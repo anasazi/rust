@@ -24,7 +24,7 @@ use rt::io::net::ip::{SocketAddr, IpAddr};
 use rt::io::{standard_error, OtherIoError, SeekStyle, SeekSet, SeekCur, SeekEnd};
 use rt::local::Local;
 use rt::rtio::*;
-use rt::sched::{Scheduler, SchedHandle};
+use rt::sched::Scheduler;
 use rt::tube::Tube;
 use rt::task::SchedHome;
 use rt::uv::*;
@@ -49,13 +49,26 @@ use task;
 
 // XXX we should not be calling uvll functions in here.
 
-struct IOHome(SchedHandle);
+struct IOHome {
+    priv home: Option<SchedHome>
+}
 
 impl IOHome {
     fn new() -> IOHome {
+        use rt::task::Sched;
         do Local::borrow |sched: &mut Scheduler| {
-            IOHome(sched.make_handle())
+            IOHome { home: Some(Sched(sched.make_handle())) }
         }
+    }
+
+    fn take_home(&mut self) -> SchedHome { self.home.take().expect("take on empty IOHome") }
+
+    fn put_home(&mut self, home: SchedHome) {
+        use util;
+        match self.home {
+            None => util::replace(&mut self.home, Some(home)),
+            Some(_) => fail!("put on filled IOHome"),
+        };
     }
 }
 
@@ -67,48 +80,50 @@ trait HomingIO {
      * and then move them back to their home.
      */
     fn go_to_IO_home(&mut self) -> SchedHome {
-        use rt::sched::PinnedTask;
-
-        do task::unkillable { // FIXME(#8674)
-            let mut old = None;
-            {
-                let ptr = &mut old;
-                let scheduler: ~Scheduler = Local::take();
-                do scheduler.deschedule_running_task_and_then |_, task| {
-                    /* FIXME(#8674) if the task was already killed then wake
-                     * will return None. In that case, the home pointer will never be set.
-                     *
-                     * RESOLUTION IDEA: Since the task is dead, we should just abort the IO action.
-                     */
-                    do task.wake().map_move |mut task| {
-                        *ptr = Some(task.take_unwrap_home());
-                        self.home().send(PinnedTask(task));
-                    };
-                }
-            }
-            old.expect("No old home because task had already been killed.")
-        }
-    }
-
-    // XXX dummy self param
-    fn restore_original_home(_dummy_self: Option<Self>, old: SchedHome) {
         use rt::task::Task;
-        use rt::sched::TaskFromFriend;
 
-        // Give the task its old home back
-        let old = Cell::new(old);
-        do Local::borrow |task: &mut Task| {
-            task.give_home(old.take());
-        }
+        let orig = do Local::borrow |task: &mut Task| {
+            // extract the task's home
+            let orig = task.take_unwrap_home();
+            // insert the handle's home
+            task.give_home(self.home().take_home());
+            orig
+        };
 
-        // If we aren't home, then send us there.
         if !Task::on_appropriate_sched() {
+            /* Since we don't have the SchedHandle at the moment (it's in the task),
+             * we can't send it manually to the new scheduler.
+             * However, if we put it into the task queue, the scheduler will do it for us.
+             */
             do task::unkillable { // FIXME(#8674)
                 let scheduler: ~Scheduler = Local::take();
                 do scheduler.deschedule_running_task_and_then |scheduler, task| {
-                    do task.wake().map_move |task| {
-                        scheduler.make_handle().send(TaskFromFriend(task));
-                    };
+                    scheduler.enqueue_blocked_task(task);
+                }
+            }
+        }
+
+        orig
+    }
+
+    fn restore_original_home(&mut self, old: SchedHome) {
+        use rt::task::Task;
+
+        let old = Cell::new(old);
+        do Local::borrow |task: &mut Task| {
+            // recover the handle's home
+            self.home().put_home(task.take_unwrap_home());
+            // return the task's home
+            task.give_home(old.take());
+        }
+
+        if !Task::on_appropriate_sched() {
+            // let the scheduler send us home
+            // XXX we could send directly if we want
+            do task::unkillable { // FIXME(#8674)
+                let scheduler: ~Scheduler = Local::take();
+                do scheduler.deschedule_running_task_and_then |scheduler, task| {
+                    scheduler.enqueue_blocked_task(task);
                 }
             }
         }
@@ -117,7 +132,7 @@ trait HomingIO {
     fn home_for_io<A>(&mut self, io: &fn(&mut Self) -> A) -> A {
         let home = self.go_to_IO_home();
         let a = io(self); // do IO
-        HomingIO::restore_original_home(None::<Self> /* XXX dummy self */, home);
+        self.restore_original_home(home);
         a // return the result of the IO
     }
 
@@ -127,7 +142,7 @@ trait HomingIO {
             let scheduler: ~Scheduler = Local::take();
             io_sched(self, scheduler) // do IO and scheduling action
         };
-        HomingIO::restore_original_home(None::<Self> /* XXX dummy self */, home);
+        self.restore_original_home(home);
         a // return result of IO
     }
 }
