@@ -82,21 +82,24 @@ trait HomingIO {
 
     // XXX dummy self param
     fn restore_original_home(_dummy_self: Option<Self>, old: SchedHome) {
+        use rt::task::Task;
         use rt::sched::TaskFromFriend;
 
+        // Give the task its old home back
         let old = Cell::new(old);
-        do task::unkillable { // FIXME(#8674)
-            let scheduler: ~Scheduler = Local::take();
-            do scheduler.deschedule_running_task_and_then |scheduler, task| {
-                /* FIXME(#8674) if the task was already killed then wake
-                 * will return None. In that case, the home pointer will never be restored.
-                 *
-                 * RESOLUTION IDEA: Since the task is dead, we should just abort the IO action.
-                 */
-                do task.wake().map_move |mut task| {
-                    task.give_home(old.take());
-                    scheduler.make_handle().send(TaskFromFriend(task));
-                };
+        do Local::borrow |task: &mut Task| {
+            task.give_home(old.take());
+        }
+
+        // If we aren't home, then send us there.
+        if !Task::on_appropriate_sched() {
+            do task::unkillable { // FIXME(#8674)
+                let scheduler: ~Scheduler = Local::take();
+                do scheduler.deschedule_running_task_and_then |scheduler, task| {
+                    do task.wake().map_move |task| {
+                        scheduler.make_handle().send(TaskFromFriend(task));
+                    };
+                }
             }
         }
     }
