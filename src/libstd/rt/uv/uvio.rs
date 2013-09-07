@@ -49,9 +49,19 @@ use task;
 
 // XXX we should not be calling uvll functions in here.
 
+struct IOHome(SchedHandle);
+
+impl IOHome {
+    fn new() -> IOHome {
+        do Local::borrow |sched: &mut Scheduler| {
+            IOHome(sched.make_handle())
+        }
+    }
+}
+
 trait HomingIO {
 
-    fn home<'r>(&'r mut self) -> &'r mut SchedHandle;
+    fn home<'r>(&'r mut self) -> &'r mut IOHome;
 
     /* XXX This will move pinned tasks to do IO on the proper scheduler
      * and then move them back to their home.
@@ -129,11 +139,6 @@ trait HomingIO {
         a // return result of IO
     }
 }
-
-// get a handle for the current scheduler
-macro_rules! get_handle_to_current_scheduler(
-    () => (do Local::borrow |sched: &mut Scheduler| { sched.make_handle() })
-)
 
 enum SocketNameKind {
     TcpPeer,
@@ -437,7 +442,7 @@ impl IoFactory for UvIoFactory {
                     match status {
                         None => {
                             let tcp = NativeHandle::from_native_handle(stream.native_handle());
-                            let home = get_handle_to_current_scheduler!();
+                            let home = IOHome::new();
                             let res = Ok(~UvTcpStream { watcher: tcp, home: home });
 
                             // Store the stream in the task's stack
@@ -469,7 +474,7 @@ impl IoFactory for UvIoFactory {
         let mut watcher = TcpWatcher::new(self.uv_loop());
         match watcher.bind(addr) {
             Ok(_) => {
-                let home = get_handle_to_current_scheduler!();
+                let home = IOHome::new();
                 Ok(~UvTcpListener::new(watcher, home))
             }
             Err(uverr) => {
@@ -492,7 +497,7 @@ impl IoFactory for UvIoFactory {
         let mut watcher = UdpWatcher::new(self.uv_loop());
         match watcher.bind(addr) {
             Ok(_) => {
-                let home = get_handle_to_current_scheduler!();
+                let home = IOHome::new();
                 Ok(~UvUdpSocket { watcher: watcher, home: home })
             }
             Err(uverr) => {
@@ -513,14 +518,14 @@ impl IoFactory for UvIoFactory {
 
     fn timer_init(&mut self) -> Result<~RtioTimerObject, IoError> {
         let watcher = TimerWatcher::new(self.uv_loop());
-        let home = get_handle_to_current_scheduler!();
+        let home = IOHome::new();
         Ok(~UvTimer::new(watcher, home))
     }
 
     fn fs_from_raw_fd(&mut self, fd: c_int, close_on_drop: bool) -> ~RtioFileStream {
         let loop_ = Loop {handle: self.uv_loop().native_handle()};
         let fd = file::FileDescriptor(fd);
-        let home = get_handle_to_current_scheduler!();
+        let home = IOHome::new();
         ~UvFileStream::new(loop_, fd, close_on_drop, home) as ~RtioFileStream
     }
 
@@ -557,7 +562,7 @@ impl IoFactory for UvIoFactory {
                       |req,err| {
                     if err.is_none() {
                         let loop_ = Loop {handle: req.get_loop().native_handle()};
-                        let home = get_handle_to_current_scheduler!();
+                        let home = IOHome::new();
                         let fd = file::FileDescriptor(req.get_result());
                         let fs = ~UvFileStream::new(
                             loop_, fd, true, home) as ~RtioFileStream;
@@ -636,15 +641,15 @@ impl IoFactory for UvIoFactory {
 
 pub struct UvTcpListener {
     watcher : TcpWatcher,
-    home: SchedHandle,
+    home: IOHome,
 }
 
 impl HomingIO for UvTcpListener {
-    fn home<'r>(&'r mut self) -> &'r mut SchedHandle { &mut self.home }
+    fn home<'r>(&'r mut self) -> &'r mut IOHome { &mut self.home }
 }
 
 impl UvTcpListener {
-    fn new(watcher: TcpWatcher, home: SchedHandle) -> UvTcpListener {
+    fn new(watcher: TcpWatcher, home: IOHome) -> UvTcpListener {
         UvTcpListener { watcher: watcher, home: home }
     }
 }
@@ -686,7 +691,7 @@ impl RtioTcpListener for UvTcpListener {
                             let inc = TcpWatcher::new(&server.event_loop());
                             // first accept call in the callback guarenteed to succeed
                             server.accept(inc.as_stream());
-                            let home = get_handle_to_current_scheduler!();
+                            let home = IOHome::new();
                             Ok(~UvTcpStream { watcher: inc, home: home })
                         }
                     };
@@ -704,7 +709,7 @@ pub struct UvTcpAcceptor {
 }
 
 impl HomingIO for UvTcpAcceptor {
-    fn home<'r>(&'r mut self) -> &'r mut SchedHandle { self.listener.home() }
+    fn home<'r>(&'r mut self) -> &'r mut IOHome { self.listener.home() }
 }
 
 impl UvTcpAcceptor {
@@ -757,11 +762,11 @@ impl RtioTcpAcceptor for UvTcpAcceptor {
 
 pub struct UvTcpStream {
     watcher: TcpWatcher,
-    home: SchedHandle,
+    home: IOHome,
 }
 
 impl HomingIO for UvTcpStream {
-    fn home<'r>(&'r mut self) -> &'r mut SchedHandle { &mut self.home }
+    fn home<'r>(&'r mut self) -> &'r mut IOHome { &mut self.home }
 }
 
 impl Drop for UvTcpStream {
@@ -916,11 +921,11 @@ impl RtioTcpStream for UvTcpStream {
 
 pub struct UvUdpSocket {
     watcher: UdpWatcher,
-    home: SchedHandle,
+    home: IOHome,
 }
 
 impl HomingIO for UvUdpSocket {
-    fn home<'r>(&'r mut self) -> &'r mut SchedHandle { &mut self.home }
+    fn home<'r>(&'r mut self) -> &'r mut IOHome { &mut self.home }
 }
 
 impl Drop for UvUdpSocket {
@@ -1128,17 +1133,17 @@ impl RtioUdpSocket for UvUdpSocket {
 
 pub struct UvTimer {
     watcher: timer::TimerWatcher,
-    home: SchedHandle,
-}
-
-impl HomingIO for UvTimer {
-    fn home<'r>(&'r mut self) -> &'r mut SchedHandle { &mut self.home }
+    home: IOHome,
 }
 
 impl UvTimer {
-    fn new(w: timer::TimerWatcher, home: SchedHandle) -> UvTimer {
+    fn new(w: timer::TimerWatcher, home: IOHome) -> UvTimer {
         UvTimer { watcher: w, home: home }
     }
+}
+
+impl HomingIO for UvTimer {
+    fn home<'r>(&'r mut self) -> &'r mut IOHome { &mut self.home }
 }
 
 impl Drop for UvTimer {
@@ -1178,16 +1183,16 @@ pub struct UvFileStream {
     loop_: Loop,
     fd: file::FileDescriptor,
     close_on_drop: bool,
-    home: SchedHandle
+    home: IOHome
 }
 
 impl HomingIO for UvFileStream {
-    fn home<'r>(&'r mut self) -> &'r mut SchedHandle { &mut self.home }
+    fn home<'r>(&'r mut self) -> &'r mut IOHome { &mut self.home }
 }
 
 impl UvFileStream {
     fn new(loop_: Loop, fd: file::FileDescriptor, close_on_drop: bool,
-           home: SchedHandle) -> UvFileStream {
+           home: IOHome) -> UvFileStream {
         UvFileStream {
             loop_: loop_,
             fd: fd,
