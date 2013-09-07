@@ -21,13 +21,12 @@ Rust extras are part of the standard Rust distribution.
 */
 
 #[link(name = "extra",
-       vers = "0.8",
+       vers = "0.9-pre",
        uuid = "122bed0b-c19b-4b82-b0b7-7ae8aead7297",
        url = "https://github.com/mozilla/rust/tree/master/src/libextra")];
 
 #[doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk.png",
-      html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-      passes = "strip-hidden")];
+      html_favicon_url = "http://www.rust-lang.org/favicon.ico")];
 
 #[comment = "Rust extras"];
 #[license = "MIT/ASL2"];

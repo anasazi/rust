@@ -28,11 +28,12 @@ use extra::json::ToJson;
 use extra::sort;
 
 use syntax::ast;
+use syntax::attr;
 
 use clean;
 use doctree;
 use fold::DocFolder;
-use html::format::{VisSpace, Method};
+use html::format::{VisSpace, Method, PuritySpace};
 use html::layout;
 use html::markdown::Markdown;
 
@@ -288,7 +289,9 @@ impl<'self> DocFolder for Cache {
         } else { false };
         match item.inner {
             clean::StructItem(*) | clean::EnumItem(*) |
-            clean::TypedefItem(*) | clean::TraitItem(*) => {
+            clean::TypedefItem(*) | clean::TraitItem(*) |
+            clean::FunctionItem(*) | clean::ModuleItem(*) |
+            clean::VariantItem(*) => {
                 self.paths.insert(item.id, (self.stack.clone(), shortty(&item)));
             }
             _ => {}
@@ -401,8 +404,16 @@ impl Context {
             let mut task = task::task();
             task.unlinked(); // we kill things manually
             task.name(format!("worker{}", i));
-            do task.spawn_with(cache.clone()) |cache| {
+            task.spawn_with(cache.clone(),
+                            |cache| worker(cache, &port, &chan, &prog_chan));
+
+            fn worker(cache: RWArc<Cache>,
+                      port: &SharedPort<Work>,
+                      chan: &SharedChan<Work>,
+                      prog_chan: &SharedChan<Progress>) {
+                #[fixed_stack_segment]; // we hit markdown FFI *a lot*
                 local_data::set(cache_key, cache);
+
                 loop {
                     match port.recv() {
                         Process(cx, item) => {
@@ -425,28 +436,20 @@ impl Context {
             }
         }
 
-        let watcher_chan = chan.clone();
-        let (done_port, done_chan) = comm::stream();
-        do task::spawn {
-            let mut jobs = 0;
-            loop {
-                match prog_port.recv() {
-                    JobNew => jobs += 1,
-                    JobDone => jobs -= 1,
-                }
-
-                if jobs == 0 { break }
+        chan.send(Process(self, item));
+        let mut jobs = 1;
+        loop {
+            match prog_port.recv() {
+                JobNew => jobs += 1,
+                JobDone => jobs -= 1,
             }
 
-            for _ in range(0, WORKERS) {
-                watcher_chan.send(Die);
-            }
-            done_chan.send(());
+            if jobs == 0 { break }
         }
 
-        prog_chan.send(JobNew);
-        chan.send(Process(self, item));
-        done_port.recv();
+        for _ in range(0, WORKERS) {
+            chan.send(Die);
+        }
     }
 
     fn item(&mut self, item: clean::Item, f: &fn(&mut Context, clean::Item)) {
@@ -479,6 +482,8 @@ impl Context {
         }
 
         match item.inner {
+            // modules are special because they add a namespace. We also need to
+            // recurse into the items of the module as well.
             clean::ModuleItem(*) => {
                 let name = item.name.get_ref().to_owned();
                 let item = Cell::new(item);
@@ -498,11 +503,37 @@ impl Context {
                     }
                 }
             }
+
+            // Things which don't have names (like impls) don't get special
+            // pages dedicated to them.
             _ if item.name.is_some() => {
                 let dst = self.dst.push(item_path(&item));
                 let writer = dst.open_writer(io::CreateOrTruncate);
                 render(writer.unwrap(), self, &item, true);
+
+                // recurse if necessary
+                let name = item.name.get_ref().clone();
+                match item.inner {
+                    clean::EnumItem(e) => {
+                        let mut it = e.variants.move_iter();
+                        do self.recurse(name) |this| {
+                            for item in it {
+                                f(this, item);
+                            }
+                        }
+                    }
+                    clean::StructItem(s) => {
+                        let mut it = s.fields.move_iter();
+                        do self.recurse(name) |this| {
+                            for item in it {
+                                f(this, item);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
             }
+
             _ => {}
         }
     }
@@ -510,19 +541,21 @@ impl Context {
 
 fn shortty(item: &clean::Item) -> &'static str {
     match item.inner {
-        clean::ModuleItem(*)      => "mod",
-        clean::StructItem(*)      => "struct",
-        clean::EnumItem(*)        => "enum",
-        clean::FunctionItem(*)    => "fn",
-        clean::TypedefItem(*)     => "typedef",
-        clean::StaticItem(*)      => "static",
-        clean::TraitItem(*)       => "trait",
-        clean::ImplItem(*)        => "impl",
-        clean::ViewItemItem(*)    => "viewitem",
-        clean::TyMethodItem(*)    => "tymethod",
-        clean::MethodItem(*)      => "method",
-        clean::StructFieldItem(*) => "structfield",
-        clean::VariantItem(*)     => "variant",
+        clean::ModuleItem(*)          => "mod",
+        clean::StructItem(*)          => "struct",
+        clean::EnumItem(*)            => "enum",
+        clean::FunctionItem(*)        => "fn",
+        clean::TypedefItem(*)         => "typedef",
+        clean::StaticItem(*)          => "static",
+        clean::TraitItem(*)           => "trait",
+        clean::ImplItem(*)            => "impl",
+        clean::ViewItemItem(*)        => "viewitem",
+        clean::TyMethodItem(*)        => "tymethod",
+        clean::MethodItem(*)          => "method",
+        clean::StructFieldItem(*)     => "structfield",
+        clean::VariantItem(*)         => "variant",
+        clean::ForeignFunctionItem(*) => "ffi",
+        clean::ForeignStaticItem(*)   => "ffs",
     }
 }
 
@@ -536,6 +569,18 @@ impl<'self> Item<'self> {
 
 impl<'self> fmt::Default for Item<'self> {
     fn fmt(it: &Item<'self>, fmt: &mut fmt::Formatter) {
+        match attr::find_stability(it.item.attrs.iter()) {
+            Some(stability) => {
+                write!(fmt.buf,
+                       "<a class='stability {lvl}' title='{reason}'>{lvl}</a>",
+                       lvl = stability.level.to_str(),
+                       reason = match stability.text {
+                           Some(s) => s, None => @"",
+                       });
+            }
+            None => {}
+        }
+
         // Write the breadcrumb trail header for the top
         write!(fmt.buf, "<h1 class='fqn'>");
         match it.item.inner {
@@ -562,11 +607,15 @@ impl<'self> fmt::Default for Item<'self> {
         match it.item.inner {
             clean::ModuleItem(ref m) => item_module(fmt.buf, it.cx,
                                                     it.item, m.items),
-            clean::FunctionItem(ref f) => item_function(fmt.buf, it.item, f),
+            clean::FunctionItem(ref f) | clean::ForeignFunctionItem(ref f) =>
+                item_function(fmt.buf, it.item, f),
             clean::TraitItem(ref t) => item_trait(fmt.buf, it.item, t),
             clean::StructItem(ref s) => item_struct(fmt.buf, it.item, s),
             clean::EnumItem(ref e) => item_enum(fmt.buf, it.item, e),
             clean::TypedefItem(ref t) => item_typedef(fmt.buf, it.item, t),
+            clean::VariantItem(*) => item_variant(fmt.buf, it.cx, it.item),
+            clean::StructFieldItem(*) => item_struct_field(fmt.buf, it.cx,
+                                                           it.item),
             _ => {}
         }
     }
@@ -615,13 +664,21 @@ fn document(w: &mut io::Writer, item: &clean::Item) {
 fn item_module(w: &mut io::Writer, cx: &Context,
                item: &clean::Item, items: &[clean::Item]) {
     document(w, item);
+    debug2!("{:?}", items);
     let mut indices = vec::from_fn(items.len(), |i| i);
 
-    fn lt(i1: &clean::Item, i2: &clean::Item) -> bool {
+    fn lt(i1: &clean::Item, i2: &clean::Item, idx1: uint, idx2: uint) -> bool {
         if shortty(i1) == shortty(i2) {
             return i1.name < i2.name;
         }
         match (&i1.inner, &i2.inner) {
+            (&clean::ViewItemItem(ref a), &clean::ViewItemItem(ref b)) => {
+                match (&a.inner, &b.inner) {
+                    (&clean::ExternMod(*), _) => true,
+                    (_, &clean::ExternMod(*)) => false,
+                    _ => idx1 < idx2,
+                }
+            }
             (&clean::ViewItemItem(*), _) => true,
             (_, &clean::ViewItemItem(*)) => false,
             (&clean::ModuleItem(*), _) => true,
@@ -632,24 +689,29 @@ fn item_module(w: &mut io::Writer, cx: &Context,
             (_, &clean::EnumItem(*)) => false,
             (&clean::StaticItem(*), _) => true,
             (_, &clean::StaticItem(*)) => false,
+            (&clean::ForeignFunctionItem(*), _) => true,
+            (_, &clean::ForeignFunctionItem(*)) => false,
+            (&clean::ForeignStaticItem(*), _) => true,
+            (_, &clean::ForeignStaticItem(*)) => false,
             (&clean::TraitItem(*), _) => true,
             (_, &clean::TraitItem(*)) => false,
             (&clean::FunctionItem(*), _) => true,
             (_, &clean::FunctionItem(*)) => false,
             (&clean::TypedefItem(*), _) => true,
             (_, &clean::TypedefItem(*)) => false,
-            _ => false,
+            _ => idx1 < idx2,
         }
     }
 
+    debug2!("{:?}", indices);
     do sort::quick_sort(indices) |&i1, &i2| {
-        lt(&items[i1], &items[i2])
+        lt(&items[i1], &items[i2], i1, i2)
     }
 
+    debug2!("{:?}", indices);
     let mut curty = "";
     for &idx in indices.iter() {
         let myitem = &items[idx];
-        if myitem.name.is_none() { loop }
 
         let myty = shortty(myitem);
         if myty != curty {
@@ -658,27 +720,31 @@ fn item_module(w: &mut io::Writer, cx: &Context,
             }
             curty = myty;
             write!(w, "<h2>{}</h2>\n<table>", match myitem.inner {
-                clean::ModuleItem(*)      => "Modules",
-                clean::StructItem(*)      => "Structs",
-                clean::EnumItem(*)        => "Enums",
-                clean::FunctionItem(*)    => "Functions",
-                clean::TypedefItem(*)     => "Type Definitions",
-                clean::StaticItem(*)      => "Statics",
-                clean::TraitItem(*)       => "Traits",
-                clean::ImplItem(*)        => "Implementations",
-                clean::ViewItemItem(*)    => "Reexports",
-                clean::TyMethodItem(*)    => "Type Methods",
-                clean::MethodItem(*)      => "Methods",
-                clean::StructFieldItem(*) => "Struct Fields",
-                clean::VariantItem(*)     => "Variants",
+                clean::ModuleItem(*)          => "Modules",
+                clean::StructItem(*)          => "Structs",
+                clean::EnumItem(*)            => "Enums",
+                clean::FunctionItem(*)        => "Functions",
+                clean::TypedefItem(*)         => "Type Definitions",
+                clean::StaticItem(*)          => "Statics",
+                clean::TraitItem(*)           => "Traits",
+                clean::ImplItem(*)            => "Implementations",
+                clean::ViewItemItem(*)        => "Reexports",
+                clean::TyMethodItem(*)        => "Type Methods",
+                clean::MethodItem(*)          => "Methods",
+                clean::StructFieldItem(*)     => "Struct Fields",
+                clean::VariantItem(*)         => "Variants",
+                clean::ForeignFunctionItem(*) => "Foreign Functions",
+                clean::ForeignStaticItem(*)   => "Foreign Statics",
             });
         }
 
         match myitem.inner {
-            clean::StaticItem(ref s) => {
+            clean::StaticItem(ref s) | clean::ForeignStaticItem(ref s) => {
                 struct Initializer<'self>(&'self str);
                 impl<'self> fmt::Default for Initializer<'self> {
                     fn fmt(s: &Initializer<'self>, f: &mut fmt::Formatter) {
+                        if s.len() == 0 { return; }
+                        write!(f.buf, "<code> = </code>");
                         let tag = if s.contains("\n") { "pre" } else { "code" };
                         write!(f.buf, "<{tag}>{}</{tag}>",
                                s.as_slice(), tag=tag);
@@ -687,17 +753,43 @@ fn item_module(w: &mut io::Writer, cx: &Context,
 
                 write!(w, "
                     <tr>
-                        <td><code>{}: {} = </code>{}</td>
+                        <td><code>{}static {}: {}</code>{}</td>
                         <td class='docblock'>{}&nbsp;</td>
                     </tr>
                 ",
+                VisSpace(myitem.visibility),
                 *myitem.name.get_ref(),
                 s.type_,
                 Initializer(s.expr),
                 Markdown(blank(myitem.doc_value())));
             }
 
+            clean::ViewItemItem(ref item) => {
+                match item.inner {
+                    clean::ExternMod(ref name, ref src, _, _) => {
+                        write!(w, "<tr><td><code>extern mod {}",
+                               name.as_slice());
+                        match *src {
+                            Some(ref src) => write!(w, " = \"{}\"",
+                                                    src.as_slice()),
+                            None => {}
+                        }
+                        write!(w, ";</code></td></tr>");
+                    }
+
+                    clean::Import(ref imports) => {
+                        for import in imports.iter() {
+                            write!(w, "<tr><td><code>{}{}</code></td></tr>",
+                                   VisSpace(myitem.visibility),
+                                   *import);
+                        }
+                    }
+                }
+
+            }
+
             _ => {
+                if myitem.name.is_none() { loop }
                 write!(w, "
                     <tr>
                         <td><a class='{class}' href='{href}'
@@ -717,8 +809,9 @@ fn item_module(w: &mut io::Writer, cx: &Context,
 }
 
 fn item_function(w: &mut io::Writer, it: &clean::Item, f: &clean::Function) {
-    write!(w, "<pre class='fn'>{vis}fn {name}{generics}{decl}</pre>",
+    write!(w, "<pre class='fn'>{vis}{purity}fn {name}{generics}{decl}</pre>",
            vis = VisSpace(it.visibility),
+           purity = PuritySpace(f.purity),
            name = it.name.get_ref().as_slice(),
            generics = f.generics,
            decl = f.decl);
@@ -830,8 +923,8 @@ fn render_method(w: &mut io::Writer, meth: &clean::Item, withlink: bool) {
            g: &clean::Generics, selfty: &clean::SelfTy, d: &clean::FnDecl,
            withlink: bool) {
         write!(w, "{}fn {withlink, select,
-                            true{<a href='\\#fn.{name}'>{name}</a>}
-                            other{{name}}
+                            true{<a href='\\#fn.{name}' class='fnname'>{name}</a>}
+                            other{<span class='fnname'>{name}</span>}
                         }{generics}{decl}",
                match purity {
                    ast::unsafe_fn => "unsafe ",
@@ -872,7 +965,8 @@ fn item_enum(w: &mut io::Writer, it: &clean::Item, e: &clean::Enum) {
     } else {
         write!(w, " \\{\n");
         for v in e.variants.iter() {
-            let name = v.name.get_ref().as_slice();
+            let name = format!("<a name='variant.{0}'>{0}</a>",
+                               v.name.get_ref().as_slice());
             match v.inner {
                 clean::VariantItem(ref var) => {
                     match var.kind {
@@ -920,11 +1014,12 @@ fn render_struct(w: &mut io::Writer, it: &clean::Item,
             for field in fields.iter() {
                 match field.inner {
                     clean::StructFieldItem(ref ty) => {
-                        write!(w, "    {}{}: {},\n{}",
+                        write!(w, "    {}<a name='field.{name}'>{name}</a>: \
+                                   {},\n{}",
                                VisSpace(field.visibility),
-                               field.name.get_ref().as_slice(),
                                ty.type_,
-                               tab);
+                               tab,
+                               name = field.name.get_ref().as_slice());
                     }
                     _ => unreachable!()
                 }
@@ -1064,11 +1159,12 @@ impl<'self> fmt::Default for Sidebar<'self> {
                 write!(w, "<a class='{ty} {class}' href='{curty, select,
                                 mod{../}
                                 other{}
-                           }{ty, select,
+                           }{tysel, select,
                                 mod{{name}/index.html}
                                 other{#.{name}.html}
                            }'>{name}</a><br/>",
                        ty = short,
+                       tysel = short,
                        class = class,
                        curty = shortty(cur),
                        name = item.as_slice());
@@ -1100,4 +1196,22 @@ fn build_sidebar(m: &clean::Module) -> HashMap<~str, ~[~str]> {
         sort::quick_sort(*items, |i1, i2| i1 < i2);
     }
     return map;
+}
+
+fn item_variant(w: &mut io::Writer, cx: &Context, it: &clean::Item) {
+    write!(w, "<DOCTYPE html><html><head>\
+                <meta http-equiv='refresh' content='0; \
+                      url=../enum.{}.html\\#variant.{}'>\
+               </head><body></body></html>",
+           *cx.current.last(),
+           it.name.get_ref().as_slice());
+}
+
+fn item_struct_field(w: &mut io::Writer, cx: &Context, it: &clean::Item) {
+    write!(w, "<DOCTYPE html><html><head>\
+                <meta http-equiv='refresh' content='0; \
+                      url=../struct.{}.html\\#field.{}'>\
+               </head><body></body></html>",
+           *cx.current.last(),
+           it.name.get_ref().as_slice());
 }

@@ -521,12 +521,12 @@ fn encode_reexported_static_methods(ecx: &EncodeContext,
 /// * For newtype structs, iterates through the node ID of the constructor.
 fn each_auxiliary_node_id(item: @item, callback: &fn(NodeId) -> bool)
                           -> bool {
-    let mut continue = true;
+    let mut continue_ = true;
     match item.node {
         item_enum(ref enum_def, _) => {
             for variant in enum_def.variants.iter() {
-                continue = callback(variant.node.id);
-                if !continue {
+                continue_ = callback(variant.node.id);
+                if !continue_ {
                     break
                 }
             }
@@ -537,7 +537,7 @@ fn each_auxiliary_node_id(item: @item, callback: &fn(NodeId) -> bool)
                 Some(ctor_id) if struct_def.fields.len() > 0 &&
                         struct_def.fields[0].node.kind ==
                         ast::unnamed_field => {
-                    continue = callback(ctor_id);
+                    continue_ = callback(ctor_id);
                 }
                 _ => {}
             }
@@ -545,7 +545,7 @@ fn each_auxiliary_node_id(item: @item, callback: &fn(NodeId) -> bool)
         _ => {}
     }
 
-    continue
+    continue_
 }
 
 fn encode_reexports(ecx: &EncodeContext,
@@ -1822,17 +1822,17 @@ pub fn encode_metadata(parms: EncodeParams, crate: &Crate) -> ~[u8] {
         }
 
         io::println("metadata stats:");
-        printfln!("    inline bytes: %u", ecx.stats.inline_bytes);
-        printfln!(" attribute bytes: %u", ecx.stats.attr_bytes);
-        printfln!("       dep bytes: %u", ecx.stats.dep_bytes);
-        printfln!(" lang item bytes: %u", ecx.stats.lang_item_bytes);
-        printfln!(" link args bytes: %u", ecx.stats.link_args_bytes);
-        printfln!("      impl bytes: %u", ecx.stats.impl_bytes);
-        printfln!("      misc bytes: %u", ecx.stats.misc_bytes);
-        printfln!("      item bytes: %u", ecx.stats.item_bytes);
-        printfln!("     index bytes: %u", ecx.stats.index_bytes);
-        printfln!("      zero bytes: %u", ecx.stats.zero_bytes);
-        printfln!("     total bytes: %u", ecx.stats.total_bytes);
+        println!("    inline bytes: {}", ecx.stats.inline_bytes);
+        println!(" attribute bytes: {}", ecx.stats.attr_bytes);
+        println!("       dep bytes: {}", ecx.stats.dep_bytes);
+        println!(" lang item bytes: {}", ecx.stats.lang_item_bytes);
+        println!(" link args bytes: {}", ecx.stats.link_args_bytes);
+        println!("      impl bytes: {}", ecx.stats.impl_bytes);
+        println!("      misc bytes: {}", ecx.stats.misc_bytes);
+        println!("      item bytes: {}", ecx.stats.item_bytes);
+        println!("     index bytes: {}", ecx.stats.index_bytes);
+        println!("      zero bytes: {}", ecx.stats.zero_bytes);
+        println!("     total bytes: {}", ecx.stats.total_bytes);
     }
 
     // Pad this, since something (LLVM, presumably) is cutting off the

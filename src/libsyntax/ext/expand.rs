@@ -813,13 +813,17 @@ pub fn std_macros() -> @str {
         ($lvl:expr, $arg:expr) => ({
             let lvl = $lvl;
             if lvl <= __log_level() {
-                ::std::logging::log(lvl, fmt!(\"%?\", $arg))
+                format_args!(|args| {
+                    ::std::logging::log(lvl, args)
+                }, \"{}\", fmt!(\"%?\", $arg))
             }
         });
         ($lvl:expr, $($arg:expr),+) => ({
             let lvl = $lvl;
             if lvl <= __log_level() {
-                ::std::logging::log(lvl, fmt!($($arg),+))
+                format_args!(|args| {
+                    ::std::logging::log(lvl, args)
+                }, \"{}\", fmt!($($arg),+))
             }
         })
     )
@@ -834,7 +838,9 @@ pub fn std_macros() -> @str {
         ($lvl:expr, $($arg:tt)+) => ({
             let lvl = $lvl;
             if lvl <= __log_level() {
-                ::std::logging::log(lvl, format!($($arg)+))
+                format_args!(|args| {
+                    ::std::logging::log(lvl, args)
+                }, $($arg)+)
             }
         })
     )
@@ -944,7 +950,7 @@ pub fn std_macros() -> @str {
 
     # Example
 
-    ~~~ {.rust}
+    ```rust
     fn choose_weighted_item(v: &[Item]) -> Item {
         assert!(!v.is_empty());
         let mut so_far = 0u;
@@ -958,7 +964,7 @@ pub fn std_macros() -> @str {
         // type checker that it isn't possible to get down here
         unreachable!();
     }
-    ~~~
+    ```
 
     */
     macro_rules! unreachable (() => (
@@ -1004,26 +1010,6 @@ pub fn std_macros() -> @str {
                     };
             }
         }
-    )
-
-    // NOTE(acrichto): start removing this after the next snapshot
-    macro_rules! printf (
-        ($arg:expr) => (
-            print(fmt!(\"%?\", $arg))
-        );
-        ($( $arg:expr ),+) => (
-            print(fmt!($($arg),+))
-        )
-    )
-
-    // NOTE(acrichto): start removing this after the next snapshot
-    macro_rules! printfln (
-        ($arg:expr) => (
-            println(fmt!(\"%?\", $arg))
-        );
-        ($( $arg:expr ),+) => (
-            println(fmt!($($arg),+))
-        )
     )
 
     macro_rules! format(($($arg:tt)*) => (

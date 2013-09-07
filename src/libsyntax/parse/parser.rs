@@ -922,6 +922,7 @@ impl Parser {
             let attrs = p.parse_outer_attributes();
             let lo = p.span.lo;
 
+            let vis_span = *self.span;
             let vis = p.parse_visibility();
             let pur = p.parse_fn_purity();
             // NB: at the moment, trait methods are public by default; this
@@ -947,7 +948,7 @@ impl Parser {
                 // NB: at the moment, visibility annotations on required
                 // methods are ignored; this could change.
                 if vis != ast::inherited {
-                    self.obsolete(*self.last_span,
+                    self.obsolete(vis_span,
                                   ObsoleteTraitFuncVisibility);
                 }
                 required(TypeMethod {
@@ -1213,14 +1214,16 @@ impl Parser {
     // parse an optional, obsolete argument mode.
     pub fn parse_arg_mode(&self) {
         if self.eat(&token::BINOP(token::MINUS)) {
-            self.obsolete(*self.span, ObsoleteMode);
+            self.obsolete(*self.last_span, ObsoleteMode);
         } else if self.eat(&token::ANDAND) {
-            self.obsolete(*self.span, ObsoleteMode);
+            self.obsolete(*self.last_span, ObsoleteMode);
         } else if self.eat(&token::BINOP(token::PLUS)) {
+            let lo = self.last_span.lo;
             if self.eat(&token::BINOP(token::PLUS)) {
-                self.obsolete(*self.span, ObsoleteMode);
+                let hi = self.last_span.hi;
+                self.obsolete(mk_sp(lo, hi), ObsoleteMode);
             } else {
-                self.obsolete(*self.span, ObsoleteMode);
+                self.obsolete(*self.last_span, ObsoleteMode);
             }
         } else {
             // Ignore.
@@ -1786,6 +1789,17 @@ impl Parser {
             }
         } else if self.eat_keyword(keywords::Loop) {
             return self.parse_loop_expr(None);
+        } else if self.eat_keyword(keywords::Continue) {
+            let lo = self.span.lo;
+            let ex = if self.token_is_lifetime(&*self.token) {
+                let lifetime = self.get_lifetime(&*self.token);
+                self.bump();
+                ExprAgain(Some(lifetime.name))
+            } else {
+                ExprAgain(None)
+            };
+            let hi = self.span.hi;
+            return self.mk_expr(lo, hi, ex);
         } else if self.eat_keyword(keywords::Match) {
             return self.parse_match_expr();
         } else if self.eat_keyword(keywords::Unsafe) {
@@ -2578,6 +2592,7 @@ impl Parser {
             return self.mk_expr(lo, hi, ExprLoop(body, opt_ident));
         } else {
             // This is a 'continue' expression
+            // FIXME #9467 rm support for 'loop' here after snapshot
             if opt_ident.is_some() {
                 self.span_err(*self.last_span,
                               "a label may not be used with a `loop` expression");
@@ -3853,7 +3868,7 @@ impl Parser {
 
         let mut meths = ~[];
         if self.eat(&token::SEMI) {
-            self.obsolete(*self.span, ObsoleteEmptyImpl);
+            self.obsolete(*self.last_span, ObsoleteEmptyImpl);
         } else {
             self.expect(&token::LBRACE);
             while !self.eat(&token::RBRACE) {
@@ -4204,9 +4219,9 @@ impl Parser {
     }
 
     // parse a function declaration from a foreign module
-    fn parse_item_foreign_fn(&self,  attrs: ~[Attribute]) -> @foreign_item {
+    fn parse_item_foreign_fn(&self, vis: ast::visibility,
+                             attrs: ~[Attribute]) -> @foreign_item {
         let lo = self.span.lo;
-        let vis = self.parse_visibility();
 
         // Parse obsolete purity.
         let purity = self.parse_fn_purity();
@@ -4740,7 +4755,7 @@ impl Parser {
         if (self.is_keyword(keywords::Fn) || self.is_keyword(keywords::Pure) ||
                 self.is_keyword(keywords::Unsafe)) {
             // FOREIGN FUNCTION ITEM
-            let item = self.parse_item_foreign_fn(attrs);
+            let item = self.parse_item_foreign_fn(visibility, attrs);
             return iovi_foreign_item(item);
         }
         self.parse_macro_use_or_failure(attrs,macros_allowed,lo,visibility)

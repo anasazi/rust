@@ -49,7 +49,7 @@ they contained the following prologue:
 
 
 #[link(name = "std",
-       vers = "0.8",
+       vers = "0.9-pre",
        uuid = "c70c24a7-5551-4f73-8e37-380b11d80be8",
        url = "https://github.com/mozilla/rust/tree/master/src/libstd")];
 
@@ -58,8 +58,7 @@ they contained the following prologue:
 #[crate_type = "lib"];
 
 #[doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk.png",
-      html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-      passes = "strip-hidden")];
+      html_favicon_url = "http://www.rust-lang.org/favicon.ico")];
 
 // Don't link to std. We are std.
 #[no_std];
@@ -68,7 +67,7 @@ they contained the following prologue:
 #[deny(missing_doc)];
 
 // Make extra accessible for benchmarking
-#[cfg(test)] extern mod extra(vers="0.8");
+#[cfg(test)] extern mod extra(vers="0.9-pre");
 
 // Make std testable by not duplicating lang items. See #2912
 #[cfg(test)] extern mod realstd(name = "std");
@@ -224,4 +223,5 @@ mod std {
     pub use os;
     pub use fmt;
     pub use to_bytes;
+    pub use logging;
 }

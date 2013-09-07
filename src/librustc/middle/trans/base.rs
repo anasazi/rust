@@ -121,7 +121,7 @@ impl Drop for _InsnCtxt {
 }
 
 pub fn push_ctxt(s: &'static str) -> _InsnCtxt {
-    debug!("new InsnCtxt: %s", s);
+    debug2!("new InsnCtxt: {}", s);
     do local_data::modify(task_local_insn_key) |c| {
         do c.map_move |ctx| {
             let mut ctx = (*ctx).clone();
@@ -524,13 +524,13 @@ pub fn set_always_inline(f: ValueRef) {
 }
 
 pub fn set_fixed_stack_segment(f: ValueRef) {
-    do "fixed-stack-segment".to_c_str().with_ref |buf| {
+    do "fixed-stack-segment".with_c_str |buf| {
         unsafe { llvm::LLVMAddFunctionAttrString(f, buf); }
     }
 }
 
 pub fn set_no_split_stack(f: ValueRef) {
-    do "no-split-stack".to_c_str().with_ref |buf| {
+    do "no-split-stack".with_c_str |buf| {
         unsafe { llvm::LLVMAddFunctionAttrString(f, buf); }
     }
 }
@@ -2544,6 +2544,10 @@ pub fn get_item_val(ccx: @mut CrateContext, id: ast::NodeId) -> ValueRef {
                                     llvm::LLVMAddGlobal(ccx.llmod, llty, buf)
                                 };
 
+                                if !*ccx.sess.building_library {
+                                    lib::llvm::SetLinkage(g, lib::llvm::InternalLinkage);
+                                }
+
                                 // Apply the `unnamed_addr` attribute if
                                 // requested
                                 if attr::contains_name(i.attrs,
@@ -3058,29 +3062,16 @@ pub fn write_metadata(cx: &mut CrateContext, crate: &ast::Crate) {
     }
 }
 
-fn mk_global(ccx: &CrateContext,
-             name: &str,
-             llval: ValueRef,
-             internal: bool)
-          -> ValueRef {
+// Writes the current ABI version into the crate.
+pub fn write_abi_version(ccx: &mut CrateContext) {
     unsafe {
-        let llglobal = do name.with_c_str |buf| {
+        let llval = C_uint(ccx, abi::abi_version);
+        let llglobal = do "rust_abi_version".with_c_str |buf| {
             llvm::LLVMAddGlobal(ccx.llmod, val_ty(llval).to_ref(), buf)
         };
         llvm::LLVMSetInitializer(llglobal, llval);
         llvm::LLVMSetGlobalConstant(llglobal, True);
-
-        if internal {
-            lib::llvm::SetLinkage(llglobal, lib::llvm::InternalLinkage);
-        }
-
-        return llglobal;
     }
-}
-
-// Writes the current ABI version into the crate.
-pub fn write_abi_version(ccx: &mut CrateContext) {
-    mk_global(ccx, "rust_abi_version", C_uint(ccx, abi::abi_version), false);
 }
 
 pub fn trans_crate(sess: session::Session,
@@ -3156,15 +3147,15 @@ pub fn trans_crate(sess: session::Session,
     write_metadata(ccx, crate);
     if ccx.sess.trans_stats() {
         io::println("--- trans stats ---");
-        printfln!("n_static_tydescs: %u", ccx.stats.n_static_tydescs);
-        printfln!("n_glues_created: %u", ccx.stats.n_glues_created);
-        printfln!("n_null_glues: %u", ccx.stats.n_null_glues);
-        printfln!("n_real_glues: %u", ccx.stats.n_real_glues);
+        println!("n_static_tydescs: {}", ccx.stats.n_static_tydescs);
+        println!("n_glues_created: {}", ccx.stats.n_glues_created);
+        println!("n_null_glues: {}", ccx.stats.n_null_glues);
+        println!("n_real_glues: {}", ccx.stats.n_real_glues);
 
-        printfln!("n_fns: %u", ccx.stats.n_fns);
-        printfln!("n_monos: %u", ccx.stats.n_monos);
-        printfln!("n_inlines: %u", ccx.stats.n_inlines);
-        printfln!("n_closures: %u", ccx.stats.n_closures);
+        println!("n_fns: {}", ccx.stats.n_fns);
+        println!("n_monos: {}", ccx.stats.n_monos);
+        println!("n_inlines: {}", ccx.stats.n_inlines);
+        println!("n_closures: {}", ccx.stats.n_closures);
         io::println("fn stats:");
         do sort::quick_sort(ccx.stats.fn_stats) |&(_, _, insns_a), &(_, _, insns_b)| {
             insns_a > insns_b
@@ -3172,14 +3163,14 @@ pub fn trans_crate(sess: session::Session,
         for tuple in ccx.stats.fn_stats.iter() {
             match *tuple {
                 (ref name, ms, insns) => {
-                    printfln!("%u insns, %u ms, %s", insns, ms, *name);
+                    println!("{} insns, {} ms, {}", insns, ms, *name);
                 }
             }
         }
     }
     if ccx.sess.count_llvm_insns() {
         for (k, v) in ccx.stats.llvm_insns.iter() {
-            printfln!("%-7u %s", *v, *k);
+            println!("{:7u} {}", *v, *k);
         }
     }
 

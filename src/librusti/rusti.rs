@@ -59,7 +59,7 @@
  */
 
 #[link(name = "rusti",
-       vers = "0.8",
+       vers = "0.9-pre",
        uuid = "7fb5bf52-7d45-4fee-8325-5ad3311149fc",
        url = "https://github.com/mozilla/rust/tree/master/src/rusti")];
 
@@ -437,7 +437,7 @@ fn run_cmd(repl: &mut Repl, _in: @io::Reader, _out: @io::Writer,
             if loaded_crates.is_empty() {
                 println("no crates loaded");
             } else {
-                printfln!("crates loaded: %s", loaded_crates.connect(", "));
+                println!("crates loaded: {}", loaded_crates.connect(", "));
             }
         }
         ~"{" => {

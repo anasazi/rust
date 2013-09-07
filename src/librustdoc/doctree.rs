@@ -30,6 +30,7 @@ pub struct Module {
     traits: ~[Trait],
     vis: ast::visibility,
     impls: ~[Impl],
+    foreigns: ~[ast::foreign_mod],
     view_items: ~[ast::view_item],
 }
 
@@ -50,6 +51,7 @@ impl Module {
             traits     : ~[],
             impls      : ~[],
             view_items : ~[],
+            foreigns   : ~[],
         }
     }
 }
@@ -107,6 +109,7 @@ pub struct Function {
     id: NodeId,
     name: Ident,
     vis: ast::visibility,
+    purity: ast::purity,
     where: Span,
     generics: ast::Generics,
 }
