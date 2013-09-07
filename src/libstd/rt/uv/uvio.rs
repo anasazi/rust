@@ -121,14 +121,6 @@ trait HomingIO {
         a // return the result of the IO
     }
 
-    fn home_for_io_consume<A>(self, io: &fn(Self) -> A) -> A {
-        let mut this = self;
-        let home = this.go_to_IO_home();
-        let a = io(this); // do IO
-        HomingIO::restore_original_home(None::<Self> /* XXX dummy self */, home);
-        a // return the result of the IO
-    }
-
     fn home_for_io_with_sched<A>(&mut self, io_sched: &fn(&mut Self, ~Scheduler) -> A) -> A {
         let home = self.go_to_IO_home();
         let a = do task::unkillable { // FIXME(#8674)
@@ -674,25 +666,25 @@ impl RtioSocket for UvTcpListener {
 
 impl RtioTcpListener for UvTcpListener {
     fn listen(self) -> Result<~RtioTcpAcceptorObject, IoError> {
-        do self.home_for_io_consume |self_| {
-            let mut acceptor = ~UvTcpAcceptor::new(self_);
-            let incoming = Cell::new(acceptor.incoming.clone());
-            do acceptor.listener.watcher.listen |mut server, status| {
-                do incoming.with_mut_ref |incoming| {
-                    let inc = match status {
-                        Some(_) => Err(standard_error(OtherIoError)),
+        let mut acceptor = ~UvTcpAcceptor::new(self);
+        do acceptor.home_for_io |self_| {
+            let accepted = Cell::new(self_.incoming.clone());
+            do self_.listener.watcher.listen |mut server, status| {
+                do accepted.with_mut_ref |accepted| {
+                    let attempt = match status {
+                        Some(_) => Err(standard_error(OtherIoError)), // XXX better error?
                         None => {
-                            let inc = TcpWatcher::new(&server.event_loop());
-                            // first accept call in the callback guarenteed to succeed
-                            server.accept(inc.as_stream());
-                            Ok(~UvTcpStream::new(inc))
+                            let attempt = TcpWatcher::new(&server.event_loop());
+                            // first accept call in the callback will always succeed
+                            server.accept(attempt.as_stream());
+                            Ok(~UvTcpStream::new(attempt))
                         }
                     };
-                    incoming.send(inc);
+                    accepted.send(attempt);
                 }
-            };
-            Ok(acceptor)
+            }
         }
+        Ok(acceptor)
     }
 }
 
