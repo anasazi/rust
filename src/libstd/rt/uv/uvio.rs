@@ -442,8 +442,7 @@ impl IoFactory for UvIoFactory {
                     match status {
                         None => {
                             let tcp = NativeHandle::from_native_handle(stream.native_handle());
-                            let home = IOHome::new();
-                            let res = Ok(~UvTcpStream { watcher: tcp, home: home });
+                            let res = Ok(~UvTcpStream::new(tcp));
 
                             // Store the stream in the task's stack
                             unsafe { (*result_cell_ptr).put_back(res); }
@@ -474,8 +473,7 @@ impl IoFactory for UvIoFactory {
         let mut watcher = TcpWatcher::new(self.uv_loop());
         match watcher.bind(addr) {
             Ok(_) => {
-                let home = IOHome::new();
-                Ok(~UvTcpListener::new(watcher, home))
+                Ok(~UvTcpListener::new(watcher))
             }
             Err(uverr) => {
                 do task::unkillable { // FIXME(#8674)
@@ -497,8 +495,7 @@ impl IoFactory for UvIoFactory {
         let mut watcher = UdpWatcher::new(self.uv_loop());
         match watcher.bind(addr) {
             Ok(_) => {
-                let home = IOHome::new();
-                Ok(~UvUdpSocket { watcher: watcher, home: home })
+                Ok(~UvUdpSocket::new(watcher))
             }
             Err(uverr) => {
                 do task::unkillable { // FIXME(#8674)
@@ -518,15 +515,13 @@ impl IoFactory for UvIoFactory {
 
     fn timer_init(&mut self) -> Result<~RtioTimerObject, IoError> {
         let watcher = TimerWatcher::new(self.uv_loop());
-        let home = IOHome::new();
-        Ok(~UvTimer::new(watcher, home))
+        Ok(~UvTimer::new(watcher))
     }
 
     fn fs_from_raw_fd(&mut self, fd: c_int, close_on_drop: bool) -> ~RtioFileStream {
         let loop_ = Loop {handle: self.uv_loop().native_handle()};
         let fd = file::FileDescriptor(fd);
-        let home = IOHome::new();
-        ~UvFileStream::new(loop_, fd, close_on_drop, home) as ~RtioFileStream
+        ~UvFileStream::new(loop_, fd, close_on_drop) as ~RtioFileStream
     }
 
     fn fs_open<P: PathLike>(&mut self, path: &P, fm: FileMode, fa: FileAccess)
@@ -562,10 +557,9 @@ impl IoFactory for UvIoFactory {
                       |req,err| {
                     if err.is_none() {
                         let loop_ = Loop {handle: req.get_loop().native_handle()};
-                        let home = IOHome::new();
                         let fd = file::FileDescriptor(req.get_result());
                         let fs = ~UvFileStream::new(
-                            loop_, fd, true, home) as ~RtioFileStream;
+                            loop_, fd, true) as ~RtioFileStream;
                         let res = Ok(fs);
                         unsafe { (*result_cell_ptr).put_back(res); }
                         let scheduler: ~Scheduler = Local::take();
@@ -644,14 +638,14 @@ pub struct UvTcpListener {
     home: IOHome,
 }
 
-impl HomingIO for UvTcpListener {
-    fn home<'r>(&'r mut self) -> &'r mut IOHome { &mut self.home }
+impl UvTcpListener {
+    fn new(watcher: TcpWatcher) -> UvTcpListener {
+        UvTcpListener { watcher: watcher, home: IOHome::new() }
+    }
 }
 
-impl UvTcpListener {
-    fn new(watcher: TcpWatcher, home: IOHome) -> UvTcpListener {
-        UvTcpListener { watcher: watcher, home: home }
-    }
+impl HomingIO for UvTcpListener {
+    fn home<'r>(&'r mut self) -> &'r mut IOHome { &mut self.home }
 }
 
 impl Drop for UvTcpListener {
@@ -691,8 +685,7 @@ impl RtioTcpListener for UvTcpListener {
                             let inc = TcpWatcher::new(&server.event_loop());
                             // first accept call in the callback guarenteed to succeed
                             server.accept(inc.as_stream());
-                            let home = IOHome::new();
-                            Ok(~UvTcpStream { watcher: inc, home: home })
+                            Ok(~UvTcpStream::new(inc))
                         }
                     };
                     incoming.send(inc);
@@ -708,14 +701,14 @@ pub struct UvTcpAcceptor {
     incoming: Tube<Result<~RtioTcpStreamObject, IoError>>,
 }
 
-impl HomingIO for UvTcpAcceptor {
-    fn home<'r>(&'r mut self) -> &'r mut IOHome { self.listener.home() }
-}
-
 impl UvTcpAcceptor {
     fn new(listener: UvTcpListener) -> UvTcpAcceptor {
         UvTcpAcceptor { listener: listener, incoming: Tube::new() }
     }
+}
+
+impl HomingIO for UvTcpAcceptor {
+    fn home<'r>(&'r mut self) -> &'r mut IOHome { self.listener.home() }
 }
 
 impl RtioSocket for UvTcpAcceptor {
@@ -763,6 +756,12 @@ impl RtioTcpAcceptor for UvTcpAcceptor {
 pub struct UvTcpStream {
     watcher: TcpWatcher,
     home: IOHome,
+}
+
+impl UvTcpStream {
+    fn new(watcher: TcpWatcher) -> UvTcpStream {
+        UvTcpStream { watcher: watcher, home: IOHome::new() }
+    }
 }
 
 impl HomingIO for UvTcpStream {
@@ -922,6 +921,12 @@ impl RtioTcpStream for UvTcpStream {
 pub struct UvUdpSocket {
     watcher: UdpWatcher,
     home: IOHome,
+}
+
+impl UvUdpSocket {
+    fn new(watcher: UdpWatcher) -> UvUdpSocket {
+        UvUdpSocket { watcher: watcher, home: IOHome::new() }
+    }
 }
 
 impl HomingIO for UvUdpSocket {
@@ -1137,8 +1142,8 @@ pub struct UvTimer {
 }
 
 impl UvTimer {
-    fn new(w: timer::TimerWatcher, home: IOHome) -> UvTimer {
-        UvTimer { watcher: w, home: home }
+    fn new(w: timer::TimerWatcher) -> UvTimer {
+        UvTimer { watcher: w, home: IOHome::new() }
     }
 }
 
@@ -1191,13 +1196,12 @@ impl HomingIO for UvFileStream {
 }
 
 impl UvFileStream {
-    fn new(loop_: Loop, fd: file::FileDescriptor, close_on_drop: bool,
-           home: IOHome) -> UvFileStream {
+    fn new(loop_: Loop, fd: file::FileDescriptor, close_on_drop: bool) -> UvFileStream {
         UvFileStream {
             loop_: loop_,
             fd: fd,
             close_on_drop: close_on_drop,
-            home: home
+            home: IOHome::new()
         }
     }
     fn base_read(&mut self, buf: &mut [u8], offset: i64) -> Result<int, IoError> {
