@@ -30,15 +30,12 @@ use treemap::TreeMap;
 
 use std::clone::Clone;
 use std::comm::{stream, SharedChan, GenericPort, GenericChan};
-use std::libc;
-use std::either;
 use std::io;
 use std::result;
 use std::task;
 use std::to_str::ToStr;
 use std::f64;
 use std::os;
-use std::uint;
 
 
 // The name of a test. By convention this follows the rules for rust
@@ -127,8 +124,9 @@ pub type MetricDiff = TreeMap<~str,MetricChange>;
 pub fn test_main(args: &[~str], tests: ~[TestDescAndFn]) {
     let opts =
         match parse_opts(args) {
-          either::Left(o) => o,
-          either::Right(m) => fail!(m)
+            Some(Ok(o)) => o,
+            Some(Err(msg)) => fail!(msg),
+            None => return
         };
     if !run_tests_console(&opts, tests) { fail!("Some tests failed"); }
 }
@@ -169,7 +167,7 @@ pub struct TestOpts {
     logfile: Option<Path>
 }
 
-type OptRes = Either<TestOpts, ~str>;
+type OptRes = Result<TestOpts, ~str>;
 
 fn optgroups() -> ~[getopts::groups::OptGroup] {
     ~[groups::optflag("", "ignored", "Run ignored tests"),
@@ -191,7 +189,7 @@ fn optgroups() -> ~[getopts::groups::OptGroup] {
                      "A.B")]
 }
 
-fn usage(binary: &str, helpstr: &str) -> ! {
+fn usage(binary: &str, helpstr: &str) {
     #[fixed_stack_segment]; #[inline(never)];
 
     let message = fmt!("Usage: %s [OPTIONS] [FILTER]", binary);
@@ -219,20 +217,19 @@ Test Attributes:
                      tests. This may also be written as #[ignore(cfg(...))] to
                      ignore the test on certain configurations.");
     }
-    unsafe { libc::exit(0) }
 }
 
 // Parses command line arguments into test options
-pub fn parse_opts(args: &[~str]) -> OptRes {
+pub fn parse_opts(args: &[~str]) -> Option<OptRes> {
     let args_ = args.tail();
     let matches =
         match groups::getopts(args_, optgroups()) {
           Ok(m) => m,
-          Err(f) => return either::Right(getopts::fail_str(f))
+          Err(f) => return Some(Err(f.to_err_msg()))
         };
 
-    if getopts::opt_present(&matches, "h") { usage(args[0], "h"); }
-    if getopts::opt_present(&matches, "help") { usage(args[0], "help"); }
+    if matches.opt_present("h") { usage(args[0], "h"); return None; }
+    if matches.opt_present("help") { usage(args[0], "help"); return None; }
 
     let filter =
         if matches.free.len() > 0 {
@@ -241,25 +238,25 @@ pub fn parse_opts(args: &[~str]) -> OptRes {
             None
         };
 
-    let run_ignored = getopts::opt_present(&matches, "ignored");
+    let run_ignored = matches.opt_present("ignored");
 
-    let logfile = getopts::opt_maybe_str(&matches, "logfile");
+    let logfile = matches.opt_str("logfile");
     let logfile = logfile.map_move(|s| Path(s));
 
-    let run_benchmarks = getopts::opt_present(&matches, "bench");
+    let run_benchmarks = matches.opt_present("bench");
     let run_tests = ! run_benchmarks ||
-        getopts::opt_present(&matches, "test");
+        matches.opt_present("test");
 
-    let ratchet_metrics = getopts::opt_maybe_str(&matches, "ratchet-metrics");
+    let ratchet_metrics = matches.opt_str("ratchet-metrics");
     let ratchet_metrics = ratchet_metrics.map_move(|s| Path(s));
 
-    let ratchet_noise_percent = getopts::opt_maybe_str(&matches, "ratchet-noise-percent");
-    let ratchet_noise_percent = ratchet_noise_percent.map_move(|s| f64::from_str(s).unwrap());
+    let ratchet_noise_percent = matches.opt_str("ratchet-noise-percent");
+    let ratchet_noise_percent = ratchet_noise_percent.map_move(|s| from_str::<f64>(s).unwrap());
 
-    let save_metrics = getopts::opt_maybe_str(&matches, "save-metrics");
+    let save_metrics = matches.opt_str("save-metrics");
     let save_metrics = save_metrics.map_move(|s| Path(s));
 
-    let test_shard = getopts::opt_maybe_str(&matches, "test-shard");
+    let test_shard = matches.opt_str("test-shard");
     let test_shard = opt_shard(test_shard);
 
     let test_opts = TestOpts {
@@ -274,7 +271,7 @@ pub fn parse_opts(args: &[~str]) -> OptRes {
         logfile: logfile
     };
 
-    either::Left(test_opts)
+    Some(Ok(test_opts))
 }
 
 pub fn opt_shard(maybestr: Option<~str>) -> Option<(uint,uint)> {
@@ -282,7 +279,7 @@ pub fn opt_shard(maybestr: Option<~str>) -> Option<(uint,uint)> {
         None => None,
         Some(s) => {
             match s.split_iter('.').to_owned_vec() {
-                [a, b] => match (uint::from_str(a), uint::from_str(b)) {
+                [a, b] => match (from_str::<uint>(a), from_str::<uint>(b)) {
                     (Some(a), Some(b)) => Some((a,b)),
                     _ => None
                 },
@@ -809,11 +806,6 @@ pub fn filter_tests(
     }
 }
 
-struct TestFuture {
-    test: TestDesc,
-    wait: @fn() -> TestResult,
-}
-
 pub fn run_test(force_ignore: bool,
                 test: TestDescAndFn,
                 monitor_ch: SharedChan<MonitorMsg>) {
@@ -1155,7 +1147,6 @@ mod tests {
                StaticTestName, DynTestName, DynTestFn};
     use test::{TestOpts, run_test};
 
-    use std::either;
     use std::comm::{stream, SharedChan};
     use tempfile;
     use std::os;
@@ -1236,8 +1227,8 @@ mod tests {
     fn first_free_arg_should_be_a_filter() {
         let args = ~[~"progname", ~"filter"];
         let opts = match parse_opts(args) {
-          either::Left(o) => o,
-          _ => fail!("Malformed arg in first_free_arg_should_be_a_filter")
+            Some(Ok(o)) => o,
+            _ => fail!("Malformed arg in first_free_arg_should_be_a_filter")
         };
         assert!("filter" == opts.filter.clone().unwrap());
     }
@@ -1246,8 +1237,8 @@ mod tests {
     fn parse_ignored_flag() {
         let args = ~[~"progname", ~"filter", ~"--ignored"];
         let opts = match parse_opts(args) {
-          either::Left(o) => o,
-          _ => fail!("Malformed arg in parse_ignored_flag")
+            Some(Ok(o)) => o,
+            _ => fail!("Malformed arg in parse_ignored_flag")
         };
         assert!((opts.run_ignored));
     }

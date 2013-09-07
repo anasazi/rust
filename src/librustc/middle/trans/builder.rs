@@ -154,28 +154,23 @@ impl Builder {
                   llfn: ValueRef,
                   args: &[ValueRef],
                   then: BasicBlockRef,
-                  catch: BasicBlockRef)
+                  catch: BasicBlockRef,
+                  attributes: &[(uint, lib::llvm::Attribute)])
                   -> ValueRef {
         self.count_insn("invoke");
         unsafe {
-            llvm::LLVMBuildInvoke(self.llbuilder,
-                                  llfn,
-                                  vec::raw::to_ptr(args),
-                                  args.len() as c_uint,
-                                  then,
-                                  catch,
-                                  noname())
+            let v = llvm::LLVMBuildInvoke(self.llbuilder,
+                                          llfn,
+                                          vec::raw::to_ptr(args),
+                                          args.len() as c_uint,
+                                          then,
+                                          catch,
+                                          noname());
+            for &(idx, attr) in attributes.iter() {
+                llvm::LLVMAddInstrAttribute(v, idx as c_uint, attr as c_uint);
+            }
+            v
         }
-    }
-
-    pub fn fast_invoke(&self,
-                       llfn: ValueRef,
-                       args: &[ValueRef],
-                       then: BasicBlockRef,
-                       catch: BasicBlockRef) {
-        self.count_insn("fastinvoke");
-        let v = self.invoke(llfn, args, then, catch);
-        lib::llvm::SetInstructionCallConv(v, lib::llvm::FastCallConv);
     }
 
     pub fn unreachable(&self) {
@@ -747,7 +742,7 @@ impl Builder {
                                              c, noname(), False, False)
                 }
             };
-            self.call(asm, []);
+            self.call(asm, [], []);
         }
     }
 
@@ -772,43 +767,29 @@ impl Builder {
         unsafe {
             let v = llvm::LLVMInlineAsm(
                 fty.to_ref(), asm, cons, volatile, alignstack, dia as c_uint);
-            self.call(v, inputs)
+            self.call(v, inputs, [])
         }
     }
 
-    pub fn call(&self, llfn: ValueRef, args: &[ValueRef]) -> ValueRef {
+    pub fn call(&self, llfn: ValueRef, args: &[ValueRef],
+                attributes: &[(uint, lib::llvm::Attribute)]) -> ValueRef {
         self.count_insn("call");
-
-        debug!("Call(llfn=%s, args=%?)",
-               self.ccx.tn.val_to_str(llfn),
-               args.map(|arg| self.ccx.tn.val_to_str(*arg)));
-
-        do args.as_imm_buf |ptr, len| {
-            unsafe {
-            llvm::LLVMBuildCall(self.llbuilder, llfn, ptr, len as c_uint, noname())
-            }
-        }
-    }
-
-    pub fn fastcall(&self, llfn: ValueRef, args: &[ValueRef]) -> ValueRef {
-        self.count_insn("fastcall");
         unsafe {
             let v = llvm::LLVMBuildCall(self.llbuilder, llfn, vec::raw::to_ptr(args),
                                         args.len() as c_uint, noname());
-            lib::llvm::SetInstructionCallConv(v, lib::llvm::FastCallConv);
+            for &(idx, attr) in attributes.iter() {
+                llvm::LLVMAddInstrAttribute(v, idx as c_uint, attr as c_uint);
+            }
             v
         }
     }
 
     pub fn call_with_conv(&self, llfn: ValueRef, args: &[ValueRef],
-                        conv: CallConv) -> ValueRef {
+                          conv: CallConv, attributes: &[(uint, lib::llvm::Attribute)]) -> ValueRef {
         self.count_insn("callwithconv");
-        unsafe {
-            let v = llvm::LLVMBuildCall(self.llbuilder, llfn, vec::raw::to_ptr(args),
-                                        args.len() as c_uint, noname());
-            lib::llvm::SetInstructionCallConv(v, conv);
-            v
-        }
+        let v = self.call(llfn, args, attributes);
+        lib::llvm::SetInstructionCallConv(v, conv);
+        v
     }
 
     pub fn select(&self, cond: ValueRef, then_val: ValueRef, else_val: ValueRef) -> ValueRef {

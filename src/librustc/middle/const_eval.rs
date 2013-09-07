@@ -19,7 +19,6 @@ use syntax::visit;
 use syntax::visit::Visitor;
 use syntax::ast::*;
 
-use std::float;
 use std::hashmap::{HashMap, HashSet};
 
 //
@@ -168,7 +167,7 @@ pub fn classify(e: &Expr,
 pub fn lookup_const(tcx: ty::ctxt, e: &Expr) -> Option<@Expr> {
     match tcx.def_map.find(&e.id) {
         Some(&ast::DefStatic(def_id, false)) => lookup_const_by_id(tcx, def_id),
-        Some(&ast::DefVariant(enum_def, variant_def)) => lookup_variant_by_id(tcx,
+        Some(&ast::DefVariant(enum_def, variant_def, _)) => lookup_variant_by_id(tcx,
                                                                                enum_def,
                                                                                variant_def),
         _ => None
@@ -476,9 +475,9 @@ pub fn lit_to_const(lit: &lit) -> const_val {
       lit_int(n, _) => const_int(n),
       lit_uint(n, _) => const_uint(n),
       lit_int_unsuffixed(n) => const_int(n),
-      lit_float(n, _) => const_float(float::from_str(n).unwrap() as f64),
+      lit_float(n, _) => const_float(from_str::<float>(n).unwrap() as f64),
       lit_float_unsuffixed(n) =>
-        const_float(float::from_str(n).unwrap() as f64),
+        const_float(from_str::<float>(n).unwrap() as f64),
       lit_nil => const_int(0i64),
       lit_bool(b) => const_bool(b)
     }

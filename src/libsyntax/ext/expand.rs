@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,9 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use ast::{Block, Crate, NodeId, DeclLocal, Expr_, ExprMac, SyntaxContext};
+use ast::{Block, Crate, DeclLocal, Expr_, ExprMac, SyntaxContext};
 use ast::{Local, Ident, mac_invoc_tt};
-use ast::{item_mac, Mrk, Stmt_, StmtDecl, StmtMac, StmtExpr, StmtSemi};
+use ast::{item_mac, Mrk, Stmt, StmtDecl, StmtMac, StmtExpr, StmtSemi};
 use ast::{token_tree};
 use ast;
 use ast_util::{mtwt_outer_mark, new_rename, new_mark};
@@ -21,6 +21,7 @@ use codemap;
 use codemap::{Span, Spanned, ExpnInfo, NameAndSpan};
 use ext::base::*;
 use fold::*;
+use opt_vec;
 use parse;
 use parse::{parse_item_from_source_str};
 use parse::token;
@@ -32,12 +33,10 @@ use std::vec;
 
 pub fn expand_expr(extsbox: @mut SyntaxEnv,
                    cx: @ExtCtxt,
-                   e: &Expr_,
-                   span: Span,
-                   fld: @ast_fold,
-                   orig: @fn(&Expr_, Span, @ast_fold) -> (Expr_, Span))
-                -> (Expr_, Span) {
-    match *e {
+                   e: @ast::Expr,
+                   fld: &MacroExpander)
+                   -> @ast::Expr {
+    match e.node {
         // expr_mac should really be expr_ext or something; it's the
         // entry-point for all syntax extensions.
         ExprMac(ref mac) => {
@@ -66,7 +65,7 @@ pub fn expand_expr(extsbox: @mut SyntaxEnv,
                         }
                         Some(@SE(NormalTT(expandfun, exp_span))) => {
                             cx.bt_push(ExpnInfo {
-                                call_site: span,
+                                call_site: e.span,
                                 callee: NameAndSpan {
                                     name: extnamestr,
                                     span: exp_span,
@@ -76,10 +75,20 @@ pub fn expand_expr(extsbox: @mut SyntaxEnv,
                             // mark before:
                             let marked_before = mark_tts(*tts,fm);
                             let marked_ctxt = new_mark(fm, ctxt);
+
+                            // The span that we pass to the expanders we want to
+                            // be the root of the call stack. That's the most
+                            // relevant span and it's the actual invocation of
+                            // the macro.
+                            let mac_span = original_span(cx);
+
                             let expanded =
-                                match expandfun(cx, mac.span, marked_before, marked_ctxt) {
+                                match expandfun.expand(cx,
+                                                       mac_span.call_site,
+                                                       marked_before,
+                                                       marked_ctxt) {
                                     MRExpr(e) => e,
-                                    MRAny(expr_maker,_,_) => expr_maker(),
+                                    MRAny(any_macro) => any_macro.make_expr(),
                                     _ => {
                                         cx.span_fatal(
                                             pth.span,
@@ -93,12 +102,19 @@ pub fn expand_expr(extsbox: @mut SyntaxEnv,
                             // mark after:
                             let marked_after = mark_expr(expanded,fm);
 
-                            //keep going, outside-in
+                            // Keep going, outside-in.
+                            //
+                            // XXX(pcwalton): Is it necessary to clone the
+                            // node here?
                             let fully_expanded =
                                 fld.fold_expr(marked_after).node.clone();
                             cx.bt_pop();
 
-                            (fully_expanded, span)
+                            @ast::Expr {
+                                id: ast::DUMMY_NODE_ID,
+                                node: fully_expanded,
+                                span: e.span,
+                            }
                         }
                         _ => {
                             cx.span_fatal(
@@ -117,8 +133,48 @@ pub fn expand_expr(extsbox: @mut SyntaxEnv,
         ast::ExprForLoop(src_pat, src_expr, ref src_loop_block, opt_ident) => {
             // Expand any interior macros etc.
             // NB: we don't fold pats yet. Curious.
-            let src_expr = fld.fold_expr(src_expr);
-            let src_loop_block = fld.fold_block(src_loop_block);
+            let src_expr = fld.fold_expr(src_expr).clone();
+            let src_loop_block = fld.fold_block(src_loop_block).clone();
+
+            let span = e.span;
+
+            pub fn mk_expr(_: @ExtCtxt, span: Span, node: Expr_)
+                           -> @ast::Expr {
+                @ast::Expr {
+                    id: ast::DUMMY_NODE_ID,
+                    node: node,
+                    span: span,
+                }
+            }
+
+            fn mk_block(_: @ExtCtxt,
+                        stmts: &[@ast::Stmt],
+                        expr: Option<@ast::Expr>,
+                        span: Span)
+                        -> ast::Block {
+                ast::Block {
+                    view_items: ~[],
+                    stmts: stmts.to_owned(),
+                    expr: expr,
+                    id: ast::DUMMY_NODE_ID,
+                    rules: ast::DefaultBlock,
+                    span: span,
+                }
+            }
+
+            fn mk_simple_path(ident: ast::Ident, span: Span) -> ast::Path {
+                ast::Path {
+                    span: span,
+                    global: false,
+                    segments: ~[
+                        ast::PathSegment {
+                            identifier: ident,
+                            lifetime: None,
+                            types: opt_vec::Empty,
+                        }
+                    ],
+                }
+            }
 
             // to:
             //
@@ -174,10 +230,14 @@ pub fn expand_expr(extsbox: @mut SyntaxEnv,
                                  ~[iter_decl_stmt],
                                  Some(loop_expr));
 
-            (ast::ExprBlock(block), span)
+            @ast::Expr {
+                id: ast::DUMMY_NODE_ID,
+                node: ast::ExprBlock(block),
+                span: span,
+            }
         }
 
-        _ => orig(e, span, fld)
+        _ => noop_fold_expr(e, fld)
     }
 }
 
@@ -193,12 +253,10 @@ pub fn expand_expr(extsbox: @mut SyntaxEnv,
 pub fn expand_mod_items(extsbox: @mut SyntaxEnv,
                         cx: @ExtCtxt,
                         module_: &ast::_mod,
-                        fld: @ast_fold,
-                        orig: @fn(&ast::_mod, @ast_fold) -> ast::_mod)
-                     -> ast::_mod {
-
+                        fld: &MacroExpander)
+                        -> ast::_mod {
     // Fold the contents first:
-    let module_ = orig(module_, fld);
+    let module_ = noop_fold_mod(module_, fld);
 
     // For each item, look through the attributes.  If any of them are
     // decorated with "item decorators", then use that function to transform
@@ -225,7 +283,10 @@ pub fn expand_mod_items(extsbox: @mut SyntaxEnv,
         }
     };
 
-    ast::_mod { items: new_items, ..module_ }
+    ast::_mod {
+        items: new_items,
+        ..module_
+    }
 }
 
 // eval $e with a new exts frame:
@@ -248,19 +309,20 @@ static special_block_name : &'static str = " block";
 pub fn expand_item(extsbox: @mut SyntaxEnv,
                    cx: @ExtCtxt,
                    it: @ast::item,
-                   fld: @ast_fold,
-                   orig: @fn(@ast::item, @ast_fold) -> Option<@ast::item>)
-                -> Option<@ast::item> {
+                   fld: &MacroExpander)
+                   -> Option<@ast::item> {
     match it.node {
         ast::item_mac(*) => expand_item_mac(extsbox, cx, it, fld),
         ast::item_mod(_) | ast::item_foreign_mod(_) => {
             cx.mod_push(it.ident);
             let macro_escape = contains_macro_escape(it.attrs);
-            let result = with_exts_frame!(extsbox,macro_escape,orig(it,fld));
+            let result = with_exts_frame!(extsbox,
+                                          macro_escape,
+                                          noop_fold_item(it, fld));
             cx.mod_pop();
             result
         },
-        _ => orig(it,fld)
+        _ => noop_fold_item(it, fld)
     }
 }
 
@@ -272,11 +334,15 @@ pub fn contains_macro_escape(attrs: &[ast::Attribute]) -> bool {
 // Support for item-position macro invocations, exactly the same
 // logic as for expression-position macro invocations.
 pub fn expand_item_mac(extsbox: @mut SyntaxEnv,
-                       cx: @ExtCtxt, it: @ast::item,
-                       fld: @ast_fold)
-                    -> Option<@ast::item> {
+                       cx: @ExtCtxt,
+                       it: @ast::item,
+                       fld: &MacroExpander)
+                       -> Option<@ast::item> {
     let (pth, tts, ctxt) = match it.node {
-        item_mac(codemap::Spanned { node: mac_invoc_tt(ref pth, ref tts, ctxt), _}) => {
+        item_mac(codemap::Spanned {
+            node: mac_invoc_tt(ref pth, ref tts, ctxt),
+            _
+        }) => {
             (pth, (*tts).clone(), ctxt)
         }
         _ => cx.span_bug(it.span, "invalid item macro invocation")
@@ -306,7 +372,7 @@ pub fn expand_item_mac(extsbox: @mut SyntaxEnv,
             // mark before expansion:
             let marked_before = mark_tts(tts,fm);
             let marked_ctxt = new_mark(fm,ctxt);
-            expander(cx, it.span, marked_before, marked_ctxt)
+            expander.expand(cx, it.span, marked_before, marked_ctxt)
         }
         Some(@SE(IdentTT(expander, span))) => {
             if it.ident.name == parse::token::special_idents::invalid.name {
@@ -324,18 +390,25 @@ pub fn expand_item_mac(extsbox: @mut SyntaxEnv,
             // mark before expansion:
             let marked_tts = mark_tts(tts,fm);
             let marked_ctxt = new_mark(fm,ctxt);
-            expander(cx, it.span, it.ident, marked_tts, marked_ctxt)
+            expander.expand(cx, it.span, it.ident, marked_tts, marked_ctxt)
         }
         _ => cx.span_fatal(
             it.span, fmt!("%s! is not legal in item position", extnamestr))
     };
 
     let maybe_it = match expanded {
-        MRItem(it) => mark_item(it,fm).chain(|i| {fld.fold_item(i)}),
-        MRExpr(_) => cx.span_fatal(pth.span,
-                                   fmt!("expr macro in item position: %s", extnamestr)),
-        MRAny(_, item_maker, _) => item_maker().chain(|i| {mark_item(i,fm)})
-                                      .chain(|i| {fld.fold_item(i)}),
+        MRItem(it) => {
+            mark_item(it,fm)
+                .and_then(|i| fld.fold_item(i))
+        }
+        MRExpr(_) => {
+            cx.span_fatal(pth.span, fmt!("expr macro in item position: %s", extnamestr))
+        }
+        MRAny(any_macro) => {
+            any_macro.make_item()
+                     .and_then(|i| mark_item(i,fm))
+                     .and_then(|i| fld.fold_item(i))
+        }
         MRDef(ref mdef) => {
             // yikes... no idea how to apply the mark to this. I'm afraid
             // we're going to have to wait-and-see on this one.
@@ -367,62 +440,75 @@ fn insert_macro(exts: SyntaxEnv, name: ast::Name, transformer: @Transformer) {
 // expand a stmt
 pub fn expand_stmt(extsbox: @mut SyntaxEnv,
                    cx: @ExtCtxt,
-                   s: &Stmt_,
-                   sp: Span,
-                   fld: @ast_fold,
-                   orig: @fn(&Stmt_, Span, @ast_fold)
-                             -> (Option<Stmt_>, Span))
-                -> (Option<Stmt_>, Span) {
+                   s: &Stmt,
+                   fld: &MacroExpander)
+                   -> Option<@Stmt> {
     // why the copying here and not in expand_expr?
     // looks like classic changed-in-only-one-place
-    let (mac, pth, tts, semi, ctxt) = match *s {
+    let (pth, tts, semi, ctxt) = match s.node {
         StmtMac(ref mac, semi) => {
             match mac.node {
                 mac_invoc_tt(ref pth, ref tts, ctxt) => {
-                    ((*mac).clone(), pth, (*tts).clone(), semi, ctxt)
+                    (pth, (*tts).clone(), semi, ctxt)
                 }
             }
         }
-        _ => return expand_non_macro_stmt(*extsbox,s,sp,fld,orig)
+        _ => return expand_non_macro_stmt(*extsbox, s, fld)
     };
     if (pth.segments.len() > 1u) {
-        cx.span_fatal(
-            pth.span,
-            fmt!("expected macro name without module \
-                  separators"));
+        cx.span_fatal(pth.span,
+                      "expected macro name without module separators");
     }
     let extname = &pth.segments[0].identifier;
     let extnamestr = ident_to_str(extname);
-    let (fully_expanded, sp) = match (*extsbox).find(&extname.name) {
-        None =>
-            cx.span_fatal(pth.span, fmt!("macro undefined: '%s'", extnamestr)),
+    let fully_expanded: @ast::Stmt = match (*extsbox).find(&extname.name) {
+        None => {
+            cx.span_fatal(pth.span, fmt!("macro undefined: '%s'", extnamestr))
+        }
 
         Some(@SE(NormalTT(expandfun, exp_span))) => {
             cx.bt_push(ExpnInfo {
-                call_site: sp,
-                callee: NameAndSpan { name: extnamestr, span: exp_span }
+                call_site: s.span,
+                callee: NameAndSpan {
+                    name: extnamestr,
+                    span: exp_span,
+                }
             });
             let fm = fresh_mark();
             // mark before expansion:
             let marked_tts = mark_tts(tts,fm);
             let marked_ctxt = new_mark(fm,ctxt);
-            let expanded = match expandfun(cx, mac.span, marked_tts, marked_ctxt) {
-                MRExpr(e) =>
-                    @codemap::Spanned { node: StmtExpr(e, ast::DUMMY_NODE_ID),
-                                        span: e.span},
-                MRAny(_,_,stmt_mkr) => stmt_mkr(),
+
+            // See the comment in expand_expr for why we want the original span,
+            // not the current mac.span.
+            let mac_span = original_span(cx);
+
+            let expanded = match expandfun.expand(cx,
+                                                  mac_span.call_site,
+                                                  marked_tts,
+                                                  marked_ctxt) {
+                MRExpr(e) => {
+                    @codemap::Spanned {
+                        node: StmtExpr(e, ast::DUMMY_NODE_ID),
+                        span: e.span,
+                    }
+                }
+                MRAny(any_macro) => any_macro.make_stmt(),
                 _ => cx.span_fatal(
                     pth.span,
                     fmt!("non-stmt macro in stmt pos: %s", extnamestr))
             };
             let marked_after = mark_stmt(expanded,fm);
 
-            //keep going, outside-in
+            // Keep going, outside-in.
             let fully_expanded = match fld.fold_stmt(marked_after) {
                 Some(stmt) => {
                     let fully_expanded = &stmt.node;
                     cx.bt_pop();
-                    (*fully_expanded).clone()
+                    @Spanned {
+                        span: stmt.span,
+                        node: (*fully_expanded).clone(),
+                    }
                 }
                 None => {
                     cx.span_fatal(pth.span,
@@ -430,7 +516,7 @@ pub fn expand_stmt(extsbox: @mut SyntaxEnv,
                 }
             };
 
-            (fully_expanded, sp)
+            fully_expanded
         }
 
         _ => {
@@ -439,24 +525,28 @@ pub fn expand_stmt(extsbox: @mut SyntaxEnv,
         }
     };
 
-    (match fully_expanded {
-        StmtExpr(e, stmt_id) if semi => Some(StmtSemi(e, stmt_id)),
-        _ => { Some(fully_expanded) } /* might already have a semi */
-    }, sp)
-
+    match fully_expanded.node {
+        StmtExpr(e, stmt_id) if semi => {
+            Some(@Spanned {
+                span: fully_expanded.span,
+                node: StmtSemi(e, stmt_id),
+            })
+        }
+        _ => Some(fully_expanded), /* might already have a semi */
+    }
 }
 
 // expand a non-macro stmt. this is essentially the fallthrough for
 // expand_stmt, above.
-fn expand_non_macro_stmt (exts: SyntaxEnv,
-                          s: &Stmt_,
-                          sp: Span,
-                          fld: @ast_fold,
-                          orig: @fn(&Stmt_, Span, @ast_fold) -> (Option<Stmt_>, Span))
-    -> (Option<Stmt_>,Span) {
+fn expand_non_macro_stmt(exts: SyntaxEnv, s: &Stmt, fld: &MacroExpander)
+                         -> Option<@Stmt> {
     // is it a let?
-    match *s {
-        StmtDecl(@Spanned{node: DeclLocal(ref local), span: stmt_span}, node_id) => {
+    match s.node {
+        StmtDecl(@Spanned {
+            node: DeclLocal(ref local),
+            span: stmt_span
+        },
+        node_id) => {
             let block_info = get_block_info(exts);
             let pending_renames = block_info.pending_renames;
 
@@ -494,19 +584,24 @@ fn expand_non_macro_stmt (exts: SyntaxEnv,
             // also, don't forget to expand the init:
             let new_init_opt = init.map(|e| fld.fold_expr(*e));
             let rewritten_local =
-                @Local{is_mutbl:is_mutbl,
-                       ty:ty,
-                       pat:rewritten_pat,
-                       init:new_init_opt,
-                       id:id,
-                       span:span};
-            (Some(StmtDecl(@Spanned{node:DeclLocal(rewritten_local),
-                                     span: stmt_span},node_id)),
-             sp)
+                @Local {
+                    is_mutbl: is_mutbl,
+                    ty: ty,
+                    pat: rewritten_pat,
+                    init: new_init_opt,
+                    id: id,
+                    span: span,
+                };
+            Some(@Spanned {
+                node: StmtDecl(@Spanned {
+                        node: DeclLocal(rewritten_local),
+                        span: stmt_span
+                    },
+                    node_id),
+                span: span
+            })
         },
-        _ => {
-            orig(s, sp, fld)
-        }
+        _ => noop_fold_stmt(s, fld),
     }
 }
 
@@ -553,107 +648,10 @@ impl Visitor<()> for NewNameFinderContext {
         }
     }
 
-    // XXX: Methods below can become default methods.
-
-    fn visit_mod(&mut self, module: &ast::_mod, _: Span, _: NodeId, _: ()) {
-        visit::walk_mod(self, module, ())
-    }
-
-    fn visit_view_item(&mut self, view_item: &ast::view_item, _: ()) {
-        visit::walk_view_item(self, view_item, ())
-    }
-
-    fn visit_item(&mut self, item: @ast::item, _: ()) {
-        visit::walk_item(self, item, ())
-    }
-
-    fn visit_foreign_item(&mut self,
-                          foreign_item: @ast::foreign_item,
-                          _: ()) {
-        visit::walk_foreign_item(self, foreign_item, ())
-    }
-
-    fn visit_local(&mut self, local: @ast::Local, _: ()) {
-        visit::walk_local(self, local, ())
-    }
-
-    fn visit_block(&mut self, block: &ast::Block, _: ()) {
-        visit::walk_block(self, block, ())
-    }
-
-    fn visit_stmt(&mut self, stmt: @ast::Stmt, _: ()) {
-        visit::walk_stmt(self, stmt, ())
-    }
-
-    fn visit_arm(&mut self, arm: &ast::Arm, _: ()) {
-        visit::walk_arm(self, arm, ())
-    }
-
-    fn visit_decl(&mut self, decl: @ast::Decl, _: ()) {
-        visit::walk_decl(self, decl, ())
-    }
-
-    fn visit_expr(&mut self, expr: @ast::Expr, _: ()) {
-        visit::walk_expr(self, expr, ())
-    }
-
-    fn visit_expr_post(&mut self, _: @ast::Expr, _: ()) {
-        // Empty!
-    }
-
     fn visit_ty(&mut self, typ: &ast::Ty, _: ()) {
         visit::walk_ty(self, typ, ())
     }
 
-    fn visit_generics(&mut self, generics: &ast::Generics, _: ()) {
-        visit::walk_generics(self, generics, ())
-    }
-
-    fn visit_fn(&mut self,
-                function_kind: &visit::fn_kind,
-                function_declaration: &ast::fn_decl,
-                block: &ast::Block,
-                span: Span,
-                node_id: NodeId,
-                _: ()) {
-        visit::walk_fn(self,
-                        function_kind,
-                        function_declaration,
-                        block,
-                        span,
-                        node_id,
-                        ())
-    }
-
-    fn visit_ty_method(&mut self, ty_method: &ast::TypeMethod, _: ()) {
-        visit::walk_ty_method(self, ty_method, ())
-    }
-
-    fn visit_trait_method(&mut self,
-                          trait_method: &ast::trait_method,
-                          _: ()) {
-        visit::walk_trait_method(self, trait_method, ())
-    }
-
-    fn visit_struct_def(&mut self,
-                        struct_def: @ast::struct_def,
-                        ident: Ident,
-                        generics: &ast::Generics,
-                        node_id: NodeId,
-                        _: ()) {
-        visit::walk_struct_def(self,
-                                struct_def,
-                                ident,
-                                generics,
-                                node_id,
-                                ())
-    }
-
-    fn visit_struct_field(&mut self,
-                          struct_field: @ast::struct_field,
-                          _: ()) {
-        visit::walk_struct_field(self, struct_field, ())
-    }
 }
 
 // a visitor that extracts the paths
@@ -664,7 +662,6 @@ struct NewPathExprFinderContext {
     path_accumulator: @mut ~[ast::Path],
 }
 
-// XXX : YIKES a lot of boilerplate again....
 impl Visitor<()> for NewPathExprFinderContext {
 
     fn visit_expr(&mut self, expr: @ast::Expr, _: ()) {
@@ -677,108 +674,10 @@ impl Visitor<()> for NewPathExprFinderContext {
         }
     }
 
-
-    // XXX: Methods below can become default methods.
-
-    fn visit_pat(&mut self, pattern: @ast::Pat, _: ()) {
-        visit::walk_pat(self,pattern,())
-    }
-
-    fn visit_mod(&mut self, module: &ast::_mod, _: Span, _: NodeId, _: ()) {
-        visit::walk_mod(self, module, ())
-    }
-
-    fn visit_view_item(&mut self, view_item: &ast::view_item, _: ()) {
-        visit::walk_view_item(self, view_item, ())
-    }
-
-    fn visit_item(&mut self, item: @ast::item, _: ()) {
-        visit::walk_item(self, item, ())
-    }
-
-    fn visit_foreign_item(&mut self,
-                          foreign_item: @ast::foreign_item,
-                          _: ()) {
-        visit::walk_foreign_item(self, foreign_item, ())
-    }
-
-    fn visit_local(&mut self, local: @ast::Local, _: ()) {
-        visit::walk_local(self, local, ())
-    }
-
-    fn visit_block(&mut self, block: &ast::Block, _: ()) {
-        visit::walk_block(self, block, ())
-    }
-
-    fn visit_stmt(&mut self, stmt: @ast::Stmt, _: ()) {
-        visit::walk_stmt(self, stmt, ())
-    }
-
-    fn visit_arm(&mut self, arm: &ast::Arm, _: ()) {
-        visit::walk_arm(self, arm, ())
-    }
-
-    fn visit_decl(&mut self, decl: @ast::Decl, _: ()) {
-        visit::walk_decl(self, decl, ())
-    }
-
-    fn visit_expr_post(&mut self, _: @ast::Expr, _: ()) {
-        // Empty!
-    }
-
     fn visit_ty(&mut self, typ: &ast::Ty, _: ()) {
         visit::walk_ty(self, typ, ())
     }
 
-    fn visit_generics(&mut self, generics: &ast::Generics, _: ()) {
-        visit::walk_generics(self, generics, ())
-    }
-
-    fn visit_fn(&mut self,
-                function_kind: &visit::fn_kind,
-                function_declaration: &ast::fn_decl,
-                block: &ast::Block,
-                span: Span,
-                node_id: NodeId,
-                _: ()) {
-        visit::walk_fn(self,
-                        function_kind,
-                        function_declaration,
-                        block,
-                        span,
-                        node_id,
-                        ())
-    }
-
-    fn visit_ty_method(&mut self, ty_method: &ast::TypeMethod, _: ()) {
-        visit::walk_ty_method(self, ty_method, ())
-    }
-
-    fn visit_trait_method(&mut self,
-                          trait_method: &ast::trait_method,
-                          _: ()) {
-        visit::walk_trait_method(self, trait_method, ())
-    }
-
-    fn visit_struct_def(&mut self,
-                        struct_def: @ast::struct_def,
-                        ident: Ident,
-                        generics: &ast::Generics,
-                        node_id: NodeId,
-                        _: ()) {
-        visit::walk_struct_def(self,
-                                struct_def,
-                                ident,
-                                generics,
-                                node_id,
-                                ())
-    }
-
-    fn visit_struct_field(&mut self,
-                          struct_field: @ast::struct_field,
-                          _: ()) {
-        visit::walk_struct_field(self, struct_field, ())
-    }
 }
 
 // return a visitor that extracts the pat_ident paths
@@ -803,18 +702,18 @@ pub fn new_path_finder(paths: @mut ~[ast::Path]) -> @mut Visitor<()> {
 
 // expand a block. pushes a new exts_frame, then calls expand_block_elts
 pub fn expand_block(extsbox: @mut SyntaxEnv,
-                    _cx: @ExtCtxt,
+                    _: @ExtCtxt,
                     blk: &Block,
-                    fld: @ast_fold,
-                    _orig: @fn(&Block, @ast_fold) -> Block)
-                 -> Block {
+                    fld: &MacroExpander)
+                    -> Block {
     // see note below about treatment of exts table
     with_exts_frame!(extsbox,false,
                      expand_block_elts(*extsbox, blk, fld))
 }
 
 // expand the elements of a block.
-pub fn expand_block_elts(exts: SyntaxEnv, b: &Block, fld: @ast_fold) -> Block {
+pub fn expand_block_elts(exts: SyntaxEnv, b: &Block, fld: &MacroExpander)
+                         -> Block {
     let block_info = get_block_info(exts);
     let pending_renames = block_info.pending_renames;
     let rename_fld = renames_to_fold(pending_renames);
@@ -855,9 +754,47 @@ fn get_block_info(exts : SyntaxEnv) -> BlockInfo {
     }
 }
 
+struct IdentRenamer {
+    renames: @mut ~[(ast::Ident,ast::Name)],
+}
+
+impl ast_fold for IdentRenamer {
+    fn fold_ident(&self, id: ast::Ident) -> ast::Ident {
+        let new_ctxt = self.renames.iter().fold(id.ctxt, |ctxt, &(from, to)| {
+            new_rename(from, to, ctxt)
+        });
+        ast::Ident {
+            name: id.name,
+            ctxt: new_ctxt,
+        }
+    }
+}
+
+// given a mutable list of renames, return a tree-folder that applies those
+// renames.
+pub fn renames_to_fold(renames: @mut ~[(ast::Ident,ast::Name)]) -> @ast_fold {
+    @IdentRenamer {
+        renames: renames,
+    } as @ast_fold
+}
+
+// perform a bunch of renames
+fn apply_pending_renames(folder : @ast_fold, stmt : ast::Stmt) -> @ast::Stmt {
+    match folder.fold_stmt(&stmt) {
+        Some(s) => s,
+        None => fail!(fmt!("renaming of stmt produced None"))
+    }
+}
+
+
+
 pub fn new_span(cx: @ExtCtxt, sp: Span) -> Span {
     /* this discards information in the case of macro-defining macros */
-    return Span {lo: sp.lo, hi: sp.hi, expn_info: cx.backtrace()};
+    Span {
+        lo: sp.lo,
+        hi: sp.hi,
+        expn_info: cx.backtrace(),
+    }
 }
 
 // FIXME (#2247): this is a moderately bad kludge to inject some macros into
@@ -886,11 +823,11 @@ pub fn std_macros() -> @str {
             }
         })
     )
-    macro_rules! error( ($($arg:tt)+) => (log!(1u32, $($arg)+)) )
-    macro_rules! warn ( ($($arg:tt)+) => (log!(2u32, $($arg)+)) )
-    macro_rules! info ( ($($arg:tt)+) => (log!(3u32, $($arg)+)) )
-    macro_rules! debug( ($($arg:tt)+) => (
-        if cfg!(debug) { log!(4u32, $($arg)+) }
+    macro_rules! error( ($($arg:tt)*) => (log!(1u32, $($arg)*)) )
+    macro_rules! warn ( ($($arg:tt)*) => (log!(2u32, $($arg)*)) )
+    macro_rules! info ( ($($arg:tt)*) => (log!(3u32, $($arg)*)) )
+    macro_rules! debug( ($($arg:tt)*) => (
+        if cfg!(not(ndebug)) { log!(4u32, $($arg)*) }
     ))
 
     macro_rules! log2(
@@ -901,11 +838,11 @@ pub fn std_macros() -> @str {
             }
         })
     )
-    macro_rules! error2( ($($arg:tt)+) => (log2!(1u32, $($arg)+)) )
-    macro_rules! warn2 ( ($($arg:tt)+) => (log2!(2u32, $($arg)+)) )
-    macro_rules! info2 ( ($($arg:tt)+) => (log2!(3u32, $($arg)+)) )
-    macro_rules! debug2( ($($arg:tt)+) => (
-        if cfg!(debug) { log2!(4u32, $($arg)+) }
+    macro_rules! error2( ($($arg:tt)*) => (log2!(1u32, $($arg)*)) )
+    macro_rules! warn2 ( ($($arg:tt)*) => (log2!(2u32, $($arg)*)) )
+    macro_rules! info2 ( ($($arg:tt)*) => (log2!(3u32, $($arg)*)) )
+    macro_rules! debug2( ($($arg:tt)*) => (
+        if cfg!(not(ndebug)) { log2!(4u32, $($arg)*) }
     ))
 
     macro_rules! fail(
@@ -924,8 +861,8 @@ pub fn std_macros() -> @str {
         () => (
             fail!(\"explicit failure\")
         );
-        ($($arg:tt)+) => (
-            ::std::sys::FailWithCause::fail_with(format!($($arg)+), file!(), line!())
+        ($($arg:tt)*) => (
+            ::std::sys::FailWithCause::fail_with(format!($($arg)*), file!(), line!())
         )
     )
 
@@ -1038,9 +975,7 @@ pub fn std_macros() -> @str {
 
                 use super::*;
 
-                static key: ::std::local_data::Key<
-                    @::std::condition::Handler<$input, $out>> =
-                    &::std::local_data::Key;
+                local_data_key!(key: @::std::condition::Handler<$input, $out>)
 
                 pub static cond :
                     ::std::condition::Condition<$input,$out> =
@@ -1059,9 +994,7 @@ pub fn std_macros() -> @str {
 
                 use super::*;
 
-                static key: ::std::local_data::Key<
-                    @::std::condition::Handler<$input, $out>> =
-                    &::std::local_data::Key;
+                local_data_key!(key: @::std::condition::Handler<$input, $out>)
 
                 pub static cond :
                     ::std::condition::Condition<$input,$out> =
@@ -1071,42 +1004,6 @@ pub fn std_macros() -> @str {
                     };
             }
         }
-    )
-
-    //
-    // A scheme-style conditional that helps to improve code clarity in some instances when
-    // the `if`, `else if`, and `else` keywords obscure predicates undesirably.
-    //
-    // # Example
-    //
-    // ~~~
-    // let clamped =
-    //     if x > mx { mx }
-    //     else if x < mn { mn }
-    //     else { x };
-    // ~~~
-    //
-    // Using `cond!`, the above could be written as:
-    //
-    // ~~~
-    // let clamped = cond!(
-    //     (x > mx) { mx }
-    //     (x < mn) { mn }
-    //     _        { x  }
-    // );
-    // ~~~
-    //
-    // The optional default case is denoted by `_`.
-    //
-    macro_rules! cond (
-        ( $(($pred:expr) $body:block)+ _ $default:block ) => (
-            $(if $pred $body else)+
-            $default
-        );
-        // for if the default case was ommitted
-        ( $(($pred:expr) $body:block)+ ) => (
-            $(if $pred $body)else+
-        );
     )
 
     // NOTE(acrichto): start removing this after the next snapshot
@@ -1129,21 +1026,27 @@ pub fn std_macros() -> @str {
         )
     )
 
+    macro_rules! format(($($arg:tt)*) => (
+        format_args!(::std::fmt::format, $($arg)*)
+    ))
+    macro_rules! write(($dst:expr, $($arg:tt)*) => (
+        format_args!(|args| { ::std::fmt::write($dst, args) }, $($arg)*)
+    ))
+    macro_rules! writeln(($dst:expr, $($arg:tt)*) => (
+        format_args!(|args| { ::std::fmt::writeln($dst, args) }, $($arg)*)
+    ))
     // FIXME(#6846) once stdio is redesigned, this shouldn't perform an
     //              allocation but should rather delegate to an invocation of
     //              write! instead of format!
     macro_rules! print (
-        ($($arg:tt)+) => (::std::io::print(format!($($arg)+)))
+        ($($arg:tt)*) => (::std::io::print(format!($($arg)*)))
     )
-
     // FIXME(#6846) once stdio is redesigned, this shouldn't perform an
     //              allocation but should rather delegate to an io::Writer
     macro_rules! println (
-        ($($arg:tt)+) => (::std::io::println(format!($($arg)+)))
+        ($($arg:tt)*) => (::std::io::println(format!($($arg)*)))
     )
 
-    // NOTE: use this after a snapshot lands to abstract the details
-    // of the TLS interface.
     macro_rules! local_data_key (
         ($name:ident: $ty:ty) => (
             static $name: ::std::local_data::Key<$ty> = &::std::local_data::Key;
@@ -1234,10 +1137,28 @@ pub fn std_macros() -> @str {
 }";
 }
 
+struct Injector {
+    sm: @ast::item,
+}
+
+impl ast_fold for Injector {
+    fn fold_mod(&self, module: &ast::_mod) -> ast::_mod {
+        // Just inject the standard macros at the start of the first module
+        // in the crate: that is, at the start of the crate file itself.
+        let items = vec::append(~[ self.sm ], module.items);
+        ast::_mod {
+            items: items,
+            ..(*module).clone() // FIXME #2543: Bad copy.
+        }
+    }
+}
+
 // add a bunch of macros as though they were placed at the head of the
 // program (ick). This should run before cfg stripping.
 pub fn inject_std_macros(parse_sess: @mut parse::ParseSess,
-                         cfg: ast::CrateConfig, c: &Crate) -> @Crate {
+                         cfg: ast::CrateConfig,
+                         c: @Crate)
+                         -> @Crate {
     let sm = match parse_item_from_source_str(@"<std-macros>",
                                               std_macros(),
                                               cfg.clone(),
@@ -1247,48 +1168,80 @@ pub fn inject_std_macros(parse_sess: @mut parse::ParseSess,
         None => fail!("expected core macros to parse correctly")
     };
 
-    let injecter = @AstFoldFns {
-        fold_mod: |modd, _| {
-            // just inject the std macros at the start of the first
-            // module in the crate (i.e the crate file itself.)
-            let items = vec::append(~[sm], modd.items);
-            ast::_mod {
-                items: items,
-                // FIXME #2543: Bad copy.
-                .. (*modd).clone()
-            }
-        },
-        .. *default_ast_fold()
-    };
-    @make_fold(injecter).fold_crate(c)
+    let injector = @Injector {
+        sm: sm,
+    } as @ast_fold;
+    @injector.fold_crate(c)
+}
+
+struct NoOpFolder {
+    contents: (),
+}
+
+impl ast_fold for NoOpFolder {}
+
+struct MacroExpander {
+    extsbox: @mut SyntaxEnv,
+    cx: @ExtCtxt,
+}
+
+impl ast_fold for MacroExpander {
+    fn fold_expr(&self, expr: @ast::Expr) -> @ast::Expr {
+        expand_expr(self.extsbox,
+                    self.cx,
+                    expr,
+                    self)
+    }
+
+    fn fold_mod(&self, module: &ast::_mod) -> ast::_mod {
+        expand_mod_items(self.extsbox,
+                         self.cx,
+                         module,
+                         self)
+    }
+
+    fn fold_item(&self, item: @ast::item) -> Option<@ast::item> {
+        expand_item(self.extsbox,
+                    self.cx,
+                    item,
+                    self)
+    }
+
+    fn fold_stmt(&self, stmt: &ast::Stmt) -> Option<@ast::Stmt> {
+        expand_stmt(self.extsbox,
+                    self.cx,
+                    stmt,
+                    self)
+    }
+
+    fn fold_block(&self, block: &ast::Block) -> ast::Block {
+        expand_block(self.extsbox,
+                     self.cx,
+                     block,
+                     self)
+    }
+
+    fn new_span(&self, span: Span) -> Span {
+        new_span(self.cx, span)
+    }
 }
 
 pub fn expand_crate(parse_sess: @mut parse::ParseSess,
-                    cfg: ast::CrateConfig, c: &Crate) -> @Crate {
+                    cfg: ast::CrateConfig,
+                    c: &Crate) -> @Crate {
     // adding *another* layer of indirection here so that the block
     // visitor can swap out one exts table for another for the duration
     // of the block.  The cleaner alternative would be to thread the
     // exts table through the fold, but that would require updating
     // every method/element of AstFoldFns in fold.rs.
-    let extsbox = @mut syntax_expander_table();
-    let afp = default_ast_fold();
+    let extsbox = syntax_expander_table();
     let cx = ExtCtxt::new(parse_sess, cfg.clone());
-    let f_pre = @AstFoldFns {
-        fold_expr: |expr,span,recur|
-            expand_expr(extsbox, cx, expr, span, recur, afp.fold_expr),
-        fold_mod: |modd,recur|
-            expand_mod_items(extsbox, cx, modd, recur, afp.fold_mod),
-        fold_item: |item,recur|
-            expand_item(extsbox, cx, item, recur, afp.fold_item),
-        fold_stmt: |stmt,span,recur|
-            expand_stmt(extsbox, cx, stmt, span, recur, afp.fold_stmt),
-        fold_block: |blk,recur|
-            expand_block(extsbox, cx, blk, recur, afp.fold_block),
-        new_span: |a| new_span(cx, a),
-        .. *afp};
-    let f = make_fold(f_pre);
+    let expander = @MacroExpander {
+        extsbox: @mut extsbox,
+        cx: cx,
+    } as @ast_fold;
 
-    let ret = @f.fold_crate(c);
+    let ret = @expander.fold_crate(c);
     parse_sess.span_diagnostic.handler().abort_if_errors();
     return ret;
 }
@@ -1354,53 +1307,56 @@ impl CtxtFn for Repainter {
     }
 }
 
-// given a function from ctxts to ctxts, produce
-// an ast_fold that applies that function to all ctxts:
-pub fn fun_to_ctxt_folder<T : 'static + CtxtFn>(cf: @T) -> @AstFoldFns {
-    let afp = default_ast_fold();
-    let fi : @fn(ast::Ident, @ast_fold) -> ast::Ident =
-        |ast::Ident{name, ctxt}, _| {
-        ast::Ident{name:name,ctxt:cf.f(ctxt)}
-    };
-    let fm : @fn(&ast::mac_, Span, @ast_fold) -> (ast::mac_,Span) =
-        |m, sp, fld| {
-        match *m {
-            mac_invoc_tt(ref path, ref tts, ctxt) =>
-            (mac_invoc_tt(fld.fold_path(path),
-                          fold_tts(*tts,fld),
-                          cf.f(ctxt)),
-            sp)
-        }
+pub struct ContextWrapper {
+    context_function: @CtxtFn,
+}
 
-    };
-    @AstFoldFns{
-        fold_ident : fi,
-        fold_mac : fm,
-        .. *afp
+impl ast_fold for ContextWrapper {
+    fn fold_ident(&self, id: ast::Ident) -> ast::Ident {
+        let ast::Ident {
+            name,
+            ctxt
+        } = id;
+        ast::Ident {
+            name: name,
+            ctxt: self.context_function.f(ctxt),
+        }
+    }
+    fn fold_mac(&self, m: &ast::mac) -> ast::mac {
+        let macro = match m.node {
+            mac_invoc_tt(ref path, ref tts, ctxt) => {
+                mac_invoc_tt(self.fold_path(path),
+                             fold_tts(*tts, self),
+                             self.context_function.f(ctxt))
+            }
+        };
+        Spanned {
+            node: macro,
+            span: m.span,
+        }
     }
 }
 
-
-
-// given a mutable list of renames, return a tree-folder that applies those
-// renames.
-// FIXME #4536: currently pub to allow testing
-pub fn renames_to_fold(renames : @mut ~[(ast::Ident,ast::Name)]) -> @AstFoldFns {
-    fun_to_ctxt_folder(@MultiRenamer{renames : renames})
+// given a function from ctxts to ctxts, produce
+// an ast_fold that applies that function to all ctxts:
+pub fn fun_to_ctxt_folder<T : 'static + CtxtFn>(cf: @T) -> @ContextWrapper {
+    @ContextWrapper {
+        context_function: cf as @CtxtFn,
+    }
 }
 
 // just a convenience:
-pub fn new_mark_folder(m : Mrk) -> @AstFoldFns {
+pub fn new_mark_folder(m: Mrk) -> @ContextWrapper {
     fun_to_ctxt_folder(@Marker{mark:m})
 }
 
-pub fn new_rename_folder(from : ast::Ident, to : ast::Name) -> @AstFoldFns {
+pub fn new_rename_folder(from: ast::Ident, to: ast::Name) -> @ContextWrapper {
     fun_to_ctxt_folder(@Renamer{from:from,to:to})
 }
 
 // apply a given mark to the given token trees. Used prior to expansion of a macro.
 fn mark_tts(tts : &[token_tree], m : Mrk) -> ~[token_tree] {
-    fold_tts(tts,new_mark_folder(m) as @ast_fold)
+    fold_tts(tts,new_mark_folder(m))
 }
 
 // apply a given mark to the given expr. Used following the expansion of a macro.
@@ -1433,6 +1389,20 @@ pub fn mtwt_cancel_outer_mark(tts: &[ast::token_tree], ctxt: ast::SyntaxContext)
     mark_tts(tts,outer_mark)
 }
 
+fn original_span(cx: @ExtCtxt) -> @codemap::ExpnInfo {
+    let mut relevant_info = cx.backtrace();
+    let mut einfo = relevant_info.unwrap();
+    loop {
+        match relevant_info {
+            None => { break }
+            Some(e) => {
+                einfo = e;
+                relevant_info = einfo.call_site.expn_info;
+            }
+        }
+    }
+    return einfo;
+}
 
 #[cfg(test)]
 mod test {
@@ -1554,7 +1524,7 @@ mod test {
         let ident_str = @"x";
         let tts = string_to_tts(ident_str);
         let fm = fresh_mark();
-        let marked_once = fold::fold_tts(tts,new_mark_folder(fm) as @fold::ast_fold);
+        let marked_once = fold::fold_tts(tts,new_mark_folder(fm));
         assert_eq!(marked_once.len(),1);
         let marked_once_ctxt =
             match marked_once[0] {
@@ -1670,9 +1640,10 @@ mod test {
                   macro_rules! user(($x:ident) => ({letty!($x); $x}))
                   fn main() -> int {user!(z)}",
                  ~[~[0]], false),
-                // FIXME #8062: this test exposes a *potential* bug; our system does
-                // not behave exactly like MTWT, but I haven't thought of a way that
-                // this could cause a bug in Rust, yet.
+                // no longer a fixme #8062: this test exposes a *potential* bug; our system does
+                // not behave exactly like MTWT, but a conversation with Matthew Flatt
+                // suggests that this can only occur in the presence of local-expand, which
+                // we have no plans to support.
                 // ("fn main() {let hrcoo = 19; macro_rules! getx(()=>(hrcoo)); getx!();}",
                 // ~[~[0]], true)
                 // FIXME #6994: the next string exposes the bug referred to in issue 6994, so I'm
@@ -1685,6 +1656,7 @@ mod test {
                 //   fn a(){g!(z)}"
                 // create a really evil test case where a $x appears inside a binding of $x
                 // but *shouldnt* bind because it was inserted by a different macro....
+                // can't write this test case until we have macro-generating macros.
             ];
         for (idx,s) in tests.iter().enumerate() {
             run_renaming_test(s,idx);

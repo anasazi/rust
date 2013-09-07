@@ -16,6 +16,7 @@ use lib::llvm::{llvm, TargetData, TypeNames};
 use lib::llvm::mk_target_data;
 use metadata::common::LinkMeta;
 use middle::astencode;
+use middle::privacy;
 use middle::resolve;
 use middle::trans::adt;
 use middle::trans::base;
@@ -49,6 +50,7 @@ pub struct CrateContext {
      intrinsics: HashMap<&'static str, ValueRef>,
      item_vals: HashMap<ast::NodeId, ValueRef>,
      exp_map2: resolve::ExportMap2,
+     exported_items: @privacy::ExportedItems,
      reachable: @mut HashSet<ast::NodeId>,
      item_symbols: HashMap<ast::NodeId, ~str>,
      link_meta: LinkMeta,
@@ -61,6 +63,13 @@ pub struct CrateContext {
      finished_tydescs: bool,
      // Track mapping of external ids to local items imported for inlining
      external: HashMap<ast::DefId, Option<ast::NodeId>>,
+     // Backwards version of the `external` map (inlined items to where they
+     // came from)
+     external_srcs: HashMap<ast::NodeId, ast::DefId>,
+     // A set of static items which cannot be inlined into other crates. This
+     // will pevent in ii_item() structures from being encoded into the metadata
+     // that is generated
+     non_inlineable_statics: HashSet<ast::NodeId>,
      // Cache instances of monomorphized functions
      monomorphized: HashMap<mono_id, ValueRef>,
      monomorphizing: HashMap<ast::DefId, uint>,
@@ -120,6 +129,7 @@ impl CrateContext {
                name: &str,
                tcx: ty::ctxt,
                emap2: resolve::ExportMap2,
+               exported_items: @privacy::ExportedItems,
                maps: astencode::Maps,
                symbol_hasher: hash::State,
                link_meta: LinkMeta,
@@ -180,6 +190,7 @@ impl CrateContext {
                   intrinsics: intrinsics,
                   item_vals: HashMap::new(),
                   exp_map2: emap2,
+                  exported_items: exported_items,
                   reachable: reachable,
                   item_symbols: HashMap::new(),
                   link_meta: link_meta,
@@ -189,6 +200,8 @@ impl CrateContext {
                   tydescs: HashMap::new(),
                   finished_tydescs: false,
                   external: HashMap::new(),
+                  external_srcs: HashMap::new(),
+                  non_inlineable_statics: HashSet::new(),
                   monomorphized: HashMap::new(),
                   monomorphizing: HashMap::new(),
                   type_use_cache: HashMap::new(),
@@ -273,12 +286,12 @@ impl CrateContext {
 
 #[unsafe_destructor]
 impl Drop for CrateContext {
-    fn drop(&self) {
+    fn drop(&mut self) {
         unset_task_llcx();
     }
 }
 
-static task_local_llcx_key: local_data::Key<@ContextRef> = &local_data::Key;
+local_data_key!(task_local_llcx_key: @ContextRef)
 
 pub fn task_llcx() -> ContextRef {
     let opt = local_data::get(task_local_llcx_key, |k| k.map_move(|k| *k));

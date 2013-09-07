@@ -24,7 +24,7 @@
 # working under these assumptions).
 
 # Hack for passing flags into LIBUV, see below.
-LIBUV_FLAGS_i386 = -m32 -fPIC
+LIBUV_FLAGS_i386 = -m32 -fPIC -I$(S)src/etc/mingw-fix-include
 LIBUV_FLAGS_x86_64 = -m64 -fPIC
 ifeq ($(OSTYPE_$(1)), linux-androideabi)
 LIBUV_FLAGS_arm = -fPIC -DANDROID -std=gnu99
@@ -71,12 +71,9 @@ RUNTIME_CXXS_$(1)_$(2) := \
               rt/sync/lock_and_signal.cpp \
               rt/sync/rust_thread.cpp \
               rt/rust_builtin.cpp \
-              rt/rust_run_program.cpp \
               rt/rust_rng.cpp \
               rt/rust_upcall.cpp \
               rt/rust_uv.cpp \
-              rt/rust_crate_map.cpp \
-              rt/isaac/randport.cpp \
               rt/miniz.cpp \
               rt/memory_region.cpp \
               rt/boxed_region.cpp \
@@ -103,15 +100,15 @@ else ifeq ($(OSTYPE_$(1)), apple-darwin)
   LIBUV_LIB_$(1)_$(2) := $$(RT_BUILD_DIR_$(1)_$(2))/libuv/libuv.a
   JEMALLOC_LIB_$(1)_$(2) := $$(RT_BUILD_DIR_$(1)_$(2))/jemalloc/lib/libjemalloc_pic.a
 else ifeq ($(OSTYPE_$(1)), unknown-freebsd)
-  LIBUV_OSTYPE_$(1)_$(2) := unix/freebsd
+  LIBUV_OSTYPE_$(1)_$(2) := freebsd
   LIBUV_LIB_$(1)_$(2) := $$(RT_BUILD_DIR_$(1)_$(2))/libuv/libuv.a
   JEMALLOC_LIB_$(1)_$(2) := $$(RT_BUILD_DIR_$(1)_$(2))/jemalloc/lib/libjemalloc_pic.a
 else ifeq ($(OSTYPE_$(1)), linux-androideabi)
-  LIBUV_OSTYPE_$(1)_$(2) := unix/android
+  LIBUV_OSTYPE_$(1)_$(2) := android
   LIBUV_LIB_$(1)_$(2) := $$(RT_BUILD_DIR_$(1)_$(2))/libuv/libuv.a
   JEMALLOC_LIB_$(1)_$(2) := $$(RT_BUILD_DIR_$(1)_$(2))/jemalloc/lib/libjemalloc_pic.a
 else
-  LIBUV_OSTYPE_$(1)_$(2) := unix/linux
+  LIBUV_OSTYPE_$(1)_$(2) := linux
   LIBUV_LIB_$(1)_$(2) := $$(RT_BUILD_DIR_$(1)_$(2))/libuv/libuv.a
   JEMALLOC_LIB_$(1)_$(2) := $$(RT_BUILD_DIR_$(1)_$(2))/jemalloc/lib/libjemalloc_pic.a
 endif
@@ -179,6 +176,7 @@ export PYTHONPATH := $(PYTHONPATH):$$(S)src/gyp/pylib
 $$(LIBUV_MAKEFILE_$(1)_$(2)): $$(LIBUV_DEPS)
 	(cd $(S)src/libuv/ && \
 	 $$(CFG_PYTHON) ./gyp_uv -f make -Dtarget_arch=$$(LIBUV_ARCH_$(1)) -D ninja \
+	   -DOS=$$(LIBUV_OSTYPE_$(1)_$(2)) \
 	   -Goutput_dir=$$(@D) --generator-output $$(@D))
 
 # XXX: Shouldn't need platform-specific conditions here

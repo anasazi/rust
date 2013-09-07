@@ -26,7 +26,7 @@ use result::*;
 pub struct DynamicLibrary { priv handle: *libc::c_void }
 
 impl Drop for DynamicLibrary {
-    fn drop(&self) {
+    fn drop(&mut self) {
         match do dl::check_for_errors_in {
             unsafe {
                 dl::close(self.handle)
@@ -90,7 +90,8 @@ mod test {
     use libc;
 
     #[test]
-    #[ignore(cfg(windows))] // FIXME #8818
+    // #[ignore(cfg(windows))] // FIXME #8818
+    #[ignore] // FIXME #9137 this library isn't thread-safe
     fn test_loading_cosine() {
         // The math library does not need to be loaded since it is already
         // statically linked in
@@ -121,6 +122,7 @@ mod test {
     #[cfg(target_os = "linux")]
     #[cfg(target_os = "macos")]
     #[cfg(target_os = "freebsd")]
+    #[ignore] // FIXME #9137 this library isn't thread-safe
     fn test_errors_do_not_crash() {
         // Open /dev/null as a library to get an error, and make sure
         // that only causes an error, and not a crash.
@@ -136,7 +138,7 @@ mod test {
 #[cfg(target_os = "android")]
 #[cfg(target_os = "macos")]
 #[cfg(target_os = "freebsd")]
-mod dl {
+pub mod dl {
     use c_str::ToCStr;
     use libc;
     use path;
@@ -205,7 +207,7 @@ mod dl {
 }
 
 #[cfg(target_os = "win32")]
-mod dl {
+pub mod dl {
     use os;
     use libc;
     use path;

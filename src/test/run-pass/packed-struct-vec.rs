@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// xfail-android: FIXME(#9116) Bus error
+
 use std::sys;
 
 #[packed]
@@ -17,7 +19,7 @@ struct Foo {
     baz: u64
 }
 
-fn main() {
+pub fn main() {
     let foos = [Foo { bar: 1, baz: 2 }, .. 10];
 
     assert_eq!(sys::size_of::<[Foo, .. 10]>(), 90);

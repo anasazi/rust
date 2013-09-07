@@ -148,18 +148,6 @@ pub mod win32 {
     }
 }
 
-#[cfg(stage0)]
-mod macro_hack {
-#[macro_escape];
-macro_rules! externfn(
-    (fn $name:ident ()) => (
-        extern {
-            fn $name();
-        }
-    )
-)
-}
-
 /*
 Accessing environment variables is not generally threadsafe.
 Serialize access through a global lock.
@@ -196,16 +184,7 @@ pub fn env() -> ~[(~str,~str)] {
             if (ch as uint == 0) {
                 fail!("os::env() failure getting env string from OS: %s", os::last_os_error());
             }
-            let mut curr_ptr: uint = ch as uint;
-            let mut result = ~[];
-            while(*(curr_ptr as *libc::c_char) != 0 as libc::c_char) {
-                let env_pair = str::raw::from_c_str(
-                    curr_ptr as *libc::c_char);
-                result.push(env_pair);
-                curr_ptr +=
-                    libc::strlen(curr_ptr as *libc::c_char) as uint
-                    + 1;
-            }
+            let result = str::raw::from_c_multistring(ch as *libc::c_char, None);
             FreeEnvironmentStringsA(ch);
             result
         }
@@ -569,7 +548,7 @@ pub fn homedir() -> Option<Path> {
 
     #[cfg(windows)]
     fn secondary() -> Option<Path> {
-        do getenv("USERPROFILE").chain |p| {
+        do getenv("USERPROFILE").and_then |p| {
             if !p.is_empty() {
                 Some(Path(p))
             } else {
@@ -611,7 +590,7 @@ pub fn tmpdir() -> Path {
         if cfg!(target_os = "android") {
             Path("/data/tmp")
         } else {
-            getenv_nonempty("TMPDIR").unwrap_or_default(Path("/tmp"))
+            getenv_nonempty("TMPDIR").unwrap_or(Path("/tmp"))
         }
     }
 
@@ -620,7 +599,7 @@ pub fn tmpdir() -> Path {
         getenv_nonempty("TMP").or(
             getenv_nonempty("TEMP").or(
                 getenv_nonempty("USERPROFILE").or(
-                   getenv_nonempty("WINDIR")))).unwrap_or_default(Path("C:\\Windows"))
+                   getenv_nonempty("WINDIR")))).unwrap_or(Path("C:\\Windows"))
     }
 }
 
@@ -1135,18 +1114,19 @@ pub fn last_os_error() -> ~str {
         #[fixed_stack_segment]; #[inline(never)];
 
         use libc::types::os::arch::extra::DWORD;
-        use libc::types::os::arch::extra::LPSTR;
+        use libc::types::os::arch::extra::LPWSTR;
         use libc::types::os::arch::extra::LPVOID;
+        use libc::types::os::arch::extra::WCHAR;
 
         #[cfg(target_arch = "x86")]
         #[link_name = "kernel32"]
         #[abi = "stdcall"]
         extern "stdcall" {
-            fn FormatMessageA(flags: DWORD,
+            fn FormatMessageW(flags: DWORD,
                               lpSrc: LPVOID,
                               msgId: DWORD,
                               langId: DWORD,
-                              buf: LPSTR,
+                              buf: LPWSTR,
                               nsize: DWORD,
                               args: *c_void)
                               -> DWORD;
@@ -1155,11 +1135,11 @@ pub fn last_os_error() -> ~str {
         #[cfg(target_arch = "x86_64")]
         #[link_name = "kernel32"]
         extern {
-            fn FormatMessageA(flags: DWORD,
+            fn FormatMessageW(flags: DWORD,
                               lpSrc: LPVOID,
                               msgId: DWORD,
                               langId: DWORD,
-                              buf: LPSTR,
+                              buf: LPWSTR,
                               nsize: DWORD,
                               args: *c_void)
                               -> DWORD;
@@ -1173,11 +1153,11 @@ pub fn last_os_error() -> ~str {
         let langId = 0x0800 as DWORD;
         let err = errno() as DWORD;
 
-        let mut buf = [0 as c_char, ..TMPBUF_SZ];
+        let mut buf = [0 as WCHAR, ..TMPBUF_SZ];
 
         unsafe {
             do buf.as_mut_buf |buf, len| {
-                let res = FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM |
+                let res = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM |
                                          FORMAT_MESSAGE_IGNORE_INSERTS,
                                          ptr::mut_null(),
                                          err,
@@ -1190,9 +1170,7 @@ pub fn last_os_error() -> ~str {
                 }
             }
 
-            do buf.as_imm_buf |buf, _len| {
-                str::raw::from_c_str(buf)
-            }
+            str::from_utf16(buf)
         }
     }
 
@@ -1482,7 +1460,7 @@ impl MemoryMap {
 
 #[cfg(unix)]
 impl Drop for MemoryMap {
-    fn drop(&self) {
+    fn drop(&mut self) {
         #[fixed_stack_segment]; #[inline(never)];
 
         unsafe {
@@ -1608,7 +1586,7 @@ impl MemoryMap {
 
 #[cfg(windows)]
 impl Drop for MemoryMap {
-    fn drop(&self) {
+    fn drop(&mut self) {
         #[fixed_stack_segment]; #[inline(never)];
 
         use libc::types::os::arch::extra::{LPCVOID, HANDLE};
@@ -1669,7 +1647,7 @@ pub mod consts {
     pub use os::consts::arm::*;
 
     #[cfg(target_arch = "mips")]
-    use os::consts::mips::*;
+    pub use os::consts::mips::*;
 
     pub mod unix {
         pub static FAMILY: &'static str = "unix";
@@ -1740,7 +1718,7 @@ mod tests {
     use os::{remove_file, setenv, unsetenv};
     use os;
     use path::Path;
-    use rand::RngUtil;
+    use rand::Rng;
     use rand;
     use run;
     use str::StrSlice;
@@ -1760,7 +1738,7 @@ mod tests {
 
     fn make_rand_name() -> ~str {
         let mut rng = rand::rng();
-        let n = ~"TEST" + rng.gen_str(10u);
+        let n = ~"TEST" + rng.gen_ascii_str(10u);
         assert!(getenv(n).is_none());
         n
     }
@@ -1895,8 +1873,8 @@ mod tests {
         setenv("USERPROFILE", "/home/PaloAlto");
         assert_eq!(os::homedir(), Some(Path("/home/MountainView")));
 
-        oldhome.iter().advance(|s| { setenv("HOME", *s); true });
-        olduserprofile.iter().advance(|s| { setenv("USERPROFILE", *s); true });
+        for s in oldhome.iter() { setenv("HOME", *s) }
+        for s in olduserprofile.iter() { setenv("USERPROFILE", *s) }
     }
 
     #[test]

@@ -172,7 +172,7 @@ pub fn allocate_cbox(bcx: @mut Block, sigil: ast::Sigil, cdata_ty: ty::t)
     // Allocate and initialize the box:
     match sigil {
         ast::ManagedSigil => {
-            malloc_raw(bcx, cdata_ty, heap_managed)
+            tcx.sess.bug("trying to trans allocation of @fn")
         }
         ast::OwnedSigil => {
             malloc_raw(bcx, cdata_ty, heap_for_unique_closure(bcx, cdata_ty))
@@ -197,7 +197,8 @@ pub struct ClosureResult {
 // Otherwise, it is stack allocated and copies pointers to the upvars.
 pub fn store_environment(bcx: @mut Block,
                          bound_values: ~[EnvValue],
-                         sigil: ast::Sigil) -> ClosureResult {
+                         sigil: ast::Sigil)
+                         -> ClosureResult {
     let _icx = push_ctxt("closure::store_environment");
     let ccx = bcx.ccx();
     let tcx = ccx.tcx;
@@ -381,8 +382,10 @@ pub fn trans_expr_fn(bcx: @mut Block,
 
     let ccx = bcx.ccx();
     let fty = node_id_type(bcx, outer_id);
-
-    let llfnty = type_of_fn_from_ty(ccx, fty);
+    let f = match ty::get(fty).sty {
+        ty::ty_closure(ref f) => f,
+        _ => fail!("expected closure")
+    };
 
     let sub_path = vec::append_one(bcx.fcx.path.clone(),
                                    path_name(special_idents::anon));
@@ -390,7 +393,7 @@ pub fn trans_expr_fn(bcx: @mut Block,
     let s = mangle_internal_name_by_path_and_seq(ccx,
                                                  sub_path.clone(),
                                                  "expr_fn");
-    let llfn = decl_internal_cdecl_fn(ccx.llmod, s, llfnty);
+    let llfn = decl_internal_rust_fn(ccx, f.sig.inputs, f.sig.output, s);
 
     // set an inline hint for all closures
     set_inline_hint(llfn);
@@ -442,27 +445,6 @@ pub fn make_closure_glue(
     }
 }
 
-pub fn make_opaque_cbox_take_glue(
-    bcx: @mut Block,
-    sigil: ast::Sigil,
-    cboxptr: ValueRef)     // ptr to ptr to the opaque closure
-    -> @mut Block {
-    // Easy cases:
-    let _icx = push_ctxt("closure::make_opaque_cbox_take_glue");
-    match sigil {
-        ast::BorrowedSigil => {
-            return bcx;
-        }
-        ast::ManagedSigil => {
-            glue::incr_refcnt_of_boxed(bcx, Load(bcx, cboxptr));
-            return bcx;
-        }
-        ast::OwnedSigil => {
-            fail!("unique closures are not copyable")
-        }
-    }
-}
-
 pub fn make_opaque_cbox_drop_glue(
     bcx: @mut Block,
     sigil: ast::Sigil,
@@ -472,9 +454,7 @@ pub fn make_opaque_cbox_drop_glue(
     match sigil {
         ast::BorrowedSigil => bcx,
         ast::ManagedSigil => {
-            glue::decr_refcnt_maybe_free(
-                bcx, Load(bcx, cboxptr), Some(cboxptr),
-                ty::mk_opaque_closure_ptr(bcx.tcx(), sigil))
+            bcx.tcx().sess.bug("trying to trans drop glue of @fn")
         }
         ast::OwnedSigil => {
             glue::free_ty(
@@ -514,12 +494,8 @@ pub fn make_opaque_cbox_free_glue(
                                     abi::tydesc_field_drop_glue, None);
 
         // Free the ty descr (if necc) and the box itself
-        match sigil {
-            ast::ManagedSigil => glue::trans_free(bcx, cbox),
-            ast::OwnedSigil => glue::trans_exchange_free(bcx, cbox),
-            ast::BorrowedSigil => {
-                bcx.sess().bug("impossible")
-            }
-        }
+        glue::trans_exchange_free(bcx, cbox);
+
+        bcx
     }
 }

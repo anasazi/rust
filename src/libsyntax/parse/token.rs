@@ -482,6 +482,9 @@ fn mk_fresh_ident_interner() -> @ident_interner {
         "pure",               // 65
         "yield",              // 66
         "typeof",             // 67
+        "alignof",            // 68
+        "offsetof",           // 69
+        "sizeof",             // 70
     ];
 
     @interner::StrInterner::prefill(init_vec)
@@ -490,8 +493,7 @@ fn mk_fresh_ident_interner() -> @ident_interner {
 // if an interner exists in TLS, return it. Otherwise, prepare a
 // fresh one.
 pub fn get_ident_interner() -> @ident_interner {
-    static key: local_data::Key<@@::parse::token::ident_interner> =
-        &local_data::Key;
+    local_data_key!(key: @@::parse::token::ident_interner)
     match local_data::get(key, |k| k.map_move(|k| *k)) {
         Some(interner) => *interner,
         None => {
@@ -623,14 +625,17 @@ pub mod keywords {
         True,
         Trait,
         Type,
-        Typeof,
         Unsafe,
         Use,
         While,
 
         // Reserved keywords
+        Alignof,
         Be,
+        Offsetof,
         Pure,
+        Sizeof,
+        Typeof,
         Yield,
     }
 
@@ -668,12 +673,16 @@ pub mod keywords {
                 True => Ident { name: 57, ctxt: 0 },
                 Trait => Ident { name: 58, ctxt: 0 },
                 Type => Ident { name: 59, ctxt: 0 },
-                Typeof => Ident { name: 67, ctxt: 0 },
                 Unsafe => Ident { name: 60, ctxt: 0 },
                 Use => Ident { name: 61, ctxt: 0 },
                 While => Ident { name: 62, ctxt: 0 },
+
+                Alignof => Ident { name: 68, ctxt: 0 },
                 Be => Ident { name: 64, ctxt: 0 },
+                Offsetof => Ident { name: 69, ctxt: 0 },
                 Pure => Ident { name: 65, ctxt: 0 },
+                Sizeof => Ident { name: 70, ctxt: 0 },
+                Typeof => Ident { name: 67, ctxt: 0 },
                 Yield => Ident { name: 66, ctxt: 0 },
             }
         }
@@ -690,7 +699,7 @@ pub fn is_keyword(kw: keywords::Keyword, tok: &Token) -> bool {
 pub fn is_any_keyword(tok: &Token) -> bool {
     match *tok {
         token::IDENT(sid, false) => match sid.name {
-            8 | 27 | 32 .. 67 => true,
+            8 | 27 | 32 .. 70 => true,
             _ => false,
         },
         _ => false
@@ -710,7 +719,7 @@ pub fn is_strict_keyword(tok: &Token) -> bool {
 pub fn is_reserved_keyword(tok: &Token) -> bool {
     match *tok {
         token::IDENT(sid, false) => match sid.name {
-            64 .. 67 => true,
+            64 .. 70 => true,
             _ => false,
         },
         _ => false,

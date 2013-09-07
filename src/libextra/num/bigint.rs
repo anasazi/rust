@@ -23,7 +23,7 @@ use std::cmp::{Eq, Ord, TotalEq, TotalOrd, Ordering, Less, Equal, Greater};
 use std::int;
 use std::num;
 use std::num::{IntConvertible, Zero, One, ToStrRadix, FromStrRadix, Orderable};
-use std::rand::{Rng, RngUtil};
+use std::rand::Rng;
 use std::str;
 use std::uint;
 use std::vec;
@@ -115,8 +115,8 @@ impl TotalOrd for BigUint {
         if s_len > o_len { return Greater;  }
 
         for (&self_i, &other_i) in self.data.rev_iter().zip(other.data.rev_iter()) {
-            cond!((self_i < other_i) { return Less; }
-                  (self_i > other_i) { return Greater; })
+            if self_i < other_i { return Less; }
+            if self_i > other_i { return Greater; }
         }
         return Equal;
     }
@@ -503,7 +503,7 @@ impl Integer for BigUint {
 impl IntConvertible for BigUint {
     #[inline]
     fn to_int(&self) -> int {
-        num::min(self.to_uint(), int::max_value as uint) as int
+        self.to_int_opt().expect("BigUint conversion would overflow int")
     }
 
     #[inline]
@@ -615,16 +615,41 @@ impl BigUint {
     }
 
 
-    /// Converts this big integer into a uint, returning the uint::max_value if
-    /// it's too large to fit in a uint.
+    /// Converts this BigUint into a uint, failing if the conversion
+    /// would overflow.
     #[inline]
     pub fn to_uint(&self) -> uint {
+        self.to_uint_opt().expect("BigUint conversion would overflow uint")
+    }
+
+    /// Converts this BigUint into a uint, unless it would overflow.
+    #[inline]
+    pub fn to_uint_opt(&self) -> Option<uint> {
         match self.data.len() {
-            0 => 0,
-            1 => self.data[0] as uint,
-            2 => BigDigit::to_uint(self.data[1], self.data[0]),
-            _ => uint::max_value
+            0 => Some(0),
+            1 => Some(self.data[0] as uint),
+            2 => Some(BigDigit::to_uint(self.data[1], self.data[0])),
+            _ => None
         }
+    }
+
+    // Converts this BigUint into an int, unless it would overflow.
+    pub fn to_int_opt(&self) -> Option<int> {
+        self.to_uint_opt().and_then(|n| {
+            // If top bit of uint is set, it's too large to convert to
+            // int.
+            if (n >> (2*BigDigit::bits - 1) != 0) {
+                None
+            } else {
+                Some(n as int)
+            }
+        })
+    }
+
+    /// Converts this BigUint into a BigInt.
+    #[inline]
+    pub fn to_bigint(&self) -> BigInt {
+        BigInt::from_biguint(Plus, self.clone())
     }
 
     #[inline]
@@ -671,6 +696,13 @@ impl BigUint {
             borrow = *elem << (BigDigit::bits - n_bits);
         }
         return BigUint::new(shifted);
+    }
+
+    /// Determines the fewest bits necessary to express the BigUint.
+    pub fn bits(&self) -> uint {
+        if self.is_zero() { return 0; }
+        let zeros = self.data.last().leading_zeros();
+        return self.data.len()*BigDigit::bits - (zeros as uint);
     }
 }
 
@@ -1048,12 +1080,7 @@ impl Integer for BigInt {
 impl IntConvertible for BigInt {
     #[inline]
     fn to_int(&self) -> int {
-        match self.sign {
-            Plus  => num::min(self.to_uint(), int::max_value as uint) as int,
-            Zero  => 0,
-            Minus => num::min((-self).to_uint(),
-                               (int::max_value as uint) + 1) as int
-        }
+        self.to_int_opt().expect("BigInt conversion would overflow int")
     }
 
     #[inline]
@@ -1095,10 +1122,23 @@ trait RandBigInt {
 
     /// Generate a random BigInt of the given bit size.
     fn gen_bigint(&mut self, bit_size: uint) -> BigInt;
+
+    /// Generate a random BigUint less than the given bound. Fails
+    /// when the bound is zero.
+    fn gen_biguint_below(&mut self, bound: &BigUint) -> BigUint;
+
+    /// Generate a random BigUint within the given range. The lower
+    /// bound is inclusive; the upper bound is exclusive. Fails when
+    /// the upper bound is not greater than the lower bound.
+    fn gen_biguint_range(&mut self, lbound: &BigUint, ubound: &BigUint) -> BigUint;
+
+    /// Generate a random BigInt within the given range. The lower
+    /// bound is inclusive; the upper bound is exclusive. Fails when
+    /// the upper bound is not greater than the lower bound.
+    fn gen_bigint_range(&mut self, lbound: &BigInt, ubound: &BigInt) -> BigInt;
 }
 
 impl<R: Rng> RandBigInt for R {
-    /// Generate a random BigUint of the given bit size.
     fn gen_biguint(&mut self, bit_size: uint) -> BigUint {
         let (digits, rem) = bit_size.div_rem(&BigDigit::bits);
         let mut data = vec::with_capacity(digits+1);
@@ -1112,7 +1152,6 @@ impl<R: Rng> RandBigInt for R {
         return BigUint::new(data);
     }
 
-    /// Generate a random BigInt of the given bit size.
     fn gen_bigint(&mut self, bit_size: uint) -> BigInt {
         // Generate a random BigUint...
         let biguint = self.gen_biguint(bit_size);
@@ -1133,6 +1172,32 @@ impl<R: Rng> RandBigInt for R {
             Minus
         };
         return BigInt::from_biguint(sign, biguint);
+    }
+
+    fn gen_biguint_below(&mut self, bound: &BigUint) -> BigUint {
+        assert!(!bound.is_zero());
+        let bits = bound.bits();
+        loop {
+            let n = self.gen_biguint(bits);
+            if n < *bound { return n; }
+        }
+    }
+
+    fn gen_biguint_range(&mut self,
+                         lbound: &BigUint,
+                         ubound: &BigUint)
+                         -> BigUint {
+        assert!(*lbound < *ubound);
+        return *lbound + self.gen_biguint_below(&(*ubound - *lbound));
+    }
+
+    fn gen_bigint_range(&mut self,
+                        lbound: &BigInt,
+                        ubound: &BigInt)
+                        -> BigInt {
+        assert!(*lbound < *ubound);
+        let delta = (*ubound - *lbound).to_biguint();
+        return *lbound + self.gen_biguint_below(&delta).to_bigint();
     }
 }
 
@@ -1179,12 +1244,55 @@ impl BigInt {
             .map_move(|bu| BigInt::from_biguint(sign, bu));
     }
 
+    /// Converts this BigInt into a uint, failing if the conversion
+    /// would overflow.
     #[inline]
     pub fn to_uint(&self) -> uint {
+        self.to_uint_opt().expect("BigInt conversion would overflow uint")
+    }
+
+    /// Converts this BigInt into a uint, unless it would overflow.
+    #[inline]
+    pub fn to_uint_opt(&self) -> Option<uint> {
         match self.sign {
-            Plus  => self.data.to_uint(),
-            Zero  => 0,
-            Minus => 0
+            Plus => self.data.to_uint_opt(),
+            Zero => Some(0),
+            Minus => None
+        }
+    }
+
+    /// Converts this BigInt into an int, unless it would overflow.
+    pub fn to_int_opt(&self) -> Option<int> {
+        match self.sign {
+            Plus  => self.data.to_int_opt(),
+            Zero  => Some(0),
+            Minus => self.data.to_uint_opt().and_then(|n| {
+                let m: uint = 1 << (2*BigDigit::bits-1);
+                if (n > m) {
+                    None
+                } else if (n == m) {
+                    Some(int::min_value)
+                } else {
+                    Some(-(n as int))
+                }
+            })
+        }
+    }
+
+    /// Converts this BigInt into a BigUint, failing if BigInt is
+    /// negative.
+    #[inline]
+    pub fn to_biguint(&self) -> BigUint {
+        self.to_biguint_opt().expect("negative BigInt cannot convert to BigUint")
+    }
+
+    /// Converts this BigInt into a BigUint, if it's not negative.
+    #[inline]
+    pub fn to_biguint_opt(&self) -> Option<BigUint> {
+        match self.sign {
+            Plus => Some(self.data.clone()),
+            Zero => Some(Zero::zero()),
+            Minus => None
         }
     }
 }
@@ -1385,9 +1493,9 @@ mod biguint_tests {
         check(~[ 0,  1], ((uint::max_value >> BigDigit::bits) + 1) as int);
         check(~[-1, -1 >> 1], int::max_value);
 
-        assert_eq!(BigUint::new(~[0, -1]).to_int(), int::max_value);
-        assert_eq!(BigUint::new(~[0, 0, 1]).to_int(), int::max_value);
-        assert_eq!(BigUint::new(~[0, 0, -1]).to_int(), int::max_value);
+        assert_eq!(BigUint::new(~[0, -1]).to_int_opt(), None);
+        assert_eq!(BigUint::new(~[0, 0, 1]).to_int_opt(), None);
+        assert_eq!(BigUint::new(~[0, 0, -1]).to_int_opt(), None);
     }
 
     #[test]
@@ -1405,8 +1513,19 @@ mod biguint_tests {
         check(~[ 0, -1], uint::max_value << BigDigit::bits);
         check(~[-1, -1], uint::max_value);
 
-        assert_eq!(BigUint::new(~[0, 0, 1]).to_uint(), uint::max_value);
-        assert_eq!(BigUint::new(~[0, 0, -1]).to_uint(), uint::max_value);
+        assert_eq!(BigUint::new(~[0, 0, 1]).to_uint_opt(), None);
+        assert_eq!(BigUint::new(~[0, 0, -1]).to_uint_opt(), None);
+    }
+
+    #[test]
+    fn test_convert_to_bigint() {
+        fn check(n: BigUint, ans: BigInt) {
+            assert_eq!(n.to_bigint(), ans);
+            assert_eq!(n.to_bigint().to_biguint(), n);
+        }
+        check(Zero::zero(), Zero::zero());
+        check(BigUint::new(~[1,2,3]),
+              BigInt::from_biguint(Plus, BigUint::new(~[1,2,3])));
     }
 
     static sum_triples: &'static [(&'static [BigDigit],
@@ -1707,10 +1826,61 @@ mod biguint_tests {
     }
 
     #[test]
+    fn test_bits() {
+        assert_eq!(BigUint::new(~[0,0,0,0]).bits(), 0);
+        assert_eq!(BigUint::from_uint(0).bits(), 0);
+        assert_eq!(BigUint::from_uint(1).bits(), 1);
+        assert_eq!(BigUint::from_uint(3).bits(), 2);
+        let n: BigUint = FromStrRadix::from_str_radix("4000000000", 16).unwrap();
+        assert_eq!(n.bits(), 39);
+        let one: BigUint = One::one();
+        assert_eq!((one << 426).bits(), 427);
+    }
+
+    #[test]
     fn test_rand() {
         let mut rng = task_rng();
         let _n: BigUint = rng.gen_biguint(137);
         assert!(rng.gen_biguint(0).is_zero());
+    }
+
+    #[test]
+    fn test_rand_range() {
+        let mut rng = task_rng();
+
+        do 10.times {
+            assert_eq!(rng.gen_bigint_range(&BigInt::from_uint(236),
+                                            &BigInt::from_uint(237)),
+                       BigInt::from_uint(236));
+        }
+
+        let l = BigUint::from_uint(403469000 + 2352);
+        let u = BigUint::from_uint(403469000 + 3513);
+        do 1000.times {
+            let n: BigUint = rng.gen_biguint_below(&u);
+            assert!(n < u);
+
+            let n: BigUint = rng.gen_biguint_range(&l, &u);
+            assert!(n >= l);
+            assert!(n < u);
+        }
+    }
+
+    #[test]
+    #[should_fail]
+    fn test_zero_rand_range() {
+        task_rng().gen_biguint_range(&BigUint::from_uint(54),
+                                     &BigUint::from_uint(54));
+    }
+
+    #[test]
+    #[should_fail]
+    fn test_negative_rand_range() {
+        let mut rng = task_rng();
+        let l = BigUint::from_uint(2352);
+        let u = BigUint::from_uint(3513);
+        // Switching u and l should fail:
+        let _n: BigUint = rng.gen_biguint_range(&u, &l);
     }
 }
 
@@ -1793,22 +1963,21 @@ mod bigint_tests {
             Plus, BigUint::from_uint(int::max_value as uint)
         ), int::max_value);
 
-        assert!(BigInt::from_biguint(
+        assert_eq!(BigInt::from_biguint(
             Plus, BigUint::from_uint(int::max_value as uint + 1)
-        ).to_int() == int::max_value);
-        assert!(BigInt::from_biguint(
+        ).to_int_opt(), None);
+        assert_eq!(BigInt::from_biguint(
             Plus, BigUint::new(~[1, 2, 3])
-        ).to_int() == int::max_value);
+        ).to_int_opt(), None);
 
         check(BigInt::from_biguint(
-            Minus, BigUint::from_uint(-int::min_value as uint)
+            Minus, BigUint::new(~[0, 1<<(BigDigit::bits-1)])
         ), int::min_value);
-        assert!(BigInt::from_biguint(
-            Minus, BigUint::from_uint(-int::min_value as uint + 1)
-        ).to_int() == int::min_value);
-        assert!(BigInt::from_biguint(
-            Minus, BigUint::new(~[1, 2, 3])
-        ).to_int() == int::min_value);
+        assert_eq!(BigInt::from_biguint(
+            Minus, BigUint::new(~[1, 1<<(BigDigit::bits-1)])
+        ).to_int_opt(), None);
+        assert_eq!(BigInt::from_biguint(
+            Minus, BigUint::new(~[1, 2, 3])).to_int_opt(), None);
     }
 
     #[test]
@@ -1824,16 +1993,31 @@ mod bigint_tests {
         check(
             BigInt::from_biguint(Plus, BigUint::from_uint(uint::max_value)),
             uint::max_value);
-        assert!(BigInt::from_biguint(
-            Plus, BigUint::new(~[1, 2, 3])
-        ).to_uint() == uint::max_value);
+        assert_eq!(BigInt::from_biguint(
+            Plus, BigUint::new(~[1, 2, 3])).to_uint_opt(), None);
 
-        assert!(BigInt::from_biguint(
-            Minus, BigUint::from_uint(uint::max_value)
-        ).to_uint() == 0);
-        assert!(BigInt::from_biguint(
-            Minus, BigUint::new(~[1, 2, 3])
-        ).to_uint() == 0);
+        assert_eq!(BigInt::from_biguint(
+            Minus, BigUint::from_uint(uint::max_value)).to_uint_opt(), None);
+        assert_eq!(BigInt::from_biguint(
+            Minus, BigUint::new(~[1, 2, 3])).to_uint_opt(), None);
+    }
+
+    #[test]
+    fn test_convert_to_biguint() {
+        fn check(n: BigInt, ans_1: BigUint) {
+            assert_eq!(n.to_biguint(), ans_1);
+            assert_eq!(n.to_biguint().to_bigint(), n);
+        }
+        let zero: BigInt = Zero::zero();
+        let unsigned_zero: BigUint = Zero::zero();
+        let positive = BigInt::from_biguint(
+            Plus, BigUint::new(~[1,2,3]));
+        let negative = -positive;
+
+        check(zero, unsigned_zero);
+        check(positive, BigUint::new(~[1,2,3]));
+
+        assert_eq!(negative.to_biguint_opt(), None);
     }
 
     static sum_triples: &'static [(&'static [BigDigit],
@@ -2148,6 +2332,48 @@ mod bigint_tests {
         let mut rng = task_rng();
         let _n: BigInt = rng.gen_bigint(137);
         assert!(rng.gen_bigint(0).is_zero());
+    }
+
+    #[test]
+    fn test_rand_range() {
+        let mut rng = task_rng();
+
+        do 10.times {
+            assert_eq!(rng.gen_bigint_range(&BigInt::from_uint(236),
+                                            &BigInt::from_uint(237)),
+                       BigInt::from_uint(236));
+        }
+
+        fn check(l: BigInt, u: BigInt) {
+            let mut rng = task_rng();
+            do 1000.times {
+                let n: BigInt = rng.gen_bigint_range(&l, &u);
+                assert!(n >= l);
+                assert!(n < u);
+            }
+        }
+        let l = BigInt::from_uint(403469000 + 2352);
+        let u = BigInt::from_uint(403469000 + 3513);
+        check( l.clone(),  u.clone());
+        check(-l.clone(),  u.clone());
+        check(-u.clone(), -l.clone());
+    }
+
+    #[test]
+    #[should_fail]
+    fn test_zero_rand_range() {
+        task_rng().gen_bigint_range(&IntConvertible::from_int(54),
+                                    &IntConvertible::from_int(54));
+    }
+
+    #[test]
+    #[should_fail]
+    fn test_negative_rand_range() {
+        let mut rng = task_rng();
+        let l = BigInt::from_uint(2352);
+        let u = BigInt::from_uint(3513);
+        // Switching u and l should fail:
+        let _n: BigInt = rng.gen_bigint_range(&u, &l);
     }
 }
 

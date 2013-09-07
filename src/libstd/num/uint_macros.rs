@@ -11,11 +11,13 @@
 // FIXME(#4375): this shouldn't have to be a nested module named 'generated'
 
 #[macro_escape];
+#[doc(hidden)];
 
 macro_rules! uint_module (($T:ty, $T_SIGNED:ty, $bits:expr) => (mod generated {
 
 #[allow(non_uppercase_statics)];
 
+use default::Default;
 use num::BitCount;
 use num::{ToStrRadix, FromStrRadix};
 use num::{CheckedDiv, Zero, One, strconv};
@@ -39,101 +41,6 @@ impl CheckedDiv for $T {
             Some(self / *v)
         }
     }
-}
-
-enum Range { Closed, HalfOpen }
-
-#[inline]
-///
-/// Iterate through a range with a given step value.
-///
-/// Let `term` denote the closed interval `[stop-step,stop]` if `r` is Closed;
-/// otherwise `term` denotes the half-open interval `[stop-step,stop)`.
-/// Iterates through the range `[x_0, x_1, ..., x_n]` where
-/// `x_j == start + step*j`, and `x_n` lies in the interval `term`.
-///
-/// If no such nonnegative integer `n` exists, then the iteration range
-/// is empty.
-///
-fn range_step_core(start: $T, stop: $T, step: $T_SIGNED, r: Range, it: &fn($T) -> bool) -> bool {
-    let mut i = start;
-    if step == 0 {
-        fail!("range_step called with step == 0");
-    } else if step == (1 as $T_SIGNED) { // elide bounds check to tighten loop
-        while i < stop {
-            if !it(i) { return false; }
-            // no need for overflow check;
-            // cannot have i + 1 > max_value because i < stop <= max_value
-            i += (1 as $T);
-        }
-    } else if step == (-1 as $T_SIGNED) { // elide bounds check to tighten loop
-        while i > stop {
-            if !it(i) { return false; }
-            // no need for underflow check;
-            // cannot have i - 1 < min_value because i > stop >= min_value
-            i -= (1 as $T);
-        }
-    } else if step > 0 { // ascending
-        while i < stop {
-            if !it(i) { return false; }
-            // avoiding overflow. break if i + step > max_value
-            if i > max_value - (step as $T) { return true; }
-            i += step as $T;
-        }
-    } else { // descending
-        while i > stop {
-            if !it(i) { return false; }
-            // avoiding underflow. break if i + step < min_value
-            if i < min_value + ((-step) as $T) { return true; }
-            i -= -step as $T;
-        }
-    }
-    match r {
-        HalfOpen => return true,
-        Closed => return (i != stop || it(i))
-    }
-}
-
-#[inline]
-///
-/// Iterate through the range [`start`..`stop`) with a given step value.
-///
-/// Iterates through the range `[x_0, x_1, ..., x_n]` where
-/// - `x_i == start + step*i`, and
-/// - `n` is the greatest nonnegative integer such that `x_n < stop`
-///
-/// (If no such `n` exists, then the iteration range is empty.)
-///
-/// # Arguments
-///
-/// * `start` - lower bound, inclusive
-/// * `stop` - higher bound, exclusive
-///
-/// # Examples
-/// ~~~ {.rust}
-/// let nums = [1,2,3,4,5,6,7];
-///
-/// for uint::range_step(0, nums.len() - 1, 2) |i| {
-///     printfln!("%d & %d", nums[i], nums[i+1]);
-/// }
-/// ~~~
-///
-pub fn range_step(start: $T, stop: $T, step: $T_SIGNED, it: &fn($T) -> bool) -> bool {
-    range_step_core(start, stop, step, HalfOpen, it)
-}
-
-#[inline]
-///
-/// Iterate through a range with a given step value.
-///
-/// Iterates through the range `[x_0, x_1, ..., x_n]` where
-/// `x_i == start + step*i` and `x_n <= last < step + x_n`.
-///
-/// (If no such nonnegative integer `n` exists, then the iteration
-///  range is empty.)
-///
-pub fn range_step_inclusive(start: $T, last: $T, step: $T_SIGNED, it: &fn($T) -> bool) -> bool {
-    range_step_core(start, last, step, Closed, it)
 }
 
 impl Num for $T {}
@@ -164,12 +71,17 @@ impl Orderable for $T {
     /// Returns the number constrained within the range `mn <= self <= mx`.
     #[inline]
     fn clamp(&self, mn: &$T, mx: &$T) -> $T {
-        cond!(
-            (*self > *mx) { *mx   }
-            (*self < *mn) { *mn   }
-            _             { *self }
-        )
+        match () {
+            _ if (*self > *mx) => *mx,
+            _ if (*self < *mn) => *mn,
+            _                  => *self,
+        }
     }
+}
+
+impl Default for $T {
+    #[inline]
+    fn default() -> $T { 0 }
 }
 
 impl Zero for $T {
@@ -327,20 +239,6 @@ impl Int for $T {}
 
 // String conversion functions and impl str -> num
 
-/// Parse a string as a number in base 10.
-#[inline]
-pub fn from_str(s: &str) -> Option<$T> {
-    strconv::from_str_common(s, 10u, false, false, false,
-                             strconv::ExpNone, false, false)
-}
-
-/// Parse a string as a number in the given base.
-#[inline]
-pub fn from_str_radix(s: &str, radix: uint) -> Option<$T> {
-    strconv::from_str_common(s, radix, false, false, false,
-                             strconv::ExpNone, false, false)
-}
-
 /// Parse a byte slice as a number in the given base.
 #[inline]
 pub fn parse_bytes(buf: &[u8], radix: uint) -> Option<$T> {
@@ -351,14 +249,16 @@ pub fn parse_bytes(buf: &[u8], radix: uint) -> Option<$T> {
 impl FromStr for $T {
     #[inline]
     fn from_str(s: &str) -> Option<$T> {
-        from_str(s)
+        strconv::from_str_common(s, 10u, false, false, false,
+                                 strconv::ExpNone, false, false)
     }
 }
 
 impl FromStrRadix for $T {
     #[inline]
     fn from_str_radix(s: &str, radix: uint) -> Option<$T> {
-        from_str_radix(s, radix)
+        strconv::from_str_common(s, radix, false, false, false,
+                                 strconv::ExpNone, false, false)
     }
 }
 
@@ -436,9 +336,6 @@ mod tests {
     use num;
     use sys;
     use u16;
-    use u32;
-    use u64;
-    use u8;
 
     #[test]
     fn test_num() {
@@ -548,15 +445,15 @@ mod tests {
 
     #[test]
     pub fn test_from_str() {
-        assert_eq!(from_str("0"), Some(0u as $T));
-        assert_eq!(from_str("3"), Some(3u as $T));
-        assert_eq!(from_str("10"), Some(10u as $T));
-        assert_eq!(u32::from_str("123456789"), Some(123456789 as u32));
-        assert_eq!(from_str("00100"), Some(100u as $T));
+        assert_eq!(from_str::<$T>("0"), Some(0u as $T));
+        assert_eq!(from_str::<$T>("3"), Some(3u as $T));
+        assert_eq!(from_str::<$T>("10"), Some(10u as $T));
+        assert_eq!(from_str::<u32>("123456789"), Some(123456789 as u32));
+        assert_eq!(from_str::<$T>("00100"), Some(100u as $T));
 
-        assert!(from_str("").is_none());
-        assert!(from_str(" ").is_none());
-        assert!(from_str("x").is_none());
+        assert!(from_str::<$T>("").is_none());
+        assert!(from_str::<$T>(" ").is_none());
+        assert!(from_str::<$T>("x").is_none());
     }
 
     #[test]
@@ -603,36 +500,36 @@ mod tests {
     #[test]
     fn test_uint_from_str_overflow() {
         let mut u8_val: u8 = 255_u8;
-        assert_eq!(u8::from_str("255"), Some(u8_val));
-        assert!(u8::from_str("256").is_none());
+        assert_eq!(from_str::<u8>("255"), Some(u8_val));
+        assert!(from_str::<u8>("256").is_none());
 
         u8_val += 1 as u8;
-        assert_eq!(u8::from_str("0"), Some(u8_val));
-        assert!(u8::from_str("-1").is_none());
+        assert_eq!(from_str::<u8>("0"), Some(u8_val));
+        assert!(from_str::<u8>("-1").is_none());
 
         let mut u16_val: u16 = 65_535_u16;
-        assert_eq!(u16::from_str("65535"), Some(u16_val));
-        assert!(u16::from_str("65536").is_none());
+        assert_eq!(from_str::<u16>("65535"), Some(u16_val));
+        assert!(from_str::<u16>("65536").is_none());
 
         u16_val += 1 as u16;
-        assert_eq!(u16::from_str("0"), Some(u16_val));
-        assert!(u16::from_str("-1").is_none());
+        assert_eq!(from_str::<u16>("0"), Some(u16_val));
+        assert!(from_str::<u16>("-1").is_none());
 
         let mut u32_val: u32 = 4_294_967_295_u32;
-        assert_eq!(u32::from_str("4294967295"), Some(u32_val));
-        assert!(u32::from_str("4294967296").is_none());
+        assert_eq!(from_str::<u32>("4294967295"), Some(u32_val));
+        assert!(from_str::<u32>("4294967296").is_none());
 
         u32_val += 1 as u32;
-        assert_eq!(u32::from_str("0"), Some(u32_val));
-        assert!(u32::from_str("-1").is_none());
+        assert_eq!(from_str::<u32>("0"), Some(u32_val));
+        assert!(from_str::<u32>("-1").is_none());
 
         let mut u64_val: u64 = 18_446_744_073_709_551_615_u64;
-        assert_eq!(u64::from_str("18446744073709551615"), Some(u64_val));
-        assert!(u64::from_str("18446744073709551616").is_none());
+        assert_eq!(from_str::<u64>("18446744073709551615"), Some(u64_val));
+        assert!(from_str::<u64>("18446744073709551616").is_none());
 
         u64_val += 1 as u64;
-        assert_eq!(u64::from_str("0"), Some(u64_val));
-        assert!(u64::from_str("-1").is_none());
+        assert_eq!(from_str::<u64>("0"), Some(u64_val));
+        assert!(from_str::<u64>("-1").is_none());
     }
 
     #[test]
@@ -645,62 +542,6 @@ mod tests {
     #[should_fail]
     pub fn to_str_radix37() {
         100u.to_str_radix(37u);
-    }
-
-    #[test]
-    pub fn test_ranges() {
-        let mut l = ~[];
-
-        do range_step(20,26,2) |i| {
-            l.push(i);
-            true
-        };
-        do range_step(36,30,-2) |i| {
-            l.push(i);
-            true
-        };
-        do range_step(max_value - 2, max_value, 2) |i| {
-            l.push(i);
-            true
-        };
-        do range_step(max_value - 3, max_value, 2) |i| {
-            l.push(i);
-            true
-        };
-        do range_step(min_value + 2, min_value, -2) |i| {
-            l.push(i);
-            true
-        };
-        do range_step(min_value + 3, min_value, -2) |i| {
-            l.push(i);
-            true
-        };
-
-        assert_eq!(l, ~[20,22,24,
-                        36,34,32,
-                        max_value-2,
-                        max_value-3,max_value-1,
-                        min_value+2,
-                        min_value+3,min_value+1]);
-
-        // None of the `fail`s should execute.
-        do range_step(10,0,1) |_i| {
-            fail!("unreachable");
-        };
-        do range_step(0,1,-10) |_i| {
-            fail!("unreachable");
-        };
-    }
-
-    #[test]
-    #[should_fail]
-    fn test_range_step_zero_step_up() {
-        do range_step(0,10,0) |_i| { true };
-    }
-    #[test]
-    #[should_fail]
-    fn test_range_step_zero_step_down() {
-        do range_step(0,-10,0) |_i| { true };
     }
 
     #[test]

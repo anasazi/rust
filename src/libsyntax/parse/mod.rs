@@ -45,7 +45,7 @@ pub struct ParseSess {
     included_mod_stack: ~[Path],
 }
 
-pub fn new_parse_sess(demitter: Option<Emitter>) -> @mut ParseSess {
+pub fn new_parse_sess(demitter: Option<@Emitter>) -> @mut ParseSess {
     let cm = @CodeMap::new();
     @mut ParseSess {
         cm: cm,
@@ -324,16 +324,9 @@ mod test {
     use abi;
     use parse::parser::Parser;
     use parse::token::{str_to_ident};
-    use util::parser_testing::{string_to_tts_and_sess, string_to_parser};
+    use util::parser_testing::{string_to_tts, string_to_parser};
     use util::parser_testing::{string_to_expr, string_to_item};
     use util::parser_testing::string_to_stmt;
-
-    // map a string to tts, return the tt without its parsesess
-    fn string_to_tts_only(source_str : @str) -> ~[ast::token_tree] {
-        let (tts,_ps) = string_to_tts_and_sess(source_str);
-        tts
-    }
-
 
     #[cfg(test)] fn to_json_str<E : Encodable<extra::json::Encoder>>(val: @E) -> ~str {
         do io::with_str_writer |writer| {
@@ -395,33 +388,178 @@ mod test {
         string_to_expr(@"::abc::def::return");
     }
 
+    // check the token-tree-ization of macros
+    #[test] fn string_to_tts_macro () {
+        let tts = string_to_tts(@"macro_rules! zip (($a)=>($a))");
+        match tts {
+            [ast::tt_tok(_,_),
+             ast::tt_tok(_,token::NOT),
+             ast::tt_tok(_,_),
+             ast::tt_delim(delim_elts)] =>
+                match *delim_elts {
+                [ast::tt_tok(_,token::LPAREN),
+                 ast::tt_delim(first_set),
+                 ast::tt_tok(_,token::FAT_ARROW),
+                 ast::tt_delim(second_set),
+                 ast::tt_tok(_,token::RPAREN)] =>
+                    match *first_set {
+                    [ast::tt_tok(_,token::LPAREN),
+                     ast::tt_tok(_,token::DOLLAR),
+                     ast::tt_tok(_,_),
+                     ast::tt_tok(_,token::RPAREN)] =>
+                        match *second_set {
+                        [ast::tt_tok(_,token::LPAREN),
+                         ast::tt_tok(_,token::DOLLAR),
+                         ast::tt_tok(_,_),
+                         ast::tt_tok(_,token::RPAREN)] =>
+                            assert_eq!("correct","correct"),
+                        _ => assert_eq!("wrong 4","correct")
+                    },
+                    _ => {
+                        error!("failing value 3: %?",first_set);
+                        assert_eq!("wrong 3","correct")
+                    }
+                },
+                _ => {
+                    error!("failing value 2: %?",delim_elts);
+                    assert_eq!("wrong","correct");
+                }
+
+            },
+            _ => {
+                error!("failing value: %?",tts);
+                assert_eq!("wrong 1","correct");
+            }
+        }
+    }
+
     #[test] fn string_to_tts_1 () {
-        let (tts,_ps) = string_to_tts_and_sess(@"fn a (b : int) { b; }");
+        let tts = string_to_tts(@"fn a (b : int) { b; }");
         assert_eq!(to_json_str(@tts),
-                   ~"[\
-                [\"tt_tok\",null,[\"IDENT\",\"fn\",false]],\
-                [\"tt_tok\",null,[\"IDENT\",\"a\",false]],\
-                [\
-                    \"tt_delim\",\
-                    [\
-                        [\"tt_tok\",null,\"LPAREN\"],\
-                        [\"tt_tok\",null,[\"IDENT\",\"b\",false]],\
-                        [\"tt_tok\",null,\"COLON\"],\
-                        [\"tt_tok\",null,[\"IDENT\",\"int\",false]],\
-                        [\"tt_tok\",null,\"RPAREN\"]\
-                    ]\
-                ],\
-                [\
-                    \"tt_delim\",\
-                    [\
-                        [\"tt_tok\",null,\"LBRACE\"],\
-                        [\"tt_tok\",null,[\"IDENT\",\"b\",false]],\
-                        [\"tt_tok\",null,\"SEMI\"],\
-                        [\"tt_tok\",null,\"RBRACE\"]\
-                    ]\
+        ~"[\
+    {\
+        \"variant\":\"tt_tok\",\
+        \"fields\":[\
+            null,\
+            {\
+                \"variant\":\"IDENT\",\
+                \"fields\":[\
+                    \"fn\",\
+                    false\
                 ]\
-            ]"
-                  );
+            }\
+        ]\
+    },\
+    {\
+        \"variant\":\"tt_tok\",\
+        \"fields\":[\
+            null,\
+            {\
+                \"variant\":\"IDENT\",\
+                \"fields\":[\
+                    \"a\",\
+                    false\
+                ]\
+            }\
+        ]\
+    },\
+    {\
+        \"variant\":\"tt_delim\",\
+        \"fields\":[\
+            [\
+                {\
+                    \"variant\":\"tt_tok\",\
+                    \"fields\":[\
+                        null,\
+                        \"LPAREN\"\
+                    ]\
+                },\
+                {\
+                    \"variant\":\"tt_tok\",\
+                    \"fields\":[\
+                        null,\
+                        {\
+                            \"variant\":\"IDENT\",\
+                            \"fields\":[\
+                                \"b\",\
+                                false\
+                            ]\
+                        }\
+                    ]\
+                },\
+                {\
+                    \"variant\":\"tt_tok\",\
+                    \"fields\":[\
+                        null,\
+                        \"COLON\"\
+                    ]\
+                },\
+                {\
+                    \"variant\":\"tt_tok\",\
+                    \"fields\":[\
+                        null,\
+                        {\
+                            \"variant\":\"IDENT\",\
+                            \"fields\":[\
+                                \"int\",\
+                                false\
+                            ]\
+                        }\
+                    ]\
+                },\
+                {\
+                    \"variant\":\"tt_tok\",\
+                    \"fields\":[\
+                        null,\
+                        \"RPAREN\"\
+                    ]\
+                }\
+            ]\
+        ]\
+    },\
+    {\
+        \"variant\":\"tt_delim\",\
+        \"fields\":[\
+            [\
+                {\
+                    \"variant\":\"tt_tok\",\
+                    \"fields\":[\
+                        null,\
+                        \"LBRACE\"\
+                    ]\
+                },\
+                {\
+                    \"variant\":\"tt_tok\",\
+                    \"fields\":[\
+                        null,\
+                        {\
+                            \"variant\":\"IDENT\",\
+                            \"fields\":[\
+                                \"b\",\
+                                false\
+                            ]\
+                        }\
+                    ]\
+                },\
+                {\
+                    \"variant\":\"tt_tok\",\
+                    \"fields\":[\
+                        null,\
+                        \"SEMI\"\
+                    ]\
+                },\
+                {\
+                    \"variant\":\"tt_tok\",\
+                    \"fields\":[\
+                        null,\
+                        \"RBRACE\"\
+                    ]\
+                }\
+            ]\
+        ]\
+    }\
+]"
+        );
     }
 
     #[test] fn ret_expr() {

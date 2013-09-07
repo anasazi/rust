@@ -8,6 +8,58 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+/*!
+
+C-string manipulation and management
+
+This modules provides the basic methods for creating and manipulating
+null-terminated strings for use with FFI calls (back to C). Most C APIs require
+that the string being passed to them is null-terminated, and by default rust's
+string types are *not* null terminated.
+
+The other problem with translating Rust strings to C strings is that Rust
+strings can validly contain a null-byte in the middle of the string (0 is a
+valid unicode codepoint). This means that not all Rust strings can actually be
+translated to C strings.
+
+# Creation of a C string
+
+A C string is managed through the `CString` type defined in this module. It
+"owns" the internal buffer of characters and will automatically deallocate the
+buffer when the string is dropped. The `ToCStr` trait is implemented for `&str`
+and `&[u8]`, but the conversions can fail due to some of the limitations
+explained above.
+
+This also means that currently whenever a C string is created, an allocation
+must be performed to place the data elsewhere (the lifetime of the C string is
+not tied to the lifetime of the original string/data buffer). If C strings are
+heavily used in applications, then caching may be advisable to prevent
+unnecessary amounts of allocations.
+
+An example of creating and using a C string would be:
+
+~~~{.rust}
+use std::libc;
+externfn!(fn puts(s: *libc::c_char))
+
+let my_string = "Hello, world!";
+
+// Allocate the C string with an explicit local that owns the string. The
+// `c_buffer` pointer will be deallocated when `my_c_string` goes out of scope.
+let my_c_string = my_string.to_c_str();
+do my_c_string.with_ref |c_buffer| {
+    unsafe { puts(c_buffer); }
+}
+
+// Don't save off the allocation of the C string, the `c_buffer` will be
+// deallocated when this block returns!
+do my_string.with_c_str |c_buffer| {
+    unsafe { puts(c_buffer); }
+}
+~~~
+
+*/
+
 use cast;
 use iter::{Iterator, range};
 use libc;
@@ -15,6 +67,7 @@ use ops::Drop;
 use option::{Option, Some, None};
 use ptr::RawPtr;
 use ptr;
+use str;
 use str::StrSlice;
 use vec::{ImmutableVector, CopyableVector};
 use container::Container;
@@ -29,9 +82,7 @@ pub enum NullByteResolution {
 
 condition! {
     // This should be &[u8] but there's a lifetime issue (#5370).
-    // NOTE: this super::NullByteResolution should be NullByteResolution
-    // Change this next time the snapshot is updated.
-    pub null_byte: (~[u8]) -> super::NullByteResolution;
+    pub null_byte: (~[u8]) -> NullByteResolution;
 }
 
 /// The representation of a C String.
@@ -97,13 +148,23 @@ impl CString {
     /// # Failure
     ///
     /// Fails if the CString is null.
+    #[inline]
     pub fn as_bytes<'a>(&'a self) -> &'a [u8] {
-        #[fixed_stack_segment]; #[inline(never)];
         if self.buf.is_null() { fail!("CString is null!"); }
         unsafe {
-            let len = libc::strlen(self.buf) as uint;
+            let len = ptr::position(self.buf, |c| *c == 0);
             cast::transmute((self.buf, len + 1))
         }
+    }
+
+    /// Converts the CString into a `&str` without copying.
+    /// Returns None if the CString is not UTF-8 or is null.
+    #[inline]
+    pub fn as_str<'a>(&'a self) -> Option<&'a str> {
+        if self.buf.is_null() { return None; }
+        let buf = self.as_bytes();
+        let buf = buf.slice_to(buf.len()-1); // chop off the trailing NUL
+        str::from_utf8_slice_opt(buf)
     }
 
     /// Return a CString iterator.
@@ -116,7 +177,7 @@ impl CString {
 }
 
 impl Drop for CString {
-    fn drop(&self) {
+    fn drop(&mut self) {
         #[fixed_stack_segment]; #[inline(never)];
         if self.owns_buffer_ {
             unsafe {
@@ -238,7 +299,7 @@ mod tests {
     use option::{Some, None};
 
     #[test]
-    fn test_to_c_str() {
+    fn test_str_to_c_str() {
         do "".to_c_str().with_ref |buf| {
             unsafe {
                 assert_eq!(*ptr::offset(buf, 0), 0);
@@ -253,6 +314,37 @@ mod tests {
                 assert_eq!(*ptr::offset(buf, 3), 'l' as libc::c_char);
                 assert_eq!(*ptr::offset(buf, 4), 'o' as libc::c_char);
                 assert_eq!(*ptr::offset(buf, 5), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn test_vec_to_c_str() {
+        let b: &[u8] = [];
+        do b.to_c_str().with_ref |buf| {
+            unsafe {
+                assert_eq!(*ptr::offset(buf, 0), 0);
+            }
+        }
+
+        do bytes!("hello").to_c_str().with_ref |buf| {
+            unsafe {
+                assert_eq!(*ptr::offset(buf, 0), 'h' as libc::c_char);
+                assert_eq!(*ptr::offset(buf, 1), 'e' as libc::c_char);
+                assert_eq!(*ptr::offset(buf, 2), 'l' as libc::c_char);
+                assert_eq!(*ptr::offset(buf, 3), 'l' as libc::c_char);
+                assert_eq!(*ptr::offset(buf, 4), 'o' as libc::c_char);
+                assert_eq!(*ptr::offset(buf, 5), 0);
+            }
+        }
+
+        do bytes!("foo", 0xff).to_c_str().with_ref |buf| {
+            unsafe {
+                assert_eq!(*ptr::offset(buf, 0), 'f' as libc::c_char);
+                assert_eq!(*ptr::offset(buf, 1), 'o' as libc::c_char);
+                assert_eq!(*ptr::offset(buf, 2), 'o' as libc::c_char);
+                assert_eq!(*ptr::offset(buf, 3), 0xff);
+                assert_eq!(*ptr::offset(buf, 4), 0);
             }
         }
     }
@@ -348,5 +440,34 @@ mod tests {
                 assert_eq!(*buf.offset(6), 0);
             }
         }
+    }
+
+    #[test]
+    fn test_as_bytes() {
+        let c_str = "hello".to_c_str();
+        assert_eq!(c_str.as_bytes(), bytes!("hello", 0));
+        let c_str = "".to_c_str();
+        assert_eq!(c_str.as_bytes(), bytes!(0));
+        let c_str = bytes!("foo", 0xff).to_c_str();
+        assert_eq!(c_str.as_bytes(), bytes!("foo", 0xff, 0));
+    }
+
+    #[test]
+    #[should_fail]
+    fn test_as_bytes_fail() {
+        let c_str = unsafe { CString::new(ptr::null(), false) };
+        c_str.as_bytes();
+    }
+
+    #[test]
+    fn test_as_str() {
+        let c_str = "hello".to_c_str();
+        assert_eq!(c_str.as_str(), Some("hello"));
+        let c_str = "".to_c_str();
+        assert_eq!(c_str.as_str(), Some(""));
+        let c_str = bytes!("foo", 0xff).to_c_str();
+        assert_eq!(c_str.as_str(), None);
+        let c_str = unsafe { CString::new(ptr::null(), false) };
+        assert_eq!(c_str.as_str(), None);
     }
 }

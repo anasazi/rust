@@ -23,7 +23,7 @@
  * `glob`/`fnmatch` functions.
  */
 
-use std::{os, path, util};
+use std::{os, path};
 
 use sort;
 
@@ -137,7 +137,7 @@ fn list_dir_sorted(path: &Path) -> ~[Path] {
 /**
  * A compiled Unix shell style pattern.
  */
-#[deriving(Clone, Eq, TotalEq, Ord, TotalOrd, IterBytes, Zero)]
+#[deriving(Clone, Eq, TotalEq, Ord, TotalOrd, IterBytes, Default)]
 pub struct Pattern {
     priv tokens: ~[PatternToken]
 }
@@ -147,8 +147,14 @@ enum PatternToken {
     Char(char),
     AnyChar,
     AnySequence,
-    AnyWithin(~[char]),
-    AnyExcept(~[char])
+    AnyWithin(~[CharSpecifier]),
+    AnyExcept(~[CharSpecifier])
+}
+
+#[deriving(Clone, Eq, TotalEq, Ord, TotalOrd, IterBytes)]
+enum CharSpecifier {
+    SingleChar(char),
+    CharRange(char, char)
 }
 
 #[deriving(Eq)]
@@ -164,12 +170,15 @@ impl Pattern {
      * This function compiles Unix shell style patterns: `?` matches any single character,
      * `*` matches any (possibly empty) sequence of characters and `[...]` matches any character
      * inside the brackets, unless the first character is `!` in which case it matches any
-     * character except those between the `!` and the `]`.
+     * character except those between the `!` and the `]`. Character sequences can also specify
+     * ranges of characters, as ordered by Unicode, so e.g. `[0-9]` specifies any character
+     * between 0 and 9 inclusive.
      *
      * The metacharacters `?`, `*`, `[`, `]` can be matched by using brackets (e.g. `[?]`).
      * When a `]` occurs immediately following `[` or `[!` then it is interpreted as
      * being part of, rather then ending, the character set, so `]` and NOT `]` can be
-     * matched by `[]]` and `[!]]` respectively.
+     * matched by `[]]` and `[!]]` respectively. The `-` character can be specified inside a
+     * character sequence pattern by placing it at the start or the end, e.g. `[abc-]`.
      *
      * When a `[` does not have a closing `]` before the end of the string then the `[` will
      * be treated literally.
@@ -199,7 +208,8 @@ impl Pattern {
                         match chars.slice_from(i + 3).position_elem(&']') {
                             None => (),
                             Some(j) => {
-                                tokens.push(AnyExcept(chars.slice(i + 2, i + 3 + j).to_owned()));
+                                let cs = parse_char_specifiers(chars.slice(i + 2, i + 3 + j));
+                                tokens.push(AnyExcept(cs));
                                 i += j + 4;
                                 loop;
                             }
@@ -209,7 +219,8 @@ impl Pattern {
                         match chars.slice_from(i + 2).position_elem(&']') {
                             None => (),
                             Some(j) => {
-                                tokens.push(AnyWithin(chars.slice(i + 1, i + 2 + j).to_owned()));
+                                let cs = parse_char_specifiers(chars.slice(i + 1, i + 2 + j));
+                                tokens.push(AnyWithin(cs));
                                 i += j + 3;
                                 loop;
                             }
@@ -301,7 +312,7 @@ impl Pattern {
         let require_literal = |c| {
             (options.require_literal_separator && is_sep(c)) ||
             (options.require_literal_leading_dot && c == '.'
-             && is_sep(prev_char.unwrap_or_default('/')))
+             && is_sep(prev_char.unwrap_or('/')))
         };
 
         for (ti, token) in self.tokens.slice_from(i).iter().enumerate() {
@@ -335,21 +346,17 @@ impl Pattern {
                         AnyChar => {
                             !require_literal(c)
                         }
-                        AnyWithin(ref chars) => {
-                            !require_literal(c) &&
-                            chars.iter()
-                                .rposition(|&e| chars_eq(e, c, options.case_sensitive)).is_some()
+                        AnyWithin(ref specifiers) => {
+                            !require_literal(c) && in_char_specifiers(*specifiers, c, options)
                         }
-                        AnyExcept(ref chars) => {
-                            !require_literal(c) &&
-                            chars.iter()
-                                .rposition(|&e| chars_eq(e, c, options.case_sensitive)).is_none()
+                        AnyExcept(ref specifiers) => {
+                            !require_literal(c) && !in_char_specifiers(*specifiers, c, options)
                         }
                         Char(c2) => {
                             chars_eq(c, c2, options.case_sensitive)
                         }
                         AnySequence => {
-                            util::unreachable()
+                            unreachable!()
                         }
                     };
                     if !matches {
@@ -368,6 +375,63 @@ impl Pattern {
         }
     }
 
+}
+
+fn parse_char_specifiers(s: &[char]) -> ~[CharSpecifier] {
+    let mut cs = ~[];
+    let mut i = 0;
+    while i < s.len() {
+        if i + 3 <= s.len() && s[i + 1] == '-' {
+            cs.push(CharRange(s[i], s[i + 2]));
+            i += 3;
+        } else {
+            cs.push(SingleChar(s[i]));
+            i += 1;
+        }
+    }
+    cs
+}
+
+fn in_char_specifiers(specifiers: &[CharSpecifier], c: char, options: MatchOptions) -> bool {
+
+    for &specifier in specifiers.iter() {
+        match specifier {
+            SingleChar(sc) => {
+                if chars_eq(c, sc, options.case_sensitive) {
+                    return true;
+                }
+            }
+            CharRange(start, end) => {
+
+                // FIXME: work with non-ascii chars properly (issue #1347)
+                if !options.case_sensitive && c.is_ascii() && start.is_ascii() && end.is_ascii() {
+
+                    let start = start.to_ascii().to_lower();
+                    let end = end.to_ascii().to_lower();
+
+                    let start_up = start.to_upper();
+                    let end_up = end.to_upper();
+
+                    // only allow case insensitive matching when
+                    // both start and end are within a-z or A-Z
+                    if start != start_up && end != end_up {
+                        let start = start.to_char();
+                        let end = end.to_char();
+                        let c = c.to_ascii().to_lower().to_char();
+                        if c >= start && c <= end {
+                            return true;
+                        }
+                    }
+                }
+
+                if c >= start && c <= end {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
 }
 
 /// A helper function to determine if two chars are (possibly case-insensitively) equal.
@@ -391,10 +455,11 @@ fn is_sep(c: char) -> bool {
     }
 }
 
+
 /**
  * Configuration options to modify the behaviour of `Pattern::matches_with(..)`
  */
-#[deriving(Clone, Eq, TotalEq, Ord, TotalOrd, IterBytes, Zero)]
+#[deriving(Clone, Eq, TotalEq, Ord, TotalOrd, IterBytes, Default)]
 pub struct MatchOptions {
 
     /**
@@ -447,198 +512,8 @@ impl MatchOptions {
 
 #[cfg(test)]
 mod test {
-    use std::{io, os, unstable};
-    use std::unstable::finally::Finally;
+    use std::os;
     use super::*;
-    use tempfile;
-
-    #[test]
-    fn test_relative_pattern() {
-
-        fn change_then_remove(p: &Path, f: &fn()) {
-            do (|| {
-                unstable::change_dir_locked(p, || f());
-            }).finally {
-                os::remove_dir_recursive(p);
-            }
-        }
-
-        fn mk_file(path: &str, directory: bool) {
-            if directory {
-                os::make_dir(&Path(path), 0xFFFF);
-            } else {
-                io::mk_file_writer(&Path(path), [io::Create]);
-            }
-        }
-
-        fn abs_path(path: &str) -> Path {
-            os::getcwd().push_many(Path(path).components)
-        }
-
-        fn glob_vec(pattern: &str) -> ~[Path] {
-            glob(pattern).collect()
-        }
-
-        let root = tempfile::mkdtemp(&os::tmpdir(), "glob-tests");
-        let root = root.expect("Should have created a temp directory");
-
-        do change_then_remove(&root) {
-
-            mk_file("aaa", true);
-            mk_file("aaa/apple", true);
-            mk_file("aaa/orange", true);
-            mk_file("aaa/tomato", true);
-            mk_file("aaa/tomato/tomato.txt", false);
-            mk_file("aaa/tomato/tomoto.txt", false);
-            mk_file("bbb", true);
-            mk_file("bbb/specials", true);
-            mk_file("bbb/specials/!", false);
-
-            // windows does not allow `*` or `?` characters to exist in filenames
-            if os::consts::FAMILY != os::consts::windows::FAMILY {
-                mk_file("bbb/specials/*", false);
-                mk_file("bbb/specials/?", false);
-            }
-
-            mk_file("bbb/specials/[", false);
-            mk_file("bbb/specials/]", false);
-            mk_file("ccc", true);
-            mk_file("xyz", true);
-            mk_file("xyz/x", false);
-            mk_file("xyz/y", false);
-            mk_file("xyz/z", false);
-
-            assert_eq!(glob_vec(""), ~[]);
-            assert_eq!(glob_vec("."), ~[]);
-            assert_eq!(glob_vec(".."), ~[]);
-
-            assert_eq!(glob_vec("aaa"), ~[abs_path("aaa")]);
-            assert_eq!(glob_vec("aaa/"), ~[abs_path("aaa")]);
-            assert_eq!(glob_vec("a"), ~[]);
-            assert_eq!(glob_vec("aa"), ~[]);
-            assert_eq!(glob_vec("aaaa"), ~[]);
-
-            assert_eq!(glob_vec("aaa/apple"), ~[abs_path("aaa/apple")]);
-            assert_eq!(glob_vec("aaa/apple/nope"), ~[]);
-
-            // windows should support both / and \ as directory separators
-            if os::consts::FAMILY == os::consts::windows::FAMILY {
-                assert_eq!(glob_vec("aaa\\apple"), ~[abs_path("aaa/apple")]);
-            }
-
-            assert_eq!(glob_vec("???/"), ~[
-                abs_path("aaa"),
-                abs_path("bbb"),
-                abs_path("ccc"),
-                abs_path("xyz")]);
-
-            assert_eq!(glob_vec("aaa/tomato/tom?to.txt"), ~[
-                abs_path("aaa/tomato/tomato.txt"),
-                abs_path("aaa/tomato/tomoto.txt")]);
-
-            assert_eq!(glob_vec("xyz/?"), ~[
-                abs_path("xyz/x"),
-                abs_path("xyz/y"),
-                abs_path("xyz/z")]);
-
-            assert_eq!(glob_vec("a*"), ~[abs_path("aaa")]);
-            assert_eq!(glob_vec("*a*"), ~[abs_path("aaa")]);
-            assert_eq!(glob_vec("a*a"), ~[abs_path("aaa")]);
-            assert_eq!(glob_vec("aaa*"), ~[abs_path("aaa")]);
-            assert_eq!(glob_vec("*aaa"), ~[abs_path("aaa")]);
-            assert_eq!(glob_vec("*aaa*"), ~[abs_path("aaa")]);
-            assert_eq!(glob_vec("*a*a*a*"), ~[abs_path("aaa")]);
-            assert_eq!(glob_vec("aaa*/"), ~[abs_path("aaa")]);
-
-            assert_eq!(glob_vec("aaa/*"), ~[
-                abs_path("aaa/apple"),
-                abs_path("aaa/orange"),
-                abs_path("aaa/tomato")]);
-
-            assert_eq!(glob_vec("aaa/*a*"), ~[
-                abs_path("aaa/apple"),
-                abs_path("aaa/orange"),
-                abs_path("aaa/tomato")]);
-
-            assert_eq!(glob_vec("*/*/*.txt"), ~[
-                abs_path("aaa/tomato/tomato.txt"),
-                abs_path("aaa/tomato/tomoto.txt")]);
-
-            assert_eq!(glob_vec("*/*/t[aob]m?to[.]t[!y]t"), ~[
-                abs_path("aaa/tomato/tomato.txt"),
-                abs_path("aaa/tomato/tomoto.txt")]);
-
-            assert_eq!(glob_vec("aa[a]"), ~[abs_path("aaa")]);
-            assert_eq!(glob_vec("aa[abc]"), ~[abs_path("aaa")]);
-            assert_eq!(glob_vec("a[bca]a"), ~[abs_path("aaa")]);
-            assert_eq!(glob_vec("aa[b]"), ~[]);
-            assert_eq!(glob_vec("aa[xyz]"), ~[]);
-            assert_eq!(glob_vec("aa[]]"), ~[]);
-
-            assert_eq!(glob_vec("aa[!b]"), ~[abs_path("aaa")]);
-            assert_eq!(glob_vec("aa[!bcd]"), ~[abs_path("aaa")]);
-            assert_eq!(glob_vec("a[!bcd]a"), ~[abs_path("aaa")]);
-            assert_eq!(glob_vec("aa[!a]"), ~[]);
-            assert_eq!(glob_vec("aa[!abc]"), ~[]);
-
-            assert_eq!(glob_vec("bbb/specials/[[]"), ~[abs_path("bbb/specials/[")]);
-            assert_eq!(glob_vec("bbb/specials/!"), ~[abs_path("bbb/specials/!")]);
-            assert_eq!(glob_vec("bbb/specials/[]]"), ~[abs_path("bbb/specials/]")]);
-
-            if os::consts::FAMILY != os::consts::windows::FAMILY {
-                assert_eq!(glob_vec("bbb/specials/[*]"), ~[abs_path("bbb/specials/*")]);
-                assert_eq!(glob_vec("bbb/specials/[?]"), ~[abs_path("bbb/specials/?")]);
-            }
-
-            if os::consts::FAMILY == os::consts::windows::FAMILY {
-
-                assert_eq!(glob_vec("bbb/specials/[![]"), ~[
-                    abs_path("bbb/specials/!"),
-                    abs_path("bbb/specials/]")]);
-
-                assert_eq!(glob_vec("bbb/specials/[!]]"), ~[
-                    abs_path("bbb/specials/!"),
-                    abs_path("bbb/specials/[")]);
-
-                assert_eq!(glob_vec("bbb/specials/[!!]"), ~[
-                    abs_path("bbb/specials/["),
-                    abs_path("bbb/specials/]")]);
-
-            } else {
-
-                assert_eq!(glob_vec("bbb/specials/[![]"), ~[
-                    abs_path("bbb/specials/!"),
-                    abs_path("bbb/specials/*"),
-                    abs_path("bbb/specials/?"),
-                    abs_path("bbb/specials/]")]);
-
-                assert_eq!(glob_vec("bbb/specials/[!]]"), ~[
-                    abs_path("bbb/specials/!"),
-                    abs_path("bbb/specials/*"),
-                    abs_path("bbb/specials/?"),
-                    abs_path("bbb/specials/[")]);
-
-                assert_eq!(glob_vec("bbb/specials/[!!]"), ~[
-                    abs_path("bbb/specials/*"),
-                    abs_path("bbb/specials/?"),
-                    abs_path("bbb/specials/["),
-                    abs_path("bbb/specials/]")]);
-
-                assert_eq!(glob_vec("bbb/specials/[!*]"), ~[
-                    abs_path("bbb/specials/!"),
-                    abs_path("bbb/specials/?"),
-                    abs_path("bbb/specials/["),
-                    abs_path("bbb/specials/]")]);
-
-                assert_eq!(glob_vec("bbb/specials/[!?]"), ~[
-                    abs_path("bbb/specials/!"),
-                    abs_path("bbb/specials/*"),
-                    abs_path("bbb/specials/["),
-                    abs_path("bbb/specials/]")]);
-
-            }
-        };
-    }
 
     #[test]
     fn test_absolute_pattern() {
@@ -670,6 +545,54 @@ mod test {
     fn test_lots_of_files() {
         // this is a good test because it touches lots of differently named files
         glob("/*/*/*/*").skip(10000).next();
+    }
+
+    #[test]
+    fn test_range_pattern() {
+
+        let pat = Pattern::new("a[0-9]b");
+        for i in range(0, 10) {
+            assert!(pat.matches(fmt!("a%db", i)));
+        }
+        assert!(!pat.matches("a_b"));
+
+        let pat = Pattern::new("a[!0-9]b");
+        for i in range(0, 10) {
+            assert!(!pat.matches(fmt!("a%db", i)));
+        }
+        assert!(pat.matches("a_b"));
+
+        let pats = ["[a-z123]", "[1a-z23]", "[123a-z]"];
+        for &p in pats.iter() {
+            let pat = Pattern::new(p);
+            for c in "abcdefghijklmnopqrstuvwxyz".iter() {
+                assert!(pat.matches(c.to_str()));
+            }
+            for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ".iter() {
+                let options = MatchOptions {case_sensitive: false, .. MatchOptions::new()};
+                assert!(pat.matches_with(c.to_str(), options));
+            }
+            assert!(pat.matches("1"));
+            assert!(pat.matches("2"));
+            assert!(pat.matches("3"));
+        }
+
+        let pats = ["[abc-]", "[-abc]", "[a-c-]"];
+        for &p in pats.iter() {
+            let pat = Pattern::new(p);
+            assert!(pat.matches("a"));
+            assert!(pat.matches("b"));
+            assert!(pat.matches("c"));
+            assert!(pat.matches("-"));
+            assert!(!pat.matches("d"));
+        }
+
+        let pat = Pattern::new("[2-1]");
+        assert!(!pat.matches("1"));
+        assert!(!pat.matches("2"));
+
+        assert!(Pattern::new("[-]").matches("-"));
+        assert!(!Pattern::new("[!-]").matches("-"));
     }
 
     #[test]

@@ -8,12 +8,59 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-/*! Composable external iterators
+/*!
 
-The `Iterator` trait defines an interface for objects which implement iteration as a state machine.
+Composable external iterators
 
-Algorithms like `zip` are provided as `Iterator` implementations which wrap other objects
-implementing the `Iterator` trait.
+# The `Iterator` trait
+
+This module defines Rust's core iteration trait. The `Iterator` trait has one
+un-implemented method, `next`. All other methods are derived through default
+methods to perform operations such as `zip`, `chain`, `enumerate`, and `fold`.
+
+The goal of this module is to unify iteration across all containers in Rust.
+An iterator can be considered as a state machine which is used to track which
+element will be yielded next.
+
+There are various extensions also defined in this module to assist with various
+types of iteration, such as the `DoubleEndedIterator` for iterating in reverse,
+the `FromIterator` trait for creating a container from an iterator, and much
+more.
+
+## Rust's `for` loop
+
+The special syntax used by rust's `for` loop is based around the `Iterator`
+trait defined in this module. For loops can be viewed as a syntactical expansion
+into a `loop`, for example, the `for` loop in this example is essentially
+translated to the `loop` below.
+
+~~~{.rust}
+let values = ~[1, 2, 3];
+
+// "Syntactical sugar" taking advantage of an iterator
+for &x in values.iter() {
+    println!("{}", x);
+}
+
+// Rough translation of the iteration without a `for` iterator.
+let mut it = values.iter();
+loop {
+    match it.next() {
+        Some(&x) => {
+            println!("{}", x);
+        }
+        None => { break }
+    }
+}
+~~~
+
+This `for` loop syntax can be applied to any iterator over any type.
+
+## Iteration protocol and more
+
+More detailed information about iterators can be found in the [container
+tutorial](http://static.rust-lang.org/doc/master/tutorial-container.html) with
+the rest of the rust manuals.
 
 */
 
@@ -21,7 +68,7 @@ use cmp;
 use num::{Zero, One, Integer, CheckedAdd, CheckedSub, Saturating};
 use option::{Option, Some, None};
 use ops::{Add, Mul, Sub};
-use cmp::Ord;
+use cmp::{Eq, Ord};
 use clone::Clone;
 use uint;
 use util;
@@ -1474,7 +1521,7 @@ pub struct Scan<'self, A, B, T, St> {
 impl<'self, A, B, T: Iterator<A>, St> Iterator<B> for Scan<'self, A, B, T, St> {
     #[inline]
     fn next(&mut self) -> Option<B> {
-        self.iter.next().chain(|a| (self.f)(&mut self.state, a))
+        self.iter.next().and_then(|a| (self.f)(&mut self.state, a))
     }
 
     #[inline]
@@ -1494,8 +1541,7 @@ pub struct FlatMap<'self, A, T, U> {
     priv backiter: Option<U>,
 }
 
-impl<'self, A, T: Iterator<A>, B, U: Iterator<B>> Iterator<B> for
-    FlatMap<'self, A, T, U> {
+impl<'self, A, T: Iterator<A>, B, U: Iterator<B>> Iterator<B> for FlatMap<'self, A, T, U> {
     #[inline]
     fn next(&mut self) -> Option<B> {
         loop {
@@ -1505,7 +1551,7 @@ impl<'self, A, T: Iterator<A>, B, U: Iterator<B>> Iterator<B> for
                 }
             }
             match self.iter.next().map_move(|x| (self.f)(x)) {
-                None => return self.backiter.chain_mut_ref(|it| it.next()),
+                None => return self.backiter.and_then_mut_ref(|it| it.next()),
                 next => self.frontiter = next,
             }
         }
@@ -1537,7 +1583,7 @@ impl<'self,
                 }
             }
             match self.iter.next_back().map_move(|x| (self.f)(x)) {
-                None => return self.frontiter.chain_mut_ref(|it| it.next_back()),
+                None => return self.frontiter.and_then_mut_ref(|it| it.next_back()),
                 next => self.backiter = next,
             }
         }
@@ -1720,7 +1766,21 @@ pub fn count<A>(start: A, step: A) -> Counter<A> {
     Counter{state: start, step: step}
 }
 
-/// A range of numbers from [0, N)
+impl<A: Add<A, A> + Clone> Iterator<A> for Counter<A> {
+    #[inline]
+    fn next(&mut self) -> Option<A> {
+        let result = self.state.clone();
+        self.state = self.state + self.step;
+        Some(result)
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (uint, Option<uint>) {
+        (uint::max_value, None) // Too bad we can't specify an infinite lower bound
+    }
+}
+
+/// An iterator over the range [start, stop)
 #[deriving(Clone, DeepClone)]
 pub struct Range<A> {
     priv state: A,
@@ -1750,14 +1810,12 @@ impl<A: Add<A, A> + Ord + Clone> Iterator<A> for Range<A> {
     // Blocked on #8605 Need numeric trait for converting to `Option<uint>`
 }
 
-impl<A: Sub<A, A> + Integer + Ord + Clone> DoubleEndedIterator<A> for Range<A> {
+/// `Integer` is required to ensure the range will be the same regardless of
+/// the direction it is consumed.
+impl<A: Integer + Ord + Clone> DoubleEndedIterator<A> for Range<A> {
     #[inline]
     fn next_back(&mut self) -> Option<A> {
         if self.stop > self.state {
-            // Integer doesn't technically define this rule, but we're going to assume that every
-            // Integer is reachable from every other one by adding or subtracting enough Ones. This
-            // seems like a reasonable-enough rule that every Integer should conform to, even if it
-            // can't be statically checked.
             self.stop = self.stop - self.one;
             Some(self.stop.clone())
         } else {
@@ -1766,7 +1824,7 @@ impl<A: Sub<A, A> + Integer + Ord + Clone> DoubleEndedIterator<A> for Range<A> {
     }
 }
 
-/// A range of numbers from [0, N]
+/// An iterator over the range [start, stop]
 #[deriving(Clone, DeepClone)]
 pub struct RangeInclusive<A> {
     priv range: Range<A>,
@@ -1779,17 +1837,17 @@ pub fn range_inclusive<A: Add<A, A> + Ord + Clone + One>(start: A, stop: A) -> R
     RangeInclusive{range: range(start, stop), done: false}
 }
 
-impl<A: Add<A, A> + Ord + Clone> Iterator<A> for RangeInclusive<A> {
+impl<A: Add<A, A> + Eq + Ord + Clone> Iterator<A> for RangeInclusive<A> {
     #[inline]
     fn next(&mut self) -> Option<A> {
         match self.range.next() {
             Some(x) => Some(x),
             None => {
-                if self.done {
-                    None
-                } else {
+                if !self.done && self.range.state == self.range.stop {
                     self.done = true;
                     Some(self.range.stop.clone())
+                } else {
+                    None
                 }
             }
         }
@@ -1818,26 +1876,79 @@ impl<A: Sub<A, A> + Integer + Ord + Clone> DoubleEndedIterator<A> for RangeInclu
             let result = self.range.stop.clone();
             self.range.stop = self.range.stop - self.range.one;
             Some(result)
-        } else if self.done {
-            None
-        } else {
+        } else if !self.done && self.range.state == self.range.stop {
             self.done = true;
             Some(self.range.stop.clone())
+        } else {
+            None
         }
     }
 }
 
-impl<A: Add<A, A> + Clone> Iterator<A> for Counter<A> {
+/// An iterator over the range [start, stop) by `step`. It handles overflow by stopping.
+#[deriving(Clone, DeepClone)]
+pub struct RangeStep<A> {
+    priv state: A,
+    priv stop: A,
+    priv step: A,
+    priv rev: bool
+}
+
+/// Return an iterator over the range [start, stop) by `step`. It handles overflow by stopping.
+#[inline]
+pub fn range_step<A: CheckedAdd + Ord + Clone + Zero>(start: A, stop: A, step: A) -> RangeStep<A> {
+    let rev = step < Zero::zero();
+    RangeStep{state: start, stop: stop, step: step, rev: rev}
+}
+
+impl<A: CheckedAdd + Ord + Clone> Iterator<A> for RangeStep<A> {
     #[inline]
     fn next(&mut self) -> Option<A> {
-        let result = self.state.clone();
-        self.state = self.state + self.step;
-        Some(result)
+        if (self.rev && self.state > self.stop) || (!self.rev && self.state < self.stop) {
+            let result = self.state.clone();
+            match self.state.checked_add(&self.step) {
+                Some(x) => self.state = x,
+                None => self.state = self.stop.clone()
+            }
+            Some(result)
+        } else {
+            None
+        }
     }
+}
 
+/// An iterator over the range [start, stop] by `step`. It handles overflow by stopping.
+#[deriving(Clone, DeepClone)]
+pub struct RangeStepInclusive<A> {
+    priv state: A,
+    priv stop: A,
+    priv step: A,
+    priv rev: bool,
+    priv done: bool
+}
+
+/// Return an iterator over the range [start, stop] by `step`. It handles overflow by stopping.
+#[inline]
+pub fn range_step_inclusive<A: CheckedAdd + Ord + Clone + Zero>(start: A, stop: A,
+                                                                step: A) -> RangeStepInclusive<A> {
+    let rev = step < Zero::zero();
+    RangeStepInclusive{state: start, stop: stop, step: step, rev: rev, done: false}
+}
+
+impl<A: CheckedAdd + Ord + Clone + Eq> Iterator<A> for RangeStepInclusive<A> {
     #[inline]
-    fn size_hint(&self) -> (uint, Option<uint>) {
-        (uint::max_value, None) // Too bad we can't specify an infinite lower bound
+    fn next(&mut self) -> Option<A> {
+        if !self.done && ((self.rev && self.state >= self.stop) ||
+                          (!self.rev && self.state <= self.stop)) {
+            let result = self.state.clone();
+            match self.state.checked_add(&self.step) {
+                Some(x) => self.state = x,
+                None => self.done = true
+            }
+            Some(result)
+        } else {
+            None
+        }
     }
 }
 
@@ -2645,9 +2756,43 @@ mod tests {
     }
 
     #[test]
+    fn test_range() {
+        assert_eq!(range(0i, 5).collect::<~[int]>(), ~[0i, 1, 2, 3, 4]);
+        assert_eq!(range(0i, 5).invert().collect::<~[int]>(), ~[4, 3, 2, 1, 0]);
+        assert_eq!(range(200, -5).collect::<~[int]>(), ~[]);
+        assert_eq!(range(200, -5).invert().collect::<~[int]>(), ~[]);
+        assert_eq!(range(200, 200).collect::<~[int]>(), ~[]);
+        assert_eq!(range(200, 200).invert().collect::<~[int]>(), ~[]);
+    }
+
+    #[test]
     fn test_range_inclusive() {
         assert_eq!(range_inclusive(0i, 5).collect::<~[int]>(), ~[0i, 1, 2, 3, 4, 5]);
         assert_eq!(range_inclusive(0i, 5).invert().collect::<~[int]>(), ~[5i, 4, 3, 2, 1, 0]);
+        assert_eq!(range_inclusive(200, -5).collect::<~[int]>(), ~[]);
+        assert_eq!(range_inclusive(200, -5).invert().collect::<~[int]>(), ~[]);
+        assert_eq!(range_inclusive(200, 200).collect::<~[int]>(), ~[200]);
+        assert_eq!(range_inclusive(200, 200).invert().collect::<~[int]>(), ~[200]);
+    }
+
+    #[test]
+    fn test_range_step() {
+        assert_eq!(range_step(0i, 20, 5).collect::<~[int]>(), ~[0, 5, 10, 15]);
+        assert_eq!(range_step(20i, 0, -5).collect::<~[int]>(), ~[20, 15, 10, 5]);
+        assert_eq!(range_step(20i, 0, -6).collect::<~[int]>(), ~[20, 14, 8, 2]);
+        assert_eq!(range_step(200u8, 255, 50).collect::<~[u8]>(), ~[200u8, 250]);
+        assert_eq!(range_step(200, -5, 1).collect::<~[int]>(), ~[]);
+        assert_eq!(range_step(200, 200, 1).collect::<~[int]>(), ~[]);
+    }
+
+    #[test]
+    fn test_range_step_inclusive() {
+        assert_eq!(range_step_inclusive(0i, 20, 5).collect::<~[int]>(), ~[0, 5, 10, 15, 20]);
+        assert_eq!(range_step_inclusive(20i, 0, -5).collect::<~[int]>(), ~[20, 15, 10, 5, 0]);
+        assert_eq!(range_step_inclusive(20i, 0, -6).collect::<~[int]>(), ~[20, 14, 8, 2]);
+        assert_eq!(range_step_inclusive(200u8, 255, 50).collect::<~[u8]>(), ~[200u8, 250]);
+        assert_eq!(range_step_inclusive(200, -5, 1).collect::<~[int]>(), ~[]);
+        assert_eq!(range_step_inclusive(200, 200, 1).collect::<~[int]>(), ~[200]);
     }
 
     #[test]

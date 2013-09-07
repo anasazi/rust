@@ -19,7 +19,6 @@ use arc::{Arc,RWArc};
 use treemap::TreeMap;
 use std::cell::Cell;
 use std::comm::{PortOne, oneshot};
-use std::either::{Either, Left, Right};
 use std::{io, os, task};
 
 /**
@@ -128,7 +127,7 @@ impl WorkMap {
     }
 }
 
-struct Database {
+pub struct Database {
     db_filename: Path,
     db_cache: TreeMap<~str, ~str>,
     db_dirty: bool
@@ -199,17 +198,16 @@ impl Database {
     }
 }
 
-// FIXME #4330: use &mut self here
 #[unsafe_destructor]
 impl Drop for Database {
-    fn drop(&self) {
+    fn drop(&mut self) {
         if self.db_dirty {
             self.save();
         }
     }
 }
 
-struct Logger {
+pub struct Logger {
     // FIXME #4432: Fill in
     a: ()
 }
@@ -225,10 +223,10 @@ impl Logger {
     }
 }
 
-type FreshnessMap = TreeMap<~str,extern fn(&str,&str)->bool>;
+pub type FreshnessMap = TreeMap<~str,extern fn(&str,&str)->bool>;
 
 #[deriving(Clone)]
-struct Context {
+pub struct Context {
     db: RWArc<Database>,
     logger: RWArc<Logger>,
     cfg: Arc<json::Object>,
@@ -241,20 +239,20 @@ struct Context {
     freshness: Arc<FreshnessMap>
 }
 
-struct Prep<'self> {
+pub struct Prep<'self> {
     ctxt: &'self Context,
     fn_name: &'self str,
     declared_inputs: WorkMap,
 }
 
-struct Exec {
+pub struct Exec {
     discovered_inputs: WorkMap,
     discovered_outputs: WorkMap
 }
 
-struct Work<'self, T> {
-    prep: &'self Prep<'self>,
-    res: Option<Either<T,PortOne<(Exec,T)>>>
+enum Work<'self, T> {
+    WorkValue(T),
+    WorkFromTask(&'self Prep<'self>, PortOne<(Exec, T)>),
 }
 
 fn json_encode<T:Encodable<json::Encoder>>(t: &T) -> ~str {
@@ -426,7 +424,7 @@ impl<'self> Prep<'self> {
             db.prepare(self.fn_name, &self.declared_inputs)
         };
 
-        let res = match cached {
+        match cached {
             Some((ref disc_in, ref disc_out, ref res))
             if self.all_fresh("declared input",&self.declared_inputs) &&
                self.all_fresh("discovered input", disc_in) &&
@@ -434,7 +432,7 @@ impl<'self> Prep<'self> {
                 debug!("Cache hit!");
                 debug!("Trying to decode: %? / %? / %?",
                        disc_in, disc_out, *res);
-                Left(json_decode(*res))
+                Work::from_value(json_decode(*res))
             }
 
             _ => {
@@ -453,10 +451,9 @@ impl<'self> Prep<'self> {
                     let v = blk(&mut exe);
                     chan.send((exe, v));
                 }
-                Right(port)
+                Work::from_task(self, port)
             }
-        };
-        Work::new(self, res)
+        }
     }
 }
 
@@ -465,16 +462,18 @@ impl<'self, T:Send +
        Decodable<json::Decoder>>
     Work<'self, T> { // FIXME(#5121)
 
-    pub fn new(p: &'self Prep<'self>, e: Either<T,PortOne<(Exec,T)>>) -> Work<'self, T> {
-        Work { prep: p, res: Some(e) }
+    pub fn from_value(elt: T) -> Work<'self, T> {
+        WorkValue(elt)
+    }
+    pub fn from_task(prep: &'self Prep<'self>, port: PortOne<(Exec, T)>)
+        -> Work<'self, T> {
+        WorkFromTask(prep, port)
     }
 
     pub fn unwrap(self) -> T {
-        let Work { prep, res } = self;
-        match res {
-            None => fail!(),
-            Some(Left(v)) => v,
-            Some(Right(port)) => {
+        match self {
+            WorkValue(v) => v,
+            WorkFromTask(prep, port) => {
                 let (exe, v) = port.recv();
                 let s = json_encode(&v);
                 do prep.ctxt.db.write |db| {
@@ -496,16 +495,23 @@ fn test() {
     use std::io::WriterUtil;
     use std::{os, run};
 
-    let pth = Path("foo.c");
+    // Create a path to a new file 'filename' in the directory in which
+    // this test is running.
+    fn make_path(filename: ~str) -> Path {
+        let pth = os::self_exe_path().expect("workcache::test failed").pop().push(filename);
+        if os::path_exists(&pth) {
+            os::remove_file(&pth);
+        }
+        return pth;
+    }
+
+    let pth = make_path(~"foo.c");
     {
         let r = io::file_writer(&pth, [io::Create]);
         r.unwrap().write_str("int main() { return 0; }");
     }
 
-    let db_path = os::self_exe_path().expect("workcache::test failed").pop().push("db.json");
-    if os::path_exists(&db_path) {
-        os::remove_file(&db_path);
-    }
+    let db_path = make_path(~"db.json");
 
     let cx = Context::new(RWArc::new(Database::new(db_path)),
                           RWArc::new(Logger::new()),
@@ -514,11 +520,12 @@ fn test() {
     let s = do cx.with_prep("test1") |prep| {
 
         let subcx = cx.clone();
+        let pth = pth.clone();
 
         prep.declare_input("file", pth.to_str(), digest_file(&pth));
         do prep.exec |_exe| {
-            let out = Path("foo.o");
-            run::process_status("gcc", [~"foo.c", ~"-o", out.to_str()]);
+            let out = make_path(~"foo.o");
+            run::process_status("gcc", [pth.to_str(), ~"-o", out.to_str()]);
 
             let _proof_of_concept = subcx.prep("subfn");
             // Could run sub-rules inside here.
@@ -526,5 +533,6 @@ fn test() {
             out.to_str()
         }
     };
+
     io::println(s);
 }

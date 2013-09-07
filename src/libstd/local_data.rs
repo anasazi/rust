@@ -17,27 +17,28 @@ anywhere within a task, keyed by a global pointer parameterized over the type of
 the TLS slot.  Useful for dynamic variables, singletons, and interfacing with
 foreign code with bad callback interfaces.
 
-To use, declare a static variable of the type you wish to store. The
-initialization should be `&local_data::Key`. This is then the key to what you
-wish to store.
+To declare a new key for storing local data of a particular type, use the
+`local_data_key!` macro. This macro will expand to a `static` item apppriately
+named and annotated. This name is then passed to the functions in this module to
+modify/read the slot specified by the key.
 
 ~~~{.rust}
 use std::local_data;
 
-local_data_key!(key_int: int);
-local_data_key!(key_vector: ~[int]);
+local_data_key!(key_int: int)
+local_data_key!(key_vector: ~[int])
 
 local_data::set(key_int, 3);
 local_data::get(key_int, |opt| assert_eq!(opt, Some(&3)));
 
 local_data::set(key_vector, ~[4]);
-local_data::get(key_int, |opt| assert_eq!(opt, Some(&~[4])));
+local_data::get(key_vector, |opt| assert_eq!(opt, Some(&~[4])));
 ~~~
 
-Casting 'Arcane Sight' reveals an overwhelming aura of Transmutation
-magic.
-
 */
+
+// Casting 'Arcane Sight' reveals an overwhelming aura of Transmutation
+// magic.
 
 use cast;
 use libc;
@@ -71,7 +72,7 @@ impl<T: 'static> LocalData for T {}
 //
 // One of the most important operations is loaning a value via `get` to a
 // caller. In doing so, the slot that the TLS entry is occupying cannot be
-// invalidated because upon returning it's loan state must be updated. Currently
+// invalidated because upon returning its loan state must be updated. Currently
 // the TLS map is a vector, but this is possibly dangerous because the vector
 // can be reallocated/moved when new values are pushed onto it.
 //

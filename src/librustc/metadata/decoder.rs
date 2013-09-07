@@ -96,7 +96,7 @@ fn find_item(item_id: int, items: ebml::Doc) -> ebml::Doc {
 
 // Looks up an item in the given metadata and returns an ebml doc pointing
 // to the item data.
-fn lookup_item(item_id: int, data: @~[u8]) -> ebml::Doc {
+pub fn lookup_item(item_id: int, data: @~[u8]) -> ebml::Doc {
     let items = reader::get_doc(reader::Doc(data), tag_items);
     find_item(item_id, items)
 }
@@ -115,7 +115,8 @@ enum Family {
     Mod,                   // m
     ForeignMod,            // n
     Enum,                  // t
-    Variant,               // v
+    TupleVariant,          // v
+    StructVariant,         // V
     Impl,                  // i
     Trait,                 // I
     Struct,                // S
@@ -139,7 +140,8 @@ fn item_family(item: ebml::Doc) -> Family {
       'm' => Mod,
       'n' => ForeignMod,
       't' => Enum,
-      'v' => Variant,
+      'v' => TupleVariant,
+      'V' => StructVariant,
       'i' => Impl,
       'I' => Trait,
       'S' => Struct,
@@ -208,7 +210,7 @@ fn each_reexport(d: ebml::Doc, f: &fn(ebml::Doc) -> bool) -> bool {
 }
 
 fn variant_disr_val(d: ebml::Doc) -> Option<ty::Disr> {
-    do reader::maybe_get_doc(d, tag_disr_val).chain |val_doc| {
+    do reader::maybe_get_doc(d, tag_disr_val).and_then |val_doc| {
         do reader::with_doc_data(val_doc) |data| { u64::parse_bytes(data, 10u) }
     }
 }
@@ -289,7 +291,7 @@ fn enum_variant_ids(item: ebml::Doc, cdata: Cmd) -> ~[ast::DefId] {
     return ids;
 }
 
-fn item_path(item_doc: ebml::Doc) -> ast_map::path {
+pub fn item_path(item_doc: ebml::Doc) -> ast_map::path {
     let path_doc = reader::get_doc(item_doc, tag_path);
 
     let len_doc = reader::get_doc(path_doc, tag_path_len);
@@ -330,7 +332,7 @@ fn item_name(intr: @ident_interner, item: ebml::Doc) -> ast::Ident {
     }
 }
 
-fn item_to_def_like(item: ebml::Doc, did: ast::DefId, cnum: ast::CrateNum)
+pub fn item_to_def_like(item: ebml::Doc, did: ast::DefId, cnum: ast::CrateNum)
     -> DefLike {
     let fam = item_family(item);
     match fam {
@@ -361,9 +363,13 @@ fn item_to_def_like(item: ebml::Doc, did: ast::DefId, cnum: ast::CrateNum)
         Type | ForeignType => DlDef(ast::DefTy(did)),
         Mod => DlDef(ast::DefMod(did)),
         ForeignMod => DlDef(ast::DefForeignMod(did)),
-        Variant => {
+        StructVariant => {
             let enum_did = item_reqd_and_translated_parent_item(cnum, item);
-            DlDef(ast::DefVariant(enum_did, did))
+            DlDef(ast::DefVariant(enum_did, did, true))
+        }
+        TupleVariant => {
+            let enum_did = item_reqd_and_translated_parent_item(cnum, item);
+            DlDef(ast::DefVariant(enum_did, did, false))
         }
         Trait => DlDef(ast::DefTrait(did)),
         Enum => DlDef(ast::DefTy(did)),
@@ -485,7 +491,7 @@ pub enum DefLike {
     DlField
 }
 
-fn def_like_to_def(def_like: DefLike) -> ast::Def {
+pub fn def_like_to_def(def_like: DefLike) -> ast::Def {
     match def_like {
         DlDef(def) => return def,
         DlImpl(*) => fail!("found impl in def_like_to_def"),
@@ -538,7 +544,8 @@ impl<'self> EachItemContext<'self> {
     fn process_item_and_pop_name(&mut self,
                                  doc: ebml::Doc,
                                  def_id: ast::DefId,
-                                 old_len: uint)
+                                 old_len: uint,
+                                 vis: ast::visibility)
                                  -> bool {
         let def_like = item_to_def_like(doc, def_id, self.cdata.cnum);
         match def_like {
@@ -557,8 +564,6 @@ impl<'self> EachItemContext<'self> {
             }
         }
 
-        let vis = item_visibility(doc);
-
         let mut continue = (self.callback)(*self.path_builder, def_like, vis);
 
         let family = item_family(doc);
@@ -575,8 +580,8 @@ impl<'self> EachItemContext<'self> {
                 }
                 ImmStatic | MutStatic | Struct | UnsafeFn | Fn | ForeignFn |
                 UnsafeStaticMethod | StaticMethod | Type | ForeignType |
-                Variant | Enum | PublicField | PrivateField |
-                InheritedField => {}
+                TupleVariant | StructVariant | Enum | PublicField |
+                PrivateField | InheritedField => {}
             }
         }
 
@@ -647,9 +652,12 @@ impl<'self> EachItemContext<'self> {
                         self.push_name(token::ident_to_str(&child_name));
 
                     // Process this item.
+
+                    let vis = item_visibility(child_item_doc);
                     continue = self.process_item_and_pop_name(child_item_doc,
                                                               child_def_id,
-                                                              old_len);
+                                                              old_len,
+                                                              vis);
                 }
             }
             continue
@@ -695,12 +703,13 @@ impl<'self> EachItemContext<'self> {
 
             // Get the item.
             match maybe_find_item(def_id.node, other_crates_items) {
-                None => {}
+                None => { self.pop_name(old_len); }
                 Some(reexported_item_doc) => {
                     continue = self.process_item_and_pop_name(
                         reexported_item_doc,
                         def_id,
-                        old_len);
+                        old_len,
+                        ast::public);
                 }
             }
 
@@ -715,7 +724,8 @@ fn each_child_of_item_or_crate(intr: @ident_interner,
                                cdata: Cmd,
                                item_doc: ebml::Doc,
                                get_crate_data: GetCrateDataCb,
-                               callback: &fn(DefLike, ast::Ident)) {
+                               callback: &fn(DefLike, ast::Ident,
+                                             ast::visibility)) {
     // Iterate over all children.
     let _ = do reader::tagged_docs(item_doc, tag_mod_child) |child_info_doc| {
         let child_def_id = reader::with_doc_data(child_info_doc,
@@ -740,7 +750,8 @@ fn each_child_of_item_or_crate(intr: @ident_interner,
                 let def_like = item_to_def_like(child_item_doc,
                                                 child_def_id,
                                                 cdata.cnum);
-                callback(def_like, child_name);
+                let visibility = item_visibility(child_item_doc);
+                callback(def_like, child_name, visibility);
 
             }
         }
@@ -782,7 +793,8 @@ fn each_child_of_item_or_crate(intr: @ident_interner,
                                                          impl_method_def_id,
                                                          cdata.cnum);
                                     callback(static_method_def_like,
-                                             static_method_name);
+                                             static_method_name,
+                                             item_visibility(impl_method_doc));
                                 }
                                 _ => {}
                             }
@@ -825,7 +837,8 @@ fn each_child_of_item_or_crate(intr: @ident_interner,
                 let def_like = item_to_def_like(child_item_doc,
                                                 child_def_id,
                                                 cdata.cnum);
-                callback(def_like, token::str_to_ident(name));
+                callback(def_like, token::str_to_ident(name),
+                         item_visibility(child_item_doc));
             }
         }
 
@@ -838,7 +851,7 @@ pub fn each_child_of_item(intr: @ident_interner,
                           cdata: Cmd,
                           id: ast::NodeId,
                           get_crate_data: GetCrateDataCb,
-                          callback: &fn(DefLike, ast::Ident)) {
+                          callback: &fn(DefLike, ast::Ident, ast::visibility)) {
     // Find the item.
     let root_doc = reader::Doc(cdata.data);
     let items = reader::get_doc(root_doc, tag_items);
@@ -858,7 +871,8 @@ pub fn each_child_of_item(intr: @ident_interner,
 pub fn each_top_level_item_of_crate(intr: @ident_interner,
                                     cdata: Cmd,
                                     get_crate_data: GetCrateDataCb,
-                                    callback: &fn(DefLike, ast::Ident)) {
+                                    callback: &fn(DefLike, ast::Ident,
+                                                  ast::visibility)) {
     let root_doc = reader::Doc(cdata.data);
     let misc_info_doc = reader::get_doc(root_doc, tag_misc_info);
     let crate_items_doc = reader::get_doc(misc_info_doc,
@@ -1155,7 +1169,8 @@ pub fn get_static_methods_if_impl(intr: @ident_interner,
                 static_impl_methods.push(StaticMethodInfo {
                     ident: item_name(intr, impl_method_doc),
                     def_id: item_def_id(impl_method_doc, cdata),
-                    purity: purity
+                    purity: purity,
+                    vis: item_visibility(impl_method_doc),
                 });
             }
             _ => {}
@@ -1196,10 +1211,11 @@ pub fn get_struct_fields(intr: @ident_interner, cdata: Cmd, id: ast::NodeId)
     do reader::tagged_docs(item, tag_item_field) |an_item| {
         let f = item_family(an_item);
         if f == PublicField || f == PrivateField || f == InheritedField {
+            // FIXME #6993: name should be of type Name, not Ident
             let name = item_name(intr, an_item);
             let did = item_def_id(an_item, cdata);
             result.push(ty::field_ty {
-                ident: name,
+                name: name.name,
                 id: did, vis:
                 struct_field_family_to_visibility(f),
             });
@@ -1209,7 +1225,7 @@ pub fn get_struct_fields(intr: @ident_interner, cdata: Cmd, id: ast::NodeId)
     do reader::tagged_docs(item, tag_item_unnamed_field) |an_item| {
         let did = item_def_id(an_item, cdata);
         result.push(ty::field_ty {
-            ident: special_idents::unnamed_field,
+            name: special_idents::unnamed_field.name,
             id: did,
             vis: ast::inherited,
         });
@@ -1268,7 +1284,8 @@ fn item_family_to_str(fam: Family) -> ~str {
       Mod => ~"mod",
       ForeignMod => ~"foreign mod",
       Enum => ~"enum",
-      Variant => ~"variant",
+      StructVariant => ~"struct variant",
+      TupleVariant => ~"tuple variant",
       Impl => ~"impl",
       Trait => ~"trait",
       Struct => ~"struct",

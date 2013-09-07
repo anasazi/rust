@@ -1120,7 +1120,7 @@ pub fn lookup_field_ty(tcx: ty::ctxt,
                        fieldname: ast::Name,
                        substs: &ty::substs) -> Option<ty::t> {
 
-    let o_field = items.iter().find(|f| f.ident.name == fieldname);
+    let o_field = items.iter().find(|f| f.name == fieldname);
     do o_field.map() |f| {
         ty::lookup_field_type(tcx, class_id, f.id, substs)
     }
@@ -2018,7 +2018,7 @@ pub fn check_expr_with_unifier(fcx: @mut FnCtxt,
         let mut class_field_map = HashMap::new();
         let mut fields_found = 0;
         for field in field_types.iter() {
-            class_field_map.insert(field.ident.name, (field.id, false));
+            class_field_map.insert(field.name, (field.id, false));
         }
 
         let mut error_happened = false;
@@ -2070,7 +2070,7 @@ pub fn check_expr_with_unifier(fcx: @mut FnCtxt,
             if fields_found < field_types.len() {
                 let mut missing_fields = ~[];
                 for class_field in field_types.iter() {
-                    let name = class_field.ident.name;
+                    let name = class_field.name;
                     let (_, seen) = *class_field_map.get(&name);
                     if !seen {
                         missing_fields.push(
@@ -2825,7 +2825,7 @@ pub fn check_expr_with_unifier(fcx: @mut FnCtxt,
                 check_struct_constructor(fcx, id, expr.span, type_def_id,
                                          *fields, base_expr);
             }
-            Some(&ast::DefVariant(enum_id, variant_id)) => {
+            Some(&ast::DefVariant(enum_id, variant_id, _)) => {
                 check_struct_enum_variant(fcx, id, expr.span, enum_id,
                                           variant_id, *fields);
             }
@@ -3256,7 +3256,7 @@ pub fn ty_param_bounds_and_ty_for_def(fcx: @mut FnCtxt,
           return no_params(typ);
       }
       ast::DefFn(id, _) | ast::DefStaticMethod(id, _, _) |
-      ast::DefStatic(id, _) | ast::DefVariant(_, id) |
+      ast::DefStatic(id, _) | ast::DefVariant(_, id, _) |
       ast::DefStruct(id) => {
         return ty::lookup_item_type(fcx.ccx.tcx, id);
       }

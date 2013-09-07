@@ -324,15 +324,16 @@ fn trans_opt(bcx: @mut Block, o: &Opt) -> opt_result {
             return single_result(datumblock.to_result(bcx));
         }
         lit(ConstLit(lit_id)) => {
-            let llval = consts::get_const_val(bcx.ccx(), lit_id);
+            let (llval, _) = consts::get_const_val(bcx.ccx(), lit_id);
             return single_result(rslt(bcx, llval));
         }
         var(disr_val, repr) => {
             return adt::trans_case(bcx, repr, disr_val);
         }
         range(l1, l2) => {
-            return range_result(rslt(bcx, consts::const_expr(ccx, l1)),
-                                rslt(bcx, consts::const_expr(ccx, l2)));
+            let (l1, _) = consts::const_expr(ccx, l1);
+            let (l2, _) = consts::const_expr(ccx, l2);
+            return range_result(rslt(bcx, l1), rslt(bcx, l2));
         }
         vec_len(n, vec_len_eq, _) => {
             return single_result(rslt(bcx, C_int(ccx, n as int)));
@@ -347,7 +348,7 @@ fn variant_opt(bcx: @mut Block, pat_id: ast::NodeId)
     -> Opt {
     let ccx = bcx.ccx();
     match ccx.tcx.def_map.get_copy(&pat_id) {
-        ast::DefVariant(enum_id, var_id) => {
+        ast::DefVariant(enum_id, var_id, _) => {
             let variants = ty::enum_variants(ccx.tcx, enum_id);
             for v in (*variants).iter() {
                 if var_id == v.id {
@@ -355,7 +356,7 @@ fn variant_opt(bcx: @mut Block, pat_id: ast::NodeId)
                                adt::represent_node(bcx, pat_id))
                 }
             }
-            ::std::util::unreachable();
+            unreachable!();
         }
         ast::DefFn(*) |
         ast::DefStruct(_) => {
@@ -532,7 +533,7 @@ fn enter_default<'r>(bcx: @mut Block,
                      m: &[Match<'r>],
                      col: uint,
                      val: ValueRef,
-                     chk: Option<mk_fail>)
+                     chk: FailureHandler)
                       -> ~[Match<'r>] {
     debug!("enter_default(bcx=%s, m=%s, col=%u, val=%s)",
            bcx.to_str(),
@@ -566,7 +567,7 @@ fn enter_default<'r>(bcx: @mut Block,
     // we don't need any default cases. If the check *isn't* nonexhaustive
     // (because chk is Some), then we need the defaults anyways.
     let is_exhaustive = match matches.last_opt() {
-        Some(m) if m.data.arm.guard.is_some() && chk.is_none() => true,
+        Some(m) if m.data.arm.guard.is_some() && chk.is_infallible() => true,
         _ => false
     };
 
@@ -657,7 +658,7 @@ fn enter_opt<'r>(bcx: @mut Block,
                     // Look up the struct variant ID.
                     let struct_id;
                     match tcx.def_map.get_copy(&p.id) {
-                        ast::DefVariant(_, found_struct_id) => {
+                        ast::DefVariant(_, found_struct_id, _) => {
                             struct_id = found_struct_id;
                         }
                         _ => {
@@ -672,7 +673,7 @@ fn enter_opt<'r>(bcx: @mut Block,
                     let r = ty::lookup_struct_fields(tcx, struct_id);
                     for field in r.iter() {
                             match field_pats.iter().find(|p| p.ident.name
-                                                         == field.ident.name) {
+                                                         == field.name) {
                                 None => reordered_patterns.push(dummy),
                                 Some(fp) => reordered_patterns.push(fp.pat)
                             }
@@ -1184,7 +1185,62 @@ fn any_tuple_struct_pat(bcx: @mut Block, m: &[Match], col: uint) -> bool {
     }
 }
 
-type mk_fail = @fn() -> BasicBlockRef;
+trait CustomFailureHandler {
+    fn handle_fail(&self) -> BasicBlockRef;
+}
+
+struct DynamicFailureHandler {
+    bcx: @mut Block,
+    sp: Span,
+    msg: @str,
+    finished: @mut Option<BasicBlockRef>,
+}
+
+impl CustomFailureHandler for DynamicFailureHandler {
+    fn handle_fail(&self) -> BasicBlockRef {
+        match *self.finished {
+            Some(bb) => return bb,
+            _ => (),
+        }
+
+        let fail_cx = sub_block(self.bcx, "case_fallthrough");
+        controlflow::trans_fail(fail_cx, Some(self.sp), self.msg);
+        *self.finished = Some(fail_cx.llbb);
+        fail_cx.llbb
+    }
+}
+
+/// What to do when the pattern match fails.
+enum FailureHandler {
+    Infallible,
+    JumpToBasicBlock(BasicBlockRef),
+    CustomFailureHandlerClass(@CustomFailureHandler),
+}
+
+impl FailureHandler {
+    fn is_infallible(&self) -> bool {
+        match *self {
+            Infallible => true,
+            _ => false,
+        }
+    }
+
+    fn is_fallible(&self) -> bool {
+        !self.is_infallible()
+    }
+
+    fn handle_fail(&self) -> BasicBlockRef {
+        match *self {
+            Infallible => {
+                fail!("attempted to fail in infallible failure handler!")
+            }
+            JumpToBasicBlock(basic_block) => basic_block,
+            CustomFailureHandlerClass(custom_failure_handler) => {
+                custom_failure_handler.handle_fail()
+            }
+        }
+    }
+}
 
 fn pick_col(m: &[Match]) -> uint {
     fn score(p: &ast::Pat) -> uint {
@@ -1346,7 +1402,7 @@ fn compile_guard(bcx: @mut Block,
                      data: &ArmData,
                      m: &[Match],
                      vals: &[ValueRef],
-                     chk: Option<mk_fail>)
+                     chk: FailureHandler)
                   -> @mut Block {
     debug!("compile_guard(bcx=%s, guard_expr=%s, m=%s, vals=%s)",
            bcx.to_str(),
@@ -1399,9 +1455,9 @@ fn compile_guard(bcx: @mut Block,
 }
 
 fn compile_submatch(bcx: @mut Block,
-                        m: &[Match],
-                        vals: &[ValueRef],
-                        chk: Option<mk_fail>) {
+                    m: &[Match],
+                    vals: &[ValueRef],
+                    chk: FailureHandler) {
     debug!("compile_submatch(bcx=%s, m=%s, vals=%s)",
            bcx.to_str(),
            m.repr(bcx.tcx()),
@@ -1411,11 +1467,11 @@ fn compile_submatch(bcx: @mut Block,
     /*
       For an empty match, a fall-through case must exist
      */
-    assert!((m.len() > 0u || chk.is_some()));
+    assert!((m.len() > 0u || chk.is_fallible()));
     let _icx = push_ctxt("match::compile_submatch");
     let mut bcx = bcx;
     if m.len() == 0u {
-        Br(bcx, chk.unwrap()());
+        Br(bcx, chk.handle_fail());
         return;
     }
     if m[0].pats.len() == 0u {
@@ -1453,7 +1509,7 @@ fn compile_submatch(bcx: @mut Block,
 fn compile_submatch_continue(mut bcx: @mut Block,
                              m: &[Match],
                              vals: &[ValueRef],
-                             chk: Option<mk_fail>,
+                             chk: FailureHandler,
                              col: uint,
                              val: ValueRef) {
     let tcx = bcx.tcx();
@@ -1616,7 +1672,7 @@ fn compile_submatch_continue(mut bcx: @mut Block,
     };
 
     let defaults = enter_default(else_cx, dm, m, col, val, chk);
-    let exhaustive = chk.is_none() && defaults.len() == 0u;
+    let exhaustive = chk.is_infallible() && defaults.len() == 0u;
     let len = opts.len();
 
     // Compile subtrees for each option
@@ -1720,7 +1776,7 @@ fn compile_submatch_continue(mut bcx: @mut Block,
 
                   // If none of these subcases match, move on to the
                   // next condition.
-                  branch_chk = Some::<mk_fail>(|| bcx.llbb);
+                  branch_chk = JumpToBasicBlock(bcx.llbb);
                   CondBr(after_cx, matches, opt_cx.llbb, bcx.llbb);
               }
               _ => ()
@@ -1859,11 +1915,15 @@ fn trans_match_inner(scope_cx: @mut Block,
         if ty::type_is_empty(tcx, t) {
             // Special case for empty types
             let fail_cx = @mut None;
-            let f: mk_fail = || mk_fail(scope_cx, discr_expr.span,
-                            @"scrutinizing value that can't exist", fail_cx);
-            Some(f)
+            let fail_handler = @DynamicFailureHandler {
+                bcx: scope_cx,
+                sp: discr_expr.span,
+                msg: @"scrutinizing value that can't exist",
+                finished: fail_cx,
+            } as @CustomFailureHandler;
+            CustomFailureHandlerClass(fail_handler)
         } else {
-            None
+            Infallible
         }
     };
     let lldiscr = discr_datum.to_zeroable_ref_llval(bcx);
@@ -1891,15 +1951,6 @@ fn trans_match_inner(scope_cx: @mut Block,
 
     bcx = controlflow::join_blocks(scope_cx, arm_cxs);
     return bcx;
-
-    fn mk_fail(bcx: @mut Block, sp: Span, msg: @str,
-               finished: @mut Option<BasicBlockRef>) -> BasicBlockRef {
-        match *finished { Some(bb) => return bb, _ => () }
-        let fail_cx = sub_block(bcx, "case_fallthrough");
-        controlflow::trans_fail(fail_cx, Some(sp), msg);
-        *finished = Some(fail_cx.llbb);
-        return fail_cx.llbb;
-    }
 }
 
 enum IrrefutablePatternBindingMode {
@@ -1912,7 +1963,7 @@ enum IrrefutablePatternBindingMode {
 pub fn store_local(bcx: @mut Block,
                    pat: @ast::Pat,
                    opt_init_expr: Option<@ast::Expr>)
-                               -> @mut Block {
+                   -> @mut Block {
     /*!
      * Generates code for a local variable declaration like
      * `let <pat>;` or `let <pat> = <opt_init_expr>`.
@@ -2113,7 +2164,7 @@ fn bind_irrefutable_pat(bcx: @mut Block,
         }
         ast::PatEnum(_, ref sub_pats) => {
             match bcx.tcx().def_map.find(&pat.id) {
-                Some(&ast::DefVariant(enum_id, var_id)) => {
+                Some(&ast::DefVariant(enum_id, var_id, _)) => {
                     let repr = adt::represent_node(bcx, pat.id);
                     let vinfo = ty::enum_variant_with_id(ccx.tcx,
                                                          enum_id,

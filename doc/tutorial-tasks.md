@@ -47,8 +47,7 @@ concurrency at this writing:
 
 * [`std::task`] - All code relating to tasks and task scheduling,
 * [`std::comm`] - The message passing interface,
-* [`std::pipes`] - The underlying messaging infrastructure,
-* [`extra::comm`] - Additional messaging types based on `std::pipes`,
+* [`extra::comm`] - Additional messaging types based on `std::comm`,
 * [`extra::sync`] - More exotic synchronization tools, including locks,
 * [`extra::arc`] - The Arc (atomically reference counted) type,
   for safely sharing immutable data,
@@ -56,7 +55,6 @@ concurrency at this writing:
 
 [`std::task`]: std/task.html
 [`std::comm`]: std/comm.html
-[`std::pipes`]: std/pipes.html
 [`extra::comm`]: extra/comm.html
 [`extra::sync`]: extra/sync.html
 [`extra::arc`]: extra/arc.html
@@ -125,7 +123,7 @@ receiving messages. Pipes are low-level communication building-blocks and so
 come in a variety of forms, each one appropriate for a different use case. In
 what follows, we cover the most commonly used varieties.
 
-The simplest way to create a pipe is to use the `pipes::stream`
+The simplest way to create a pipe is to use the `comm::stream`
 function to create a `(Port, Chan)` pair. In Rust parlance, a *channel*
 is a sending endpoint of a pipe, and a *port* is the receiving
 endpoint. Consider the following example of calculating two results
@@ -282,7 +280,7 @@ fn fib(n: uint) -> uint {
     12586269025
 }
 
-let mut delayed_fib = extra::future::spawn (|| fib(50) );
+let mut delayed_fib = extra::future::Future::spawn (|| fib(50) );
 make_a_sandwich();
 println(fmt!("fib(50) = %?", delayed_fib.get()))
 ~~~
@@ -306,7 +304,7 @@ fn partial_sum(start: uint) -> f64 {
 }
 
 fn main() {
-    let mut futures = vec::from_fn(1000, |ind| do extra::future::spawn { partial_sum(ind) });
+    let mut futures = vec::from_fn(1000, |ind| do extra::future::Future::spawn { partial_sum(ind) });
 
     let mut final_res = 0f64;
     for ft in futures.mut_iter()  {
@@ -425,7 +423,7 @@ do_some_work();
 While it isn't possible for a task to recover from failure, tasks may notify
 each other of failure. The simplest way of handling task failure is with the
 `try` function, which is similar to `spawn`, but immediately blocks waiting
-for the child task to finish. `try` returns a value of type `Result<int,
+for the child task to finish. `try` returns a value of type `Result<T,
 ()>`. `Result` is an `enum` type with two variants: `Ok` and `Err`. In this
 case, because the type arguments to `Result` are `int` and `()`, callers can
 pattern-match on a result to check whether it's an `Ok` result with an `int`

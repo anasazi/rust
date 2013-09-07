@@ -363,7 +363,7 @@ impl<T> Peekable<T> for PortOne<T> {
 
 #[unsafe_destructor]
 impl<T> Drop for ChanOne<T> {
-    fn drop(&self) {
+    fn drop(&mut self) {
         if self.suppress_finalize { return }
 
         unsafe {
@@ -391,7 +391,7 @@ impl<T> Drop for ChanOne<T> {
 
 #[unsafe_destructor]
 impl<T> Drop for PortOne<T> {
-    fn drop(&self) {
+    fn drop(&mut self) {
         if self.suppress_finalize { return }
 
         unsafe {
@@ -1095,7 +1095,7 @@ mod test {
     #[test]
     fn megapipe_stress() {
         use rand;
-        use rand::RngUtil;
+        use rand::Rng;
 
         if util::limit_thread_creation_due_to_osx_and_valgrind() { return; }
 
@@ -1106,7 +1106,7 @@ mod test {
             let total = stress_factor() + 10;
             let mut rng = rand::rng();
             do total.times {
-                let msgs = rng.gen_uint_range(0, 10);
+                let msgs = rng.gen_integer_range(0u, 10);
                 let pipe_clone = pipe.clone();
                 let end_chan_clone = end_chan.clone();
                 do spawntask_random {

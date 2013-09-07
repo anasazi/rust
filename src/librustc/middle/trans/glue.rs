@@ -332,7 +332,7 @@ pub fn call_tydesc_glue_full(bcx: @mut Block,
         }
     };
 
-    Call(bcx, llfn, [C_null(Type::nil().ptr_to()), llrawptr]);
+    Call(bcx, llfn, [C_null(Type::nil().ptr_to()), llrawptr], []);
 }
 
 // See [Note-arg-mode]
@@ -424,7 +424,7 @@ pub fn trans_struct_drop_flag(bcx: @mut Block, t: ty::t, v0: ValueRef, dtor_did:
         let self_arg = PointerCast(bcx, v0, params[0]);
         let args = ~[self_arg];
 
-        Call(bcx, dtor_addr, args);
+        Call(bcx, dtor_addr, args, []);
 
         // Drop the fields
         let field_tys = ty::struct_fields(bcx.tcx(), class_did, substs);
@@ -459,7 +459,7 @@ pub fn trans_struct_drop(mut bcx: @mut Block, t: ty::t, v0: ValueRef, dtor_did: 
     let self_arg = PointerCast(bcx, v0, params[0]);
     let args = ~[self_arg];
 
-    Call(bcx, dtor_addr, args);
+    Call(bcx, dtor_addr, args, []);
 
     // Drop the fields
     let field_tys = ty::struct_fields(bcx.tcx(), class_did, substs);
@@ -581,11 +581,7 @@ pub fn make_take_glue(bcx: @mut Block, v: ValueRef, t: ty::t) -> @mut Block {
       | ty::ty_estr(ty::vstore_slice(_)) => {
         bcx
       }
-      ty::ty_closure(ty::ClosureTy { sigil: ast::BorrowedSigil, _ }) |
-      ty::ty_closure(ty::ClosureTy { sigil: ast::ManagedSigil, _ }) => {
-        closure::make_closure_glue(bcx, v, t, take_ty)
-      }
-      ty::ty_closure(ty::ClosureTy { sigil: ast::OwnedSigil, _ }) => bcx,
+      ty::ty_closure(_) => bcx,
       ty::ty_trait(_, _, ty::BoxTraitStore, _, _) => {
         let llbox = Load(bcx, GEPi(bcx, v, [0u, abi::trt_field_box]));
         incr_refcnt_of_boxed(bcx, llbox);
@@ -606,9 +602,7 @@ pub fn make_take_glue(bcx: @mut Block, v: ValueRef, t: ty::t) -> @mut Block {
                                 None);
           bcx
       }
-      ty::ty_opaque_closure_ptr(ck) => {
-        closure::make_opaque_cbox_take_glue(bcx, ck, v)
-      }
+      ty::ty_opaque_closure_ptr(_) => bcx,
       ty::ty_struct(did, _) => {
         let tcx = bcx.tcx();
         let bcx = iter_structural_ty(bcx, v, t, take_ty);

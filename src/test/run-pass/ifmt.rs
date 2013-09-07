@@ -13,6 +13,11 @@
 #[deny(warnings)];
 
 use std::fmt;
+use std::rt::io::Decorator;
+use std::rt::io::mem::MemWriter;
+use std::rt::io;
+use std::rt::io::Writer;
+use std::str;
 
 struct A;
 struct B;
@@ -82,6 +87,7 @@ pub fn main() {
     t!(format!("{foo} {1} {bar} {0}", 0, 1, foo=2, bar=3), "2 1 3 0");
     t!(format!("{} {0:s}", "a"), "a a");
     t!(format!("{} {0}", "a"), "a a");
+    t!(format!("{foo_bar}", foo_bar=1), "1");
 
     // Methods should probably work
     t!(format!("{0, plural, =1{a#} =2{b#} zero{c#} other{d#}}", 0u), "c0");
@@ -235,16 +241,17 @@ pub fn main() {
         let a: int = ::std::cast::transmute(3u);
         format!("{}", a);
     }
+
+    test_format_args();
+
+    // test that trailing commas are acceptable
+    format!("{}", "test",);
+    format!("{foo}", foo="test",);
 }
 
 // Basic test to make sure that we can invoke the `write!` macro with an
 // io::Writer instance.
 fn test_write() {
-    use std::rt::io::Decorator;
-    use std::rt::io::mem::MemWriter;
-    use std::rt::io;
-    use std::str;
-
     let mut buf = MemWriter::new();
     write!(&mut buf as &mut io::Writer, "{}", 3);
     {
@@ -267,4 +274,21 @@ fn test_print() {
     println!("hello");
     println!("this is a {}", "test");
     println!("{foo}", foo="bar");
+}
+
+// Just make sure that the macros are defined, there's not really a lot that we
+// can do with them just yet (to test the output)
+fn test_format_args() {
+    let mut buf = MemWriter::new();
+    {
+        let w = &mut buf as &mut io::Writer;
+        format_args!(|args| { fmt::write(w, args) }, "{}", 1);
+        format_args!(|args| { fmt::write(w, args) }, "test");
+        format_args!(|args| { fmt::write(w, args) }, "{test}", test=3);
+    }
+    let s = str::from_utf8_owned(buf.inner());
+    t!(s, "1test3");
+
+    let s = format_args!(fmt::format, "hello {}", "world");
+    t!(s, "hello world");
 }

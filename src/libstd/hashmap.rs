@@ -18,15 +18,16 @@
 use container::{Container, Mutable, Map, MutableMap, Set, MutableSet};
 use clone::Clone;
 use cmp::{Eq, Equiv};
+use default::Default;
 use hash::Hash;
 use iter::{Iterator, FromIterator, Extendable};
 use iter::{FilterMap, Chain, Repeat, Zip};
 use num;
 use option::{None, Option, Some};
-use rand::RngUtil;
+use rand::Rng;
 use rand;
 use uint;
-use util::{replace, unreachable};
+use util::replace;
 use vec::{ImmutableVector, MutableVector, OwnedVector};
 use vec;
 
@@ -186,7 +187,7 @@ impl<K:Hash + Eq,V> HashMap<K, V> {
     fn mut_value_for_bucket<'a>(&'a mut self, idx: uint) -> &'a mut V {
         match self.buckets[idx] {
             Some(ref mut bkt) => &mut bkt.value,
-            None => unreachable()
+            None => unreachable!()
         }
     }
 
@@ -622,6 +623,10 @@ impl<K: Eq + Hash, V> Extendable<(K, V)> for HashMap<K, V> {
     }
 }
 
+impl<K: Eq + Hash, V> Default for HashMap<K, V> {
+    fn default() -> HashMap<K, V> { HashMap::new() }
+}
+
 /// An implementation of a hash set using the underlying representation of a
 /// HashMap where the value is (). As with the `HashMap` type, a `HashSet`
 /// requires that the elements implement the `Eq` and `Hash` traits.
@@ -685,6 +690,17 @@ impl<T:Hash + Eq> HashSet<T> {
     /// the hash table.
     pub fn with_capacity(capacity: uint) -> HashSet<T> {
         HashSet { map: HashMap::with_capacity(capacity) }
+    }
+
+    /// Create an empty HashSet with space for at least `capacity`
+    /// elements in the hash table, using `k0` and `k1` as the keys.
+    ///
+    /// Warning: `k0` and `k1` are normally randomly generated, and
+    /// are designed to allow HashSets to be resistant to attacks that
+    /// cause many collisions and very poor performance. Setting them
+    /// manually using this function can expose a DoS attack vector.
+    pub fn with_capacity_and_keys(k0: u64, k1: u64, capacity: uint) -> HashSet<T> {
+        HashSet { map: HashMap::with_capacity_and_keys(k0, k1, capacity) }
     }
 
     /// Reserve space for at least `n` elements in the hash table.
@@ -768,6 +784,10 @@ impl<K: Eq + Hash> Extendable<K> for HashSet<K> {
             self.insert(k);
         }
     }
+}
+
+impl<K: Eq + Hash> Default for HashSet<K> {
+    fn default() -> HashSet<K> { HashSet::new() }
 }
 
 // `Repeat` is used to feed the filter closure an explicit capture

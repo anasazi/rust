@@ -20,7 +20,7 @@ use std::vec;
 
 use back::abi;
 use driver::session;
-use lib::llvm::ValueRef;
+use lib::llvm::{ValueRef, NoAliasAttribute, StructRetAttribute};
 use lib::llvm::llvm;
 use metadata::csearch;
 use middle::trans::base;
@@ -128,7 +128,7 @@ pub fn trans(bcx: @mut Block, expr: @ast::Expr) -> Callee {
                                                                 trait_did,
                                                                 ref_expr.id))
             }
-            ast::DefVariant(tid, vid) => {
+            ast::DefVariant(tid, vid, _) => {
                 // nullary variants are not callable
                 assert!(ty::enum_variant_with_id(bcx.tcx(),
                                                       tid,
@@ -570,18 +570,20 @@ pub fn trans_lang_call_with_type_params(bcx: @mut Block,
 }
 
 
-struct CalleeTranslationVisitor;
+struct CalleeTranslationVisitor {
+    flag: bool,
+}
 
-impl Visitor<@mut bool> for CalleeTranslationVisitor {
+impl Visitor<()> for CalleeTranslationVisitor {
 
-    fn visit_item(&mut self, _:@ast::item, _:@mut bool) { }
+    fn visit_item(&mut self, _:@ast::item, _:()) { }
 
-    fn visit_expr(&mut self, e:@ast::Expr, cx:@mut bool) {
+    fn visit_expr(&mut self, e:@ast::Expr, _:()) {
 
-            if !*cx {
+            if !self.flag {
                 match e.node {
-                  ast::ExprRet(_) => *cx = true,
-                  _ => visit::walk_expr(self, e, cx),
+                  ast::ExprRet(_) => self.flag = true,
+                  _ => visit::walk_expr(self, e, ()),
                 }
             }
     }
@@ -589,10 +591,9 @@ impl Visitor<@mut bool> for CalleeTranslationVisitor {
 }
 
 pub fn body_contains_ret(body: &ast::Block) -> bool {
-    let cx = @mut false;
-    let mut v = CalleeTranslationVisitor;
-    visit::walk_block(&mut v, body, cx);
-    *cx
+    let mut v = CalleeTranslationVisitor{ flag: false };
+    visit::walk_block(&mut v, body, ());
+    v.flag
 }
 
 pub fn trans_call_inner(in_cx: @mut Block,
@@ -706,8 +707,26 @@ pub fn trans_call_inner(in_cx: @mut Block,
                 _ => {}
             }
 
+            // A function pointer is called without the declaration available, so we have to apply
+            // any attributes with ABI implications directly to the call instruction. Right now, the
+            // only attribute we need to worry about is `sret`.
+            let mut attrs = ~[];
+            if type_of::return_uses_outptr(in_cx.tcx(), ret_ty) {
+                attrs.push((1, StructRetAttribute));
+            }
+
+            // The `noalias` attribute on the return value is useful to a function ptr caller.
+            match ty::get(ret_ty).sty {
+                // `~` pointer return values never alias because ownership is transferred
+                ty::ty_uniq(*) |
+                ty::ty_evec(_, ty::vstore_uniq) => {
+                    attrs.push((0, NoAliasAttribute));
+                }
+                _ => ()
+            }
+
             // Invoke the actual rust fn and update bcx/llresult.
-            let (llret, b) = base::invoke(bcx, llfn, llargs);
+            let (llret, b) = base::invoke(bcx, llfn, llargs, attrs);
             bcx = b;
             llresult = llret;
 

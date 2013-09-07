@@ -126,7 +126,7 @@ pub fn check_arms(cx: &MatchCheckCtxt, arms: &[Arm]) {
                     Some(&DefStatic(did, false)) => {
                         let const_expr = lookup_const_by_id(cx.tcx, did).unwrap();
                         match eval_const_expr(cx.tcx, const_expr) {
-                            const_float(f) if f.is_NaN() => true,
+                            const_float(f) if f.is_nan() => true,
                             _ => false
                         }
                     }
@@ -136,7 +136,7 @@ pub fn check_arms(cx: &MatchCheckCtxt, arms: &[Arm]) {
             do walk_pat(*pat) |p| {
                 if pat_matches_nan(p) {
                     cx.tcx.sess.span_warn(p.span, "unmatchable NaN in pattern, \
-                                                   use the is_NaN method in a guard instead");
+                                                   use the is_nan method in a guard instead");
                 }
                 true
             };
@@ -335,7 +335,7 @@ pub fn pat_ctor_id(cx: &MatchCheckCtxt, p: @Pat) -> Option<ctor> {
       PatWild => { None }
       PatIdent(_, _, _) | PatEnum(_, _) => {
         match cx.tcx.def_map.find(&pat.id) {
-          Some(&DefVariant(_, id)) => Some(variant(id)),
+          Some(&DefVariant(_, id, _)) => Some(variant(id)),
           Some(&DefStatic(did, false)) => {
             let const_expr = lookup_const_by_id(cx.tcx, did).unwrap();
             Some(val(eval_const_expr(cx.tcx, const_expr)))
@@ -349,7 +349,7 @@ pub fn pat_ctor_id(cx: &MatchCheckCtxt, p: @Pat) -> Option<ctor> {
       }
       PatStruct(*) => {
         match cx.tcx.def_map.find(&pat.id) {
-          Some(&DefVariant(_, id)) => Some(variant(id)),
+          Some(&DefVariant(_, id, _)) => Some(variant(id)),
           _ => Some(single)
         }
       }
@@ -371,7 +371,7 @@ pub fn is_wild(cx: &MatchCheckCtxt, p: @Pat) -> bool {
       PatWild => { true }
       PatIdent(_, _, _) => {
         match cx.tcx.def_map.find(&pat.id) {
-          Some(&DefVariant(_, _)) | Some(&DefStatic(*)) => { false }
+          Some(&DefVariant(_, _, _)) | Some(&DefStatic(*)) => { false }
           _ => { true }
         }
       }
@@ -547,7 +547,7 @@ pub fn specialize(cx: &MatchCheckCtxt,
             }
             PatIdent(_, _, _) => {
                 match cx.tcx.def_map.find(&pat_id) {
-                    Some(&DefVariant(_, id)) => {
+                    Some(&DefVariant(_, id, _)) => {
                         if variant(id) == *ctor_id {
                             Some(r.tail().to_owned())
                         } else {
@@ -639,14 +639,14 @@ pub fn specialize(cx: &MatchCheckCtxt,
                             None
                         }
                     }
-                    DefVariant(_, id) if variant(id) == *ctor_id => {
+                    DefVariant(_, id, _) if variant(id) == *ctor_id => {
                         let args = match args {
                             Some(args) => args,
                             None => vec::from_elem(arity, wild())
                         };
                         Some(vec::append(args, r.tail()))
                     }
-                    DefVariant(_, _) => None,
+                    DefVariant(_, _, _) => None,
 
                     DefFn(*) |
                     DefStruct(*) => {
@@ -664,7 +664,7 @@ pub fn specialize(cx: &MatchCheckCtxt,
             PatStruct(_, ref flds, _) => {
                 // Is this a struct or an enum variant?
                 match cx.tcx.def_map.get_copy(&pat_id) {
-                    DefVariant(_, variant_id) => {
+                    DefVariant(_, variant_id, _) => {
                         if variant(variant_id) == *ctor_id {
                             // FIXME #4731: Is this right? --pcw
                             let args = flds.map(|ty_field| {
@@ -700,7 +700,7 @@ pub fn specialize(cx: &MatchCheckCtxt,
                         }
                         let args = class_fields.iter().map(|class_field| {
                             match flds.iter().find(|f|
-                                            f.ident == class_field.ident) {
+                                            f.ident.name == class_field.name) {
                                 Some(f) => f.pat,
                                 _ => wild()
                             }
@@ -835,7 +835,7 @@ pub fn check_fn(v: &mut CheckMatchVisitor,
 
 pub fn is_refutable(cx: &MatchCheckCtxt, pat: &Pat) -> bool {
     match cx.tcx.def_map.find(&pat.id) {
-      Some(&DefVariant(enum_id, _)) => {
+      Some(&DefVariant(enum_id, _, _)) => {
         if ty::enum_variants(cx.tcx, enum_id).len() != 1u {
             return true;
         }

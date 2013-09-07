@@ -21,6 +21,7 @@ use middle::typeck::require_same_types;
 use std::hashmap::{HashMap, HashSet};
 use syntax::ast;
 use syntax::ast_util;
+use syntax::parse::token;
 use syntax::codemap::Span;
 use syntax::print::pprust;
 
@@ -36,12 +37,12 @@ pub fn check_match(fcx: @mut FnCtxt,
     // Typecheck the patterns first, so that we get types for all the
     // bindings.
     for arm in arms.iter() {
-        let pcx = pat_ctxt {
+        let mut pcx = pat_ctxt {
             fcx: fcx,
             map: pat_id_map(tcx.def_map, arm.pats[0]),
         };
 
-        for p in arm.pats.iter() { check_pat(&pcx, *p, discrim_ty);}
+        for p in arm.pats.iter() { check_pat(&mut pcx, *p, discrim_ty);}
     }
 
     // The result of the match is the common supertype of all the
@@ -172,7 +173,7 @@ pub fn check_pat_variant(pcx: &pat_ctxt, pat: @ast::Pat, path: &ast::Path,
                     fcx.write_error(pat.id);
                     kind_name = "[error]";
                     arg_types = (*subpats).clone()
-                                          .unwrap_or_default(~[])
+                                          .unwrap_or_default()
                                           .map(|_| ty::mk_err());
                 }
             }
@@ -221,7 +222,7 @@ pub fn check_pat_variant(pcx: &pat_ctxt, pat: @ast::Pat, path: &ast::Path,
             fcx.write_error(pat.id);
             kind_name = "[error]";
             arg_types = (*subpats).clone()
-                                  .unwrap_or_default(~[])
+                                  .unwrap_or_default()
                                   .map(|_| ty::mk_err());
         }
     }
@@ -296,7 +297,7 @@ pub fn check_struct_pat_fields(pcx: &pat_ctxt,
     // Index the class fields.
     let mut field_map = HashMap::new();
     for (i, class_field) in class_fields.iter().enumerate() {
-        field_map.insert(class_field.ident.name, i);
+        field_map.insert(class_field.name, i);
     }
 
     // Typecheck each field.
@@ -333,7 +334,7 @@ pub fn check_struct_pat_fields(pcx: &pat_ctxt,
             }
             tcx.sess.span_err(span,
                               fmt!("pattern does not mention field `%s`",
-                                   tcx.sess.str_of(field.ident)));
+                                   token::interner_get(field.name)));
         }
     }
 }
@@ -384,7 +385,7 @@ pub fn check_struct_like_enum_variant_pat(pcx: &pat_ctxt,
 
     // Find the variant that was specified.
     match tcx.def_map.find(&pat_id) {
-        Some(&ast::DefVariant(found_enum_id, variant_id))
+        Some(&ast::DefVariant(found_enum_id, variant_id, _))
                 if found_enum_id == enum_id => {
             // Get the struct fields from this struct-like enum variant.
             let class_fields = ty::lookup_struct_fields(tcx, variant_id);

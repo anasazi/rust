@@ -45,7 +45,7 @@ pub fn capacity<T>(v: @[T]) -> uint {
 #[inline]
 pub fn build<A>(size: Option<uint>, builder: &fn(push: &fn(v: A))) -> @[A] {
     let mut vec = @[];
-    unsafe { raw::reserve(&mut vec, size.unwrap_or_default(4)); }
+    unsafe { raw::reserve(&mut vec, size.unwrap_or(4)); }
     builder(|x| unsafe { raw::push(&mut vec, x) });
     vec
 }
@@ -230,13 +230,16 @@ pub mod raw {
     // Implementation detail. Shouldn't be public
     #[allow(missing_doc)]
     pub fn reserve_raw(ty: *TyDesc, ptr: *mut *mut Box<Vec<()>>, n: uint) {
-
+        // check for `uint` overflow
         unsafe {
-            let size_in_bytes = n * (*ty).size;
-            if size_in_bytes > (**ptr).data.alloc {
-                let total_size = size_in_bytes + sys::size_of::<Vec<()>>();
+            if n > (**ptr).data.alloc / (*ty).size {
+                let alloc = n * (*ty).size;
+                let total_size = alloc + sys::size_of::<Vec<()>>();
+                if alloc / (*ty).size != n || total_size < alloc {
+                    fail!("vector size is too large: %u", n);
+                }
                 (*ptr) = local_realloc(*ptr as *(), total_size) as *mut Box<Vec<()>>;
-                (**ptr).data.alloc = size_in_bytes;
+                (**ptr).data.alloc = alloc;
             }
         }
 

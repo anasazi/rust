@@ -2118,6 +2118,9 @@ pub mod llvm {
                                             -> ValueRef;
 
         #[fast_ffi]
+        pub fn LLVMDICompositeTypeSetTypeArray(CompositeType: ValueRef, TypeArray: ValueRef);
+
+        #[fast_ffi]
         pub fn LLVMIsAArgument(value_ref: ValueRef) -> ValueRef;
 
         #[fast_ffi]
@@ -2322,7 +2325,7 @@ pub struct target_data_res {
 }
 
 impl Drop for target_data_res {
-    fn drop(&self) {
+    fn drop(&mut self) {
         unsafe {
             llvm::LLVMDisposeTargetData(self.TD);
         }
@@ -2358,7 +2361,7 @@ pub struct pass_manager_res {
 }
 
 impl Drop for pass_manager_res {
-    fn drop(&self) {
+    fn drop(&mut self) {
         unsafe {
             llvm::LLVMDisposePassManager(self.PM);
         }
@@ -2394,7 +2397,7 @@ pub struct object_file_res {
 }
 
 impl Drop for object_file_res {
-    fn drop(&self) {
+    fn drop(&mut self) {
         unsafe {
             llvm::LLVMDisposeObjectFile(self.ObjectFile);
         }
@@ -2431,7 +2434,7 @@ pub struct section_iter_res {
 }
 
 impl Drop for section_iter_res {
-    fn drop(&self) {
+    fn drop(&mut self) {
         unsafe {
             llvm::LLVMDisposeSectionIterator(self.SI);
         }

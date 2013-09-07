@@ -10,17 +10,18 @@
 
 /*!
 
-# The Formatting Module
+The Formatting Module
 
-This module contains the runtime support for the `format!` syntax extension. This
-macro is implemented in the compiler to emit calls to this module in order to
-format arguments at runtime into strings and streams.
+This module contains the runtime support for the `format!` syntax extension.
+This macro is implemented in the compiler to emit calls to this module in order
+to format arguments at runtime into strings and streams.
 
 The functions contained in this module should not normally be used in everyday
-use cases of `format!`. The assumptions made by these functions are unsafe for all
-inputs, and the compiler performs a large amount of validation on the arguments
-to `format!` in order to ensure safety at runtime. While it is possible to call
-these functions directly, it is not recommended to do so in the general case.
+use cases of `format!`. The assumptions made by these functions are unsafe for
+all inputs, and the compiler performs a large amount of validation on the
+arguments to `format!` in order to ensure safety at runtime. While it is
+possible to call these functions directly, it is not recommended to do so in the
+general case.
 
 ## Usage
 
@@ -36,7 +37,7 @@ Some examples of the `format!` extension are:
 format!("Hello")                  // => ~"Hello"
 format!("Hello, {:s}!", "world")  // => ~"Hello, world!"
 format!("The number is {:d}", 1)  // => ~"The number is 1"
-format!("{}", ~[3, 4])            // => ~"~[3, 4]"
+format!("{:?}", ~[3, 4])          // => ~"~[3, 4]"
 format!("{value}", value=4)       // => ~"4"
 format!("{} {}", 1, 2)            // => ~"1 2"
 ~~~
@@ -133,7 +134,7 @@ is `?` which is defined for all types by default.
 When implementing a format trait for your own time, you will have to implement a
 method of the signature:
 
-~~~
+~~~{.rust}
 fn fmt(value: &T, f: &mut std::fmt::Formatter);
 ~~~
 
@@ -143,6 +144,78 @@ implementation to correctly adhere to the requested formatting parameters. The
 values of these parameters will be listed in the fields of the `Formatter`
 struct. In order to help with this, the `Formatter` struct also provides some
 helper methods.
+
+### Related macros
+
+There are a number of related macros in the `format!` family. The ones that are
+currently implemented are:
+
+~~~{.rust}
+format!      // described above
+write!       // first argument is a &mut rt::io::Writer, the destination
+writeln!     // same as write but appends a newline
+print!       // the format string is printed to the standard output
+println!     // same as print but appends a newline
+format_args! // described below.
+~~~
+
+
+#### `write!`
+
+This and `writeln` are two macros which are used to emit the format string to a
+specified stream. This is used to prevent intermediate allocations of format
+strings and instead directly write the output. Under the hood, this function is
+actually invoking the `write` function defined in this module. Example usage is:
+
+~~~{.rust}
+use std::rt::io;
+
+let mut w = io::mem::MemWriter::new();
+write!(&mut w as &mut io::Writer, "Hello {}!", "world");
+~~~
+
+#### `print!`
+
+This and `println` emit their output to stdout. Similarly to the `write!` macro,
+the goal of these macros is to avoid intermediate allocations when printing
+output. Example usage is:
+
+~~~{.rust}
+print!("Hello {}!", "world");
+println!("I have a newline {}", "character at the end");
+~~~
+
+#### `format_args!`
+This is a curious macro which is used to safely pass around
+an opaque object describing the format string. This object
+does not require any heap allocations to create, and it only
+references information on the stack. Under the hood, all of
+the related macros are implemented in terms of this. First
+off, some example usage is:
+
+~~~{.rust}
+use std::fmt;
+
+format_args!(fmt::format, "this returns {}", "~str");
+format_args!(|args| { fmt::write(my_writer, args) }, "some {}", "args");
+format_args!(my_fn, "format {}", "string");
+~~~
+
+The first argument of the `format_args!` macro is a function (or closure) which
+takes one argument of type `&fmt::Arguments`. This structure can then be
+passed to the `write` and `format` functions inside this module in order to
+process the format string. The goal of this macro is to even further prevent
+intermediate allocations when dealing formatting strings.
+
+For example, a logging library could use the standard formatting syntax, but it
+would internally pass around this structure until it has been determined where
+output should go to.
+
+It is unsafe to programmatically create an instance of `fmt::Arguments` because
+the operations performed when executing a format string require the compile-time
+checks provided by the compiler. The `format_args!` macro is the only method of
+safely creating these structures, but they can be unsafely created with the
+constructor provided.
 
 ## Internationalization
 
@@ -163,7 +236,7 @@ Furthermore, whenever a case is running, the special character `#` can be used
 to reference the string value of the argument which was selected upon. As an
 example:
 
-~~~
+~~~{.rust}
 format!("{0, select, other{#}}", "hello") // => ~"hello"
 ~~~
 
@@ -363,6 +436,32 @@ pub struct Argument<'self> {
     priv value: &'self util::Void,
 }
 
+impl<'self> Arguments<'self> {
+    /// When using the format_args!() macro, this function is used to generate the
+    /// Arguments structure. The compiler inserts an `unsafe` block to call this,
+    /// which is valid because the compiler performs all necessary validation to
+    /// ensure that the resulting call to format/write would be safe.
+    #[doc(hidden)] #[inline]
+    pub unsafe fn new<'a>(fmt: &'static [rt::Piece<'static>],
+                          args: &'a [Argument<'a>]) -> Arguments<'a> {
+        Arguments{ fmt: cast::transmute(fmt), args: args }
+    }
+}
+
+/// This structure represents a safely precompiled version of a format string
+/// and its arguments. This cannot be generated at runtime because it cannot
+/// safely be done so, so no constructors are given and the fields are private
+/// to prevent modification.
+///
+/// The `format_args!` macro will safely create an instance of this structure
+/// and pass it to a user-supplied function. The macro validates the format
+/// string at compile-time so usage of the `write` and `format` functions can
+/// be safely performed.
+pub struct Arguments<'self> {
+    priv fmt: &'self [rt::Piece<'self>],
+    priv args: &'self [Argument<'self>],
+}
+
 /// When a format is not otherwise specified, types are formatted by ascribing
 /// to this trait. There is not an explicit way of selecting this trait to be
 /// used for formatting, it is only if no other format is specified.
@@ -410,6 +509,33 @@ pub trait Float { fn fmt(&Self, &mut Formatter); }
 /// and a list of arguments. The arguments will be formatted according to the
 /// specified format string into the output stream provided.
 ///
+/// # Arguments
+///
+///   * output - the buffer to write output to
+///   * args - the precompiled arguments generated by `format_args!`
+///
+/// # Example
+///
+/// ~~~{.rust}
+/// use std::fmt;
+/// let w: &mut io::Writer = ...;
+/// format_args!(|args| { fmt::write(w, args) }, "Hello, {}!", "world");
+/// ~~~
+pub fn write(output: &mut io::Writer, args: &Arguments) {
+    unsafe { write_unsafe(output, args.fmt, args.args) }
+}
+
+/// The `writeln` function takes the same arguments as `write`, except that it
+/// will also write a newline (`\n`) character at the end of the format string.
+pub fn writeln(output: &mut io::Writer, args: &Arguments) {
+    unsafe { write_unsafe(output, args.fmt, args.args) }
+    output.write(['\n' as u8]);
+}
+
+/// The `write_unsafe` function takes an output stream, a precompiled format
+/// string, and a list of arguments. The arguments will be formatted according
+/// to the specified format string into the output stream provided.
+///
 /// See the documentation for `format` for why this function is unsafe and care
 /// should be taken if calling it manually.
 ///
@@ -426,8 +552,9 @@ pub trait Float { fn fmt(&Self, &mut Formatter); }
 ///
 /// Note that this function assumes that there are enough arguments for the
 /// format string.
-pub unsafe fn write(output: &mut io::Writer,
-                    fmt: &[rt::Piece], args: &[Argument]) {
+pub unsafe fn write_unsafe(output: &mut io::Writer,
+                           fmt: &[rt::Piece],
+                           args: &[Argument]) {
     let mut formatter = Formatter {
         flags: 0,
         width: None,
@@ -445,6 +572,25 @@ pub unsafe fn write(output: &mut io::Writer,
 
 /// The format function takes a precompiled format string and a list of
 /// arguments, to return the resulting formatted string.
+///
+/// # Arguments
+///
+///   * args - a structure of arguments generated via the `format_args!` macro.
+///            Because this structure can only be safely generated at
+///            compile-time, this function is safe.
+///
+/// # Example
+///
+/// ~~~{.rust}
+/// use std::fmt;
+/// let s = format_args!(fmt::format, "Hello, {}!", "world");
+/// assert_eq!(s, "Hello, world!");
+/// ~~~
+pub fn format(args: &Arguments) -> ~str {
+    unsafe { format_unsafe(args.fmt, args.args) }
+}
+
+/// The unsafe version of the formatting function.
 ///
 /// This is currently an unsafe function because the types of all arguments
 /// aren't verified by immediate callers of this function. This currently does
@@ -465,9 +611,9 @@ pub unsafe fn write(output: &mut io::Writer,
 ///
 /// Note that this function assumes that there are enough arguments for the
 /// format string.
-pub unsafe fn format(fmt: &[rt::Piece], args: &[Argument]) -> ~str {
+pub unsafe fn format_unsafe(fmt: &[rt::Piece], args: &[Argument]) -> ~str {
     let mut output = MemWriter::new();
-    write(&mut output as &mut io::Writer, fmt, args);
+    write_unsafe(&mut output as &mut io::Writer, fmt, args);
     return str::from_utf8_owned(output.inner());
 }
 
@@ -740,7 +886,7 @@ impl<'self> Formatter<'self> {
 
 /// This is a function which calls are emitted to by the compiler itself to
 /// create the Argument structures that are passed into the `format` function.
-#[doc(hidden)]
+#[doc(hidden)] #[inline]
 pub fn argument<'a, T>(f: extern "Rust" fn(&T, &mut Formatter),
                        t: &'a T) -> Argument<'a> {
     unsafe {
@@ -753,14 +899,14 @@ pub fn argument<'a, T>(f: extern "Rust" fn(&T, &mut Formatter),
 
 /// When the compiler determines that the type of an argument *must* be a string
 /// (such as for select), then it invokes this method.
-#[doc(hidden)]
+#[doc(hidden)] #[inline]
 pub fn argumentstr<'a>(s: &'a &str) -> Argument<'a> {
     argument(String::fmt, s)
 }
 
 /// When the compiler determines that the type of an argument *must* be a uint
 /// (such as for plural), then it invokes this method.
-#[doc(hidden)]
+#[doc(hidden)] #[inline]
 pub fn argumentuint<'a>(s: &'a uint) -> Argument<'a> {
     argument(Unsigned::fmt, s)
 }
@@ -899,14 +1045,8 @@ impl<T> Pointer for *T {
         }
     }
 }
-
 impl<T> Pointer for *mut T {
-    fn fmt(t: &*mut T, f: &mut Formatter) {
-        f.flags |= 1 << (parse::FlagAlternate as uint);
-        do ::uint::to_str_bytes(*t as uint, 16) |buf| {
-            f.pad_integral(buf, "0x", true);
-        }
-    }
+    fn fmt(t: &*mut T, f: &mut Formatter) { Pointer::fmt(&(*t as *T), f) }
 }
 
 // Implementation of Default for various core types
@@ -940,7 +1080,6 @@ delegate!(f64 to Float)
 impl<T> Default for *T {
     fn fmt(me: &*T, f: &mut Formatter) { Pointer::fmt(me, f) }
 }
-
 impl<T> Default for *mut T {
     fn fmt(me: &*mut T, f: &mut Formatter) { Pointer::fmt(me, f) }
 }

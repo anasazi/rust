@@ -80,8 +80,6 @@ use parse::{new_sub_parser_from_file, ParseSess};
 use opt_vec;
 use opt_vec::OptVec;
 
-use std::either::Either;
-use std::either;
 use std::hashmap::HashSet;
 use std::util;
 use std::vec;
@@ -94,7 +92,6 @@ enum restriction {
     RESTRICT_NO_BAR_OR_DOUBLEBAR_OP,
 }
 
-type arg_or_capture_item = Either<arg, ()>;
 type item_info = (Ident, item_, Option<~[Attribute]>);
 
 /// How to parse a path. There are four different kinds of paths, all of which
@@ -344,7 +341,7 @@ pub struct Parser {
 #[unsafe_destructor]
 impl Drop for Parser {
     /* do not copy the parser; its state is tied to outside state */
-    fn drop(&self) {}
+    fn drop(&mut self) {}
 }
 
 fn is_plain_ident_or_underscore(t: &token::Token) -> bool {
@@ -802,7 +799,7 @@ impl Parser {
         */
 
         let opt_abis = self.parse_opt_abis();
-        let abis = opt_abis.unwrap_or_default(AbiSet::Rust());
+        let abis = opt_abis.unwrap_or(AbiSet::Rust());
         let purity = self.parse_unsafety();
         self.expect_keyword(keywords::Fn);
         let (decl, lifetimes) = self.parse_ty_fn_decl();
@@ -925,7 +922,7 @@ impl Parser {
             let attrs = p.parse_outer_attributes();
             let lo = p.span.lo;
 
-            let vis = p.parse_non_priv_visibility();
+            let vis = p.parse_visibility();
             let pur = p.parse_fn_purity();
             // NB: at the moment, trait methods are public by default; this
             // could change.
@@ -936,7 +933,7 @@ impl Parser {
             let (explicit_self, d) = do self.parse_fn_decl_with_self() |p| {
                 // This is somewhat dubious; We don't want to allow argument
                 // names to be left off if there is a definition...
-                either::Left(p.parse_arg_general(false))
+                p.parse_arg_general(false)
             };
 
             let hi = p.last_span.hi;
@@ -1290,12 +1287,12 @@ impl Parser {
     }
 
     // parse a single function argument
-    pub fn parse_arg(&self) -> arg_or_capture_item {
-        either::Left(self.parse_arg_general(true))
+    pub fn parse_arg(&self) -> arg {
+        self.parse_arg_general(true)
     }
 
     // parse an argument in a lambda header e.g. |arg, arg|
-    pub fn parse_fn_block_arg(&self) -> arg_or_capture_item {
+    pub fn parse_fn_block_arg(&self) -> arg {
         self.parse_arg_mode();
         let is_mutbl = self.eat_keyword(keywords::Mut);
         let pat = self.parse_pat();
@@ -1308,12 +1305,12 @@ impl Parser {
                 span: mk_sp(self.span.lo, self.span.hi),
             }
         };
-        either::Left(ast::arg {
+        ast::arg {
             is_mutbl: is_mutbl,
             ty: t,
             pat: pat,
             id: ast::DUMMY_NODE_ID
-        })
+        }
     }
 
     pub fn maybe_parse_fixed_vstore(&self) -> Option<@ast::Expr> {
@@ -2038,6 +2035,11 @@ impl Parser {
 
     // parse a single token tree from the input.
     pub fn parse_token_tree(&self) -> token_tree {
+        // FIXME #6994: currently, this is too eager. It
+        // parses token trees but also identifies tt_seq's
+        // and tt_nonterminals; it's too early to know yet
+        // whether something will be a nonterminal or a seq
+        // yet.
         maybe_whole!(deref self, nt_tt);
 
         // this is the fall-through for the 'match' below.
@@ -3461,7 +3463,7 @@ impl Parser {
         let ident = self.parse_ident();
         let opt_bounds = self.parse_optional_ty_param_bounds();
         // For typarams we don't care about the difference b/w "<T>" and "<T:>".
-        let bounds = opt_bounds.unwrap_or_default(opt_vec::Empty);
+        let bounds = opt_bounds.unwrap_or_default();
         ast::TyParam { ident: ident, id: ast::DUMMY_NODE_ID, bounds: bounds }
     }
 
@@ -3500,7 +3502,7 @@ impl Parser {
 
     // parse the argument list and result type of a function declaration
     pub fn parse_fn_decl(&self) -> fn_decl {
-        let args_or_capture_items: ~[arg_or_capture_item] =
+        let args: ~[arg] =
             self.parse_unspanned_seq(
                 &token::LPAREN,
                 &token::RPAREN,
@@ -3508,11 +3510,9 @@ impl Parser {
                 |p| p.parse_arg()
             );
 
-        let inputs = either::lefts(args_or_capture_items.move_iter()).collect();
-
         let (ret_style, ret_ty) = self.parse_ret_ty();
         ast::fn_decl {
-            inputs: inputs,
+            inputs: args,
             output: ret_ty,
             cf: ret_style,
         }
@@ -3542,7 +3542,7 @@ impl Parser {
     fn parse_fn_decl_with_self(
         &self,
         parse_arg_fn:
-        &fn(&Parser) -> arg_or_capture_item
+        &fn(&Parser) -> arg
     ) -> (explicit_self, fn_decl) {
         fn maybe_parse_explicit_self(
             cnstr: &fn(v: Mutability) -> ast::explicit_self_,
@@ -3650,20 +3650,20 @@ impl Parser {
         };
 
         // If we parsed a self type, expect a comma before the argument list.
-        let args_or_capture_items;
+        let fn_inputs;
         if explicit_self != sty_static {
             match *self.token {
                 token::COMMA => {
                     self.bump();
                     let sep = seq_sep_trailing_disallowed(token::COMMA);
-                    args_or_capture_items = self.parse_seq_to_before_end(
+                    fn_inputs = self.parse_seq_to_before_end(
                         &token::RPAREN,
                         sep,
                         parse_arg_fn
                     );
                 }
                 token::RPAREN => {
-                    args_or_capture_items = ~[];
+                    fn_inputs = ~[];
                 }
                 _ => {
                     self.fatal(
@@ -3676,7 +3676,7 @@ impl Parser {
             }
         } else {
             let sep = seq_sep_trailing_disallowed(token::COMMA);
-            args_or_capture_items = self.parse_seq_to_before_end(
+            fn_inputs = self.parse_seq_to_before_end(
                 &token::RPAREN,
                 sep,
                 parse_arg_fn
@@ -3687,11 +3687,10 @@ impl Parser {
 
         let hi = self.span.hi;
 
-        let inputs = either::lefts(args_or_capture_items.move_iter()).collect();
         let (ret_style, ret_ty) = self.parse_ret_ty();
 
         let fn_decl = ast::fn_decl {
-            inputs: inputs,
+            inputs: fn_inputs,
             output: ret_ty,
             cf: ret_style
         };
@@ -3720,7 +3719,7 @@ impl Parser {
         };
 
         ast::fn_decl {
-            inputs: either::lefts(inputs_captures.move_iter()).collect(),
+            inputs: inputs_captures,
             output: output,
             cf: return_val,
         }
@@ -3759,7 +3758,7 @@ impl Parser {
         let attrs = self.parse_outer_attributes();
         let lo = self.span.lo;
 
-        let visa = self.parse_non_priv_visibility();
+        let visa = self.parse_visibility();
         let pur = self.parse_fn_purity();
         let ident = self.parse_ident();
         let generics = self.parse_generics();
@@ -3807,7 +3806,7 @@ impl Parser {
     // Parses two variants (with the region/type params always optional):
     //    impl<T> Foo { ... }
     //    impl<T> ToStr for ~[T] { ... }
-    fn parse_item_impl(&self, visibility: ast::visibility) -> item_info {
+    fn parse_item_impl(&self) -> item_info {
         // First, parse type parameters if necessary.
         let generics = self.parse_generics();
 
@@ -3852,13 +3851,10 @@ impl Parser {
             None
         };
 
-        // Do not allow visibility to be specified.
-        if visibility != ast::inherited {
-            self.obsolete(*self.span, ObsoleteImplVisibility);
-        }
-
         let mut meths = ~[];
-        if !self.eat(&token::SEMI) {
+        if self.eat(&token::SEMI) {
+            self.obsolete(*self.span, ObsoleteEmptyImpl);
+        } else {
             self.expect(&token::LBRACE);
             while !self.eat(&token::RBRACE) {
                 meths.push(self.parse_method());
@@ -4016,18 +4012,6 @@ impl Parser {
         if self.eat_keyword(keywords::Pub) { public }
         else if self.eat_keyword(keywords::Priv) { private }
         else { inherited }
-    }
-
-    // parse visibility, but emits an obsolete error if it's private
-    fn parse_non_priv_visibility(&self) -> visibility {
-        match self.parse_visibility() {
-            public => public,
-            inherited => inherited,
-            private => {
-                self.obsolete(*self.last_span, ObsoletePrivVisibility);
-                inherited
-            }
-        }
     }
 
     fn parse_staticness(&self) -> bool {
@@ -4222,7 +4206,7 @@ impl Parser {
     // parse a function declaration from a foreign module
     fn parse_item_foreign_fn(&self,  attrs: ~[Attribute]) -> @foreign_item {
         let lo = self.span.lo;
-        let vis = self.parse_non_priv_visibility();
+        let vis = self.parse_visibility();
 
         // Parse obsolete purity.
         let purity = self.parse_fn_purity();
@@ -4358,12 +4342,7 @@ impl Parser {
                 self.obsolete(*self.last_span, ObsoleteNamedExternModule);
             }
 
-            // Do not allow visibility to be specified.
-            if visibility != ast::inherited {
-                self.obsolete(*self.last_span, ObsoleteExternVisibility);
-            }
-
-            let abis = opt_abis.unwrap_or_default(AbiSet::C());
+            let abis = opt_abis.unwrap_or(AbiSet::C());
 
             let (inner, next) = self.parse_inner_attrs_and_next();
             let m = self.parse_foreign_mod_items(sort, abis, next);
@@ -4373,7 +4352,7 @@ impl Parser {
                                           self.last_span.hi,
                                           ident,
                                           item_foreign_mod(m),
-                                          public,
+                                          visibility,
                                           maybe_append(attrs, Some(inner))));
         }
 
@@ -4620,7 +4599,7 @@ impl Parser {
 
         let lo = self.span.lo;
 
-        let visibility = self.parse_non_priv_visibility();
+        let visibility = self.parse_visibility();
 
         // must be a view item:
         if self.eat_keyword(keywords::Use) {
@@ -4640,7 +4619,7 @@ impl Parser {
 
             if self.eat_keyword(keywords::Fn) {
                 // EXTERN FUNCTION ITEM
-                let abis = opt_abis.unwrap_or_default(AbiSet::C());
+                let abis = opt_abis.unwrap_or(AbiSet::C());
                 let (ident, item_, extra_attrs) =
                     self.parse_item_fn(extern_fn, abis);
                 return iovi_item(self.mk_item(lo, self.last_span.hi, ident,
@@ -4728,8 +4707,7 @@ impl Parser {
         }
         if self.eat_keyword(keywords::Impl) {
             // IMPL ITEM
-            let (ident, item_, extra_attrs) =
-                self.parse_item_impl(visibility);
+            let (ident, item_, extra_attrs) = self.parse_item_impl();
             return iovi_item(self.mk_item(lo, self.last_span.hi, ident, item_,
                                           visibility,
                                           maybe_append(attrs, extra_attrs)));
@@ -4752,7 +4730,7 @@ impl Parser {
         maybe_whole!(iovi self, nt_item);
         let lo = self.span.lo;
 
-        let visibility = self.parse_non_priv_visibility();
+        let visibility = self.parse_visibility();
 
         if (self.is_keyword(keywords::Const) || self.is_keyword(keywords::Static)) {
             // FOREIGN CONST ITEM
