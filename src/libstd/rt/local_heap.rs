@@ -86,6 +86,17 @@ impl Drop for LocalHeap {
     }
 }
 
+pub unsafe fn local_malloc(td: *libc::c_char, size: libc::uintptr_t) -> *libc::c_char {
+    // XXX: Unsafe borrow for speed. Lame.
+    let task: Option<*mut Task> = Local::try_unsafe_borrow();
+    match task {
+        Some(task) => {
+            (*task).heap.alloc(td as *libc::c_void, size as uint) as *libc::c_char
+        }
+        None => rtabort!("local malloc outside of task")
+    }
+}
+
 // A little compatibility function
 pub unsafe fn local_free(ptr: *libc::c_char) {
     // XXX: Unsafe borrow for speed. Lame.
@@ -107,25 +118,18 @@ pub fn live_allocs() -> *raw::Box<()> {
 }
 
 extern {
-    #[fast_ffi]
     fn rust_new_memory_region(detailed_leaks: uintptr_t,
                                poison_on_free: uintptr_t) -> *MemoryRegion;
-    #[fast_ffi]
     fn rust_delete_memory_region(region: *MemoryRegion);
-    #[fast_ffi]
     fn rust_new_boxed_region(region: *MemoryRegion,
                              poison_on_free: uintptr_t) -> *BoxedRegion;
-    #[fast_ffi]
     fn rust_delete_boxed_region(region: *BoxedRegion);
-    #[fast_ffi]
     fn rust_boxed_region_malloc(region: *BoxedRegion,
                                 td: *TypeDesc,
                                 size: size_t) -> *OpaqueBox;
-    #[fast_ffi]
     fn rust_boxed_region_realloc(region: *BoxedRegion,
                                  ptr: *OpaqueBox,
                                  size: size_t) -> *OpaqueBox;
-    #[fast_ffi]
     fn rust_boxed_region_free(region: *BoxedRegion, box: *OpaqueBox);
 }
 

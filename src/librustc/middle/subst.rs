@@ -96,7 +96,7 @@ impl<T:Subst + 'static> Subst for @T {
 
 impl<T:Subst> Subst for Option<T> {
     fn subst(&self, tcx: ty::ctxt, substs: &ty::substs) -> Option<T> {
-        self.map(|t| t.subst(tcx, substs))
+        self.as_ref().map(|t| t.subst(tcx, substs))
     }
 }
 
@@ -183,9 +183,9 @@ impl Subst for ty::Region {
                     ty::NonerasedRegions(ref regions) => {
                         if regions.len() != 1 {
                             tcx.sess.bug(
-                                fmt!("ty::Region#subst(): \
+                                format!("ty::Region\\#subst(): \
                                       Reference to self region when \
-                                      given substs with no self region: %s",
+                                      given substs with no self region: {}",
                                      substs.repr(tcx)));
                         }
                         *regions.get(0)

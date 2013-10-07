@@ -10,15 +10,17 @@
 
 // error-pattern: unresolved
 
+#[feature(globs)];
+
 mod circ1 {
     pub use circ2::f2;
-    pub fn f1() { info!("f1"); }
+    pub fn f1() { info2!("f1"); }
     pub fn common() -> uint { return 0u; }
 }
 
 mod circ2 {
     pub use circ1::f1;
-    pub fn f2() { info!("f2"); }
+    pub fn f2() { info2!("f2"); }
     pub fn common() -> uint { return 1u; }
 }
 

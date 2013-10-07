@@ -17,6 +17,8 @@
 #[license = "MIT/ASL2"];
 #[crate_type = "lib"];
 
+#[feature(macro_rules, globs, struct_variant)];
+
 // Rustc tasks always run on a fixed_stack_segment, so code in this
 // module can call C functions (in particular, LLVM functions) with
 // impunity.
@@ -83,6 +85,7 @@ pub mod front {
     pub mod test;
     pub mod std_inject;
     pub mod assign_node_ids;
+    pub mod feature_gate;
 }
 
 pub mod back {
@@ -135,7 +138,7 @@ pub fn version(argv0: &str) {
 }
 
 pub fn usage(argv0: &str) {
-    let message = fmt!("Usage: %s [OPTIONS] INPUT", argv0);
+    let message = format!("Usage: {} [OPTIONS] INPUT", argv0);
     println!("{}\n\
 Additional help:
     -W help             Print 'lint' options and default settings
@@ -194,9 +197,6 @@ pub fn describe_debug_flags() {
 }
 
 pub fn run_compiler(args: &[~str], demitter: @diagnostic::Emitter) {
-    // Don't display log spew by default. Can override with RUST_LOG.
-    ::std::logging::console_off();
-
     let mut args = args.to_owned();
     let binary = args.shift().to_managed();
 
@@ -243,25 +243,25 @@ pub fn run_compiler(args: &[~str], demitter: @diagnostic::Emitter) {
         return;
     }
     let input = match matches.free.len() {
-      0u => early_error(demitter, ~"no input filename given"),
+      0u => early_error(demitter, "no input filename given"),
       1u => {
         let ifile = matches.free[0].as_slice();
         if "-" == ifile {
             let src = str::from_utf8(io::stdin().read_whole_stream());
             str_input(src.to_managed())
         } else {
-            file_input(Path(ifile))
+            file_input(Path::new(ifile))
         }
       }
-      _ => early_error(demitter, ~"multiple input filenames provided")
+      _ => early_error(demitter, "multiple input filenames provided")
     };
 
     let sopts = build_session_options(binary, matches, demitter);
     let sess = build_session(sopts, demitter);
-    let odir = matches.opt_str("out-dir").map_move(|o| Path(o));
-    let ofile = matches.opt_str("o").map_move(|o| Path(o));
+    let odir = matches.opt_str("out-dir").map(|o| Path::new(o));
+    let ofile = matches.opt_str("o").map(|o| Path::new(o));
     let cfg = build_configuration(sess);
-    let pretty = do matches.opt_default("pretty", "normal").map_move |a| {
+    let pretty = do matches.opt_default("pretty", "normal").map |a| {
         parse_pretty(sess, a)
     };
     match pretty {
@@ -278,7 +278,7 @@ pub fn run_compiler(args: &[~str], demitter: @diagnostic::Emitter) {
             list_metadata(sess, &(*ifile), io::stdout());
           }
           str_input(_) => {
-            early_error(demitter, ~"can not list metadata for stdin");
+            early_error(demitter, "can not list metadata for stdin");
           }
         }
         return;
@@ -388,7 +388,7 @@ pub fn monitor(f: ~fn(@diagnostic::Emitter)) {
                 }
             }
             // Fail so the process returns a failure code
-            fail!();
+            fail2!();
         }
     }
 }

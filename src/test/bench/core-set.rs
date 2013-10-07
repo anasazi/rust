@@ -19,16 +19,16 @@ use std::rand;
 use std::uint;
 
 struct Results {
-    sequential_ints: float,
-    random_ints: float,
-    delete_ints: float,
+    sequential_ints: f64,
+    random_ints: f64,
+    delete_ints: f64,
 
-    sequential_strings: float,
-    random_strings: float,
-    delete_strings: float
+    sequential_strings: f64,
+    random_strings: f64,
+    delete_strings: f64
 }
 
-fn timed(result: &mut float, op: &fn()) {
+fn timed(result: &mut f64, op: &fn()) {
     let start = extra::time::precise_time_s();
     op();
     let end = extra::time::precise_time_s();
@@ -60,7 +60,7 @@ impl Results {
             let mut set = f();
             do timed(&mut self.random_ints) {
                 for _ in range(0, num_keys) {
-                    set.insert((rng.next() as uint) % rand_cap);
+                    set.insert(rng.gen::<uint>() % rand_cap);
                 }
             }
         }
@@ -102,7 +102,7 @@ impl Results {
             let mut set = f();
             do timed(&mut self.random_strings) {
                 for _ in range(0, num_keys) {
-                    let s = (rng.next() as uint).to_str();
+                    let s = rng.gen::<uint>().to_str();
                     set.insert(s);
                 }
             }
@@ -127,8 +127,8 @@ fn write_header(header: &str) {
     io::stdout().write_str("\n");
 }
 
-fn write_row(label: &str, value: float) {
-    io::stdout().write_str(fmt!("%30s %f s\n", label, value));
+fn write_row(label: &str, value: f64) {
+    io::stdout().write_str(format!("{:30s} {} s\n", label, value));
 }
 
 fn write_results(label: &str, results: &Results) {
@@ -143,13 +143,13 @@ fn write_results(label: &str, results: &Results) {
 
 fn empty_results() -> Results {
     Results {
-        sequential_ints: 0f,
-        random_ints: 0f,
-        delete_ints: 0f,
+        sequential_ints: 0.0,
+        random_ints: 0.0,
+        delete_ints: 0.0,
 
-        sequential_strings: 0f,
-        random_strings: 0f,
-        delete_strings: 0f,
+        sequential_strings: 0.0,
+        random_strings: 0.0,
+        delete_strings: 0.0,
     }
 }
 
@@ -163,11 +163,11 @@ fn main() {
         }
     };
 
-    let seed = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    let seed = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
     let max = 200000;
 
     {
-        let mut rng = rand::IsaacRng::new_seeded(seed);
+        let mut rng: rand::IsaacRng = rand::SeedableRng::from_seed(seed);
         let mut results = empty_results();
         results.bench_int(&mut rng, num_keys, max, || {
             let s: HashSet<uint> = HashSet::new();
@@ -181,7 +181,7 @@ fn main() {
     }
 
     {
-        let mut rng = rand::IsaacRng::new_seeded(seed);
+        let mut rng: rand::IsaacRng = rand::SeedableRng::from_seed(seed);
         let mut results = empty_results();
         results.bench_int(&mut rng, num_keys, max, || {
             let s: TreeSet<uint> = TreeSet::new();
@@ -195,7 +195,7 @@ fn main() {
     }
 
     {
-        let mut rng = rand::IsaacRng::new_seeded(seed);
+        let mut rng: rand::IsaacRng = rand::SeedableRng::from_seed(seed);
         let mut results = empty_results();
         results.bench_int(&mut rng, num_keys, max, || BitvSet::new());
         write_results("extra::bitv::BitvSet", &results);

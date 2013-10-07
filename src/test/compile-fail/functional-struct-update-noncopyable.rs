@@ -12,12 +12,12 @@
 
 // xfail-fast #7103
 extern mod extra;
-use extra::arc::*;
+use extra::arc::Arc;
 
 struct A { y: Arc<int>, x: Arc<int> }
 
 impl Drop for A {
-    fn drop(&mut self) { println(fmt!("x=%?", self.x.get())); }
+    fn drop(&mut self) { println(format!("x={:?}", self.x.get())); }
 }
 fn main() {
     let a = A { y: Arc::new(1), x: Arc::new(2) };

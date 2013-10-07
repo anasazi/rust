@@ -15,7 +15,7 @@ use driver::session;
 use driver::session::Session;
 use lib::llvm::{ValueRef, BasicBlockRef, BuilderRef};
 use lib::llvm::{True, False, Bool};
-use lib::llvm::{llvm};
+use lib::llvm::llvm;
 use lib;
 use middle::lang_items::LangItem;
 use middle::trans::base;
@@ -28,23 +28,55 @@ use middle::ty::substs;
 use middle::ty;
 use middle::typeck;
 use middle::borrowck::root_map_key;
-use util::ppaux::{Repr};
+use util::ppaux::Repr;
 
 use middle::trans::type_::Type;
 
 use std::c_str::ToCStr;
 use std::cast::transmute;
 use std::cast;
-use std::hashmap::{HashMap};
+use std::hashmap::HashMap;
 use std::libc::{c_uint, c_longlong, c_ulonglong, c_char};
 use std::vec;
-use syntax::ast::{Name,Ident};
+use syntax::ast::{Name, Ident};
 use syntax::ast_map::{path, path_elt, path_pretty_name};
 use syntax::codemap::Span;
 use syntax::parse::token;
 use syntax::{ast, ast_map};
 
 pub use middle::trans::context::CrateContext;
+
+fn type_is_newtype_immediate(ccx: &mut CrateContext, ty: ty::t) -> bool {
+    match ty::get(ty).sty {
+        ty::ty_struct(def_id, ref substs) => {
+            let fields = ty::struct_fields(ccx.tcx, def_id, substs);
+            fields.len() == 1 &&
+                fields[0].ident.name == token::special_idents::unnamed_field.name &&
+                type_is_immediate(ccx, fields[0].mt.ty)
+        }
+        _ => false
+    }
+}
+
+pub fn type_is_immediate(ccx: &mut CrateContext, ty: ty::t) -> bool {
+    use middle::trans::machine::llsize_of_alloc;
+    use middle::trans::type_of::sizing_type_of;
+    let tcx = ccx.tcx;
+    let simple = ty::type_is_scalar(ty) || ty::type_is_boxed(ty) ||
+        ty::type_is_unique(ty) || ty::type_is_region_ptr(ty) ||
+        type_is_newtype_immediate(ccx, ty) ||
+        ty::type_is_simd(tcx, ty);
+    if simple {
+        return true;
+    }
+    match ty::get(ty).sty {
+        ty::ty_struct(*) | ty::ty_enum(*) | ty::ty_tup(*) => {
+            let llty = sizing_type_of(ccx, ty);
+            llsize_of_alloc(ccx, llty) <= llsize_of_alloc(ccx, ccx.int_type)
+        }
+        _ => false
+    }
+}
 
 pub fn gensym_name(name: &str) -> (Ident, path_elt) {
     let name = token::gensym(name);
@@ -150,7 +182,7 @@ impl param_substs {
 }
 
 fn param_substs_to_str(this: &param_substs, tcx: ty::ctxt) -> ~str {
-    fmt!("param_substs {tys:%s, vtables:%s}",
+    format!("param_substs \\{tys:{}, vtables:{}\\}",
          this.tys.repr(tcx),
          this.vtables.repr(tcx))
 }
@@ -417,7 +449,7 @@ pub fn add_clean(bcx: @mut Block, val: ValueRef, t: ty::t) {
         return
     }
 
-    debug!("add_clean(%s, %s, %s)", bcx.to_str(), bcx.val_to_str(val), t.repr(bcx.tcx()));
+    debug2!("add_clean({}, {}, {})", bcx.to_str(), bcx.val_to_str(val), t.repr(bcx.tcx()));
 
     let cleanup_type = cleanup_type(bcx.tcx(), t);
     do in_scope_cx(bcx, None) |scope_info| {
@@ -432,7 +464,7 @@ pub fn add_clean(bcx: @mut Block, val: ValueRef, t: ty::t) {
 
 pub fn add_clean_temp_immediate(cx: @mut Block, val: ValueRef, ty: ty::t) {
     if !ty::type_needs_drop(cx.tcx(), ty) { return; }
-    debug!("add_clean_temp_immediate(%s, %s, %s)",
+    debug2!("add_clean_temp_immediate({}, {}, {})",
            cx.to_str(), cx.val_to_str(val),
            ty.repr(cx.tcx()));
     let cleanup_type = cleanup_type(cx.tcx(), ty);
@@ -461,7 +493,7 @@ pub fn add_clean_temp_mem_in_scope(bcx: @mut Block,
 pub fn add_clean_temp_mem_in_scope_(bcx: @mut Block, scope_id: Option<ast::NodeId>,
                                     val: ValueRef, t: ty::t) {
     if !ty::type_needs_drop(bcx.tcx(), t) { return; }
-    debug!("add_clean_temp_mem(%s, %s, %s)",
+    debug2!("add_clean_temp_mem({}, {}, {})",
            bcx.to_str(), bcx.val_to_str(val),
            t.repr(bcx.tcx()));
     let cleanup_type = cleanup_type(bcx.tcx(), t);
@@ -490,7 +522,7 @@ pub fn add_clean_return_to_mut(bcx: @mut Block,
     //! box was frozen initially. Here, both `frozen_val_ref` and
     //! `bits_val_ref` are in fact pointers to stack slots.
 
-    debug!("add_clean_return_to_mut(%s, %s, %s)",
+    debug2!("add_clean_return_to_mut({}, {}, {})",
            bcx.to_str(),
            bcx.val_to_str(frozen_val_ref),
            bcx.val_to_str(bits_val_ref));
@@ -550,7 +582,7 @@ pub fn revoke_clean(cx: @mut Block, val: ValueRef) {
     }
 }
 
-pub fn block_cleanups(bcx: @mut Block) -> ~[cleanup] {
+pub fn block_cleanups(bcx: &mut Block) -> ~[cleanup] {
     match bcx.scope {
        None  => ~[],
        Some(inf) => inf.cleanups.clone(),
@@ -602,7 +634,7 @@ impl get_node_info for ast::Block {
 
 impl get_node_info for Option<@ast::Expr> {
     fn info(&self) -> Option<NodeInfo> {
-        self.and_then_ref(|s| s.info())
+        self.as_ref().and_then(|s| s.info())
     }
 }
 
@@ -670,7 +702,7 @@ impl Block {
         ast_map::node_id_to_str(self.tcx().items, id, self.sess().intr())
     }
 
-    pub fn expr_to_str(&self, e: @ast::Expr) -> ~str {
+    pub fn expr_to_str(&self, e: &ast::Expr) -> ~str {
         e.repr(self.tcx())
     }
 
@@ -686,8 +718,8 @@ impl Block {
         match self.tcx().def_map.find(&nid) {
             Some(&v) => v,
             None => {
-                self.tcx().sess.bug(fmt!(
-                    "No def associated with node id %?", nid));
+                self.tcx().sess.bug(format!(
+                    "No def associated with node id {:?}", nid));
             }
         }
     }
@@ -707,8 +739,8 @@ impl Block {
     pub fn to_str(&self) -> ~str {
         unsafe {
             match self.node_info {
-                Some(node_info) => fmt!("[block %d]", node_info.id),
-                None => fmt!("[block %x]", transmute(&*self)),
+                Some(node_info) => format!("[block {}]", node_info.id),
+                None => format!("[block {}]", transmute::<&Block, *Block>(self)),
             }
         }
     }
@@ -744,7 +776,7 @@ pub fn in_scope_cx(cx: @mut Block, scope_id: Option<ast::NodeId>, f: &fn(si: &mu
             Some(inf) => match scope_id {
                 Some(wanted) => match inf.node_info {
                     Some(NodeInfo { id: actual, _ }) if wanted == actual => {
-                        debug!("in_scope_cx: selected cur=%s (cx=%s)",
+                        debug2!("in_scope_cx: selected cur={} (cx={})",
                                cur.to_str(), cx.to_str());
                         f(inf);
                         return;
@@ -752,7 +784,7 @@ pub fn in_scope_cx(cx: @mut Block, scope_id: Option<ast::NodeId>, f: &fn(si: &mu
                     _ => inf.parent,
                 },
                 None => {
-                    debug!("in_scope_cx: selected cur=%s (cx=%s)",
+                    debug2!("in_scope_cx: selected cur={} (cx={})",
                            cur.to_str(), cx.to_str());
                     f(inf);
                     return;
@@ -769,7 +801,7 @@ pub fn in_scope_cx(cx: @mut Block, scope_id: Option<ast::NodeId>, f: &fn(si: &mu
 pub fn block_parent(cx: @mut Block) -> @mut Block {
     match cx.parent {
       Some(b) => b,
-      None    => cx.sess().bug(fmt!("block_parent called on root block %?",
+      None    => cx.sess().bug(format!("block_parent called on root block {:?}",
                                    cx))
     }
 }
@@ -816,7 +848,7 @@ pub fn C_floating(s: &str, t: Type) -> ValueRef {
 }
 
 pub fn C_nil() -> ValueRef {
-    return C_struct([]);
+    C_struct([], false)
 }
 
 pub fn C_bool(val: bool) -> ValueRef {
@@ -862,7 +894,7 @@ pub fn C_cstr(cx: &mut CrateContext, s: @str) -> ValueRef {
         };
 
         let gsym = token::gensym("str");
-        let g = do fmt!("str%u", gsym).with_c_str |buf| {
+        let g = do format!("str{}", gsym).with_c_str |buf| {
             llvm::LLVMAddGlobal(cx.llmod, val_ty(sc).to_ref(), buf)
         };
         llvm::LLVMSetInitializer(g, sc);
@@ -881,7 +913,7 @@ pub fn C_estr_slice(cx: &mut CrateContext, s: @str) -> ValueRef {
     unsafe {
         let len = s.len();
         let cs = llvm::LLVMConstPointerCast(C_cstr(cx, s), Type::i8p().to_ref());
-        C_struct([cs, C_uint(cx, len)])
+        C_struct([cs, C_uint(cx, len)], false)
     }
 }
 
@@ -895,18 +927,10 @@ pub fn C_zero_byte_arr(size: uint) -> ValueRef {
     }
 }
 
-pub fn C_struct(elts: &[ValueRef]) -> ValueRef {
+pub fn C_struct(elts: &[ValueRef], packed: bool) -> ValueRef {
     unsafe {
         do elts.as_imm_buf |ptr, len| {
-            llvm::LLVMConstStructInContext(base::task_llcx(), ptr, len as c_uint, False)
-        }
-    }
-}
-
-pub fn C_packed_struct(elts: &[ValueRef]) -> ValueRef {
-    unsafe {
-        do elts.as_imm_buf |ptr, len| {
-            llvm::LLVMConstStructInContext(base::task_llcx(), ptr, len as c_uint, True)
+            llvm::LLVMConstStructInContext(base::task_llcx(), ptr, len as c_uint, packed as Bool)
         }
     }
 }
@@ -945,7 +969,7 @@ pub fn const_get_elt(cx: &CrateContext, v: ValueRef, us: &[c_uint])
             llvm::LLVMConstExtractValue(v, p, len as c_uint)
         };
 
-        debug!("const_get_elt(v=%s, us=%?, r=%s)",
+        debug2!("const_get_elt(v={}, us={:?}, r={})",
                cx.tn.val_to_str(v), us, cx.tn.val_to_str(r));
 
         return r;
@@ -1061,7 +1085,7 @@ pub fn path_str(sess: session::Session, p: &[path_elt]) -> ~str {
     r
 }
 
-pub fn monomorphize_type(bcx: @mut Block, t: ty::t) -> ty::t {
+pub fn monomorphize_type(bcx: &mut Block, t: ty::t) -> ty::t {
     match bcx.fcx.param_substs {
         Some(substs) => {
             ty::subst_tps(bcx.tcx(), substs.tys, substs.self_ty, t)
@@ -1074,29 +1098,29 @@ pub fn monomorphize_type(bcx: @mut Block, t: ty::t) -> ty::t {
     }
 }
 
-pub fn node_id_type(bcx: @mut Block, id: ast::NodeId) -> ty::t {
+pub fn node_id_type(bcx: &mut Block, id: ast::NodeId) -> ty::t {
     let tcx = bcx.tcx();
     let t = ty::node_id_to_type(tcx, id);
     monomorphize_type(bcx, t)
 }
 
-pub fn expr_ty(bcx: @mut Block, ex: &ast::Expr) -> ty::t {
+pub fn expr_ty(bcx: &mut Block, ex: &ast::Expr) -> ty::t {
     node_id_type(bcx, ex.id)
 }
 
-pub fn expr_ty_adjusted(bcx: @mut Block, ex: &ast::Expr) -> ty::t {
+pub fn expr_ty_adjusted(bcx: &mut Block, ex: &ast::Expr) -> ty::t {
     let tcx = bcx.tcx();
     let t = ty::expr_ty_adjusted(tcx, ex);
     monomorphize_type(bcx, t)
 }
 
-pub fn node_id_type_params(bcx: @mut Block, id: ast::NodeId) -> ~[ty::t] {
+pub fn node_id_type_params(bcx: &mut Block, id: ast::NodeId) -> ~[ty::t] {
     let tcx = bcx.tcx();
     let params = ty::node_id_to_type_params(tcx, id);
 
     if !params.iter().all(|t| !ty::type_needs_infer(*t)) {
         bcx.sess().bug(
-            fmt!("Type parameters for node %d include inference types: %s",
+            format!("Type parameters for node {} include inference types: {}",
                  id, params.map(|t| bcx.ty_to_str(*t)).connect(",")));
     }
 
@@ -1113,7 +1137,7 @@ pub fn node_id_type_params(bcx: @mut Block, id: ast::NodeId) -> ~[ty::t] {
 pub fn node_vtables(bcx: @mut Block, id: ast::NodeId)
                  -> Option<typeck::vtable_res> {
     let raw_vtables = bcx.ccx().maps.vtable_map.find(&id);
-    raw_vtables.map_move(|vts| resolve_vtables_in_fn_ctxt(bcx.fcx, *vts))
+    raw_vtables.map(|vts| resolve_vtables_in_fn_ctxt(bcx.fcx, *vts))
 }
 
 // Apply the typaram substitutions in the FunctionContext to some
@@ -1174,7 +1198,7 @@ pub fn resolve_vtable_under_param_substs(tcx: ty::ctxt,
                     find_vtable(tcx, substs, n_param, n_bound)
                 }
                 _ => {
-                    tcx.sess.bug(fmt!(
+                    tcx.sess.bug(format!(
                         "resolve_vtable_under_param_substs: asked to lookup \
                          but no vtables in the fn_ctxt!"))
                 }
@@ -1188,7 +1212,7 @@ pub fn find_vtable(tcx: ty::ctxt,
                    n_param: typeck::param_index,
                    n_bound: uint)
                    -> typeck::vtable_origin {
-    debug!("find_vtable(n_param=%?, n_bound=%u, ps=%s)",
+    debug2!("find_vtable(n_param={:?}, n_bound={}, ps={})",
            n_param, n_bound, ps.repr(tcx));
 
     let param_bounds = match n_param {
@@ -1229,7 +1253,7 @@ pub fn langcall(bcx: @mut Block, span: Option<Span>, msg: &str,
     match bcx.tcx().lang_items.require(li) {
         Ok(id) => id,
         Err(s) => {
-            let msg = fmt!("%s %s", msg, s);
+            let msg = format!("{} {}", msg, s);
             match span {
                 Some(span) => { bcx.tcx().sess.span_fatal(span, msg); }
                 None => { bcx.tcx().sess.fatal(msg); }

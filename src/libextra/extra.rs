@@ -26,11 +26,14 @@ Rust extras are part of the standard Rust distribution.
        url = "https://github.com/mozilla/rust/tree/master/src/libextra")];
 
 #[doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk.png",
-      html_favicon_url = "http://www.rust-lang.org/favicon.ico")];
+      html_favicon_url = "http://www.rust-lang.org/favicon.ico",
+      html_root_url = "http://static.rust-lang.org/doc/master")];
 
 #[comment = "Rust extras"];
 #[license = "MIT/ASL2"];
 #[crate_type = "lib"];
+
+#[feature(macro_rules, globs)];
 
 #[deny(non_camel_case_types)];
 #[deny(missing_doc)];
@@ -43,7 +46,6 @@ pub use std::os;
 
 pub mod c_vec;
 pub mod io_util;
-pub mod rc;
 
 // Concurrency
 
@@ -52,7 +54,6 @@ pub mod arc;
 pub mod comm;
 pub mod future;
 pub mod task_pool;
-pub mod flatpipes;
 
 // Collections
 

@@ -11,7 +11,7 @@
 // xfail-fast
 // aux-build:cci_class_trait.rs
 extern mod cci_class_trait;
-use cci_class_trait::animals::*;
+use cci_class_trait::animals::noisy;
 
 struct cat {
   priv meows: uint,
@@ -23,12 +23,12 @@ struct cat {
 impl cat {
     pub fn eat(&mut self) -> bool {
         if self.how_hungry > 0 {
-            error!("OM NOM NOM");
+            error2!("OM NOM NOM");
             self.how_hungry -= 2;
             return true;
         }
         else {
-            error!("Not hungry!");
+            error2!("Not hungry!");
             return false;
         }
     }
@@ -40,7 +40,7 @@ impl noisy for cat {
 
 impl cat {
     fn meow(&mut self) {
-        error!("Meow");
+        error2!("Meow");
         self.meows += 1u;
         if self.meows % 5u == 0u {
             self.how_hungry += 1;

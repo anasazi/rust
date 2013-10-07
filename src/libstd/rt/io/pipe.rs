@@ -20,7 +20,12 @@ use rt::local::Local;
 use rt::rtio::{RtioPipe, RtioPipeObject, IoFactoryObject, IoFactory};
 use rt::rtio::RtioUnboundPipeObject;
 
-pub struct PipeStream(RtioPipeObject);
+pub struct PipeStream {
+    priv obj: RtioPipeObject
+}
+
+// This should not be a newtype, but rt::uv::process::set_stdio needs to reach
+// into the internals of this :(
 pub struct UnboundPipeStream(~RtioUnboundPipeObject);
 
 impl PipeStream {
@@ -41,13 +46,13 @@ impl PipeStream {
     }
 
     pub fn bind(inner: RtioPipeObject) -> PipeStream {
-        PipeStream(inner)
+        PipeStream { obj: inner }
     }
 }
 
 impl Reader for PipeStream {
     fn read(&mut self, buf: &mut [u8]) -> Option<uint> {
-        match (**self).read(buf) {
+        match self.obj.read(buf) {
             Ok(read) => Some(read),
             Err(ioerr) => {
                 // EOF is indicated by returning None
@@ -59,12 +64,12 @@ impl Reader for PipeStream {
         }
     }
 
-    fn eof(&mut self) -> bool { fail!() }
+    fn eof(&mut self) -> bool { fail2!() }
 }
 
 impl Writer for PipeStream {
     fn write(&mut self, buf: &[u8]) {
-        match (**self).write(buf) {
+        match self.obj.write(buf) {
             Ok(_) => (),
             Err(ioerr) => {
                 io_error::cond.raise(ioerr);
@@ -72,5 +77,5 @@ impl Writer for PipeStream {
         }
     }
 
-    fn flush(&mut self) { fail!() }
+    fn flush(&mut self) { fail2!() }
 }

@@ -114,7 +114,7 @@ impl<T: Send> GenericPort<T> for SyncPort<T> {
     }
 
     fn try_recv(&self) -> Option<T> {
-        do self.duplex_stream.try_recv().map_move |val| {
+        do self.duplex_stream.try_recv().map |val| {
             self.duplex_stream.try_send(());
             val
         }
@@ -179,7 +179,7 @@ mod test {
         let (port, chan) = rendezvous();
         do spawn_unlinked {
             chan.duplex_stream.send(()); // Can't access this field outside this module
-            fail!()
+            fail2!()
         }
         port.recv()
     }
@@ -189,7 +189,7 @@ mod test {
         let (port, chan) = rendezvous();
         do spawn_unlinked {
             port.duplex_stream.recv();
-            fail!()
+            fail2!()
         }
         chan.try_send(());
     }
@@ -200,7 +200,7 @@ mod test {
         let (port, chan) = rendezvous();
         do spawn_unlinked {
             port.duplex_stream.recv();
-            fail!()
+            fail2!()
         }
         chan.send(());
     }

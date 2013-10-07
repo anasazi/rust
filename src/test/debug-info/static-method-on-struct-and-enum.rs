@@ -30,6 +30,7 @@
 // check:$5 = 5
 // debugger:continue
 
+#[feature(struct_variant)];
 
 struct Struct {
     x: int
@@ -46,12 +47,12 @@ impl Struct {
 enum Enum {
     Variant1 { x: int },
     Variant2,
-    Variant3(float, int, char),
+    Variant3(f64, int, char),
 }
 
 impl Enum {
 
-    fn static_method(arg1: int, arg2: float, arg3: uint) -> int {
+    fn static_method(arg1: int, arg2: f64, arg3: uint) -> int {
         zzz();
         arg1
     }

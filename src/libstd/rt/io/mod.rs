@@ -297,10 +297,11 @@ pub mod flate;
 pub mod comm_adapters;
 
 /// Extension traits
-mod extensions;
+pub mod extensions;
 
 /// Non-I/O things needed by the I/O module
-mod support;
+// XXX: shouldn this really be pub?
+pub mod support;
 
 /// Basic Timer
 pub mod timer;
@@ -312,8 +313,11 @@ pub mod buffered;
 pub mod native {
     /// Posix file I/O
     pub mod file;
-    /// # XXX - implement this
-    pub mod stdio { }
+    /// Process spawning and child management
+    pub mod process;
+    /// Posix stdio
+    pub mod stdio;
+
     /// Sockets
     /// # XXX - implement this
     pub mod net {
@@ -458,6 +462,16 @@ pub trait Reader {
     fn eof(&mut self) -> bool;
 }
 
+impl Reader for ~Reader {
+    fn read(&mut self, buf: &mut [u8]) -> Option<uint> { self.read(buf) }
+    fn eof(&mut self) -> bool { self.eof() }
+}
+
+impl<'self> Reader for &'self mut Reader {
+    fn read(&mut self, buf: &mut [u8]) -> Option<uint> { self.read(buf) }
+    fn eof(&mut self) -> bool { self.eof() }
+}
+
 pub trait Writer {
     /// Write the given buffer
     ///
@@ -468,6 +482,16 @@ pub trait Writer {
 
     /// Flush output
     fn flush(&mut self);
+}
+
+impl Writer for ~Writer {
+    fn write(&mut self, buf: &[u8]) { self.write(buf) }
+    fn flush(&mut self) { self.flush() }
+}
+
+impl<'self> Writer for &'self mut Writer {
+    fn write(&mut self, buf: &[u8]) { self.write(buf) }
+    fn flush(&mut self) { self.flush() }
 }
 
 pub trait Stream: Reader + Writer { }
@@ -585,7 +609,7 @@ pub fn standard_error(kind: IoErrorKind) -> IoError {
                 detail: None
             }
         }
-        _ => fail!()
+        _ => fail2!()
     }
 }
 

@@ -66,6 +66,8 @@
 #[license = "MIT/ASL2"];
 #[crate_type = "lib"];
 
+#[feature(globs)];
+
 extern mod extra;
 extern mod rustc;
 extern mod syntax;
@@ -140,7 +142,7 @@ fn run(mut program: ~Program, binary: ~str, lib_search_paths: ~[~str],
     let options = @session::options {
         crate_type: session::unknown_crate,
         binary: binary,
-        addl_lib_search_paths: @mut lib_search_paths.map(|p| Path(*p)),
+        addl_lib_search_paths: @mut lib_search_paths.map(|p| Path::new(p.as_slice())),
         jit: true,
         .. (*session::basic_options()).clone()
     };
@@ -156,12 +158,12 @@ fn run(mut program: ~Program, binary: ~str, lib_search_paths: ~[~str],
     //
     // Stage 1: parse the input and filter it into the program (as necessary)
     //
-    debug!("parsing: %s", input);
+    debug2!("parsing: {}", input);
     let crate = parse_input(sess, input);
     let mut to_run = ~[];       // statements to run (emitted back into code)
     let new_locals = @mut ~[];  // new locals being defined
     let mut result = None;      // resultant expression (to print via pp)
-    do find_main(crate, sess) |blk| {
+    do find_main(&crate, sess) |blk| {
         // Fish out all the view items, be sure to record 'extern mod' items
         // differently beause they must appear before all 'use' statements
         for vi in blk.view_items.iter() {
@@ -218,7 +220,7 @@ fn run(mut program: ~Program, binary: ~str, lib_search_paths: ~[~str],
                 }
             }
         }
-        result = do blk.expr.map_move |e| {
+        result = do blk.expr.map |e| {
             do with_pp(intr) |pp, _| { pprust::print_expr(pp, e); }
         };
     }
@@ -231,30 +233,30 @@ fn run(mut program: ~Program, binary: ~str, lib_search_paths: ~[~str],
     // Stage 2: run everything up to typeck to learn the types of the new
     //          variables introduced into the program
     //
-    info!("Learning about the new types in the program");
+    info2!("Learning about the new types in the program");
     program.set_cache(); // before register_new_vars (which changes them)
     let input = to_run.connect("\n");
     let test = program.test_code(input, &result, *new_locals);
-    debug!("testing with ^^^^^^ %?", (||{ println(test) })());
+    debug2!("testing with ^^^^^^ {:?}", (||{ println(test) })());
     let dinput = driver::str_input(test.to_managed());
     let cfg = driver::build_configuration(sess);
 
     let crate = driver::phase_1_parse_input(sess, cfg.clone(), &dinput);
     let expanded_crate = driver::phase_2_configure_and_expand(sess, cfg, crate);
-    let analysis = driver::phase_3_run_analysis_passes(sess, expanded_crate);
+    let analysis = driver::phase_3_run_analysis_passes(sess, &expanded_crate);
 
     // Once we're typechecked, record the types of all local variables defined
     // in this input
-    do find_main(crate, sess) |blk| {
+    do find_main(&expanded_crate, sess) |blk| {
         program.register_new_vars(blk, analysis.ty_cx);
     }
 
     //
     // Stage 3: Actually run the code in the JIT
     //
-    info!("actually running code");
+    info2!("actually running code");
     let code = program.code(input, &result);
-    debug!("actually running ^^^^^^ %?", (||{ println(code) })());
+    debug2!("actually running ^^^^^^ {:?}", (||{ println(code) })());
     let input = driver::str_input(code.to_managed());
     let cfg = driver::build_configuration(sess);
     let outputs = driver::build_output_filenames(&input, &None, &None, [], sess);
@@ -264,7 +266,7 @@ fn run(mut program: ~Program, binary: ~str, lib_search_paths: ~[~str],
 
     let crate = driver::phase_1_parse_input(sess, cfg.clone(), &input);
     let expanded_crate = driver::phase_2_configure_and_expand(sess, cfg, crate);
-    let analysis = driver::phase_3_run_analysis_passes(sess, expanded_crate);
+    let analysis = driver::phase_3_run_analysis_passes(sess, &expanded_crate);
     let trans = driver::phase_4_translate_to_llvm(sess, expanded_crate, &analysis, outputs);
     driver::phase_5_run_llvm_passes(sess, &trans, outputs);
 
@@ -272,7 +274,7 @@ fn run(mut program: ~Program, binary: ~str, lib_search_paths: ~[~str],
     // Stage 4: Inform the program that computation is done so it can update all
     //          local variable bindings.
     //
-    info!("cleaning up after code");
+    info2!("cleaning up after code");
     program.consume_cache();
 
     //
@@ -283,14 +285,14 @@ fn run(mut program: ~Program, binary: ~str, lib_search_paths: ~[~str],
     //
     return (program, jit::consume_engine());
 
-    fn parse_input(sess: session::Session, input: &str) -> @ast::Crate {
-        let code = fmt!("fn main() {\n %s \n}", input);
+    fn parse_input(sess: session::Session, input: &str) -> ast::Crate {
+        let code = format!("fn main() \\{\n {} \n\\}", input);
         let input = driver::str_input(code.to_managed());
         let cfg = driver::build_configuration(sess);
         driver::phase_1_parse_input(sess, cfg.clone(), &input)
     }
 
-    fn find_main(crate: @ast::Crate, sess: session::Session,
+    fn find_main(crate: &ast::Crate, sess: session::Session,
                  f: &fn(&ast::Block)) {
         for item in crate.module.items.iter() {
             match item.node {
@@ -302,7 +304,7 @@ fn run(mut program: ~Program, binary: ~str, lib_search_paths: ~[~str],
                 _ => {}
             }
         }
-        fail!("main function was expected somewhere...");
+        fail2!("main function was expected somewhere...");
     }
 }
 
@@ -313,8 +315,20 @@ fn run(mut program: ~Program, binary: ~str, lib_search_paths: ~[~str],
 // because it already exists and is newer than the source file, or
 // None if there were compile errors.
 fn compile_crate(src_filename: ~str, binary: ~str) -> Option<bool> {
+    fn has_prefix(v: &[u8], pref: &[u8]) -> bool {
+        v.len() >= pref.len() && v.slice_to(pref.len()) == pref
+    }
+    fn has_extension(v: &[u8], ext: Option<&[u8]>) -> bool {
+        match ext {
+            None => true,
+            Some(ext) => {
+                v.len() > ext.len() && v[v.len()-ext.len()-1] == '.' as u8 &&
+                    v.slice_from(v.len()-ext.len()) == ext
+            }
+        }
+    }
     match do task::try {
-        let src_path = Path(src_filename);
+        let src_path = Path::new(src_filename.as_slice());
         let binary = binary.to_managed();
         let options = @session::options {
             binary: binary,
@@ -332,7 +346,7 @@ fn compile_crate(src_filename: ~str, binary: ~str) -> Option<bool> {
         // If the library already exists and is newer than the source
         // file, skip compilation and return None.
         let mut should_compile = true;
-        let dir = os::list_dir_path(&Path(outputs.out_filename.dirname()));
+        let dir = os::list_dir_path(&outputs.out_filename.dir_path());
         let maybe_lib_path = do dir.iter().find |file| {
             // The actual file's name has a hash value and version
             // number in it which is unknown at this time, so looking
@@ -340,9 +354,9 @@ fn compile_crate(src_filename: ~str, binary: ~str) -> Option<bool> {
             // instead we guess which file is the library by matching
             // the prefix and suffix of out_filename to files in the
             // directory.
-            let file_str = file.filename().unwrap();
-            file_str.starts_with(outputs.out_filename.filestem().unwrap())
-                && file_str.ends_with(outputs.out_filename.filetype().unwrap())
+            let file_vec = file.filename().unwrap();
+            has_prefix(file_vec, outputs.out_filename.filestem().unwrap()) &&
+                has_extension(file_vec, outputs.out_filename.extension())
         };
         match maybe_lib_path {
             Some(lib_path) => {
@@ -355,10 +369,10 @@ fn compile_crate(src_filename: ~str, binary: ~str) -> Option<bool> {
             None => { },
         }
         if (should_compile) {
-            println(fmt!("compiling %s...", src_filename));
+            println(format!("compiling {}...", src_filename));
             let crate = driver::phase_1_parse_input(sess, cfg.clone(), &input);
             let expanded_crate = driver::phase_2_configure_and_expand(sess, cfg, crate);
-            let analysis = driver::phase_3_run_analysis_passes(sess, expanded_crate);
+            let analysis = driver::phase_3_run_analysis_passes(sess, &expanded_crate);
             let trans = driver::phase_4_translate_to_llvm(sess, expanded_crate, &analysis, outputs);
             driver::phase_5_run_llvm_passes(sess, &trans, outputs);
             true
@@ -427,11 +441,12 @@ fn run_cmd(repl: &mut Repl, _in: @io::Reader, _out: @io::Writer,
                 }
             }
             for crate in loaded_crates.iter() {
-                let crate_path = Path(*crate);
-                let crate_dir = crate_path.dirname();
-                repl.program.record_extern(fmt!("extern mod %s;", *crate));
-                if !repl.lib_search_paths.iter().any(|x| x == &crate_dir) {
-                    repl.lib_search_paths.push(crate_dir);
+                let crate_path = Path::new(crate.as_slice());
+                // FIXME (#9639): This needs to handle non-utf8 paths
+                let crate_dir = crate_path.dirname_str().unwrap();
+                repl.program.record_extern(format!("extern mod {};", *crate));
+                if !repl.lib_search_paths.iter().any(|x| crate_dir == *x) {
+                    repl.lib_search_paths.push(crate_dir.to_owned());
                 }
             }
             if loaded_crates.is_empty() {
@@ -445,7 +460,7 @@ fn run_cmd(repl: &mut Repl, _in: @io::Reader, _out: @io::Writer,
             let mut end_multiline = false;
             while (!end_multiline) {
                 match get_line(use_rl, "rusti| ") {
-                    None => fail!("unterminated multiline command :{ .. :}"),
+                    None => fail2!("unterminated multiline command :\\{ .. :\\}"),
                     Some(line) => {
                         if line.trim() == ":}" {
                             end_multiline = true;
@@ -569,7 +584,7 @@ pub fn main_args(args: &[~str]) -> int {
                     if istty {
                         println("()");
                     }
-                    loop;
+                    continue;
                 }
                 run_line(&mut repl, input, out, line, istty);
             }

@@ -16,7 +16,6 @@ use lib::llvm::{llvm, TargetData, TypeNames};
 use lib::llvm::mk_target_data;
 use metadata::common::LinkMeta;
 use middle::astencode;
-use middle::privacy;
 use middle::resolve;
 use middle::trans::adt;
 use middle::trans::base;
@@ -49,7 +48,6 @@ pub struct CrateContext {
      intrinsics: HashMap<&'static str, ValueRef>,
      item_vals: HashMap<ast::NodeId, ValueRef>,
      exp_map2: resolve::ExportMap2,
-     exported_items: @privacy::ExportedItems,
      reachable: @mut HashSet<ast::NodeId>,
      item_symbols: HashMap<ast::NodeId, ~str>,
      link_meta: LinkMeta,
@@ -109,7 +107,6 @@ pub struct CrateContext {
      upcalls: @upcall::Upcalls,
      tydesc_type: Type,
      int_type: Type,
-     float_type: Type,
      opaque_vec_type: Type,
      builder: BuilderRef_res,
      crate_map: ValueRef,
@@ -126,7 +123,6 @@ impl CrateContext {
                name: &str,
                tcx: ty::ctxt,
                emap2: resolve::ExportMap2,
-               exported_items: @privacy::ExportedItems,
                maps: astencode::Maps,
                symbol_hasher: hash::State,
                link_meta: LinkMeta,
@@ -156,7 +152,6 @@ impl CrateContext {
                 base::declare_dbg_intrinsics(llmod, &mut intrinsics);
             }
             let int_type = Type::int(targ_cfg.arch);
-            let float_type = Type::float(targ_cfg.arch);
             let tydesc_type = Type::tydesc(targ_cfg.arch);
             let opaque_vec_type = Type::opaque_vec(targ_cfg.arch);
 
@@ -187,7 +182,6 @@ impl CrateContext {
                   intrinsics: intrinsics,
                   item_vals: HashMap::new(),
                   exp_map2: emap2,
-                  exported_items: exported_items,
                   reachable: reachable,
                   item_symbols: HashMap::new(),
                   link_meta: link_meta,
@@ -234,7 +228,6 @@ impl CrateContext {
                   upcalls: upcall::declare_upcalls(targ_cfg, llmod),
                   tydesc_type: tydesc_type,
                   int_type: int_type,
-                  float_type: float_type,
                   opaque_vec_type: opaque_vec_type,
                   builder: BuilderRef_res(llvm::LLVMCreateBuilderInContext(llcx)),
                   crate_map: crate_map,
@@ -252,7 +245,7 @@ impl CrateContext {
     pub fn const_inbounds_gepi(&self,
                                pointer: ValueRef,
                                indices: &[uint]) -> ValueRef {
-        debug!("const_inbounds_gepi: pointer=%s indices=%?",
+        debug2!("const_inbounds_gepi: pointer={} indices={:?}",
                self.tn.val_to_str(pointer), indices);
         let v: ~[ValueRef] =
             indices.iter().map(|i| C_i32(*i as i32)).collect();
@@ -290,7 +283,7 @@ impl Drop for CrateContext {
 local_data_key!(task_local_llcx_key: @ContextRef)
 
 pub fn task_llcx() -> ContextRef {
-    let opt = local_data::get(task_local_llcx_key, |k| k.map_move(|k| *k));
+    let opt = local_data::get(task_local_llcx_key, |k| k.map(|k| *k));
     *opt.expect("task-local LLVMContextRef wasn't ever set!")
 }
 

@@ -61,17 +61,20 @@ pub struct FormatSpec<'self> {
 
 /// Enum describing where an argument for a format can be located.
 #[deriving(Eq)]
+#[allow(missing_doc)]
 pub enum Position<'self> {
     ArgumentNext, ArgumentIs(uint), ArgumentNamed(&'self str)
 }
 
 /// Enum of alignments which are supported.
 #[deriving(Eq)]
+#[allow(missing_doc)]
 pub enum Alignment { AlignLeft, AlignRight, AlignUnknown }
 
 /// Various flags which can be applied to format strings, the meaning of these
 /// flags is defined by the formatters themselves.
 #[deriving(Eq)]
+#[allow(missing_doc)]
 pub enum Flag {
     FlagSignPlus,
     FlagSignMinus,
@@ -82,6 +85,7 @@ pub enum Flag {
 /// A count is used for the precision and width parameters of an integer, and
 /// can reference either an argument or a literal integer.
 #[deriving(Eq)]
+#[allow(missing_doc)]
 pub enum Count {
     CountIs(uint),
     CountIsParam(uint),
@@ -126,6 +130,7 @@ pub struct PluralArm<'self> {
 ///
 /// http://www.icu-project.org/apiref/icu4c/classicu_1_1PluralRules.html
 #[deriving(Eq, IterBytes)]
+#[allow(missing_doc)]
 pub enum PluralKeyword {
     Zero, One, Two, Few, Many
 }
@@ -234,7 +239,7 @@ impl<'self> Parser<'self> {
             Some((_, c @ '#')) | Some((_, c @ '{')) |
             Some((_, c @ '\\')) | Some((_, c @ '}')) => { c }
             Some((_, c)) => {
-                self.err(fmt!("invalid escape character `%c`", c));
+                self.err(format!("invalid escape character `{}`", c));
                 c
             }
             None => {
@@ -378,7 +383,7 @@ impl<'self> Parser<'self> {
                 return None;
             }
             method => {
-                self.err(fmt!("unknown method: `%s`", method));
+                self.err(format!("unknown method: `{}`", method));
                 return None;
             }
         }
@@ -448,8 +453,8 @@ impl<'self> Parser<'self> {
                     Some((_, 'f')) => {
                         let word = self.word();
                         if word != "offset" {
-                            self.err(fmt!("expected `offset`, found `%s`",
-                                          word));
+                            self.err(format!("expected `offset`, found `{}`",
+                                             word));
                         } else {
                             if !self.consume(':') {
                                 self.err(~"`offset` must be followed by `:`");
@@ -490,7 +495,8 @@ impl<'self> Parser<'self> {
                     "few"   => Left(Few),
                     "many"  => Left(Many),
                     word    => {
-                        self.err(fmt!("unexpected plural selector `%s`", word));
+                        self.err(format!("unexpected plural selector `{}`",
+                                         word));
                         if word == "" {
                             break
                         } else {

@@ -188,16 +188,16 @@ pub fn scratch_datum(bcx: @mut Block, ty: ty::t, name: &str, zero: bool) -> Datu
     Datum { val: scratch, ty: ty, mode: ByRef(RevokeClean) }
 }
 
-pub fn appropriate_mode(tcx: ty::ctxt, ty: ty::t) -> DatumMode {
+pub fn appropriate_mode(ccx: &mut CrateContext, ty: ty::t) -> DatumMode {
     /*!
      * Indicates the "appropriate" mode for this value,
      * which is either by ref or by value, depending
      * on whether type is immediate or not.
      */
 
-    if ty::type_is_voidish(ty) {
+    if ty::type_is_voidish(ccx.tcx, ty) {
         ByValue
-    } else if ty::type_is_immediate(tcx, ty) {
+    } else if type_is_immediate(ccx, ty) {
         ByValue
     } else {
         ByRef(RevokeClean)
@@ -242,7 +242,7 @@ impl Datum {
                           action: CopyAction,
                           datum: Datum)
                           -> @mut Block {
-        debug!("store_to_datum(self=%s, action=%?, datum=%s)",
+        debug2!("store_to_datum(self={}, action={:?}, datum={})",
                self.to_str(bcx.ccx()), action, datum.to_str(bcx.ccx()));
         assert!(datum.mode.is_by_ref());
         self.store_to(bcx, action, datum.val)
@@ -271,11 +271,11 @@ impl Datum {
 
         let _icx = push_ctxt("copy_to");
 
-        if ty::type_is_voidish(self.ty) {
+        if ty::type_is_voidish(bcx.tcx(), self.ty) {
             return bcx;
         }
 
-        debug!("copy_to(self=%s, action=%?, dst=%s)",
+        debug2!("copy_to(self={}, action={:?}, dst={})",
                self.to_str(bcx.ccx()), action, bcx.val_to_str(dst));
 
         // Watch out for the case where we are writing the copying the
@@ -340,10 +340,10 @@ impl Datum {
         let _icx = push_ctxt("move_to");
         let mut bcx = bcx;
 
-        debug!("move_to(self=%s, action=%?, dst=%s)",
+        debug2!("move_to(self={}, action={:?}, dst={})",
                self.to_str(bcx.ccx()), action, bcx.val_to_str(dst));
 
-        if ty::type_is_voidish(self.ty) {
+        if ty::type_is_voidish(bcx.tcx(), self.ty) {
             return bcx;
         }
 
@@ -380,7 +380,7 @@ impl Datum {
             }
             ByRef(ZeroMem) => {
                 bcx.tcx().sess.bug(
-                    fmt!("Cannot add clean to a 'zero-mem' datum"));
+                    format!("Cannot add clean to a 'zero-mem' datum"));
             }
         }
     }
@@ -404,7 +404,7 @@ impl Datum {
     }
 
     pub fn to_str(&self, ccx: &CrateContext) -> ~str {
-        fmt!("Datum { val=%s, ty=%s, mode=%? }",
+        format!("Datum \\{ val={}, ty={}, mode={:?} \\}",
              ccx.tn.val_to_str(self.val),
              ty_to_str(ccx.tcx, self.ty),
              self.mode)
@@ -432,7 +432,7 @@ impl Datum {
          *
          * Yields the value itself. */
 
-        if ty::type_is_voidish(self.ty) {
+        if ty::type_is_voidish(bcx.tcx(), self.ty) {
             C_nil()
         } else {
             match self.mode {
@@ -469,7 +469,7 @@ impl Datum {
         match self.mode {
             ByRef(_) => self.val,
             ByValue => {
-                if ty::type_is_voidish(self.ty) {
+                if ty::type_is_voidish(bcx.tcx(), self.ty) {
                     C_null(type_of::type_of(bcx.ccx(), self.ty).ptr_to())
                 } else {
                     let slot = alloc_ty(bcx, self.ty, "");
@@ -505,10 +505,10 @@ impl Datum {
         }
     }
 
-    pub fn appropriate_mode(&self, tcx: ty::ctxt) -> DatumMode {
+    pub fn appropriate_mode(&self, ccx: &mut CrateContext) -> DatumMode {
         /*! See the `appropriate_mode()` function */
 
-        appropriate_mode(tcx, self.ty)
+        appropriate_mode(ccx, self.ty)
     }
 
     pub fn to_appropriate_llval(&self, bcx: @mut Block) -> ValueRef {
@@ -516,7 +516,7 @@ impl Datum {
          *
          * Yields an llvalue with the `appropriate_mode()`. */
 
-        match self.appropriate_mode(bcx.tcx()) {
+        match self.appropriate_mode(bcx.ccx()) {
             ByValue => self.to_value_llval(bcx),
             ByRef(_) => self.to_ref_llval(bcx)
         }
@@ -527,7 +527,7 @@ impl Datum {
          *
          * Yields a datum with the `appropriate_mode()`. */
 
-        match self.appropriate_mode(bcx.tcx()) {
+        match self.appropriate_mode(bcx.ccx()) {
             ByValue => self.to_value_datum(bcx),
             ByRef(_) => self.to_ref_datum(bcx)
         }
@@ -573,15 +573,15 @@ impl Datum {
                 (unboxed_vec_ty, true)
             }
             _ => {
-                bcx.tcx().sess.bug(fmt!(
-                    "box_body() invoked on non-box type %s",
+                bcx.tcx().sess.bug(format!(
+                    "box_body() invoked on non-box type {}",
                     ty_to_str(bcx.tcx(), self.ty)));
             }
         };
 
         if !header && !ty::type_contents(bcx.tcx(), content_ty).contains_managed() {
             let ptr = self.to_value_llval(bcx);
-            let ty = type_of(bcx.ccx(), content_ty);
+            let ty = type_of::type_of(bcx.ccx(), content_ty);
             let body = PointerCast(bcx, ptr, ty.ptr_to());
             Datum {val: body, ty: content_ty, mode: ByRef(ZeroMem)}
         } else { // has a header
@@ -620,7 +620,7 @@ impl Datum {
                      -> (Option<Datum>, @mut Block) {
         let ccx = bcx.ccx();
 
-        debug!("try_deref(expr_id=%?, derefs=%?, is_auto=%b, self=%?)",
+        debug2!("try_deref(expr_id={:?}, derefs={:?}, is_auto={}, self={:?})",
                expr_id, derefs, is_auto, self.to_str(bcx.ccx()));
 
         let bcx =
@@ -667,7 +667,7 @@ impl Datum {
                     ByValue => {
                         // Actually, this case cannot happen right
                         // now, because enums are never immediate.
-                        assert!(ty::type_is_immediate(bcx.tcx(), ty));
+                        assert!(type_is_immediate(bcx.ccx(), ty));
                         (Some(Datum {ty: ty, ..*self}), bcx)
                     }
                 };
@@ -699,7 +699,7 @@ impl Datum {
                         )
                     }
                     ByValue => {
-                        assert!(ty::type_is_immediate(bcx.tcx(), ty));
+                        assert!(type_is_immediate(bcx.ccx(), ty));
                         (
                             Some(Datum {
                                 val: ExtractValue(bcx, self.val, 0),
@@ -745,7 +745,7 @@ impl Datum {
                      -> DatumBlock {
         let _icx = push_ctxt("autoderef");
 
-        debug!("autoderef(expr_id=%d, max=%?, self=%?)",
+        debug2!("autoderef(expr_id={}, max={:?}, self={:?})",
                expr_id, max, self.to_str(bcx.ccx()));
         let _indenter = indenter();
 

@@ -43,7 +43,7 @@ to handle any `FileInput` structs. E.g. a simple `cat` program
 or a program that numbers lines after concatenating two files
 
     for input_vec_state(make_path_option_vec([~"a.txt", ~"b.txt"])) |line, state| {
-        io::println(fmt!("%u: %s", state.line_num,
+        io::println(format!("{}: %s", state.line_num,
                                    line));
     }
 
@@ -88,7 +88,7 @@ total line count).
         input.next_file(); // skip!
 
         for input.each_line_state |line, state| {
-           io::println(fmt!("%u: %s", state.line_num_file,
+           io::println(format!("{}: %s", state.line_num_file,
                                       line))
         }
     }
@@ -303,7 +303,7 @@ impl io::Reader for FileInput {
                     let b = r.read_byte();
 
                     if b < 0 {
-                        loop;
+                        continue;
                     }
 
                     if b == '\n' as int {
@@ -358,11 +358,11 @@ instance. `stdin_hyphen` controls whether `-` represents `stdin` or
 a literal `-`.
 */
 pub fn make_path_option_vec(vec: &[~str], stdin_hyphen : bool) -> ~[Option<Path>] {
-    vec.iter().map(|str| {
-        if stdin_hyphen && "-" == *str {
+    vec.iter().map(|s| {
+        if stdin_hyphen && "-" == *s {
             None
         } else {
-            Some(Path(*str))
+            Some(Path::new(s.as_slice()))
         }
     }).collect()
 }
@@ -435,25 +435,25 @@ mod test {
     fn test_make_path_option_vec() {
         let strs = [~"some/path",
                     ~"some/other/path"];
-        let paths = ~[Some(Path("some/path")),
-                      Some(Path("some/other/path"))];
+        let paths = ~[Some(Path::new("some/path")),
+                      Some(Path::new("some/other/path"))];
 
         assert_eq!(make_path_option_vec(strs, true), paths.clone());
         assert_eq!(make_path_option_vec(strs, false), paths);
 
         assert_eq!(make_path_option_vec([~"-"], true), ~[None]);
-        assert_eq!(make_path_option_vec([~"-"], false), ~[Some(Path("-"))]);
+        assert_eq!(make_path_option_vec([~"-"], false), ~[Some(Path::new("-"))]);
     }
 
     #[test]
     fn test_fileinput_read_byte() {
         let filenames = make_path_option_vec(vec::from_fn(
             3,
-            |i| fmt!("tmp/lib-fileinput-test-fileinput-read-byte-%u.tmp", i)), true);
+            |i| format!("tmp/lib-fileinput-test-fileinput-read-byte-{}.tmp", i)), true);
 
         // 3 files containing 0\n, 1\n, and 2\n respectively
         for (i, filename) in filenames.iter().enumerate() {
-            make_file(filename.get_ref(), [fmt!("%u", i)]);
+            make_file(filename.get_ref(), [format!("{}", i)]);
         }
 
         let fi = FileInput::from_vec(filenames.clone());
@@ -479,11 +479,11 @@ mod test {
     fn test_fileinput_read() {
         let filenames = make_path_option_vec(vec::from_fn(
             3,
-            |i| fmt!("tmp/lib-fileinput-test-fileinput-read-%u.tmp", i)), true);
+            |i| format!("tmp/lib-fileinput-test-fileinput-read-{}.tmp", i)), true);
 
         // 3 files containing 1\n, 2\n, and 3\n respectively
         for (i, filename) in filenames.iter().enumerate() {
-            make_file(filename.get_ref(), [fmt!("%u", i)]);
+            make_file(filename.get_ref(), [format!("{}", i)]);
         }
 
         let fi = FileInput::from_vec(filenames);
@@ -500,13 +500,13 @@ mod test {
         let mut all_lines = ~[];
         let filenames = make_path_option_vec(vec::from_fn(
             3,
-            |i| fmt!("tmp/lib-fileinput-test-input-vec-%u.tmp", i)), true);
+            |i| format!("tmp/lib-fileinput-test-input-vec-{}.tmp", i)), true);
 
         for (i, filename) in filenames.iter().enumerate() {
             let contents =
-                vec::from_fn(3, |j| fmt!("%u %u", i, j));
+                vec::from_fn(3, |j| format!("{} {}", i, j));
             make_file(filename.get_ref(), contents);
-            debug!("contents=%?", contents);
+            debug2!("contents={:?}", contents);
             all_lines.push_all(contents);
         }
 
@@ -522,11 +522,11 @@ mod test {
     fn test_input_vec_state() {
         let filenames = make_path_option_vec(vec::from_fn(
             3,
-            |i| fmt!("tmp/lib-fileinput-test-input-vec-state-%u.tmp", i)),true);
+            |i| format!("tmp/lib-fileinput-test-input-vec-state-{}.tmp", i)),true);
 
         for (i, filename) in filenames.iter().enumerate() {
             let contents =
-                vec::from_fn(3, |j| fmt!("%u %u", i, j + 1));
+                vec::from_fn(3, |j| format!("{} {}", i, j + 1));
             make_file(filename.get_ref(), contents);
         }
 
@@ -544,7 +544,7 @@ mod test {
     fn test_empty_files() {
         let filenames = make_path_option_vec(vec::from_fn(
             3,
-            |i| fmt!("tmp/lib-fileinput-test-empty-files-%u.tmp", i)),true);
+            |i| format!("tmp/lib-fileinput-test-empty-files-{}.tmp", i)),true);
 
         make_file(filenames[0].get_ref(), [~"1", ~"2"]);
         make_file(filenames[1].get_ref(), []);
@@ -555,7 +555,7 @@ mod test {
             let expected_path = match line {
                 "1" | "2" => filenames[0].clone(),
                 "3" | "4" => filenames[2].clone(),
-                _ => fail!("unexpected line")
+                _ => fail2!("unexpected line")
             };
             assert_eq!(state.current_path.clone(), expected_path);
             count += 1;
@@ -567,9 +567,9 @@ mod test {
     #[test]
     fn test_no_trailing_newline() {
         let f1 =
-            Some(Path("tmp/lib-fileinput-test-no-trailing-newline-1.tmp"));
+            Some(Path::new("tmp/lib-fileinput-test-no-trailing-newline-1.tmp"));
         let f2 =
-            Some(Path("tmp/lib-fileinput-test-no-trailing-newline-2.tmp"));
+            Some(Path::new("tmp/lib-fileinput-test-no-trailing-newline-2.tmp"));
 
         {
             let mut wr = file::open(f1.get_ref(), io::CreateOrTruncate,
@@ -593,11 +593,10 @@ mod test {
     fn test_next_file() {
         let filenames = make_path_option_vec(vec::from_fn(
             3,
-            |i| fmt!("tmp/lib-fileinput-test-next-file-%u.tmp", i)),true);
+            |i| format!("tmp/lib-fileinput-test-next-file-{}.tmp", i)),true);
 
         for (i, filename) in filenames.iter().enumerate() {
-            let contents =
-                vec::from_fn(3, |j| fmt!("%u %u", i, j + 1));
+            let contents = vec::from_fn(3, |j| format!("{} {}", i, j + 1));
             make_file(filename.get_ref(), contents);
         }
 
@@ -609,7 +608,7 @@ mod test {
 
         // read all lines from 1 (but don't read any from 2),
         for i in range(1u, 4) {
-            assert_eq!(input.read_line(), fmt!("1 %u", i));
+            assert_eq!(input.read_line(), format!("1 {}", i));
         }
         // 1 is finished, but 2 hasn't been started yet, so this will
         // just "skip" to the beginning of 2 (Python's fileinput does

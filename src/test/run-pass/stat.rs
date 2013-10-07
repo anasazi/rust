@@ -18,12 +18,12 @@ use std::io;
 use std::os;
 
 pub fn main() {
-    let dir = tempfile::mkdtemp(&Path("."), "").unwrap();
-    let path = dir.push("file");
+    let dir = tempfile::TempDir::new_in(&Path::new("."), "").unwrap();
+    let path = dir.path().join("file");
 
     {
         match io::file_writer(&path, [io::Create, io::Truncate]) {
-            Err(ref e) => fail!(e.clone()),
+            Err(ref e) => fail2!("{}", e.clone()),
             Ok(f) => {
                 for _ in range(0u, 1000) {
                     f.write_u8(0);
@@ -34,7 +34,4 @@ pub fn main() {
 
     assert!(path.exists());
     assert_eq!(path.get_size(), Some(1000));
-
-    os::remove_file(&path);
-    os::remove_dir(&dir);
 }

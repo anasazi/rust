@@ -18,7 +18,6 @@ pub mod c_double_utils {
     use libc::{c_double, c_int};
 
     #[link_name = "m"]
-    #[abi = "cdecl"]
     extern {
         // Alpabetically sorted by link_name
 
@@ -36,10 +35,10 @@ pub mod c_double_utils {
         pub fn exp(n: c_double) -> c_double;
         // rename: for consistency with underscore usage elsewhere
         #[link_name="expm1"]
-        fn exp_m1(n: c_double) -> c_double;
+        pub fn exp_m1(n: c_double) -> c_double;
         pub fn exp2(n: c_double) -> c_double;
         #[link_name="fabs"]
-        fn abs(n: c_double) -> c_double;
+        pub fn abs(n: c_double) -> c_double;
         // rename: for clarity and consistency with add/sub/mul/div
         #[link_name="fdim"]
         pub fn abs_sub(a: c_double, b: c_double) -> c_double;
@@ -107,7 +106,6 @@ pub mod c_float_utils {
     use libc::{c_float, c_int};
 
     #[link_name = "m"]
-    #[abi = "cdecl"]
     extern {
         // Alpabetically sorted by link_name
 

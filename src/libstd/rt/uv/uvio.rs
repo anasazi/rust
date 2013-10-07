@@ -18,6 +18,7 @@ use ops::Drop;
 use option::*;
 use ptr;
 use str;
+use str::Str;
 use result::*;
 use rt::io::IoError;
 use rt::io::net::ip::{SocketAddr, IpAddr};
@@ -34,7 +35,7 @@ use rt::uv::idle::IdleWatcher;
 use rt::uv::net::{UvIpv4SocketAddr, UvIpv6SocketAddr, accum_sockaddrs};
 use rt::uv::addrinfo::GetAddrInfoRequest;
 use unstable::sync::Exclusive;
-use path::Path;
+use path::{GenericPath, Path};
 use super::super::io::support::PathLike;
 use libc::{lseek, off_t, O_CREAT, O_APPEND, O_TRUNC, O_RDWR, O_RDONLY, O_WRONLY,
           S_IRUSR, S_IWUSR, S_IRWXU};
@@ -74,7 +75,7 @@ trait HomingIO {
                      *
                      * RESOLUTION IDEA: Since the task is dead, we should just abort the IO action.
                      */
-                    do task.wake().map_move |mut task| {
+                    do task.wake().map |mut task| {
                         *ptr = Some(task.take_unwrap_home());
                         self.home().send(PinnedTask(task));
                     };
@@ -97,7 +98,7 @@ trait HomingIO {
                  *
                  * RESOLUTION IDEA: Since the task is dead, we should just abort the IO action.
                  */
-                do task.wake().map_move |mut task| {
+                do task.wake().map |mut task| {
                     task.give_home(old.take());
                     scheduler.make_handle().send(TaskFromFriend(task));
                 };
@@ -631,7 +632,7 @@ impl IoFactory for UvIoFactory {
                         None => {
                             let stat = req.get_stat();
                             Ok(FileStat {
-                                path: Path(path_str),
+                                path: Path::new(path_str.as_slice()),
                                 is_file: stat.is_file(),
                                 is_dir: stat.is_dir(),
                                 size: stat.st_size,
@@ -720,7 +721,9 @@ impl IoFactory for UvIoFactory {
                             let rel_paths = req.get_paths();
                             let mut paths = ~[];
                             for r in rel_paths.iter() {
-                                paths.push(Path(path_str+"/"+*r));
+                                let mut p = Path::new(path_str.as_slice());
+                                p.push(r.as_slice());
+                                paths.push(p);
                             }
                             Ok(paths)
                         },
@@ -1672,7 +1675,7 @@ fn test_simple_homed_udp_io_bind_then_move_task_then_home_and_close() {
                 let scheduler: ~Scheduler = Local::take();
                 do scheduler.deschedule_running_task_and_then |_, task| {
                     // unblock task
-                    do task.wake().map_move |task| {
+                    do task.wake().map |task| {
                       // send self to sched2
                       tasksFriendHandle.take().send(TaskFromFriend(task));
                     };
@@ -1802,7 +1805,7 @@ fn test_simple_tcp_server_and_client() {
                 let nread = stream.read(buf).unwrap();
                 assert_eq!(nread, 8);
                 for i in range(0u, nread) {
-                    rtdebug!("%u", buf[i] as uint);
+                    rtdebug!("{}", buf[i]);
                     assert_eq!(buf[i], i as u8);
                 }
             }
@@ -1919,7 +1922,7 @@ fn test_simple_udp_server_and_client() {
                 let (nread,src) = server_socket.recvfrom(buf).unwrap();
                 assert_eq!(nread, 8);
                 for i in range(0u, nread) {
-                    rtdebug!("%u", buf[i] as uint);
+                    rtdebug!("{}", buf[i]);
                     assert_eq!(buf[i], i as u8);
                 }
                 assert_eq!(src, client_addr);
@@ -2031,13 +2034,13 @@ fn test_read_read_read() {
                 let mut total_bytes_read = 0;
                 while total_bytes_read < MAX {
                     let nread = stream.read(buf).unwrap();
-                    rtdebug!("read %u bytes", nread as uint);
+                    rtdebug!("read {} bytes", nread);
                     total_bytes_read += nread;
                     for i in range(0u, nread) {
                         assert_eq!(buf[i], 1);
                     }
                 }
-                rtdebug!("read %u bytes total", total_bytes_read as uint);
+                rtdebug!("read {} bytes total", total_bytes_read);
             }
         }
     }
@@ -2177,20 +2180,20 @@ fn file_test_uvio_full_simple_impl() {
         {
             let create_fm = Create;
             let create_fa = ReadWrite;
-            let mut fd = (*io).fs_open(&Path(path), create_fm, create_fa).unwrap();
+            let mut fd = (*io).fs_open(&Path::new(path), create_fm, create_fa).unwrap();
             let write_buf = write_val.as_bytes();
             fd.write(write_buf);
         }
         {
             let ro_fm = Open;
             let ro_fa = Read;
-            let mut fd = (*io).fs_open(&Path(path), ro_fm, ro_fa).unwrap();
+            let mut fd = (*io).fs_open(&Path::new(path), ro_fm, ro_fa).unwrap();
             let mut read_vec = [0, .. 1028];
             let nread = fd.read(read_vec).unwrap();
             let read_val = str::from_utf8(read_vec.slice(0, nread as uint));
             assert!(read_val == write_val.to_owned());
         }
-        (*io).fs_unlink(&Path(path));
+        (*io).fs_unlink(&Path::new(path));
     }
 }
 

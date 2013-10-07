@@ -15,7 +15,7 @@
 
 # The names of crates that must be tested
 TEST_TARGET_CRATES = std extra
-TEST_HOST_CRATES = rust rusti rustpkg rustc rustdoc syntax
+TEST_HOST_CRATES = rusti rustpkg rustc rustdoc syntax
 TEST_CRATES = $(TEST_TARGET_CRATES) $(TEST_HOST_CRATES)
 
 # Markdown files under doc/ that should have their code extracted and run
@@ -261,6 +261,15 @@ tidy:
 		| xargs -n 10 $(CFG_PYTHON) $(S)src/etc/tidy.py
 		$(Q)echo $(ALL_HS) \
 		| xargs -n 10 $(CFG_PYTHON) $(S)src/etc/tidy.py
+		$(Q)find $(S)src -type f -perm +111 \
+		    -not -name '*.rs' -and -not -name '*.py' \
+		    -and -not -name '*.sh' \
+		| grep '^$(S)src/llvm' -v \
+		| grep '^$(S)src/libuv' -v \
+		| grep '^$(S)src/gyp' -v \
+		| grep '^$(S)src/etc' -v \
+		| grep '^$(S)src/rt/jemalloc' -v \
+		| xargs $(CFG_PYTHON) $(S)src/etc/check-binaries.py
 
 endif
 
@@ -374,16 +383,6 @@ $(3)/stage$(1)/test/rustitest-$(2)$$(X_$(2)):					\
 		$$(RUSTI_LIB) $$(RUSTI_INPUTS)		\
 		$$(SREQ$(1)_T_$(2)_H_$(3)) \
 		$$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_LIBSYNTAX_$(2)) \
-		$$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_LIBRUSTC_$(2))
-	@$$(call E, compile_and_link: $$@)
-	$$(STAGE$(1)_T_$(2)_H_$(3)) -o $$@ $$< --test
-
-$(3)/stage$(1)/test/rusttest-$(2)$$(X_$(2)):					\
-		$$(RUST_LIB) $$(RUST_INPUTS)		\
-		$$(SREQ$(1)_T_$(2)_H_$(3)) \
-		$$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_LIBRUSTPKG_$(2)) \
-		$$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_LIBRUSTDOC_$(2)) \
-		$$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_LIBRUSTI_$(2)) \
 		$$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_LIBRUSTC_$(2))
 	@$$(call E, compile_and_link: $$@)
 	$$(STAGE$(1)_T_$(2)_H_$(3)) -o $$@ $$< --test

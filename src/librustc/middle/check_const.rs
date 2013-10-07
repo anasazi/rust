@@ -86,7 +86,7 @@ pub fn check_pat(v: &mut CheckCrateVisitor, p: @Pat, _is_const: bool) {
         match e.node {
             ExprVstore(
                 @Expr { node: ExprLit(@codemap::Spanned {
-                    node: lit_str(_),
+                    node: lit_str(*),
                     _}),
                        _ },
                 ExprVstoreUniq
@@ -120,7 +120,7 @@ pub fn check_expr(v: &mut CheckCrateVisitor,
                           "disallowed operator in constant expression");
             return;
           }
-          ExprLit(@codemap::Spanned {node: lit_str(_), _}) => { }
+          ExprLit(@codemap::Spanned {node: lit_str(*), _}) => { }
           ExprBinary(*) | ExprUnary(*) => {
             if method_map.contains_key(&e.id) {
                 sess.span_err(e.span, "user-defined operators are not \
@@ -153,7 +153,7 @@ pub fn check_expr(v: &mut CheckCrateVisitor,
               Some(&DefStruct(_)) => { }
 
               Some(&def) => {
-                debug!("(checking const) found bad def: %?", def);
+                debug2!("(checking const) found bad def: {:?}", def);
                 sess.span_err(
                     e.span,
                     "paths in constants may only refer to \
@@ -266,7 +266,7 @@ impl Visitor<()> for CheckItemRecursionVisitor {
                         ast_map::node_item(it, _) => {
                             self.visit_item(it, ());
                         }
-                        _ => fail!("const not bound to an item")
+                        _ => fail2!("const not bound to an item")
                     },
                 _ => ()
             },

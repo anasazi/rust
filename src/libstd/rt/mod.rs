@@ -67,13 +67,40 @@ use rt::local::Local;
 use rt::sched::{Scheduler, Shutdown};
 use rt::sleeper_list::SleeperList;
 use rt::task::{Task, SchedTask, GreenTask, Sched};
-use rt::thread::Thread;
-use rt::work_queue::WorkQueue;
 use rt::uv::uvio::UvEventLoop;
-use unstable::atomics::{AtomicInt, SeqCst};
+use unstable::atomics::{AtomicInt, AtomicBool, SeqCst};
 use unstable::sync::UnsafeArc;
 use vec;
 use vec::{OwnedVector, MutableVector, ImmutableVector};
+
+use self::thread::Thread;
+use self::work_queue::WorkQueue;
+
+// the os module needs to reach into this helper, so allow general access
+// through this reexport.
+pub use self::util::set_exit_status;
+
+// this is somewhat useful when a program wants to spawn a "reasonable" number
+// of workers based on the constraints of the system that it's running on.
+// Perhaps this shouldn't be a `pub use` though and there should be another
+// method...
+pub use self::util::default_sched_threads;
+
+// XXX: these probably shouldn't be public...
+#[doc(hidden)]
+pub mod shouldnt_be_public {
+    pub use super::sched::Scheduler;
+    pub use super::kill::KillHandle;
+    pub use super::thread::Thread;
+    pub use super::work_queue::WorkQueue;
+    pub use super::select::SelectInner;
+    pub use super::rtio::EventLoop;
+    pub use super::select::{SelectInner, SelectPortInner};
+    pub use super::local_ptr::maybe_tls_key;
+}
+
+// Internal macros used by the runtime.
+mod macros;
 
 /// The global (exchange) heap.
 pub mod global_heap;
@@ -145,17 +172,14 @@ pub mod comm;
 
 mod select;
 
-// FIXME #5248 shouldn't be pub
 /// The runtime needs to be able to put a pointer into thread-local storage.
-pub mod local_ptr;
+mod local_ptr;
 
-// FIXME #5248: The import in `sched` doesn't resolve unless this is pub!
 /// Bindings to pthread/windows thread-local storage.
-pub mod thread_local_storage;
+mod thread_local_storage;
 
-// FIXME #5248 shouldn't be pub
 /// Just stuff
-pub mod util;
+mod util;
 
 // Global command line argument storage
 pub mod args;
@@ -286,8 +310,14 @@ fn run_(main: ~fn(), use_main_sched: bool) -> int {
                                                      sleepers.clone(),
                                                      false,
                                                      Some(friend_handle));
-        let main_handle = main_sched.make_handle();
-        handles.push(main_handle);
+        let mut main_handle = main_sched.make_handle();
+        // Allow the scheduler to exit when the main task exits.
+        // Note: sending the shutdown message also prevents the scheduler
+        // from pushing itself to the sleeper list, which is used for
+        // waking up schedulers for work stealing; since this is a
+        // non-work-stealing scheduler it should not be adding itself
+        // to the list.
+        main_handle.send_shutdown();
         Some(main_sched)
     } else {
         None
@@ -298,11 +328,17 @@ fn run_(main: ~fn(), use_main_sched: bool) -> int {
     let exit_code = UnsafeArc::new(AtomicInt::new(0));
     let exit_code_clone = exit_code.clone();
 
+    // Used to sanity check that the runtime only exits once
+    let exited_already = UnsafeArc::new(AtomicBool::new(false));
+
     // When the main task exits, after all the tasks in the main
     // task tree, shut down the schedulers and set the exit code.
     let handles = Cell::new(handles);
     let on_exit: ~fn(bool) = |exit_success| {
-        assert_once_ever!("last task exiting");
+        unsafe {
+            assert!(!(*exited_already.get()).swap(true, SeqCst),
+                    "the runtime already exited");
+        }
 
         let mut handles = handles.take();
         for handle in handles.mut_iter() {

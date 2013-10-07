@@ -16,7 +16,7 @@ String manipulation
 
 Rust's string type is one of the core primitive types of the language. While
 represented by the name `str`, the name `str` is not actually a valid type in
-Rust. Each string must also be decorated with how its ownership. This means that
+Rust. Each string must also be decorated with its ownership. This means that
 there are three common kinds of strings in rust:
 
 * `~str` - This is an owned string. This type obeys all of the normal semantics
@@ -26,7 +26,7 @@ there are three common kinds of strings in rust:
 
 * `@str` - This is a managed string. Similarly to `@T`, this type can be
            implicitly copied, and each implicit copy will increment the
-           reference count to the string. This means that there is not "true
+           reference count to the string. This means that there is no "true
            owner" of the string, and the string will be deallocated when the
            reference count reaches 0.
 
@@ -105,6 +105,7 @@ use option::{None, Option, Some};
 use ptr;
 use ptr::RawPtr;
 use to_str::ToStr;
+use from_str::FromStr;
 use uint;
 use vec;
 use vec::{OwnedVector, OwnedCopyableVector, ImmutableVector, MutableVector};
@@ -134,8 +135,8 @@ pub fn from_utf8(vv: &[u8]) -> ~str {
     match from_utf8_opt(vv) {
         None => {
             let first_bad_byte = *vv.iter().find(|&b| !is_utf8([*b])).unwrap();
-            cond.raise(fmt!("from_utf8: input is not UTF-8; first bad byte is %u",
-                            first_bad_byte as uint))
+            cond.raise(format!("from_utf8: input is not UTF-8; first bad \
+                                byte is {}", first_bad_byte))
         }
         Some(s) => s
     }
@@ -161,8 +162,8 @@ pub fn from_utf8_owned(vv: ~[u8]) -> ~str {
 
     if !is_utf8(vv) {
         let first_bad_byte = *vv.iter().find(|&b| !is_utf8([*b])).unwrap();
-        cond.raise(fmt!("from_utf8: input is not UTF-8; first bad byte is %u",
-                        first_bad_byte as uint))
+        cond.raise(format!("from_utf8: input is not UTF-8; first bad byte is {}",
+                           first_bad_byte))
     } else {
         unsafe { raw::from_utf8_owned(vv) }
     }
@@ -204,6 +205,11 @@ impl ToStr for ~str {
     fn to_str(&self) -> ~str { self.to_owned() }
 }
 
+impl FromStr for ~str {
+    #[inline]
+    fn from_str(s: &str) -> Option<~str> { Some(s.to_owned()) }
+}
+
 impl<'self> ToStr for &'self str {
     #[inline]
     fn to_str(&self) -> ~str { self.to_owned() }
@@ -212,6 +218,11 @@ impl<'self> ToStr for &'self str {
 impl ToStr for @str {
     #[inline]
     fn to_str(&self) -> ~str { self.to_owned() }
+}
+
+impl<'self> FromStr for @str {
+    #[inline]
+    fn from_str(s: &str) -> Option<@str> { Some(s.to_managed()) }
 }
 
 /// Convert a byte to a UTF-8 string
@@ -404,7 +415,7 @@ impl<'self> Iterator<(uint, char)> for CharOffsetIterator<'self> {
                 b as uint - a as uint
             }
         };
-        self.iter.next().map_move(|ch| (offset, ch))
+        self.iter.next().map(|ch| (offset, ch))
     }
 
     #[inline]
@@ -416,7 +427,7 @@ impl<'self> Iterator<(uint, char)> for CharOffsetIterator<'self> {
 impl<'self> DoubleEndedIterator<(uint, char)> for CharOffsetIterator<'self> {
     #[inline]
     fn next_back(&mut self) -> Option<(uint, char)> {
-        self.iter.next_back().map_move(|ch| {
+        self.iter.next_back().map(|ch| {
             let offset = do self.string.as_imm_buf |a, _| {
                 do self.iter.string.as_imm_buf |b, len| {
                     b as uint - a as uint + len
@@ -1229,7 +1240,7 @@ pub mod raw {
                 match ctr {
                     0 => assert_eq!(x, &~"zero"),
                     1 => assert_eq!(x, &~"one"),
-                    _ => fail!("shouldn't happen!")
+                    _ => fail2!("shouldn't happen!")
                 }
                 ctr += 1;
             }
@@ -2000,8 +2011,8 @@ impl<'self> StrSlice<'self> for &'self str {
         if end_byte.is_none() && count == end { end_byte = Some(self.len()) }
 
         match (begin_byte, end_byte) {
-            (None, _) => fail!("slice_chars: `begin` is beyond end of string"),
-            (_, None) => fail!("slice_chars: `end` is beyond end of string"),
+            (None, _) => fail2!("slice_chars: `begin` is beyond end of string"),
+            (_, None) => fail2!("slice_chars: `end` is beyond end of string"),
             (Some(a), Some(b)) => unsafe { raw::slice_bytes(*self, a, b) }
         }
     }
@@ -2249,7 +2260,7 @@ impl<'self> StrSlice<'self> for &'self str {
         } else {
             self.matches_index_iter(needle)
                 .next()
-                .map_move(|(start, _end)| start)
+                .map(|(start, _end)| start)
         }
     }
 
@@ -2580,13 +2591,14 @@ impl Default for @str {
 #[cfg(test)]
 mod tests {
     use container::Container;
-    use option::{None, Some};
+    use option::{None, Some, Option};
     use ptr;
     use str::*;
     use vec;
     use vec::{Vector, ImmutableVector, CopyableVector};
     use cmp::{TotalOrd, Less, Equal, Greater};
     use send_str::{SendStrOwned, SendStrStatic};
+    use from_str::from_str;
 
     #[test]
     fn test_eq() {
@@ -2723,12 +2735,12 @@ mod tests {
 
     #[test]
     fn test_collect() {
-        let empty = "";
+        let empty = ~"";
         let s: ~str = empty.iter().collect();
-        assert_eq!(empty, s.as_slice());
-        let data = "ประเทศไทย中";
+        assert_eq!(empty, s);
+        let data = ~"ประเทศไทย中";
         let s: ~str = data.iter().collect();
-        assert_eq!(data, s.as_slice());
+        assert_eq!(data, s);
     }
 
     #[test]
@@ -3242,7 +3254,7 @@ mod tests {
         // original problem code path anymore.)
         let s = ~"";
         let _bytes = s.as_bytes();
-        fail!();
+        fail2!();
     }
 
     #[test]
@@ -3300,8 +3312,8 @@ mod tests {
         while i < n1 {
             let a: u8 = s1[i];
             let b: u8 = s2[i];
-            debug!(a);
-            debug!(b);
+            debug2!("{}", a);
+            debug2!("{}", b);
             assert_eq!(a, b);
             i += 1u;
         }
@@ -3888,6 +3900,14 @@ mod tests {
     fn test_to_send_str() {
         assert_eq!("abcde".to_send_str(), SendStrStatic("abcde"));
         assert_eq!("abcde".to_send_str(), SendStrOwned(~"abcde"));
+    }
+
+    #[test]
+    fn test_from_str() {
+      let owned: Option<~str> = from_str(&"string");
+      assert_eq!(owned, Some(~"string"));
+      let managed: Option<@str> = from_str(&"string");
+      assert_eq!(managed, Some(@"string"));
     }
 }
 

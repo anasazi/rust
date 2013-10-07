@@ -10,10 +10,11 @@
 
 // Microbenchmarks for various functions in std and extra
 
+#[feature(macro_rules)];
+
 extern mod extra;
 
 use extra::time::precise_time_s;
-use std::io;
 use std::os;
 use std::rand::Rng;
 use std::rand;
@@ -55,7 +56,7 @@ fn maybe_run_test(argv: &[~str], name: ~str, test: &fn()) {
     test();
     let stop = precise_time_s();
 
-    println!("{}:\t\t{} ms", name, (stop - start) * 1000f);
+    println!("{}:\t\t{} ms", name, (stop - start) * 1000.0);
 }
 
 fn shift_push() {
@@ -68,11 +69,15 @@ fn shift_push() {
 }
 
 fn read_line() {
-    let path = Path(env!("CFG_SRC_DIR"))
-        .push_rel(&Path("src/test/bench/shootout-k-nucleotide.data"));
+    use std::rt::io::{Reader, Open};
+    use std::rt::io::file::FileInfo;
+    use std::rt::io::buffered::BufferedReader;
+
+    let mut path = Path::new(env!("CFG_SRC_DIR"));
+    path.push("src/test/bench/shootout-k-nucleotide.data");
 
     for _ in range(0, 3) {
-        let reader = io::file_reader(&path).unwrap();
+        let mut reader = BufferedReader::new(path.open_reader(Open).unwrap());
         while !reader.eof() {
             reader.read_line();
         }
@@ -133,7 +138,7 @@ fn is_utf8_ascii() {
     for _ in range(0u, 20000) {
         v.push('b' as u8);
         if !str::is_utf8(v) {
-            fail!("is_utf8 failed");
+            fail2!("is_utf8 failed");
         }
     }
 }
@@ -144,7 +149,7 @@ fn is_utf8_multibyte() {
     for _ in range(0u, 5000) {
         v.push_all(s.as_bytes());
         if !str::is_utf8(v) {
-            fail!("is_utf8 failed");
+            fail2!("is_utf8 failed");
         }
     }
 }

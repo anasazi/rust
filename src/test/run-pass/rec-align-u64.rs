@@ -15,7 +15,6 @@
 use std::sys;
 
 mod rusti {
-    #[abi = "rust-intrinsic"]
     extern "rust-intrinsic" {
         pub fn pref_align_of<T>() -> uint;
         pub fn min_align_of<T>() -> uint;
@@ -46,7 +45,7 @@ mod m {
     }
 
     #[cfg(target_arch = "x86_64")]
-    mod m {
+    pub mod m {
         pub fn align() -> uint { 8u }
         pub fn size() -> uint { 16u }
     }
@@ -75,11 +74,11 @@ pub fn main() {
         let x = Outer {c8: 22u8, t: Inner {c64: 44u64}};
 
         // Send it through the shape code
-        let y = fmt!("%?", x);
+        let y = format!("{:?}", x);
 
-        info!("align inner = %?", rusti::min_align_of::<Inner>());
-        info!("size outer = %?", sys::size_of::<Outer>());
-        info!("y = %s", y);
+        info2!("align inner = {}", rusti::min_align_of::<Inner>());
+        info2!("size outer = {}", sys::size_of::<Outer>());
+        info2!("y = {}", y);
 
         // per clang/gcc the alignment of `Inner` is 4 on x86.
         assert_eq!(rusti::min_align_of::<Inner>(), m::m::align());

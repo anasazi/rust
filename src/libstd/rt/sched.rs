@@ -140,7 +140,7 @@ impl Scheduler {
             cleanup_job: None,
             run_anything: run_anything,
             friend_handle: friend,
-            rng: XorShiftRng::new(),
+            rng: new_sched_rng(),
             idle_callback: None,
             yield_check_count: 0,
             steal_for_yield: false
@@ -191,7 +191,7 @@ impl Scheduler {
         // action will have given it away.
         let sched: ~Scheduler = Local::take();
 
-        rtdebug!("starting scheduler %u", sched.sched_id());
+        rtdebug!("starting scheduler {}", sched.sched_id());
         sched.run();
 
         // Close the idle callback.
@@ -207,7 +207,7 @@ impl Scheduler {
         // the cleanup code it runs.
         let mut stask: ~Task = Local::take();
 
-        rtdebug!("stopping scheduler %u", stask.sched.get_ref().sched_id());
+        rtdebug!("stopping scheduler {}", stask.sched.get_ref().sched_id());
 
         // Should not have any messages
         let message = stask.sched.get_mut_ref().message_queue.pop();
@@ -538,7 +538,7 @@ impl Scheduler {
     /// As enqueue_task, but with the possibility for the blocked task to
     /// already have been killed.
     pub fn enqueue_blocked_task(&mut self, blocked_task: BlockedTask) {
-        do blocked_task.wake().map_move |task| {
+        do blocked_task.wake().map |task| {
             self.enqueue_task(task);
         };
     }
@@ -803,6 +803,12 @@ impl SchedHandle {
         self.queue.push(msg);
         self.remote.fire();
     }
+    pub fn send_task_from_friend(&mut self, friend: ~Task) {
+        self.send(TaskFromFriend(friend));
+    }
+    pub fn send_shutdown(&mut self) {
+        self.send(Shutdown);
+    }
 }
 
 struct CleanupJob {
@@ -836,6 +842,54 @@ impl ClosureConverter for UnsafeTaskReceiver {
         unsafe { transmute(f) }
     }
     fn to_fn(self) -> &fn(&mut Scheduler, ~Task) { unsafe { transmute(self) } }
+}
+
+// On unix, we read randomness straight from /dev/urandom, but the
+// default constructor of an XorShiftRng does this via io::file, which
+// relies on the scheduler existing, so we have to manually load
+// randomness. Windows has its own C API for this, so we don't need to
+// worry there.
+#[cfg(windows)]
+fn new_sched_rng() -> XorShiftRng {
+    XorShiftRng::new()
+}
+#[cfg(unix)]
+#[fixed_stack_segment] #[inline(never)]
+fn new_sched_rng() -> XorShiftRng {
+    use libc;
+    use sys;
+    use c_str::ToCStr;
+    use vec::MutableVector;
+    use iter::Iterator;
+    use rand::SeedableRng;
+
+    let fd = do "/dev/urandom".with_c_str |name| {
+        unsafe { libc::open(name, libc::O_RDONLY, 0) }
+    };
+    if fd == -1 {
+        rtabort!("could not open /dev/urandom for reading.")
+    }
+
+    let mut seeds = [0u32, .. 4];
+    let size = sys::size_of_val(&seeds);
+    loop {
+        let nbytes = do seeds.as_mut_buf |buf, _| {
+            unsafe {
+                libc::read(fd,
+                           buf as *mut libc::c_void,
+                           size as libc::size_t)
+            }
+        };
+        rtassert!(nbytes as uint == size);
+
+        if !seeds.iter().all(|x| *x == 0) {
+            break;
+        }
+    }
+
+    unsafe {libc::close(fd);}
+
+    SeedableRng::from_seed(seeds)
 }
 
 #[cfg(test)]
@@ -999,7 +1053,7 @@ mod test {
                                                  Sched(t1_handle)) || {
                 rtassert!(Task::on_appropriate_sched());
             };
-            rtdebug!("task1 id: **%u**", borrow::to_uint(task1));
+            rtdebug!("task1 id: **{}**", borrow::to_uint(task1));
 
             let task2 = ~do Task::new_root(&mut normal_sched.stack_pool, None) {
                 rtassert!(Task::on_appropriate_sched());
@@ -1013,7 +1067,7 @@ mod test {
                                                  Sched(t4_handle)) {
                 rtassert!(Task::on_appropriate_sched());
             };
-            rtdebug!("task4 id: **%u**", borrow::to_uint(task4));
+            rtdebug!("task4 id: **{}**", borrow::to_uint(task4));
 
             let task1 = Cell::new(task1);
             let task2 = Cell::new(task2);
@@ -1038,7 +1092,7 @@ mod test {
                 sh.send(Shutdown);
             };
 
-            rtdebug!("normal task: %u", borrow::to_uint(normal_task));
+            rtdebug!("normal task: {}", borrow::to_uint(normal_task));
 
             let special_task = ~do Task::new_root(&mut special_sched.stack_pool, None) {
                 rtdebug!("*about to submit task1*");
@@ -1049,7 +1103,7 @@ mod test {
                 chan.take().send(());
             };
 
-            rtdebug!("special task: %u", borrow::to_uint(special_task));
+            rtdebug!("special task: {}", borrow::to_uint(special_task));
 
             let special_sched = Cell::new(special_sched);
             let normal_sched = Cell::new(normal_sched);
@@ -1238,12 +1292,12 @@ mod test {
             while (true) {
                 match p.recv() {
                     (1, end_chan) => {
-                                        debug!("%d\n", id);
+                                debug2!("{}\n", id);
                                 end_chan.send(());
                                 return;
                     }
                     (token, end_chan) => {
-                        debug!("thread: %d   got token: %d", id, token);
+                        debug2!("thread: {}   got token: {}", id, token);
                         ch.send((token - 1, end_chan));
                         if token <= n_tasks {
                             return;
@@ -1280,7 +1334,6 @@ mod test {
     // FIXME: #9407: xfail-test
     fn dont_starve_1() {
         use rt::comm::oneshot;
-        use unstable::running_on_valgrind;
 
         do stress_factor().times {
             do run_in_mt_newsched_task {

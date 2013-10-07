@@ -13,12 +13,14 @@
 
 
 #[deriving(Clone, Eq)]
+#[allow(missing_doc)]
 pub enum List<T> {
     Cons(T, @List<T>),
     Nil,
 }
 
 #[deriving(Eq)]
+#[allow(missing_doc)]
 pub enum MutList<T> {
     MutCons(T, @mut MutList<T>),
     MutNil,
@@ -96,7 +98,7 @@ pub fn len<T>(ls: @List<T>) -> uint {
 pub fn tail<T>(ls: @List<T>) -> @List<T> {
     match *ls {
         Cons(_, tl) => return tl,
-        Nil => fail!("list empty")
+        Nil => fail2!("list empty")
     }
 }
 
@@ -105,7 +107,7 @@ pub fn head<T:Clone>(ls: @List<T>) -> T {
     match *ls {
       Cons(ref hd, _) => (*hd).clone(),
       // makes me sad
-      _ => fail!("head invoked on empty list")
+      _ => fail2!("head invoked on empty list")
     }
 }
 

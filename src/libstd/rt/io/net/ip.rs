@@ -8,14 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use num::FromStrRadix;
 use vec::MutableCloneableVector;
 use to_str::ToStr;
 use from_str::FromStr;
 use option::{Option, None, Some};
 
 
-type Port = u16;
+pub type Port = u16;
 
 #[deriving(Eq, TotalEq, Clone)]
 pub enum IpAddr {
@@ -27,37 +26,22 @@ impl ToStr for IpAddr {
     fn to_str(&self) -> ~str {
         match *self {
             Ipv4Addr(a, b, c, d) =>
-                fmt!("%u.%u.%u.%u",
-                    a as uint, b as uint, c as uint, d as uint),
+                format!("{}.{}.{}.{}", a, b, c, d),
 
             // Ipv4 Compatible address
             Ipv6Addr(0, 0, 0, 0, 0, 0, g, h) => {
-                let a = fmt!("%04x", g as uint);
-                let b = FromStrRadix::from_str_radix(a.slice(2, 4), 16).unwrap();
-                let a = FromStrRadix::from_str_radix(a.slice(0, 2), 16).unwrap();
-                let c = fmt!("%04x", h as uint);
-                let d = FromStrRadix::from_str_radix(c.slice(2, 4), 16).unwrap();
-                let c = FromStrRadix::from_str_radix(c.slice(0, 2), 16).unwrap();
-
-                fmt!("::%u.%u.%u.%u", a, b, c, d)
+                format!("::{}.{}.{}.{}", (g >> 8) as u8, g as u8,
+                        (h >> 8) as u8, h as u8)
             }
 
             // Ipv4-Mapped address
             Ipv6Addr(0, 0, 0, 0, 0, 0xFFFF, g, h) => {
-                let a = fmt!("%04x", g as uint);
-                let b = FromStrRadix::from_str_radix(a.slice(2, 4), 16).unwrap();
-                let a = FromStrRadix::from_str_radix(a.slice(0, 2), 16).unwrap();
-                let c = fmt!("%04x", h as uint);
-                let d = FromStrRadix::from_str_radix(c.slice(2, 4), 16).unwrap();
-                let c = FromStrRadix::from_str_radix(c.slice(0, 2), 16).unwrap();
-
-                fmt!("::FFFF:%u.%u.%u.%u", a, b, c, d)
+                format!("::FFFF:{}.{}.{}.{}", (g >> 8) as u8, g as u8,
+                        (h >> 8) as u8, h as u8)
             }
 
             Ipv6Addr(a, b, c, d, e, f, g, h) =>
-                fmt!("%x:%x:%x:%x:%x:%x:%x:%x",
-                    a as uint, b as uint, c as uint, d as uint,
-                    e as uint, f as uint, g as uint, h as uint)
+                format!("{}:{}:{}:{}:{}:{}:{}:{}", a, b, c, d, e, f, g, h)
         }
     }
 }
@@ -72,8 +56,8 @@ pub struct SocketAddr {
 impl ToStr for SocketAddr {
     fn to_str(&self) -> ~str {
         match self.ip {
-            Ipv4Addr(*) => fmt!("%s:%u", self.ip.to_str(), self.port as uint),
-            Ipv6Addr(*) => fmt!("[%s]:%u", self.ip.to_str(), self.port as uint),
+            Ipv4Addr(*) => format!("{}:{}", self.ip.to_str(), self.port),
+            Ipv6Addr(*) => format!("[{}]:{}", self.ip.to_str(), self.port),
         }
     }
 }
@@ -219,7 +203,7 @@ impl<'self> Parser<'self> {
                 return None;
             }
 
-            let octet = self.read_number(10, 3, 0x100).map(|&n| n as u8);
+            let octet = self.read_number(10, 3, 0x100).map(|n| n as u8);
             match octet {
                 Some(d) => bs[i] = d,
                 None => return None,
@@ -268,7 +252,7 @@ impl<'self> Parser<'self> {
 
                 let group = do p.read_atomically |p| {
                     if i == 0 || p.read_given_char(':').is_some() {
-                        p.read_number(16, 4, 0x10000).map(|&n| n as u16)
+                        p.read_number(16, 4, 0x10000).map(|n| n as u16)
                     } else {
                         None
                     }
@@ -326,16 +310,16 @@ impl<'self> Parser<'self> {
                 let ip_addr = |p: &mut Parser| p.read_ipv6_addr();
                 let clos_br = |p: &mut Parser| p.read_given_char(']');
                 p.read_seq_3::<char, IpAddr, char>(open_br, ip_addr, clos_br)
-                        .map(|&t| match t { (_, ip, _) => ip })
+                        .map(|t| match t { (_, ip, _) => ip })
             };
             p.read_or([ipv4_p, ipv6_p])
         };
         let colon = |p: &mut Parser| p.read_given_char(':');
-        let port  = |p: &mut Parser| p.read_number(10, 5, 0x10000).map(|&n| n as u16);
+        let port  = |p: &mut Parser| p.read_number(10, 5, 0x10000).map(|n| n as u16);
 
         // host, colon, port
         self.read_seq_3::<IpAddr, char, u16>(ip_addr, colon, port)
-                .map(|&t| match t { (ip, _, port) => SocketAddr { ip: ip, port: port } })
+                .map(|t| match t { (ip, _, port) => SocketAddr { ip: ip, port: port } })
     }
 }
 

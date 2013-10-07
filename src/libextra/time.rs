@@ -19,7 +19,6 @@ static NSEC_PER_SEC: i32 = 1_000_000_000_i32;
 pub mod rustrt {
     use super::Tm;
 
-    #[abi = "cdecl"]
     extern {
         pub fn get_time(sec: &mut i64, nsec: &mut i32);
         pub fn precise_time_ns(ns: &mut u64);
@@ -92,8 +91,8 @@ pub fn precise_time_ns() -> u64 {
  * Returns the current value of a high-resolution performance counter
  * in seconds since an unspecified epoch.
  */
-pub fn precise_time_s() -> float {
-    return (precise_time_ns() as float) / 1000000000.;
+pub fn precise_time_s() -> f64 {
+    return (precise_time_ns() as f64) / 1000000000.;
 }
 
 pub fn tzset() {
@@ -174,15 +173,6 @@ pub fn now() -> Tm {
     at(get_time())
 }
 
-/// Parses the time from the string according to the format string.
-pub fn strptime(s: &str, format: &str) -> Result<Tm, ~str> {
-    do_strptime(s, format)
-}
-
-/// Formats the time according to the format string.
-pub fn strftime(format: &str, tm: &Tm) -> ~str {
-    do_strftime(format, tm)
-}
 
 impl Tm {
     /// Convert time to the seconds from January 1, 1970
@@ -259,12 +249,13 @@ impl Tm {
             let mut m = num::abs(self.tm_gmtoff) / 60_i32;
             let h = m / 60_i32;
             m -= h * 60_i32;
-            s + fmt!("%c%02d:%02d", sign, h as int, m as int)
+            s + format!("{}{:02d}:{:02d}", sign, h as int, m as int)
         }
     }
 }
 
-fn do_strptime(s: &str, format: &str) -> Result<Tm, ~str> {
+/// Parses the time from the string according to the format string.
+pub fn strptime(s: &str, format: &str) -> Result<Tm, ~str> {
     fn match_str(s: &str, pos: uint, needle: &str) -> bool {
         let mut i = pos;
         for ch in needle.byte_iter() {
@@ -364,7 +355,7 @@ fn do_strptime(s: &str, format: &str) -> Result<Tm, ~str> {
         if c == range.ch {
             Ok(range.next)
         } else {
-            Err(fmt!("Expected %?, found %?",
+            Err(format!("Expected {}, found {}",
                 str::from_char(c),
                 str::from_char(range.ch)))
         }
@@ -608,8 +599,6 @@ fn do_strptime(s: &str, format: &str) -> Result<Tm, ~str> {
               None => Err(~"Invalid day of week")
             }
           }
-          //'X' {}
-          //'x' {}
           'Y' => {
             match match_digits(s, pos, 4u, false) {
               Some(item) => {
@@ -671,7 +660,7 @@ fn do_strptime(s: &str, format: &str) -> Result<Tm, ~str> {
           }
           '%' => parse_char(s, pos, '%'),
           ch => {
-            Err(fmt!("unknown formatting type: %?", str::from_char(ch)))
+            Err(format!("unknown formatting type: {}", str::from_char(ch)))
           }
         }
     }
@@ -733,10 +722,63 @@ fn do_strptime(s: &str, format: &str) -> Result<Tm, ~str> {
     }
 }
 
-fn do_strftime(format: &str, tm: &Tm) -> ~str {
+/// Formats the time according to the format string.
+pub fn strftime(format: &str, tm: &Tm) -> ~str {
+    fn days_in_year(year: int) -> i32 {
+        if ((year % 4 == 0) && ((year % 100 != 0) || (year % 400 == 0))) {
+            366    /* Days in a leap year */
+        } else {
+            365    /* Days in a non-leap year */
+        }
+    }
+
+    fn iso_week_days(yday: i32, wday: i32) -> int {
+        /* The number of days from the first day of the first ISO week of this
+        * year to the year day YDAY with week day WDAY.
+        * ISO weeks start on Monday. The first ISO week has the year's first
+        * Thursday.
+        * YDAY may be as small as yday_minimum.
+        */
+        let yday: int = yday as int;
+        let wday: int = wday as int;
+        let iso_week_start_wday: int = 1;                     /* Monday */
+        let iso_week1_wday: int = 4;                          /* Thursday */
+        let yday_minimum: int = 366;
+        /* Add enough to the first operand of % to make it nonnegative. */
+        let big_enough_multiple_of_7: int = (yday_minimum / 7 + 2) * 7;
+
+        yday - (yday - wday + iso_week1_wday + big_enough_multiple_of_7) % 7
+            + iso_week1_wday - iso_week_start_wday
+    }
+
+    fn iso_week(ch:char, tm: &Tm) -> ~str {
+        let mut year: int = tm.tm_year as int + 1900;
+        let mut days: int = iso_week_days (tm.tm_yday, tm.tm_wday);
+
+        if (days < 0) {
+            /* This ISO week belongs to the previous year. */
+            year -= 1;
+            days = iso_week_days (tm.tm_yday + (days_in_year(year)), tm.tm_wday);
+        } else {
+            let d: int = iso_week_days (tm.tm_yday - (days_in_year(year)),
+                                        tm.tm_wday);
+            if (0 <= d) {
+                /* This ISO week belongs to the next year. */
+                year += 1;
+                days = d;
+            }
+        }
+
+        match ch {
+            'G' => format!("{}", year),
+            'g' => format!("{:02d}", (year % 100 + 100) % 100),
+            'V' => format!("{:02d}", days / 7 + 1),
+            _ => ~""
+        }
+    }
+
     fn parse_type(ch: char, tm: &Tm) -> ~str {
-        //FIXME (#2350): Implement missing types.
-      let die = || fmt!("strftime: can't understand this format %c ", ch);
+      let die = || format!("strftime: can't understand this format {} ", ch);
         match ch {
           'A' => match tm.tm_wday as int {
             0 => ~"Sunday",
@@ -788,9 +830,9 @@ fn do_strftime(format: &str, tm: &Tm) -> ~str {
             11 => ~"Dec",
             _  => die()
           },
-          'C' => fmt!("%02d", (tm.tm_year as int + 1900) / 100),
+          'C' => format!("{:02d}", (tm.tm_year as int + 1900) / 100),
           'c' => {
-            fmt!("%s %s %s %s %s",
+            format!("{} {} {} {} {}",
                 parse_type('a', tm),
                 parse_type('b', tm),
                 parse_type('e', tm),
@@ -798,90 +840,89 @@ fn do_strftime(format: &str, tm: &Tm) -> ~str {
                 parse_type('Y', tm))
           }
           'D' | 'x' => {
-            fmt!("%s/%s/%s",
+            format!("{}/{}/{}",
                 parse_type('m', tm),
                 parse_type('d', tm),
                 parse_type('y', tm))
           }
-          'd' => fmt!("%02d", tm.tm_mday as int),
-          'e' => fmt!("%2d", tm.tm_mday as int),
-          'f' => fmt!("%09d", tm.tm_nsec as int),
+          'd' => format!("{:02d}", tm.tm_mday),
+          'e' => format!("{:2d}", tm.tm_mday),
+          'f' => format!("{:09d}", tm.tm_nsec),
           'F' => {
-            fmt!("%s-%s-%s",
+            format!("{}-{}-{}",
                 parse_type('Y', tm),
                 parse_type('m', tm),
                 parse_type('d', tm))
           }
-          //'G' {}
-          //'g' {}
-          'H' => fmt!("%02d", tm.tm_hour as int),
+          'G' => iso_week('G', tm),
+          'g' => iso_week('g', tm),
+          'H' => format!("{:02d}", tm.tm_hour),
           'I' => {
-            let mut h = tm.tm_hour as int;
+            let mut h = tm.tm_hour;
             if h == 0 { h = 12 }
             if h > 12 { h -= 12 }
-            fmt!("%02d", h)
+            format!("{:02d}", h)
           }
-          'j' => fmt!("%03d", tm.tm_yday as int + 1),
-          'k' => fmt!("%2d", tm.tm_hour as int),
+          'j' => format!("{:03d}", tm.tm_yday + 1),
+          'k' => format!("{:2d}", tm.tm_hour),
           'l' => {
-            let mut h = tm.tm_hour as int;
+            let mut h = tm.tm_hour;
             if h == 0 { h = 12 }
             if h > 12 { h -= 12 }
-            fmt!("%2d", h)
+            format!("{:2d}", h)
           }
-          'M' => fmt!("%02d", tm.tm_min as int),
-          'm' => fmt!("%02d", tm.tm_mon as int + 1),
+          'M' => format!("{:02d}", tm.tm_min),
+          'm' => format!("{:02d}", tm.tm_mon + 1),
           'n' => ~"\n",
           'P' => if (tm.tm_hour as int) < 12 { ~"am" } else { ~"pm" },
           'p' => if (tm.tm_hour as int) < 12 { ~"AM" } else { ~"PM" },
           'R' => {
-            fmt!("%s:%s",
+            format!("{}:{}",
                 parse_type('H', tm),
                 parse_type('M', tm))
           }
           'r' => {
-            fmt!("%s:%s:%s %s",
+            format!("{}:{}:{} {}",
                 parse_type('I', tm),
                 parse_type('M', tm),
                 parse_type('S', tm),
                 parse_type('p', tm))
           }
-          'S' => fmt!("%02d", tm.tm_sec as int),
-          's' => fmt!("%d", tm.to_timespec().sec as int),
+          'S' => format!("{:02d}", tm.tm_sec),
+          's' => format!("{}", tm.to_timespec().sec),
           'T' | 'X' => {
-            fmt!("%s:%s:%s",
+            format!("{}:{}:{}",
                 parse_type('H', tm),
                 parse_type('M', tm),
                 parse_type('S', tm))
           }
           't' => ~"\t",
-          //'U' {}
+          'U' => format!("{:02d}", (tm.tm_yday - tm.tm_wday + 7) / 7),
           'u' => {
             let i = tm.tm_wday as int;
             (if i == 0 { 7 } else { i }).to_str()
           }
-          //'V' {}
+          'V' => iso_week('V', tm),
           'v' => {
-            fmt!("%s-%s-%s",
+            format!("{}-{}-{}",
                 parse_type('e', tm),
                 parse_type('b', tm),
                 parse_type('Y', tm))
           }
-          //'W' {}
+          'W' => format!("{:02d}", (tm.tm_yday - (tm.tm_wday - 1 + 7) % 7 + 7)
+                         / 7),
           'w' => (tm.tm_wday as int).to_str(),
-          //'X' {}
-          //'x' {}
           'Y' => (tm.tm_year as int + 1900).to_str(),
-          'y' => fmt!("%02d", (tm.tm_year as int + 1900) % 100),
+          'y' => format!("{:02d}", (tm.tm_year as int + 1900) % 100),
           'Z' => tm.tm_zone.clone(),
           'z' => {
             let sign = if tm.tm_gmtoff > 0_i32 { '+' } else { '-' };
             let mut m = num::abs(tm.tm_gmtoff) / 60_i32;
             let h = m / 60_i32;
             m -= h * 60_i32;
-            fmt!("%c%02d%02d", sign, h as int, m as int)
+            format!("{}{:02d}{:02d}", sign, h, m)
           }
-          //'+' {}
+          '+' => tm.rfc3339(),
           '%' => ~"%",
           _   => die()
         }
@@ -905,7 +946,7 @@ fn do_strftime(format: &str, tm: &Tm) -> ~str {
 mod tests {
     use super::*;
 
-    use std::float;
+    use std::f64;
     use std::os;
     use std::result::{Err, Ok};
 
@@ -914,13 +955,13 @@ mod tests {
         static SOME_FUTURE_DATE: i64 = 1577836800i64; // 2020-01-01T00:00:00Z
 
         let tv1 = get_time();
-        debug!("tv1=%? sec + %? nsec", tv1.sec as uint, tv1.nsec as uint);
+        debug2!("tv1={:?} sec + {:?} nsec", tv1.sec as uint, tv1.nsec as uint);
 
         assert!(tv1.sec > SOME_RECENT_DATE);
         assert!(tv1.nsec < 1000000000i32);
 
         let tv2 = get_time();
-        debug!("tv2=%? sec + %? nsec", tv2.sec as uint, tv2.nsec as uint);
+        debug2!("tv2={:?} sec + {:?} nsec", tv2.sec as uint, tv2.nsec as uint);
 
         assert!(tv2.sec >= tv1.sec);
         assert!(tv2.sec < SOME_FUTURE_DATE);
@@ -934,16 +975,16 @@ mod tests {
         let s0 = precise_time_s();
         let ns1 = precise_time_ns();
 
-        debug!("s0=%s sec", float::to_str_digits(s0, 9u));
+        debug2!("s0={} sec", f64::to_str_digits(s0, 9u));
         assert!(s0 > 0.);
         let ns0 = (s0 * 1000000000.) as u64;
-        debug!("ns0=%? ns", ns0);
+        debug2!("ns0={:?} ns", ns0);
 
-        debug!("ns1=%? ns", ns0);
+        debug2!("ns1={:?} ns", ns0);
         assert!(ns1 >= ns0);
 
         let ns2 = precise_time_ns();
-        debug!("ns2=%? ns", ns0);
+        debug2!("ns2={:?} ns", ns0);
         assert!(ns2 >= ns1);
     }
 
@@ -975,7 +1016,7 @@ mod tests {
         let time = Timespec::new(1234567890, 54321);
         let local = at(time);
 
-        error!("time_at: %?", local);
+        error2!("time_at: {:?}", local);
 
         assert!(local.tm_sec == 30_i32);
         assert!(local.tm_min == 31_i32);
@@ -1050,7 +1091,7 @@ mod tests {
             == Err(~"Invalid time"));
 
         match strptime("Fri Feb 13 15:31:30.01234 2009", format) {
-          Err(e) => fail!(e),
+          Err(e) => fail2!(e),
           Ok(ref tm) => {
             assert!(tm.tm_sec == 30_i32);
             assert!(tm.tm_min == 31_i32);
@@ -1070,7 +1111,7 @@ mod tests {
         fn test(s: &str, format: &str) -> bool {
             match strptime(s, format) {
               Ok(ref tm) => tm.strftime(format) == s.to_owned(),
-              Err(e) => fail!(e)
+              Err(e) => fail2!(e)
             }
         }
 
@@ -1196,7 +1237,7 @@ mod tests {
         let utc   = at_utc(time);
         let local = at(time);
 
-        error!("test_ctime: %? %?", utc.ctime(), local.ctime());
+        error2!("test_ctime: {:?} {:?}", utc.ctime(), local.ctime());
 
         assert_eq!(utc.ctime(), ~"Fri Feb 13 23:31:30 2009");
         assert_eq!(local.ctime(), ~"Fri Feb 13 15:31:30 2009");
@@ -1222,8 +1263,8 @@ mod tests {
         assert_eq!(local.strftime("%e"), ~"13");
         assert_eq!(local.strftime("%f"), ~"000054321");
         assert_eq!(local.strftime("%F"), ~"2009-02-13");
-        // assert!(local.strftime("%G") == "2009");
-        // assert!(local.strftime("%g") == "09");
+        assert_eq!(local.strftime("%G"), ~"2009");
+        assert_eq!(local.strftime("%g"), ~"09");
         assert_eq!(local.strftime("%H"), ~"15");
         assert_eq!(local.strftime("%I"), ~"03");
         assert_eq!(local.strftime("%j"), ~"044");
@@ -1240,16 +1281,17 @@ mod tests {
         assert_eq!(local.strftime("%s"), ~"1234567890");
         assert_eq!(local.strftime("%T"), ~"15:31:30");
         assert_eq!(local.strftime("%t"), ~"\t");
-        // assert!(local.strftime("%U") == "06");
+        assert_eq!(local.strftime("%U"), ~"06");
         assert_eq!(local.strftime("%u"), ~"5");
-        // assert!(local.strftime("%V") == "07");
+        assert_eq!(local.strftime("%V"), ~"07");
         assert_eq!(local.strftime("%v"), ~"13-Feb-2009");
-        // assert!(local.strftime("%W") == "06");
+        assert_eq!(local.strftime("%W"), ~"06");
         assert_eq!(local.strftime("%w"), ~"5");
-        // handle "%X"
-        // handle "%x"
+        assert_eq!(local.strftime("%X"), ~"15:31:30"); // FIXME (#2350): support locale
+        assert_eq!(local.strftime("%x"), ~"02/13/09"); // FIXME (#2350): support locale
         assert_eq!(local.strftime("%Y"), ~"2009");
         assert_eq!(local.strftime("%y"), ~"09");
+        assert_eq!(local.strftime("%+"), ~"2009-02-13T15:31:30-08:00");
 
         // FIXME (#2350): We should probably standardize on the timezone
         // abbreviation.

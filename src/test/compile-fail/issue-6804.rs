@@ -1,6 +1,8 @@
+#[allow(non_uppercase_pattern_statics)];
+
 // Matching against NaN should result in a warning
 
-use std::float::NaN;
+use std::f64::NaN;
 
 fn main() {
     let x = NaN;

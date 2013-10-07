@@ -46,7 +46,7 @@ impl Process {
                  exit_cb: uv::ExitCallback)
                     -> Result<~[Option<UvPipeStream>], uv::UvError>
     {
-        let cwd = config.cwd.map_move(|s| s.to_c_str());
+        let cwd = config.cwd.map(|s| s.to_c_str());
 
         extern fn on_exit(p: *uvll::uv_process_t,
                           exit_status: libc::c_int,
@@ -199,7 +199,7 @@ fn with_env<T>(env: Option<&[(~str, ~str)]>, f: &fn(**libc::c_char) -> T) -> T {
     // As with argv, create some temporary storage and then the actual array
     let mut envp = vec::with_capacity(env.len());
     for &(ref key, ref value) in env.iter() {
-        envp.push(fmt!("%s=%s", *key, *value).to_c_str());
+        envp.push(format!("{}={}", *key, *value).to_c_str());
     }
     let mut c_envp = vec::with_capacity(envp.len() + 1);
     for s in envp.iter() {

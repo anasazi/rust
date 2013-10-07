@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[feature(struct_variant)];
+
 enum E {
     Foo{f : int},
     Bar
@@ -17,10 +19,10 @@ pub fn main() {
     let e = Foo{f: 1};
     match e {
         Foo{_} => (),
-        _ => fail!(),
+        _ => fail2!(),
     }
     match e {
         Foo{f: _f} => (),
-        _ => fail!(),
+        _ => fail2!(),
     }
 }

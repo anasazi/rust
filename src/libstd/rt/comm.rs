@@ -165,7 +165,7 @@ impl<T> ChanOne<T> {
                     // Port is blocked. Wake it up.
                     let recvr = BlockedTask::cast_from_uint(task_as_state);
                     if do_resched {
-                        do recvr.wake().map_move |woken_task| {
+                        do recvr.wake().map |woken_task| {
                             Scheduler::run_task(woken_task);
                         };
                     } else {
@@ -196,7 +196,7 @@ impl<T> PortOne<T> {
         match self.try_recv() {
             Some(val) => val,
             None => {
-                fail!("receiving on closed channel");
+                fail2!("receiving on closed channel");
             }
         }
     }
@@ -391,7 +391,7 @@ impl<T> Drop for ChanOne<T> {
                     // The port is blocked waiting for a message we will never send. Wake it.
                     rtassert!((*this.packet()).payload.is_none());
                     let recvr = BlockedTask::cast_from_uint(task_as_state);
-                    do recvr.wake().map_move |woken_task| {
+                    do recvr.wake().map |woken_task| {
                         Scheduler::run_task(woken_task);
                     };
                 }
@@ -495,13 +495,13 @@ impl<T> GenericPort<T> for Port<T> {
         match self.try_recv() {
             Some(val) => val,
             None => {
-                fail!("receiving on closed channel");
+                fail2!("receiving on closed channel");
             }
         }
     }
 
     fn try_recv(&self) -> Option<T> {
-        do self.next.take_opt().map_move_default(None) |pone| {
+        do self.next.take_opt().map_default(None) |pone| {
             match pone.try_recv() {
                 Some(StreamPayload { val, next }) => {
                     self.next.put_back(next);
@@ -650,7 +650,7 @@ impl<T: Send> GenericPort<T> for SharedPort<T> {
         match self.try_recv() {
             Some(val) => val,
             None => {
-                fail!("receiving on a closed channel");
+                fail2!("receiving on a closed channel");
             }
         }
     }
@@ -770,7 +770,7 @@ mod test {
                 port.recv();
             };
             // What is our res?
-            rtdebug!("res is: %?", res.is_err());
+            rtdebug!("res is: {:?}", res.is_err());
             assert!(res.is_err());
         }
     }

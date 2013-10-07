@@ -45,7 +45,7 @@ pub fn stmt_id(s: &Stmt) -> NodeId {
       StmtDecl(_, id) => id,
       StmtExpr(_, id) => id,
       StmtSemi(_, id) => id,
-      StmtMac(*) => fail!("attempted to analyze unexpanded stmt")
+      StmtMac(*) => fail2!("attempted to analyze unexpanded stmt")
     }
 }
 
@@ -72,7 +72,7 @@ pub fn def_id_of_def(d: Def) -> DefId {
         local_def(id)
       }
 
-      DefPrimTy(_) => fail!()
+      DefPrimTy(_) => fail2!()
     }
 }
 
@@ -190,7 +190,7 @@ pub fn uint_ty_max(t: uint_ty) -> u64 {
 }
 
 pub fn float_ty_to_str(t: float_ty) -> ~str {
-    match t { ty_f => ~"f", ty_f32 => ~"f32", ty_f64 => ~"f64" }
+    match t { ty_f32 => ~"f32", ty_f64 => ~"f64" }
 }
 
 pub fn is_call_expr(e: @Expr) -> bool {
@@ -397,27 +397,17 @@ impl id_range {
     }
 }
 
-pub fn id_visitor(operation: @IdVisitingOperation, pass_through_items: bool)
-                  -> @mut Visitor<()> {
-    let visitor = @mut IdVisitor {
-        operation: operation,
-        pass_through_items: pass_through_items,
-        visited_outermost: false,
-    };
-    visitor as @mut Visitor<()>
-}
-
 pub trait IdVisitingOperation {
     fn visit_id(&self, node_id: NodeId);
 }
 
-pub struct IdVisitor {
-    operation: @IdVisitingOperation,
+pub struct IdVisitor<'self, O> {
+    operation: &'self O,
     pass_through_items: bool,
     visited_outermost: bool,
 }
 
-impl IdVisitor {
+impl<'self, O: IdVisitingOperation> IdVisitor<'self, O> {
     fn visit_generics_helper(&self, generics: &Generics) {
         for type_parameter in generics.ty_params.iter() {
             self.operation.visit_id(type_parameter.id)
@@ -428,7 +418,7 @@ impl IdVisitor {
     }
 }
 
-impl Visitor<()> for IdVisitor {
+impl<'self, O: IdVisitingOperation> Visitor<()> for IdVisitor<'self, O> {
     fn visit_mod(&mut self,
                  module: &_mod,
                  _: Span,
@@ -590,10 +580,29 @@ impl Visitor<()> for IdVisitor {
         self.operation.visit_id(struct_field.node.id);
         visit::walk_struct_field(self, struct_field, env)
     }
+
+    fn visit_struct_def(&mut self,
+                        struct_def: @struct_def,
+                        ident: ast::Ident,
+                        generics: &ast::Generics,
+                        id: NodeId,
+                        _: ()) {
+        self.operation.visit_id(id);
+        struct_def.ctor_id.map(|ctor_id| self.operation.visit_id(ctor_id));
+        visit::walk_struct_def(self, struct_def, ident, generics, id, ());
+    }
+
+    fn visit_trait_method(&mut self, tm: &ast::trait_method, _: ()) {
+        match *tm {
+            ast::required(ref m) => self.operation.visit_id(m.id),
+            ast::provided(ref m) => self.operation.visit_id(m.id),
+        }
+        visit::walk_trait_method(self, tm, ());
+    }
 }
 
-pub fn visit_ids_for_inlined_item(item: &inlined_item,
-                                  operation: @IdVisitingOperation) {
+pub fn visit_ids_for_inlined_item<O: IdVisitingOperation>(item: &inlined_item,
+                                                          operation: &O) {
     let mut id_visitor = IdVisitor {
         operation: operation,
         pass_through_items: true,
@@ -612,16 +621,12 @@ impl IdVisitingOperation for IdRangeComputingVisitor {
     }
 }
 
-pub fn compute_id_range(visit_ids_fn: &fn(@IdVisitingOperation)) -> id_range {
-    let result = @mut id_range::max();
-    visit_ids_fn(@IdRangeComputingVisitor {
-        result: result,
-    } as @IdVisitingOperation);
-    *result
-}
-
 pub fn compute_id_range_for_inlined_item(item: &inlined_item) -> id_range {
-    compute_id_range(|f| visit_ids_for_inlined_item(item, f))
+    let result = @mut id_range::max();
+    visit_ids_for_inlined_item(item, &IdRangeComputingVisitor {
+        result: result,
+    });
+    *result
 }
 
 pub fn is_item_impl(item: @ast::item) -> bool {
@@ -697,32 +702,6 @@ pub fn struct_def_is_tuple_like(struct_def: &ast::struct_def) -> bool {
     struct_def.ctor_id.is_some()
 }
 
-pub fn visibility_to_privacy(visibility: visibility) -> Privacy {
-    match visibility {
-        public => Public,
-        inherited | private => Private
-    }
-}
-
-pub fn variant_visibility_to_privacy(visibility: visibility,
-                                     enclosing_is_public: bool)
-                                  -> Privacy {
-    if enclosing_is_public {
-        match visibility {
-            public | inherited => Public,
-            private => Private
-        }
-    } else {
-        visibility_to_privacy(visibility)
-    }
-}
-
-#[deriving(Eq)]
-pub enum Privacy {
-    Private,
-    Public
-}
-
 /// Returns true if the given pattern consists solely of an identifier
 /// and false otherwise.
 pub fn pat_is_ident(pat: @ast::Pat) -> bool {
@@ -756,7 +735,7 @@ pub fn new_mark_internal(m:Mrk, tail:SyntaxContext,table:&mut SCTable)
         }
         true => {
             match table.mark_memo.find(&key) {
-                None => fail!(~"internal error: key disappeared 2013042901"),
+                None => fail2!("internal error: key disappeared 2013042901"),
                 Some(idxptr) => {*idxptr}
             }
         }
@@ -783,7 +762,7 @@ pub fn new_rename_internal(id:Ident, to:Name, tail:SyntaxContext, table: &mut SC
         }
         true => {
             match table.rename_memo.find(&key) {
-                None => fail!(~"internal error: key disappeared 2013042902"),
+                None => fail2!("internal error: key disappeared 2013042902"),
                 Some(idxptr) => {*idxptr}
             }
         }
@@ -804,7 +783,7 @@ pub fn new_sctable_internal() -> SCTable {
 // fetch the SCTable from TLS, create one if it doesn't yet exist.
 pub fn get_sctable() -> @mut SCTable {
     local_data_key!(sctable_key: @@mut SCTable)
-    match local_data::get(sctable_key, |k| k.map_move(|k| *k)) {
+    match local_data::get(sctable_key, |k| k.map(|k| *k)) {
         None => {
             let new_table = @@mut new_sctable_internal();
             local_data::set(sctable_key,new_table);
@@ -816,9 +795,9 @@ pub fn get_sctable() -> @mut SCTable {
 
 /// print out an SCTable for debugging
 pub fn display_sctable(table : &SCTable) {
-    error!("SC table:");
+    error2!("SC table:");
     for (idx,val) in table.table.iter().enumerate() {
-        error!("%4u : %?",idx,val);
+        error2!("{:4u} : {:?}",idx,val);
     }
 }
 
@@ -841,7 +820,7 @@ pub type ResolveTable = HashMap<(Name,SyntaxContext),Name>;
 // fetch the SCTable from TLS, create one if it doesn't yet exist.
 pub fn get_resolve_table() -> @mut ResolveTable {
     local_data_key!(resolve_table_key: @@mut ResolveTable)
-    match local_data::get(resolve_table_key, |k| k.map(|&k| *k)) {
+    match local_data::get(resolve_table_key, |k| k.map(|k| *k)) {
         None => {
             let new_table = @@mut HashMap::new();
             local_data::set(resolve_table_key,new_table);
@@ -880,7 +859,7 @@ pub fn resolve_internal(id : Ident,
                             resolvedthis
                         }
                     }
-                    IllegalCtxt() => fail!(~"expected resolvable context, got IllegalCtxt")
+                    IllegalCtxt() => fail2!("expected resolvable context, got IllegalCtxt")
                 }
             };
             resolve_table.insert(key,resolved);
@@ -921,7 +900,7 @@ pub fn marksof(ctxt: SyntaxContext, stopname: Name, table: &SCTable) -> ~[Mrk] {
                     loopvar = tl;
                 }
             }
-            IllegalCtxt => fail!(~"expected resolvable context, got IllegalCtxt")
+            IllegalCtxt => fail2!("expected resolvable context, got IllegalCtxt")
         }
     }
 }
@@ -932,7 +911,7 @@ pub fn mtwt_outer_mark(ctxt: SyntaxContext) -> Mrk {
     let sctable = get_sctable();
     match sctable.table[ctxt] {
         ast::Mark(mrk,_) => mrk,
-        _ => fail!("can't retrieve outer mark when outside is not a mark")
+        _ => fail2!("can't retrieve outer mark when outside is not a mark")
     }
 }
 
@@ -985,7 +964,7 @@ mod test {
     use super::*;
     use std::io;
     use opt_vec;
-    use std::hash::HashMap;
+    use std::hashmap::HashMap;
 
     fn ident_to_segment(id : &Ident) -> PathSegment {
         PathSegment{identifier:id.clone(), lifetime: None, types: opt_vec::Empty}
@@ -1057,14 +1036,14 @@ mod test {
                 Mark(mrk,tail) => {
                     result.push(M(mrk));
                     sc = tail;
-                    loop;
+                    continue;
                 },
                 Rename(id,name,tail) => {
                     result.push(R(id,name));
                     sc = tail;
-                    loop;
+                    continue;
                 }
-                IllegalCtxt => fail!("expected resolvable context, got IllegalCtxt")
+                IllegalCtxt => fail2!("expected resolvable context, got IllegalCtxt")
             }
         }
     }

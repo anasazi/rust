@@ -59,6 +59,7 @@ use util;
  */
 pub type Key<T> = &'static KeyValue<T>;
 
+#[allow(missing_doc)]
 pub enum KeyValue<T> { Key }
 
 trait LocalData {}
@@ -143,8 +144,8 @@ pub fn pop<T: 'static>(key: Key<T>) -> Option<T> {
         match *entry {
             Some((k, _, loan)) if k == key_value => {
                 if loan != NoLoan {
-                    fail!("TLS value cannot be removed because it is currently \
-                          borrowed as %s", loan.describe());
+                    fail2!("TLS value cannot be removed because it is currently \
+                          borrowed as {}", loan.describe());
                 }
                 // Move the data out of the `entry` slot via util::replace.
                 // This is guaranteed to succeed because we already matched
@@ -240,8 +241,8 @@ fn get_with<T: 'static, U>(key: Key<T>,
                         }
                         (ImmLoan, ImmLoan) => {}
                         (want, cur) => {
-                            fail!("TLS slot cannot be borrowed as %s because \
-                                   it is already borrowed as %s",
+                            fail2!("TLS slot cannot be borrowed as {} because \
+                                    it is already borrowed as {}",
                                   want.describe(), cur.describe());
                         }
                     }
@@ -304,8 +305,8 @@ pub fn set<T: 'static>(key: Key<T>, data: T) {
             match *entry {
                 Some((ekey, _, loan)) if key == ekey => {
                     if loan != NoLoan {
-                        fail!("TLS value cannot be overwritten because it is
-                               already borrowed as %s", loan.describe())
+                        fail2!("TLS value cannot be overwritten because it is
+                               already borrowed as {}", loan.describe())
                     }
                     true
                 }
@@ -354,16 +355,16 @@ mod tests {
         set(my_key, @~"parent data");
         do task::spawn {
             // TLS shouldn't carry over.
-            assert!(get(my_key, |k| k.map_move(|k| *k)).is_none());
+            assert!(get(my_key, |k| k.map(|k| *k)).is_none());
             set(my_key, @~"child data");
-            assert!(*(get(my_key, |k| k.map_move(|k| *k)).unwrap()) ==
+            assert!(*(get(my_key, |k| k.map(|k| *k)).unwrap()) ==
                     ~"child data");
             // should be cleaned up for us
         }
         // Must work multiple times
-        assert!(*(get(my_key, |k| k.map_move(|k| *k)).unwrap()) == ~"parent data");
-        assert!(*(get(my_key, |k| k.map_move(|k| *k)).unwrap()) == ~"parent data");
-        assert!(*(get(my_key, |k| k.map_move(|k| *k)).unwrap()) == ~"parent data");
+        assert!(*(get(my_key, |k| k.map(|k| *k)).unwrap()) == ~"parent data");
+        assert!(*(get(my_key, |k| k.map(|k| *k)).unwrap()) == ~"parent data");
+        assert!(*(get(my_key, |k| k.map(|k| *k)).unwrap()) == ~"parent data");
     }
 
     #[test]
@@ -371,7 +372,7 @@ mod tests {
         static my_key: Key<@~str> = &Key;
         set(my_key, @~"first data");
         set(my_key, @~"next data"); // Shouldn't leak.
-        assert!(*(get(my_key, |k| k.map_move(|k| *k)).unwrap()) == ~"next data");
+        assert!(*(get(my_key, |k| k.map(|k| *k)).unwrap()) == ~"next data");
     }
 
     #[test]
@@ -388,15 +389,15 @@ mod tests {
         static my_key: Key<@~str> = &Key;
         modify(my_key, |data| {
             match data {
-                Some(@ref val) => fail!("unwelcome value: %s", *val),
+                Some(@ref val) => fail2!("unwelcome value: {}", *val),
                 None           => Some(@~"first data")
             }
         });
         modify(my_key, |data| {
             match data {
                 Some(@~"first data") => Some(@~"next data"),
-                Some(@ref val)       => fail!("wrong value: %s", *val),
-                None                 => fail!("missing value")
+                Some(@ref val)       => fail2!("wrong value: {}", *val),
+                None                 => fail2!("missing value")
             }
         });
         assert!(*(pop(my_key).unwrap()) == ~"next data");
@@ -456,11 +457,11 @@ mod tests {
             set(str_key, @~"string data");
             set(box_key, @@());
             set(int_key, @42);
-            fail!();
+            fail2!();
         }
         // Not quite nondeterministic.
         set(int_key, @31337);
-        fail!();
+        fail2!();
     }
 
     #[test]

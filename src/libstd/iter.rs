@@ -617,7 +617,7 @@ pub trait Iterator<A> {
                     Some((y, y_val))
                 }
             }
-        }).map_move(|(x, _)| x)
+        }).map(|(x, _)| x)
     }
 
     /// Return the element that gives the minimum value from the
@@ -641,7 +641,7 @@ pub trait Iterator<A> {
                     Some((y, y_val))
                 }
             }
-        }).map_move(|(x, _)| x)
+        }).map(|(x, _)| x)
     }
 }
 
@@ -723,7 +723,7 @@ pub trait ExactSize<A> : DoubleEndedIterator<A> {
                 Some(x) => {
                     i = match i.checked_sub(&1) {
                         Some(x) => x,
-                        None => fail!("rposition: incorrect ExactSize")
+                        None => fail2!("rposition: incorrect ExactSize")
                     };
                     if predicate(x) {
                         return Some(i)
@@ -1150,7 +1150,7 @@ impl<'self, A, T: Iterator<A>> Iterator<A> for Filter<'self, A, T> {
             if (self.predicate)(&x) {
                 return Some(x);
             } else {
-                loop
+                continue
             }
         }
         None
@@ -1173,7 +1173,7 @@ impl<'self, A, T: DoubleEndedIterator<A>> DoubleEndedIterator<A> for Filter<'sel
                     if (self.predicate)(&x) {
                         return Some(x);
                     } else {
-                        loop
+                        continue
                     }
                 }
             }
@@ -1342,7 +1342,7 @@ impl<'self, A, T: Iterator<A>> Iterator<A> for SkipWhile<'self, A, T> {
                     Some(x) => {
                         if (self.predicate)(&x) {
                             next = self.iter.next();
-                            loop
+                            continue
                         } else {
                             self.flag = true;
                             return Some(x)
@@ -1415,7 +1415,7 @@ impl<A, T: Iterator<A>> Iterator<A> for Skip<T> {
                 match next {
                     Some(_) => {
                         next = self.iter.next();
-                        loop
+                        continue
                     }
                     None => {
                         self.n = 0;
@@ -1550,8 +1550,8 @@ impl<'self, A, T: Iterator<A>, B, U: Iterator<B>> Iterator<B> for FlatMap<'self,
                     return Some(x)
                 }
             }
-            match self.iter.next().map_move(|x| (self.f)(x)) {
-                None => return self.backiter.and_then_mut_ref(|it| it.next()),
+            match self.iter.next().map(|x| (self.f)(x)) {
+                None => return self.backiter.as_mut().and_then(|it| it.next()),
                 next => self.frontiter = next,
             }
         }
@@ -1559,8 +1559,8 @@ impl<'self, A, T: Iterator<A>, B, U: Iterator<B>> Iterator<B> for FlatMap<'self,
 
     #[inline]
     fn size_hint(&self) -> (uint, Option<uint>) {
-        let (flo, fhi) = self.frontiter.map_default((0, Some(0)), |it| it.size_hint());
-        let (blo, bhi) = self.backiter.map_default((0, Some(0)), |it| it.size_hint());
+        let (flo, fhi) = self.frontiter.as_ref().map_default((0, Some(0)), |it| it.size_hint());
+        let (blo, bhi) = self.backiter.as_ref().map_default((0, Some(0)), |it| it.size_hint());
         let lo = flo.saturating_add(blo);
         match (self.iter.size_hint(), fhi, bhi) {
             ((0, Some(0)), Some(a), Some(b)) => (lo, a.checked_add(&b)),
@@ -1582,8 +1582,8 @@ impl<'self,
                     y => return y
                 }
             }
-            match self.iter.next_back().map_move(|x| (self.f)(x)) {
-                None => return self.frontiter.and_then_mut_ref(|it| it.next_back()),
+            match self.iter.next_back().map(|x| (self.f)(x)) {
+                None => return self.frontiter.as_mut().and_then(|it| it.next_back()),
                 next => self.backiter = next,
             }
         }
@@ -2269,12 +2269,12 @@ mod tests {
     #[test]
     fn test_iterator_scan() {
         // test the type inference
-        fn add(old: &mut int, new: &uint) -> Option<float> {
+        fn add(old: &mut int, new: &uint) -> Option<f64> {
             *old += *new as int;
-            Some(*old as float)
+            Some(*old as f64)
         }
         let xs = [0u, 1, 2, 3, 4];
-        let ys = [0f, 1f, 3f, 6f, 10f];
+        let ys = [0f64, 1.0, 3.0, 6.0, 10.0];
 
         let mut it = xs.iter().scan(0, add);
         let mut i = 0;
@@ -2452,7 +2452,7 @@ mod tests {
         assert!(v.iter().all(|&x| x < 10));
         assert!(!v.iter().all(|&x| x.is_even()));
         assert!(!v.iter().all(|&x| x > 100));
-        assert!(v.slice(0, 0).iter().all(|_| fail!()));
+        assert!(v.slice(0, 0).iter().all(|_| fail2!()));
     }
 
     #[test]
@@ -2461,7 +2461,7 @@ mod tests {
         assert!(v.iter().any(|&x| x < 10));
         assert!(v.iter().any(|&x| x.is_even()));
         assert!(!v.iter().any(|&x| x > 100));
-        assert!(!v.slice(0, 0).iter().any(|_| fail!()));
+        assert!(!v.slice(0, 0).iter().any(|_| fail2!()));
     }
 
     #[test]
@@ -2602,7 +2602,7 @@ mod tests {
         let mut i = 0;
         do v.iter().rposition |_elt| {
             if i == 2 {
-                fail!()
+                fail2!()
             }
             i += 1;
             false
@@ -2746,12 +2746,12 @@ mod tests {
     fn test_double_ended_range() {
         assert_eq!(range(11i, 14).invert().collect::<~[int]>(), ~[13i, 12, 11]);
         for _ in range(10i, 0).invert() {
-            fail!("unreachable");
+            fail2!("unreachable");
         }
 
         assert_eq!(range(11u, 14).invert().collect::<~[uint]>(), ~[13u, 12, 11]);
         for _ in range(10u, 0).invert() {
-            fail!("unreachable");
+            fail2!("unreachable");
         }
     }
 

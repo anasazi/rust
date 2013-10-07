@@ -31,7 +31,7 @@ pub fn strip_hidden(crate: clean::Crate) -> plugins::PluginResult {
                         for innerattr in l.iter() {
                             match innerattr {
                                 &clean::Word(ref s) if "hidden" == *s => {
-                                    debug!("found one in strip_hidden; removing");
+                                    debug2!("found one in strip_hidden; removing");
                                     return None;
                                 },
                                 _ => (),
@@ -70,16 +70,12 @@ pub fn strip_private(mut crate: clean::Crate) -> plugins::PluginResult {
                     }
                 }
 
-                // These are public-by-default (if the enum was public)
-                clean::VariantItem(*) => {
+                // These are public-by-default (if the enum/struct was public)
+                clean::VariantItem(*) | clean::StructFieldItem(*) => {
                     if i.visibility == Some(ast::private) {
                         return None;
                     }
                 }
-
-                // We show these regardless of whether they're public/private
-                // because it's useful to see sometimes
-                clean::StructFieldItem(*) => {}
 
                 // handled below
                 clean::ModuleItem(*) => {}

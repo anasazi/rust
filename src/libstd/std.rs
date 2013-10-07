@@ -58,7 +58,10 @@ they contained the following prologue:
 #[crate_type = "lib"];
 
 #[doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk.png",
-      html_favicon_url = "http://www.rust-lang.org/favicon.ico")];
+      html_favicon_url = "http://www.rust-lang.org/favicon.ico",
+      html_root_url = "http://static.rust-lang.org/doc/master")];
+
+#[feature(macro_rules, globs)];
 
 // Don't link to std. We are std.
 #[no_std];
@@ -85,9 +88,6 @@ pub mod linkhack {
     }
 }
 
-// Internal macros
-mod macros;
-
 /* The Prelude. */
 
 pub mod prelude;
@@ -109,7 +109,6 @@ pub mod prelude;
 #[path = "num/u32.rs"]  pub mod u32;
 #[path = "num/u64.rs"]  pub mod u64;
 
-#[path = "num/float.rs"] pub mod float;
 #[path = "num/f32.rs"]   pub mod f32;
 #[path = "num/f64.rs"]   pub mod f64;
 
@@ -130,6 +129,7 @@ pub mod ptr;
 pub mod owned;
 pub mod managed;
 pub mod borrow;
+pub mod rc;
 
 
 /* Core language traits */

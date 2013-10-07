@@ -104,11 +104,13 @@ use util::ppaux;
 
 use std::c_str::ToCStr;
 use std::hashmap::HashMap;
+use std::hashmap::HashSet;
 use std::libc::{c_uint, c_ulonglong, c_longlong};
 use std::ptr;
+use std::unstable::atomics;
 use std::vec;
-use syntax::codemap::Span;
-use syntax::{ast, codemap, ast_util, ast_map, opt_vec, visit};
+use syntax::codemap::{Span, Pos};
+use syntax::{ast, codemap, ast_util, ast_map, opt_vec};
 use syntax::parse::token;
 use syntax::parse::token::special_idents;
 
@@ -136,13 +138,15 @@ pub struct CrateDebugContext {
     priv current_debug_location: DebugLocation,
     priv created_files: HashMap<~str, DIFile>,
     priv created_types: HashMap<uint, DIType>,
-    priv local_namespace_map: HashMap<ast::NodeId, @NamespaceTreeNode>,
-    priv extern_namespaces: HashMap<~[ast::Ident], @NamespaceTreeNode>,
+    priv namespace_map: HashMap<~[ast::Ident], @NamespaceTreeNode>,
+    // This collection is used to assert that composite types (structs, enums, ...) have their
+    // members only set once:
+    priv composite_types_completed: HashSet<DIType>,
 }
 
 impl CrateDebugContext {
     pub fn new(llmod: ModuleRef, crate: ~str) -> CrateDebugContext {
-        debug!("CrateDebugContext::new");
+        debug2!("CrateDebugContext::new");
         let builder = unsafe { llvm::LLVMDIBuilderCreate(llmod) };
         // DIBuilder inherits context from the module, so we'd better use the same one
         let llcontext = unsafe { llvm::LLVMGetModuleContext(llmod) };
@@ -153,8 +157,8 @@ impl CrateDebugContext {
             current_debug_location: UnknownLocation,
             created_files: HashMap::new(),
             created_types: HashMap::new(),
-            local_namespace_map: HashMap::new(),
-            extern_namespaces: HashMap::new(),
+            namespace_map: HashMap::new(),
+            composite_types_completed: HashSet::new(),
         };
     }
 }
@@ -224,23 +228,13 @@ enum VariableKind {
     CapturedVariable,
 }
 
-pub fn initialize(cx: &mut CrateContext, crate: &ast::Crate) {
-    if cx.dbg_cx.is_none() {
-        return;
-    }
-
-    let crate_namespace_ident = token::str_to_ident(cx.link_meta.name);
-    let mut visitor = NamespaceVisitor::new_crate_visitor(cx, crate_namespace_ident);
-    visit::walk_crate(&mut visitor, crate, ());
-}
-
 /// Create any deferred debug metadata nodes
 pub fn finalize(cx: @mut CrateContext) {
     if cx.dbg_cx.is_none() {
         return;
     }
 
-    debug!("finalize");
+    debug2!("finalize");
     compile_unit_metadata(cx);
     unsafe {
         llvm::LLVMDIBuilderFinalize(DIB(cx));
@@ -268,7 +262,8 @@ pub fn create_local_var_metadata(bcx: @mut Block,
         let llptr = match bcx.fcx.lllocals.find_copy(&node_id) {
             Some(v) => v,
             None => {
-                bcx.tcx().sess.span_bug(span, fmt!("No entry in lllocals table for %?", node_id));
+                bcx.tcx().sess.span_bug(span,
+                    format!("No entry in lllocals table for {:?}", node_id));
             }
         };
 
@@ -310,8 +305,8 @@ pub fn create_captured_var_metadata(bcx: @mut Block,
             ast_util::path_to_ident(path)
         }
         _ => {
-            cx.sess.span_bug(span, fmt!("debuginfo::create_captured_var_metadata() - \
-                Captured var-id refers to unexpected ast_map variant: %?", ast_item));
+            cx.sess.span_bug(span, format!("debuginfo::create_captured_var_metadata() - \
+                Captured var-id refers to unexpected ast_map variant: {:?}", ast_item));
         }
     };
 
@@ -366,7 +361,7 @@ pub fn create_match_binding_metadata(bcx: @mut Block,
     let llptr = match bcx.fcx.lllocals.find_copy(&node_id) {
         Some(v) => v,
         None => {
-            bcx.tcx().sess.span_bug(span, fmt!("No entry in lllocals table for %?", node_id));
+            bcx.tcx().sess.span_bug(span, format!("No entry in lllocals table for {:?}", node_id));
         }
     };
 
@@ -408,7 +403,7 @@ pub fn create_self_argument_metadata(bcx: @mut Block,
             explicit_self.span
         }
         _ => bcx.ccx().sess.bug(
-                fmt!("create_self_argument_metadata: unexpected sort of node: %?", fnitem))
+                format!("create_self_argument_metadata: unexpected sort of node: {:?}", fnitem))
     };
 
     let scope_metadata = bcx.fcx.debug_context.get_ref(bcx.ccx(), span).fn_metadata;
@@ -459,7 +454,8 @@ pub fn create_argument_metadata(bcx: @mut Block,
         let llptr = match bcx.fcx.llargs.find_copy(&node_id) {
             Some(v) => v,
             None => {
-                bcx.tcx().sess.span_bug(span, fmt!("No entry in llargs table for %?", node_id));
+                bcx.tcx().sess.span_bug(span,
+                    format!("No entry in llargs table for {:?}", node_id));
             }
         };
 
@@ -501,7 +497,7 @@ pub fn set_source_location(fcx: &FunctionContext,
 
     let cx = fcx.ccx;
 
-    debug!("set_source_location: %s", cx.sess.codemap.span_to_str(span));
+    debug2!("set_source_location: {}", cx.sess.codemap.span_to_str(span));
 
     if fcx.debug_context.get_ref(cx, span).source_locations_enabled {
         let loc = span_start(cx, span);
@@ -546,11 +542,11 @@ pub fn create_function_debug_context(cx: &mut CrateContext,
     let empty_generics = ast::Generics { lifetimes: opt_vec::Empty, ty_params: opt_vec::Empty };
 
     let fnitem = cx.tcx.items.get_copy(&fn_ast_id);
-    let (ident, fn_decl, generics, top_level_block, span) = match fnitem {
+    let (ident, fn_decl, generics, top_level_block, span, has_path) = match fnitem {
         ast_map::node_item(ref item, _) => {
             match item.node {
                 ast::item_fn(ref fn_decl, _, _, ref generics, ref top_level_block) => {
-                    (item.ident, fn_decl, generics, top_level_block, item.span)
+                    (item.ident, fn_decl, generics, top_level_block, item.span, true)
                 }
                 _ => {
                     cx.sess.span_bug(item.span,
@@ -569,19 +565,21 @@ pub fn create_function_debug_context(cx: &mut CrateContext,
             },
             _,
             _) => {
-            (ident, fn_decl, generics, top_level_block, span)
+            (ident, fn_decl, generics, top_level_block, span, true)
         }
         ast_map::node_expr(ref expr) => {
             match expr.node {
                 ast::ExprFnBlock(ref fn_decl, ref top_level_block) => {
-                    let name = fmt!("fn%u", token::gensym("fn"));
+                    let name = format!("fn{}", token::gensym("fn"));
                     let name = token::str_to_ident(name);
                     (name, fn_decl,
                         // This is not quite right. It should actually inherit the generics of the
                         // enclosing function.
                         &empty_generics,
                         top_level_block,
-                        expr.span)
+                        expr.span,
+                        // Don't try to lookup the item path:
+                        false)
                 }
                 _ => cx.sess.span_bug(expr.span,
                         "create_function_debug_context: expected an expr_fn_block here")
@@ -599,14 +597,15 @@ pub fn create_function_debug_context(cx: &mut CrateContext,
                 }),
             _,
             _) => {
-            (ident, fn_decl, generics, top_level_block, span)
+            (ident, fn_decl, generics, top_level_block, span, true)
         }
         ast_map::node_foreign_item(@ast::foreign_item { _ }, _, _, _) |
         ast_map::node_variant(*) |
         ast_map::node_struct_ctor(*) => {
             return FunctionWithoutDebugInfo;
         }
-        _ => cx.sess.bug(fmt!("create_function_debug_context: unexpected sort of node: %?", fnitem))
+        _ => cx.sess.bug(format!("create_function_debug_context: \
+                                  unexpected sort of node: {:?}", fnitem))
     };
 
     // This can be the case for functions inlined from another crate
@@ -630,18 +629,16 @@ pub fn create_function_debug_context(cx: &mut CrateContext,
                                                       file_metadata,
                                                       &mut function_name);
 
-    let namespace_node = debug_context(cx).local_namespace_map.find_copy(&fn_ast_id);
-    let (linkage_name, containing_scope) = match namespace_node {
-        Some(namespace_node) => {
-            (namespace_node.mangled_name_of_contained_item(function_name), namespace_node.scope)
-        }
-        None => {
-            // This branch is only hit when there is a bug in the NamespaceVisitor.
-            cx.sess.span_warn(span, fmt!("debuginfo: Could not find namespace node for function
-                                          with name %s. This is a bug! Please report this to
-                                          github.com/mozilla/rust/issues", function_name));
-            (function_name.clone(), file_metadata)
-        }
+    // There is no ast_map::path for ast::ExprFnBlock-type functions. For now, just don't put them
+    // into a namespace. In the future this could be improved somehow (storing a path in the
+    // ast_map, or construct a path using the enclosing function).
+    let (linkage_name, containing_scope) = if has_path {
+        let namespace_node = namespace_for_item(cx, ast_util::local_def(fn_ast_id), span);
+        let linkage_name = namespace_node.mangled_name_of_contained_item(function_name);
+        let containing_scope = namespace_node.scope;
+        (linkage_name, containing_scope)
+    } else {
+        (function_name.clone(), file_metadata)
     };
 
     let scope_line = get_scope_line(cx, top_level_block, loc.line);
@@ -678,16 +675,6 @@ pub fn create_function_debug_context(cx: &mut CrateContext,
 
     let arg_pats = do fn_decl.inputs.map |arg_ref| { arg_ref.pat };
     populate_scope_map(cx, arg_pats, top_level_block, fn_metadata, &mut fn_debug_context.scope_map);
-
-    // Create namespaces for the interior of this function
-    {
-        let mut namespace_visitor = NamespaceVisitor::new_function_visitor(cx,
-                                                                           function_name,
-                                                                           namespace_node,
-                                                                           file_metadata,
-                                                                           span);
-        visit::walk_block(&mut namespace_visitor, top_level_block, ());
-    }
 
     return FunctionDebugContext(fn_debug_context);
 
@@ -870,10 +857,11 @@ fn compile_unit_metadata(cx: @mut CrateContext) {
     let dcx = debug_context(cx);
     let crate_name: &str = dcx.crate_file;
 
-    debug!("compile_unit_metadata: %?", crate_name);
+    debug2!("compile_unit_metadata: {:?}", crate_name);
 
-    let work_dir = cx.sess.working_dir.to_str();
-    let producer = fmt!("rustc version %s", env!("CFG_VERSION"));
+    // FIXME (#9639): This needs to handle non-utf8 paths
+    let work_dir = cx.sess.working_dir.as_str().unwrap();
+    let producer = format!("rustc version {}", env!("CFG_VERSION"));
 
     do crate_name.with_c_str |crate_name| {
     do work_dir.with_c_str |work_dir| {
@@ -980,9 +968,10 @@ fn file_metadata(cx: &mut CrateContext, full_path: &str) -> DIFile {
         None => ()
     }
 
-    debug!("file_metadata: %s", full_path);
+    debug2!("file_metadata: {}", full_path);
 
-    let work_dir = cx.sess.working_dir.to_str();
+    // FIXME (#9639): This needs to handle non-utf8 paths
+    let work_dir = cx.sess.working_dir.as_str().unwrap();
     let file_name =
         if full_path.starts_with(work_dir) {
             full_path.slice(work_dir.len() + 1u, full_path.len())
@@ -1015,14 +1004,14 @@ fn scope_metadata(fcx: &FunctionContext,
             let node = fcx.ccx.tcx.items.get_copy(&node_id);
 
             fcx.ccx.sess.span_bug(span,
-                fmt!("debuginfo: Could not find scope info for node %?", node));
+                format!("debuginfo: Could not find scope info for node {:?}", node));
         }
     }
 }
 
 fn basic_type_metadata(cx: &mut CrateContext, t: ty::t) -> DIType {
 
-    debug!("basic_type_metadata: %?", ty::get(t));
+    debug2!("basic_type_metadata: {:?}", ty::get(t));
 
     let (name, encoding) = match ty::get(t).sty {
         ty::ty_nil | ty::ty_bot => (~"uint", DW_ATE_unsigned),
@@ -1043,7 +1032,6 @@ fn basic_type_metadata(cx: &mut CrateContext, t: ty::t) -> DIType {
             ast::ty_u64 => (~"u64", DW_ATE_unsigned)
         },
         ty::ty_float(float_ty) => match float_ty {
-            ast::ty_f => (~"float", DW_ATE_float),
             ast::ty_f32 => (~"f32", DW_ATE_float),
             ast::ty_f64 => (~"f64", DW_ATE_float)
         },
@@ -1340,8 +1328,8 @@ fn describe_variant(cx: &mut CrateContext,
             Some(&ast_map::node_variant(ref variant, _, _)) => variant.span,
             ref node => {
                 cx.sess.span_warn(span,
-                    fmt!("debuginfo::enum_metadata()::adt_struct_metadata() - Unexpected node \
-                          type: %?. This is a bug.", node));
+                    format!("debuginfo::enum_metadata()::adt_struct_metadata() - Unexpected node \
+                          type: {:?}. This is a bug.", node));
                 codemap::dummy_sp()
             }
         }
@@ -1582,6 +1570,17 @@ fn set_members_of_composite_type(cx: &mut CrateContext,
                                  member_descriptions: &[MemberDescription],
                                  file_metadata: DIFile,
                                  definition_span: Span) {
+    // In some rare cases LLVM metadata uniquing would lead to an existing type description being
+    // used instead of a new one created in create_struct_stub. This would cause a hard to trace
+    // assertion in DICompositeType::SetTypeArray(). The following check makes sure that we get a
+    // better error message if this should happen again due to some regression.
+    if debug_context(cx).composite_types_completed.contains(&composite_type_metadata) {
+        cx.sess.span_bug(definition_span, "debuginfo::set_members_of_composite_type() - Already \
+                                           completed forward declaration re-encountered.");
+    } else {
+        debug_context(cx).composite_types_completed.insert(composite_type_metadata);
+    }
+
     let loc = span_start(cx, definition_span);
 
     let member_metadata: ~[DIDescriptor] = member_descriptions
@@ -1630,8 +1629,16 @@ fn create_struct_stub(cx: &mut CrateContext,
     let loc = span_start(cx, definition_span);
     let (struct_size, struct_align) = size_and_align_of(cx, struct_llvm_type);
 
-    return do struct_type_name.with_c_str |name| {
-        unsafe {
+    // We assign unique IDs to the type stubs so LLVM metadata uniquing does not reuse instances
+    // where we don't want it.
+    let unique_id = unsafe {
+        static mut unique_id_counter: atomics::AtomicUint = atomics::INIT_ATOMIC_UINT;
+        format!("DiStructStub{}", unique_id_counter.fetch_add(1, atomics::SeqCst))
+    };
+
+    return unsafe {
+        do struct_type_name.with_c_str |name| {
+        do unique_id.with_c_str |unique_id| {
             // LLVMDIBuilderCreateStructType() wants an empty array. A null pointer will lead to
             // hard to trace and debug LLVM assertions later on in llvm/lib/IR/Value.cpp
             let empty_array = create_DIArray(DIB(cx), []);
@@ -1648,8 +1655,9 @@ fn create_struct_stub(cx: &mut CrateContext,
                 ptr::null(),
                 empty_array,
                 0,
-                ptr::null())
-    }};
+                ptr::null(),
+                unique_id)
+    }}};
 }
 
 fn boxed_type_metadata(cx: &mut CrateContext,
@@ -1659,7 +1667,7 @@ fn boxed_type_metadata(cx: &mut CrateContext,
                        span: Span)
                     -> DICompositeType {
     let box_type_name = match content_type_name {
-        Some(content_type_name) => fmt!("Boxed<%s>", content_type_name),
+        Some(content_type_name) => format!("Boxed<{}>", content_type_name),
         None                    => ~"BoxedType"
     };
 
@@ -1768,7 +1776,7 @@ fn vec_metadata(cx: &mut CrateContext,
     let (element_size, element_align) = size_and_align_of(cx, element_llvm_type);
 
     let vec_llvm_type = Type::vec(cx.sess.targ_cfg.arch, &element_llvm_type);
-    let vec_type_name: &str = fmt!("[%s]", ppaux::ty_to_str(cx.tcx, element_type));
+    let vec_type_name: &str = format!("[{}]", ppaux::ty_to_str(cx.tcx, element_type));
 
     let member_llvm_types = vec_llvm_type.field_types();
 
@@ -1824,7 +1832,7 @@ fn boxed_vec_metadata(cx: &mut CrateContext,
                    -> DICompositeType {
     let element_llvm_type = type_of::type_of(cx, element_type);
     let vec_llvm_type = Type::vec(cx.sess.targ_cfg.arch, &element_llvm_type);
-    let vec_type_name: &str = fmt!("[%s]", ppaux::ty_to_str(cx.tcx, element_type));
+    let vec_type_name: &str = format!("[{}]", ppaux::ty_to_str(cx.tcx, element_type));
     let vec_metadata = vec_metadata(cx, element_type, span);
 
     return boxed_type_metadata(
@@ -1841,7 +1849,7 @@ fn vec_slice_metadata(cx: &mut CrateContext,
                       span: Span)
                    -> DICompositeType {
 
-    debug!("vec_slice_metadata: %?", ty::get(vec_type));
+    debug2!("vec_slice_metadata: {:?}", ty::get(vec_type));
 
     let slice_llvm_type = type_of::type_of(cx, vec_type);
     let slice_type_name = ppaux::ty_to_str(cx.tcx, vec_type);
@@ -1956,10 +1964,10 @@ fn trait_metadata(cx: &mut CrateContext,
 }
 
 fn unimplemented_type_metadata(cx: &mut CrateContext, t: ty::t) -> DIType {
-    debug!("unimplemented_type_metadata: %?", ty::get(t));
+    debug2!("unimplemented_type_metadata: {:?}", ty::get(t));
 
     let name = ppaux::ty_to_str(cx.tcx, t);
-    let metadata = do fmt!("NYI<%s>", name).with_c_str |name| {
+    let metadata = do format!("NYI<{}>", name).with_c_str |name| {
         unsafe {
             llvm::LLVMDIBuilderCreateBasicType(
                 DIB(cx),
@@ -2008,7 +2016,7 @@ fn type_metadata(cx: &mut CrateContext,
         pointer_type_metadata(cx, pointer_type, box_metadata)
     }
 
-    debug!("type_metadata: %?", ty::get(t));
+    debug2!("type_metadata: {:?}", ty::get(t));
 
     let sty = &ty::get(t).sty;
     let type_metadata = match *sty {
@@ -2095,7 +2103,7 @@ fn type_metadata(cx: &mut CrateContext,
         ty::ty_opaque_box => {
             create_pointer_to_box_metadata(cx, t, ty::mk_nil())
         }
-        _ => cx.sess.bug(fmt!("debuginfo: unexpected type in type_metadata: %?", sty))
+        _ => cx.sess.bug(format!("debuginfo: unexpected type in type_metadata: {:?}", sty))
     };
 
     debug_context(cx).created_types.insert(cache_id, type_metadata);
@@ -2127,7 +2135,7 @@ fn set_debug_location(cx: &mut CrateContext, debug_location: DebugLocation) {
 
     match debug_location {
         KnownLocation { scope, line, col } => {
-            debug!("setting debug location to %u %u", line, col);
+            debug2!("setting debug location to {} {}", line, col);
             let elements = [C_i32(line as i32), C_i32(col as i32), scope, ptr::null()];
             unsafe {
                 metadata_node = llvm::LLVMMDNodeInContext(debug_context(cx).llcontext,
@@ -2136,7 +2144,7 @@ fn set_debug_location(cx: &mut CrateContext, debug_location: DebugLocation) {
             }
         }
         UnknownLocation => {
-            debug!("clearing debug location ");
+            debug2!("clearing debug location ");
             metadata_node = ptr::null();
         }
     };
@@ -2197,22 +2205,24 @@ fn get_namespace_and_span_for_item(cx: &mut CrateContext,
                                    def_id: ast::DefId,
                                    warning_span: Span)
                                 -> (DIScope, Span) {
-    if def_id.crate == ast::LOCAL_CRATE {
-        let containing_scope = debug_context(cx).local_namespace_map.get_copy(&def_id.node).scope;
+    let containing_scope = namespace_for_item(cx, def_id, warning_span).scope;
+    let definition_span = if def_id.crate == ast::LOCAL_CRATE {
         let definition_span = match cx.tcx.items.find(&def_id.node) {
             Some(&ast_map::node_item(@ast::item { span, _ }, _)) => span,
             ref node => {
-                cx.sess.span_warn(warning_span, fmt!("debuginfo::get_namespace_and_span_for_item() \
-                                                      - Unexpected node type: %?", *node));
+                cx.sess.span_warn(warning_span,
+                    format!("debuginfo::get_namespace_and_span_for_item() \
+                             - Unexpected node type: {:?}", *node));
                 codemap::dummy_sp()
             }
         };
-        (containing_scope, definition_span)
+        definition_span
     } else {
-        let item_path = ty::item_path(cx.tcx, def_id);
         // For external items there is no span information
-        (namespace_for_external_item(cx, &item_path).scope, codemap::dummy_sp())
-    }
+        codemap::dummy_sp()
+    };
+
+    (containing_scope, definition_span)
 }
 
 // This procedure builds the *scope map* for a given function, which maps any given ast::NodeId in
@@ -2682,7 +2692,7 @@ impl NamespaceTreeNode {
         let mut name = ~"_ZN";
         fill_nested(self, &mut name);
 
-        name.push_str(fmt!("%u%s", item_name.len(), item_name));
+        name.push_str(format!("{}{}", item_name.len(), item_name));
         name.push_char('E');
 
         return name;
@@ -2695,34 +2705,46 @@ impl NamespaceTreeNode {
                 None => {}
             }
             let name = token::ident_to_str(&node.ident);
-            output.push_str(fmt!("%u%s", name.len(), name));
+            output.push_str(format!("{}{}", name.len(), name));
         }
     }
 }
 
-fn namespace_for_external_item(cx: &mut CrateContext,
-                               item_path: &ast_map::path)
-                            -> @NamespaceTreeNode {
-    if item_path.len() < 2 {
-        cx.sess.bug(fmt!("debuginfo::namespace_for_external_item() - Invalid item_path: %s",
-            ast_map::path_to_str(*item_path, token::get_ident_interner())));
-    }
+fn namespace_for_item(cx: &mut CrateContext,
+                      def_id: ast::DefId,
+                      warning_span: Span)
+                   -> @NamespaceTreeNode {
+    let namespace_path = {
+        let mut item_path = ty::item_path(cx.tcx, def_id);
 
-    let path_excluding_item = item_path.slice_to(item_path.len() - 1);
-    let mut current_key = vec::with_capacity(path_excluding_item.len());
+        if (def_id.crate == ast::LOCAL_CRATE && item_path.len() < 1) ||
+           (def_id.crate != ast::LOCAL_CRATE && item_path.len() < 2) {
+            cx.sess.bug(format!("debuginfo::namespace_for_item() - Item path too short: {}",
+                ast_map::path_to_str(item_path, token::get_ident_interner())));
+        }
+
+        // remove the name of the item
+        item_path.pop();
+
+        if def_id.crate == ast::LOCAL_CRATE {
+            // prepend crate name if not already present
+            let crate_namespace_ident = token::str_to_ident(cx.link_meta.name);
+            item_path.insert(0, ast_map::path_mod(crate_namespace_ident));
+        }
+
+        item_path
+    };
+
+    let mut current_key = vec::with_capacity(namespace_path.len());
     let mut parent_node: Option<@NamespaceTreeNode> = None;
-    let last_index = path_excluding_item.len() - 1;
+    let last_index = namespace_path.len() - 1;
 
-    for (i, &path_element) in path_excluding_item.iter().enumerate() {
-        let ident = match path_element {
-            ast_map::path_mod(ident)            |
-            ast_map::path_name(ident)           |
-            ast_map::path_pretty_name(ident, _) => ident
-        };
-
+    // Create/Lookup namespace for each element of the path.
+    for (i, &path_element) in namespace_path.iter().enumerate() {
+        let ident = path_element.ident();
         current_key.push(ident);
 
-        let existing_node = debug_context(cx).extern_namespaces.find_copy(&current_key);
+        let existing_node = debug_context(cx).namespace_map.find_copy(&current_key);
         let current_node = match existing_node {
             Some(existing_node) => existing_node,
             None => {
@@ -2740,7 +2762,7 @@ fn namespace_for_external_item(cx: &mut CrateContext,
                             parent_scope,
                             namespace_name,
                             ptr::null(), // cannot reconstruct file ...
-                            0)           // ... or line information
+                            0)           // ... or line information, but that's not so important.
                     }
                 };
 
@@ -2750,7 +2772,7 @@ fn namespace_for_external_item(cx: &mut CrateContext,
                     parent: parent_node,
                 };
 
-                debug_context(cx).extern_namespaces.insert(current_key.clone(), node);
+                debug_context(cx).namespace_map.insert(current_key.clone(), node);
 
                 node
             }
@@ -2763,142 +2785,9 @@ fn namespace_for_external_item(cx: &mut CrateContext,
         }
     }
 
-    cx.sess.bug("debuginfo::namespace_for_external_item() - Code path should be unreachable");
-}
-
-struct NamespaceVisitor<'self> {
-    module_ident: ast::Ident,
-    scope_stack: ~[@NamespaceTreeNode],
-    crate_context: &'self mut CrateContext,
-}
-
-impl<'self> NamespaceVisitor<'self> {
-
-    fn new_crate_visitor<'a>(cx: &'a mut CrateContext,
-                             crate_ident: ast::Ident)
-                          -> NamespaceVisitor<'a> {
-        NamespaceVisitor {
-            module_ident: crate_ident,
-            scope_stack: ~[],
-            crate_context: cx,
-        }
-    }
-
-    fn new_function_visitor<'a>(cx: &'a mut CrateContext,
-                                function_name: &str,
-                                parent_node: Option<@NamespaceTreeNode>,
-                                file_metadata: DIFile,
-                                span: Span)
-                             -> NamespaceVisitor<'a> {
-        let companion_name = function_name + "()";
-        let companion_ident = token::str_to_ident(companion_name);
-        let parent_scope = match parent_node {
-            Some(parent_node) => parent_node.scope,
-            None => ptr::null()
-        };
-        let line = span_start(cx, span).line as c_uint;
-
-        let namespace_metadata = unsafe {
-            do companion_name.with_c_str |companion_name| {
-                llvm::LLVMDIBuilderCreateNameSpace(
-                    DIB(cx),
-                    parent_scope,
-                    companion_name,
-                    file_metadata,
-                    line)
-            }
-        };
-
-        let function_node = @NamespaceTreeNode {
-            scope: namespace_metadata,
-            ident: companion_ident,
-            parent: parent_node,
-        };
-
-        return NamespaceVisitor {
-            module_ident: special_idents::invalid,
-            scope_stack: ~[function_node],
-            crate_context: cx,
-        };
-    }
-}
-
-// Possible optimization: Only recurse if needed.
-impl<'self> visit::Visitor<()> for NamespaceVisitor<'self> {
-
-    fn visit_mod(&mut self,
-                 module: &ast::_mod,
-                 span: Span,
-                 _: ast::NodeId,
-                 _: ()) {
-        let module_name = token::ident_to_str(&self.module_ident);
-
-        let (parent_node, parent_scope) = if self.scope_stack.len() > 0 {
-            let parent_node = *self.scope_stack.last();
-            (Some(parent_node), parent_node.scope)
-        } else {
-            (None, ptr::null())
-        };
-
-        let loc = span_start(self.crate_context, span);
-        let file_metadata = file_metadata(self.crate_context, loc.file.name);
-
-        let namespace_metadata = unsafe {
-            do module_name.with_c_str |module_name| {
-                llvm::LLVMDIBuilderCreateNameSpace(
-                    DIB(self.crate_context),
-                    parent_scope,
-                    module_name,
-                    file_metadata,
-                    loc.line as c_uint)
-            }
-        };
-
-        let this_node = @NamespaceTreeNode {
-            scope: namespace_metadata,
-            ident: self.module_ident,
-            parent: parent_node,
-        };
-
-        self.scope_stack.push(this_node);
-
-        visit::walk_mod(self, module, ());
-
-        self.scope_stack.pop();
-    }
-
-    fn visit_item(&mut self, item: @ast::item, _: ()) {
-        match item.node {
-            ast::item_mod(*) => {
-                // always store the last module ident so visit_mod() has it available
-                self.module_ident = item.ident;
-            }
-            ast::item_fn(*) => { /* handled by visit_fn */ }
-            _ => {
-                debug_context(self.crate_context)
-                    .local_namespace_map
-                    .insert(item.id, *self.scope_stack.last());
-            }
-        }
-
-        visit::walk_item(self, item, ());
-    }
-
-    fn visit_foreign_item(&mut self, item: @ast::foreign_item, _: ()) {
-        debug_context(self.crate_context)
-            .local_namespace_map
-            .insert(item.id, *self.scope_stack.last());
-    }
-
-    fn visit_fn(&mut self,
-                _: &visit::fn_kind,
-                _: &ast::fn_decl,
-                _: &ast::Block,
-                _: Span,
-                node_id: ast::NodeId,
-                _: ()) {
-        debug_context(self.crate_context)
-            .local_namespace_map
-            .insert(node_id, *self.scope_stack.last());
-    }
+    // Should be unreachable:
+    let error_message = format!("debuginfo::namespace_for_item() - Code path should be \
+                                 unreachable. namespace_path was {}",
+                                 ast_map::path_to_str(namespace_path, token::get_ident_interner()));
+    cx.sess.span_bug(warning_span, error_message);
 }

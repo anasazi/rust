@@ -10,6 +10,7 @@
 
 // xfail-fast: check-fast screws up repr paths
 
+#[feature(macro_rules)];
 #[deny(warnings)];
 
 use std::fmt;
@@ -56,7 +57,6 @@ pub fn main() {
     t!(format!("{}", 1u16), "1");
     t!(format!("{}", 1u32), "1");
     t!(format!("{}", 1u64), "1");
-    t!(format!("{}", 1.0f), "1");
     t!(format!("{}", 1.0f32), "1");
     t!(format!("{}", 1.0f64), "1");
     t!(format!("{}", "a"), "a");
@@ -212,13 +212,12 @@ pub fn main() {
     t!(format!("{:+05d}", -1), "-0001");
 
     // Some float stuff
-    t!(format!("{:f}", 1.0f), "1");
     t!(format!("{:f}", 1.0f32), "1");
     t!(format!("{:f}", 1.0f64), "1");
-    t!(format!("{:.3f}", 1.0f), "1.000");
-    t!(format!("{:10.3f}", 1.0f),   "     1.000");
-    t!(format!("{:+10.3f}", 1.0f),  "    +1.000");
-    t!(format!("{:+10.3f}", -1.0f), "    -1.000");
+    t!(format!("{:.3f}", 1.0f64), "1.000");
+    t!(format!("{:10.3f}", 1.0f64),   "     1.000");
+    t!(format!("{:+10.3f}", 1.0f64),  "    +1.000");
+    t!(format!("{:+10.3f}", -1.0f64), "    -1.000");
 
     // Escaping
     t!(format!("\\{"), "{");

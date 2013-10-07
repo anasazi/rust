@@ -16,6 +16,7 @@ use container::Container;
 use iter::{Iterator, range};
 use super::io::net::ip::{SocketAddr, Ipv4Addr, Ipv6Addr};
 use vec::{OwnedVector, MutableVector, ImmutableVector};
+use path::GenericPath;
 use rt::sched::Scheduler;
 use unstable::{run_in_bare_thread};
 use rt::thread::Thread;
@@ -114,7 +115,7 @@ mod darwin_fd_limit {
                   to_mut_unsafe_ptr(&mut size),
                   mut_null(), 0) != 0 {
             let err = last_os_error();
-            error!("raise_fd_limit: error calling sysctl: %s", err);
+            error2!("raise_fd_limit: error calling sysctl: {}", err);
             return;
         }
 
@@ -122,7 +123,7 @@ mod darwin_fd_limit {
         let mut rlim = rlimit{rlim_cur: 0, rlim_max: 0};
         if getrlimit(RLIMIT_NOFILE, to_mut_unsafe_ptr(&mut rlim)) != 0 {
             let err = last_os_error();
-            error!("raise_fd_limit: error calling getrlimit: %s", err);
+            error2!("raise_fd_limit: error calling getrlimit: {}", err);
             return;
         }
 
@@ -132,7 +133,7 @@ mod darwin_fd_limit {
         // Set our newly-increased resource limit
         if setrlimit(RLIMIT_NOFILE, to_unsafe_ptr(&rlim)) != 0 {
             let err = last_os_error();
-            error!("raise_fd_limit: error calling setrlimit: %s", err);
+            error2!("raise_fd_limit: error calling setrlimit: {}", err);
             return;
         }
     }
@@ -346,7 +347,6 @@ it is running in and assigns a port range based on it.
 fn base_port() -> uint {
     use os;
     use str::StrSlice;
-    use to_str::ToStr;
     use vec::ImmutableVector;
 
     let base = 9600u;
@@ -363,12 +363,14 @@ fn base_port() -> uint {
         ("dist", base + range * 8)
     ];
 
-    let path = os::getcwd().to_str();
+    // FIXME (#9639): This needs to handle non-utf8 paths
+    let path = os::getcwd();
+    let path_s = path.as_str().unwrap();
 
     let mut final_base = base;
 
     for &(dir, base) in bases.iter() {
-        if path.contains(dir) {
+        if path_s.contains(dir) {
             final_base = base;
             break;
         }

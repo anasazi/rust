@@ -18,6 +18,13 @@ use rt::io::io_error;
 use rt::local::Local;
 use rt::rtio::{RtioProcess, RtioProcessObject, IoFactoryObject, IoFactory};
 
+// windows values don't matter as long as they're at least one of unix's
+// TERM/KILL/INT signals
+#[cfg(windows)] pub static PleaseExitSignal: int = 15;
+#[cfg(windows)] pub static MustDieSignal: int = 9;
+#[cfg(not(windows))] pub static PleaseExitSignal: int = libc::SIGTERM as int;
+#[cfg(not(windows))] pub static MustDieSignal: int = libc::SIGKILL as int;
+
 pub struct Process {
     priv handle: ~RtioProcessObject,
     io: ~[Option<io::PipeStream>],
@@ -93,7 +100,7 @@ impl Process {
             Ok((p, io)) => Some(Process{
                 handle: p,
                 io: io.move_iter().map(|p|
-                    p.map_move(|p| io::PipeStream::bind(p))
+                    p.map(|p| io::PipeStream::bind(p))
                 ).collect()
             }),
             Err(ioerr) => {
@@ -140,145 +147,5 @@ impl Drop for Process {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use prelude::*;
-    use super::*;
-
-    use rt::io::{Reader, Writer};
-    use rt::io::pipe::*;
-    use str;
-
-    #[test]
-    #[cfg(unix, not(android))]
-    #[ignore] // FIXME(#9341)
-    fn smoke() {
-        let io = ~[];
-        let args = ProcessConfig {
-            program: "/bin/sh",
-            args: [~"-c", ~"true"],
-            env: None,
-            cwd: None,
-            io: io,
-        };
-        let p = Process::new(args);
-        assert!(p.is_some());
-        let mut p = p.unwrap();
-        assert_eq!(p.wait(), 0);
-    }
-
-    #[test]
-    #[cfg(unix, not(android))]
-    #[ignore] // FIXME(#9341)
-    fn smoke_failure() {
-        let io = ~[];
-        let args = ProcessConfig {
-            program: "if-this-is-a-binary-then-the-world-has-ended",
-            args: [],
-            env: None,
-            cwd: None,
-            io: io,
-        };
-        let p = Process::new(args);
-        assert!(p.is_some());
-        let mut p = p.unwrap();
-        assert!(p.wait() != 0);
-    }
-
-    #[test]
-    #[cfg(unix, not(android))]
-    #[ignore] // FIXME(#9341)
-    fn exit_reported_right() {
-        let io = ~[];
-        let args = ProcessConfig {
-            program: "/bin/sh",
-            args: [~"-c", ~"exit 1"],
-            env: None,
-            cwd: None,
-            io: io,
-        };
-        let p = Process::new(args);
-        assert!(p.is_some());
-        let mut p = p.unwrap();
-        assert_eq!(p.wait(), 1);
-    }
-
-    fn read_all(input: &mut Reader) -> ~str {
-        let mut ret = ~"";
-        let mut buf = [0, ..1024];
-        loop {
-            match input.read(buf) {
-                None | Some(0) => { break }
-                Some(n) => { ret = ret + str::from_utf8(buf.slice_to(n)); }
-            }
-        }
-        return ret;
-    }
-
-    fn run_output(args: ProcessConfig) -> ~str {
-        let p = Process::new(args);
-        assert!(p.is_some());
-        let mut p = p.unwrap();
-        assert!(p.io[0].is_none());
-        assert!(p.io[1].is_some());
-        let ret = read_all(p.io[1].get_mut_ref() as &mut Reader);
-        assert_eq!(p.wait(), 0);
-        return ret;
-    }
-
-    #[test]
-    #[cfg(unix, not(android))]
-    #[ignore] // FIXME(#9341)
-    fn stdout_works() {
-        let pipe = PipeStream::new().unwrap();
-        let io = ~[Ignored, CreatePipe(pipe, false, true)];
-        let args = ProcessConfig {
-            program: "/bin/sh",
-            args: [~"-c", ~"echo foobar"],
-            env: None,
-            cwd: None,
-            io: io,
-        };
-        assert_eq!(run_output(args), ~"foobar\n");
-    }
-
-    #[test]
-    #[cfg(unix, not(android))]
-    #[ignore] // FIXME(#9341)
-    fn set_cwd_works() {
-        let pipe = PipeStream::new().unwrap();
-        let io = ~[Ignored, CreatePipe(pipe, false, true)];
-        let cwd = Some("/");
-        let args = ProcessConfig {
-            program: "/bin/sh",
-            args: [~"-c", ~"pwd"],
-            env: None,
-            cwd: cwd,
-            io: io,
-        };
-        assert_eq!(run_output(args), ~"/\n");
-    }
-
-    #[test]
-    #[cfg(unix, not(android))]
-    #[ignore] // FIXME(#9341)
-    fn stdin_works() {
-        let input = PipeStream::new().unwrap();
-        let output = PipeStream::new().unwrap();
-        let io = ~[CreatePipe(input, true, false),
-                   CreatePipe(output, false, true)];
-        let args = ProcessConfig {
-            program: "/bin/sh",
-            args: [~"-c", ~"read line; echo $line"],
-            env: None,
-            cwd: None,
-            io: io,
-        };
-        let mut p = Process::new(args).expect("didn't create a proces?!");
-        p.io[0].get_mut_ref().write("foobar".as_bytes());
-        p.io[0] = None; // close stdin;
-        let out = read_all(p.io[1].get_mut_ref() as &mut Reader);
-        assert_eq!(p.wait(), 0);
-        assert_eq!(out, ~"foobar\n");
-    }
-}
+// Tests for this module can be found in the rtio-processes run-pass test, along
+// with the justification for why it's not located here.

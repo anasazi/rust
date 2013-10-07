@@ -453,10 +453,10 @@ pub fn print_type(s: @ps, ty: &ast::Ty) {
           word(s.s, ")");
       }
       ast::ty_mac(_) => {
-          fail!("print_type doesn't know how to print a ty_mac");
+          fail2!("print_type doesn't know how to print a ty_mac");
       }
       ast::ty_infer => {
-          fail!("print_type shouldn't see a ty_infer");
+          fail2!("print_type shouldn't see a ty_infer");
       }
 
     }
@@ -539,14 +539,6 @@ pub fn print_item(s: @ps, item: &ast::item) {
       ast::item_foreign_mod(ref nmod) => {
         head(s, "extern");
         word_nbsp(s, nmod.abis.to_str());
-        match nmod.sort {
-            ast::named => {
-                word_nbsp(s, "mod");
-                print_ident(s, item.ident);
-                nbsp(s);
-            }
-            ast::anonymous => {}
-        }
         bopen(s);
         print_foreign_mod(s, nmod, item.attrs);
         bclose(s, item.span);
@@ -709,7 +701,7 @@ pub fn print_struct(s: @ps,
             popen(s);
             do commasep(s, inconsistent, struct_def.fields) |s, field| {
                 match field.node.kind {
-                    ast::named_field(*) => fail!("unexpected named field"),
+                    ast::named_field(*) => fail2!("unexpected named field"),
                     ast::unnamed_field => {
                         maybe_print_comment(s, field.span.lo);
                         print_type(s, &field.node.ty);
@@ -728,7 +720,7 @@ pub fn print_struct(s: @ps,
 
         for field in struct_def.fields.iter() {
             match field.node.kind {
-                ast::unnamed_field => fail!("unexpected unnamed field"),
+                ast::unnamed_field => fail2!("unexpected unnamed field"),
                 ast::named_field(ident, visibility) => {
                     hardbreak_if_not_bol(s);
                     maybe_print_comment(s, field.span.lo);
@@ -1017,7 +1009,7 @@ pub fn print_if(s: @ps, test: &ast::Expr, blk: &ast::Block,
               }
               // BLEAH, constraints would be great here
               _ => {
-                  fail!("print_if saw if with weird alternative");
+                  fail2!("print_if saw if with weird alternative");
               }
             }
           }
@@ -1042,7 +1034,7 @@ pub fn print_mac(s: @ps, m: &ast::mac) {
 
 pub fn print_vstore(s: @ps, t: ast::Vstore) {
     match t {
-        ast::VstoreFixed(Some(i)) => word(s.s, fmt!("%u", i)),
+        ast::VstoreFixed(Some(i)) => word(s.s, format!("{}", i)),
         ast::VstoreFixed(None) => word(s.s, "_"),
         ast::VstoreUniq => word(s.s, "~"),
         ast::VstoreBox => word(s.s, "@"),
@@ -1319,7 +1311,7 @@ pub fn print_expr(s: @ps, expr: &ast::Expr) {
                         }
                         end(s); // close enclosing cbox
                     }
-                    None => fail!()
+                    None => fail2!()
                 }
             } else {
                 // the block will close the pattern's ibox
@@ -1406,7 +1398,7 @@ pub fn print_expr(s: @ps, expr: &ast::Expr) {
         }
       }
       ast::ExprAgain(opt_ident) => {
-        word(s.s, "loop");
+        word(s.s, "continue");
         space(s.s);
         for ident in opt_ident.iter() {
             word(s.s, "'");
@@ -1433,10 +1425,10 @@ pub fn print_expr(s: @ps, expr: &ast::Expr) {
             word(s.s, "asm!");
         }
         popen(s);
-        print_string(s, a.asm);
+        print_string(s, a.asm, a.asm_str_style);
         word_space(s, ":");
         for &(co, o) in a.outputs.iter() {
-            print_string(s, co);
+            print_string(s, co, ast::CookedStr);
             popen(s);
             print_expr(s, o);
             pclose(s);
@@ -1444,14 +1436,14 @@ pub fn print_expr(s: @ps, expr: &ast::Expr) {
         }
         word_space(s, ":");
         for &(co, o) in a.inputs.iter() {
-            print_string(s, co);
+            print_string(s, co, ast::CookedStr);
             popen(s);
             print_expr(s, o);
             pclose(s);
             word_space(s, ",");
         }
         word_space(s, ":");
-        print_string(s, a.clobbers);
+        print_string(s, a.clobbers, ast::CookedStr);
         pclose(s);
       }
       ast::ExprMac(ref m) => print_mac(s, m),
@@ -1894,9 +1886,11 @@ pub fn print_view_item(s: @ps, item: &ast::view_item) {
         ast::view_item_extern_mod(id, ref optional_path, ref mta, _) => {
             head(s, "extern mod");
             print_ident(s, id);
-            for p in optional_path.iter() {
+            for &(ref p, style) in optional_path.iter() {
+                space(s.s);
                 word(s.s, "=");
-                print_string(s, *p);
+                space(s.s);
+                print_string(s, *p, style);
             }
             if !mta.is_empty() {
                 popen(s);
@@ -1976,7 +1970,7 @@ pub fn print_ty_fn(s: @ps,
     print_onceness(s, onceness);
     word(s.s, "fn");
     match id { Some(id) => { word(s.s, " "); print_ident(s, id); } _ => () }
-    do opt_bounds.map |bounds| { print_bounds(s, bounds, true); };
+    do opt_bounds.as_ref().map |bounds| { print_bounds(s, bounds, true); };
     match generics { Some(g) => print_generics(s, g), _ => () }
     zerobreak(s.s);
 
@@ -2058,7 +2052,7 @@ pub fn print_literal(s: @ps, lit: &ast::lit) {
       _ => ()
     }
     match lit.node {
-      ast::lit_str(st) => print_string(s, st),
+      ast::lit_str(st, style) => print_string(s, st, style),
       ast::lit_char(ch) => {
           let mut res = ~"'";
           do char::from_u32(ch).unwrap().escape_default |c| {
@@ -2178,10 +2172,13 @@ pub fn print_comment(s: @ps, cmnt: &comments::cmnt) {
     }
 }
 
-pub fn print_string(s: @ps, st: &str) {
-    word(s.s, "\"");
-    word(s.s, st.escape_default());
-    word(s.s, "\"");
+pub fn print_string(s: @ps, st: &str, style: ast::StrStyle) {
+    let st = match style {
+        ast::CookedStr => format!("\"{}\"", st.escape_default()),
+        ast::RawStr(n) => format!("r{delim}\"{string}\"{delim}",
+                                  delim="#".repeat(n), string=st)
+    };
+    word(s.s, st);
 }
 
 pub fn to_str<T>(t: &T, f: &fn(@ps, &T), intr: @ident_interner) -> ~str {
@@ -2299,7 +2296,7 @@ mod test {
 
     fn string_check<T:Eq> (given : &T, expected: &T) {
         if !(given == expected) {
-            fail!("given %?, expected %?", given, expected);
+            fail2!("given {:?}, expected {:?}", given, expected);
         }
     }
 

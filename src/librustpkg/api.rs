@@ -16,6 +16,8 @@ use target::*;
 use version::Version;
 use workcache_support::*;
 
+pub use source_control::{safe_git_clone, git_clone_url};
+
 use std::os;
 use extra::arc::{Arc,RWArc};
 use extra::workcache;
@@ -41,18 +43,18 @@ pub fn new_default_context(c: workcache::Context, p: Path) -> BuildContext {
 }
 
 fn file_is_fresh(path: &str, in_hash: &str) -> bool {
-    let path = Path(path);
+    let path = Path::new(path);
     os::path_exists(&path) && in_hash == digest_file_with_date(&path)
 }
 
 fn binary_is_fresh(path: &str, in_hash: &str) -> bool {
-    let path = Path(path);
+    let path = Path::new(path);
     os::path_exists(&path) && in_hash == digest_only_date(&path)
 }
 
 pub fn new_workcache_context(p: &Path) -> workcache::Context {
-    let db_file = p.push("rustpkg_db.json"); // ??? probably wrong
-    debug!("Workcache database file: %s", db_file.to_str());
+    let db_file = p.join("rustpkg_db.json"); // ??? probably wrong
+    debug2!("Workcache database file: {}", db_file.display());
     let db = RWArc::new(Database::new(db_file));
     let lg = RWArc::new(Logger::new());
     let cfg = Arc::new(TreeMap::new());
@@ -68,15 +70,17 @@ pub fn build_lib(sysroot: Path, root: Path, name: ~str, version: Version,
                  lib: Path) {
     let cx = default_context(sysroot);
     let pkg_src = PkgSrc {
-            workspace: root.clone(),
-            start_dir: root.push("src").push(name),
-            id: PkgId{ version: version, ..PkgId::new(name)},
-            // n.b. This assumes the package only has one crate
-            libs: ~[mk_crate(lib)],
-            mains: ~[],
-            tests: ~[],
-            benchs: ~[]
-        };
+        source_workspace: root.clone(),
+        build_in_destination: false,
+        destination_workspace: root.clone(),
+        start_dir: root.join_many(["src", name.as_slice()]),
+        id: PkgId{ version: version, ..PkgId::new(name)},
+        // n.b. This assumes the package only has one crate
+        libs: ~[mk_crate(lib)],
+        mains: ~[],
+        tests: ~[],
+        benchs: ~[]
+    };
     pkg_src.build(&cx, ~[]);
 }
 
@@ -84,8 +88,10 @@ pub fn build_exe(sysroot: Path, root: Path, name: ~str, version: Version,
                  main: Path) {
     let cx = default_context(sysroot);
     let pkg_src = PkgSrc {
-        workspace: root.clone(),
-        start_dir: root.push("src").push(name),
+        source_workspace: root.clone(),
+        build_in_destination: false,
+        destination_workspace: root.clone(),
+        start_dir: root.join_many(["src", name.as_slice()]),
         id: PkgId{ version: version, ..PkgId::new(name)},
         libs: ~[],
         // n.b. This assumes the package only has one crate
@@ -100,7 +106,7 @@ pub fn build_exe(sysroot: Path, root: Path, name: ~str, version: Version,
 pub fn install_pkg(sysroot: Path, workspace: Path, name: ~str, version: Version) {
     let cx = default_context(sysroot);
     let pkgid = PkgId{ version: version, ..PkgId::new(name)};
-    cx.install(PkgSrc::new(workspace, false, pkgid), &Everything);
+    cx.install(PkgSrc::new(workspace.clone(), workspace, false, pkgid), &Everything);
 }
 
 fn mk_crate(p: Path) -> Crate {

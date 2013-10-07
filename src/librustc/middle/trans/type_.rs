@@ -8,6 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[allow(non_uppercase_pattern_statics)];
 
 use lib::llvm::{llvm, TypeRef, Bool, False, True, TypeKind};
 use lib::llvm::{Float, Double, X86_FP80, PPC_FP128, FP128};
@@ -136,9 +137,8 @@ impl Type {
         }
     }
 
-    pub fn float_from_ty(ctx: &CrateContext, t: ast::float_ty) -> Type {
+    pub fn float_from_ty(t: ast::float_ty) -> Type {
         match t {
-            ast::ty_f => ctx.float_type,
             ast::ty_f32 => Type::f32(),
             ast::ty_f64 => Type::f64()
         }
@@ -364,7 +364,7 @@ impl Type {
             Double => 64,
             X86_FP80 => 80,
             FP128 | PPC_FP128 => 128,
-            _ => fail!("llvm_float_width called on a non-float type")
+            _ => fail2!("llvm_float_width called on a non-float type")
         }
     }
 }

@@ -127,7 +127,7 @@ impl Terminal {
         let inf = ti.unwrap();
         let nc = if inf.strings.find_equiv(&("setaf")).is_some()
                  && inf.strings.find_equiv(&("setab")).is_some() {
-                     inf.numbers.find_equiv(&("colors")).map_move_default(0, |&n| n)
+                     inf.numbers.find_equiv(&("colors")).map_default(0, |&n| n)
                  } else { 0 };
 
         return Ok(Terminal {out: out, ti: inf, num_colors: nc});
@@ -147,7 +147,7 @@ impl Terminal {
                 self.out.write(s.unwrap());
                 return true
             } else {
-                warn!("%s", s.unwrap_err());
+                warn2!("{}", s.unwrap_err());
             }
         }
         false
@@ -167,7 +167,7 @@ impl Terminal {
                 self.out.write(s.unwrap());
                 return true
             } else {
-                warn!("%s", s.unwrap_err());
+                warn2!("{}", s.unwrap_err());
             }
         }
         false
@@ -188,7 +188,7 @@ impl Terminal {
                         self.out.write(s.unwrap());
                         return true
                     } else {
-                        warn!("%s", s.unwrap_err());
+                        warn2!("{}", s.unwrap_err());
                     }
                 }
                 false
@@ -220,17 +220,17 @@ impl Terminal {
                 cap = self.ti.strings.find_equiv(&("op"));
             }
         }
-        let s = do cap.map_move_default(Err(~"can't find terminfo capability `sgr0`")) |op| {
+        let s = do cap.map_default(Err(~"can't find terminfo capability `sgr0`")) |op| {
             expand(*op, [], &mut Variables::new())
         };
         if s.is_ok() {
             self.out.write(s.unwrap());
         } else if self.num_colors > 0 {
-            warn!("%s", s.unwrap_err());
+            warn2!("{}", s.unwrap_err());
         } else {
-            // if we support attributes but not color, it would be nice to still warn!()
+            // if we support attributes but not color, it would be nice to still warn2!()
             // but it's not worth testing all known attributes just for this.
-            debug!("%s", s.unwrap_err());
+            debug2!("{}", s.unwrap_err());
         }
     }
 

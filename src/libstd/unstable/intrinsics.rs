@@ -94,7 +94,6 @@ pub trait TyVisitor {
     fn visit_u32(&mut self) -> bool;
     fn visit_u64(&mut self) -> bool;
 
-    fn visit_float(&mut self) -> bool;
     fn visit_f32(&mut self) -> bool;
     fn visit_f64(&mut self) -> bool;
 
@@ -171,8 +170,10 @@ pub trait TyVisitor {
     fn visit_closure_ptr(&mut self, ck: uint) -> bool;
 }
 
-#[abi = "rust-intrinsic"]
 extern "rust-intrinsic" {
+    /// Abort the execution of the process.
+    #[cfg(not(stage0))]
+    pub fn abort() -> !;
 
     /// Atomic compare and exchange, sequentially consistent.
     pub fn atomic_cxchg(dst: &mut int, old: int, src: int) -> int;

@@ -60,7 +60,7 @@ use num;
 use ops::Drop;
 use option::{Some, None};
 use os;
-use path::Path;
+use path::{Path,GenericPath};
 use ptr;
 use result::{Result, Ok, Err};
 use str::{StrSlice, OwnedStr};
@@ -76,7 +76,6 @@ pub type fd_t = c_int;
 pub mod rustrt {
     use libc;
 
-    #[abi = "cdecl"]
     #[link_name = "rustrt"]
     extern {
         pub fn rust_get_stdin() -> *libc::FILE;
@@ -665,7 +664,7 @@ impl<T:Reader> ReaderUtil for T {
                     unsafe {
                         chars.push(transmute(b0 as u32));
                     }
-                    loop;
+                    continue;
                 }
                 // can't satisfy this char with the existing data
                 if end > bytes_len {
@@ -947,9 +946,8 @@ impl Reader for *libc::FILE {
                   match libc::ferror(*self) {
                     0 => (),
                     _ => {
-                      error!("error reading buffer");
-                      error!("%s", os::last_os_error());
-                      fail!();
+                      error2!("error reading buffer: {}", os::last_os_error());
+                      fail2!();
                     }
                   }
                 }
@@ -1071,7 +1069,9 @@ pub fn file_reader(path: &Path) -> Result<@Reader, ~str> {
     };
 
     if f as uint == 0u {
-        Err(~"error opening " + path.to_str())
+        do path.display().with_str |p| {
+            Err(~"error opening " + p)
+        }
     } else {
         Ok(FILE_reader(f, true))
     }
@@ -1194,9 +1194,8 @@ impl Writer for *libc::FILE {
                                         len as size_t,
                                         *self);
                 if nout != len as size_t {
-                    error!("error writing buffer");
-                    error!("%s", os::last_os_error());
-                    fail!();
+                    error2!("error writing buffer: {}", os::last_os_error());
+                    fail2!();
                 }
             }
         }
@@ -1235,14 +1234,6 @@ impl Writer for *libc::FILE {
     }
 }
 
-pub fn FILE_writer(f: *libc::FILE, cleanup: bool) -> @Writer {
-    if cleanup {
-        @Wrapper { base: f, cleanup: FILERes::new(f) } as @Writer
-    } else {
-        @f as @Writer
-    }
-}
-
 impl Writer for fd_t {
     fn write(&self, v: &[u8]) {
         #[fixed_stack_segment]; #[inline(never)];
@@ -1264,9 +1255,8 @@ impl Writer for fd_t {
                     let vb = ptr::offset(vbuf, count as int) as *c_void;
                     let nout = libc::write(*self, vb, len as IoSize);
                     if nout < 0 as IoRet {
-                        error!("error writing buffer");
-                        error!("%s", os::last_os_error());
-                        fail!();
+                        error2!("error writing buffer: {}", os::last_os_error());
+                        fail2!();
                     }
                     count += nout as uint;
                 }
@@ -1274,12 +1264,12 @@ impl Writer for fd_t {
         }
     }
     fn seek(&self, _offset: int, _whence: SeekStyle) {
-        error!("need 64-bit foreign calls for seek, sorry");
-        fail!();
+        error2!("need 64-bit foreign calls for seek, sorry");
+        fail2!();
     }
     fn tell(&self) -> uint {
-        error!("need 64-bit foreign calls for tell, sorry");
-        fail!();
+        error2!("need 64-bit foreign calls for tell, sorry");
+        fail2!();
     }
     fn flush(&self) -> int { 0 }
     fn get_type(&self) -> WriterType {
@@ -1347,7 +1337,7 @@ pub fn mk_file_writer(path: &Path, flags: &[FileFlag])
         }
     };
     if fd < (0 as c_int) {
-        Err(fmt!("error opening %s: %s", path.to_str(), os::last_os_error()))
+        Err(format!("error opening {}: {}", path.display(), os::last_os_error()))
     } else {
         Ok(fd_writer(fd, true))
     }
@@ -1621,25 +1611,6 @@ pub fn file_writer(path: &Path, flags: &[FileFlag]) -> Result<@Writer, ~str> {
     mk_file_writer(path, flags).and_then(|w| Ok(w))
 }
 
-
-// FIXME: fileflags // #2004
-pub fn buffered_file_writer(path: &Path) -> Result<@Writer, ~str> {
-    #[fixed_stack_segment]; #[inline(never)];
-
-    unsafe {
-        let f = do path.with_c_str |pathbuf| {
-            do "w".with_c_str |modebuf| {
-                libc::fopen(pathbuf, modebuf)
-            }
-        };
-        return if f as uint == 0u {
-            Err(~"error opening " + path.to_str())
-        } else {
-            Ok(FILE_writer(f, true))
-        }
-    }
-}
-
 // FIXME (#2004) it would be great if this could be a const
 // FIXME (#2004) why are these different from the way stdin() is
 // implemented?
@@ -1783,7 +1754,7 @@ pub fn read_whole_file_str(file: &Path) -> Result<~str, ~str> {
         if str::is_utf8(bytes) {
             Ok(str::from_utf8(bytes))
         } else {
-            Err(file.to_str() + " is not UTF-8")
+            Err(file.display().to_str() + " is not UTF-8")
         }
     }
 }
@@ -1923,25 +1894,25 @@ mod tests {
 
     #[test]
     fn test_simple() {
-        let tmpfile = &Path("tmp/lib-io-test-simple.tmp");
-        debug!(tmpfile);
+        let tmpfile = &Path::new("tmp/lib-io-test-simple.tmp");
+        debug2!("{}", tmpfile.display());
         let frood: ~str =
             ~"A hoopy frood who really knows where his towel is.";
-        debug!(frood.clone());
+        debug2!("{}", frood.clone());
         {
             let out = io::file_writer(tmpfile, [io::Create, io::Truncate]).unwrap();
             out.write_str(frood);
         }
         let inp = io::file_reader(tmpfile).unwrap();
         let frood2: ~str = inp.read_c_str();
-        debug!(frood2.clone());
+        debug2!("{}", frood2.clone());
         assert_eq!(frood, frood2);
     }
 
     #[test]
     fn test_each_byte_each_char_file() {
         // Issue #5056 -- shouldn't include trailing EOF.
-        let path = Path("tmp/lib-io-test-each-byte-each-char-file.tmp");
+        let path = Path::new("tmp/lib-io-test-each-byte-each-char-file.tmp");
 
         {
             // create empty, enough to reproduce a problem
@@ -1951,14 +1922,14 @@ mod tests {
         {
             let file = io::file_reader(&path).unwrap();
             do file.each_byte() |_| {
-                fail!("must be empty")
+                fail2!("must be empty")
             };
         }
 
         {
             let file = io::file_reader(&path).unwrap();
             do file.each_char() |_| {
-                fail!("must be empty")
+                fail2!("must be empty")
             };
         }
     }
@@ -2041,18 +2012,18 @@ mod tests {
 
     #[test]
     fn file_reader_not_exist() {
-        match io::file_reader(&Path("not a file")) {
+        match io::file_reader(&Path::new("not a file")) {
           Err(e) => {
             assert_eq!(e, ~"error opening not a file");
           }
-          Ok(_) => fail!()
+          Ok(_) => fail2!()
         }
     }
 
     #[test]
     #[should_fail]
     fn test_read_buffer_too_small() {
-        let path = &Path("tmp/lib-io-test-read-buffer-too-small.tmp");
+        let path = &Path::new("tmp/lib-io-test-read-buffer-too-small.tmp");
         // ensure the file exists
         io::file_writer(path, [io::Create]).unwrap();
 
@@ -2063,7 +2034,7 @@ mod tests {
 
     #[test]
     fn test_read_buffer_big_enough() {
-        let path = &Path("tmp/lib-io-test-read-buffer-big-enough.tmp");
+        let path = &Path::new("tmp/lib-io-test-read-buffer-big-enough.tmp");
         // ensure the file exists
         io::file_writer(path, [io::Create]).unwrap();
 
@@ -2074,28 +2045,18 @@ mod tests {
 
     #[test]
     fn test_write_empty() {
-        let file = io::file_writer(&Path("tmp/lib-io-test-write-empty.tmp"),
+        let file = io::file_writer(&Path::new("tmp/lib-io-test-write-empty.tmp"),
                                    [io::Create]).unwrap();
         file.write([]);
     }
 
     #[test]
     fn file_writer_bad_name() {
-        match io::file_writer(&Path("?/?"), []) {
+        match io::file_writer(&Path::new("?/?"), []) {
           Err(e) => {
             assert!(e.starts_with("error opening"));
           }
-          Ok(_) => fail!()
-        }
-    }
-
-    #[test]
-    fn buffered_file_writer_bad_name() {
-        match io::buffered_file_writer(&Path("?/?")) {
-          Err(e) => {
-            assert!(e.starts_with("error opening"));
-          }
-          Ok(_) => fail!()
+          Ok(_) => fail2!()
         }
     }
 
@@ -2116,7 +2077,7 @@ mod tests {
 
     #[test]
     fn test_read_write_le() {
-        let path = Path("tmp/lib-io-test-read-write-le.tmp");
+        let path = Path::new("tmp/lib-io-test-read-write-le.tmp");
         let uints = [0, 1, 2, 42, 10_123, 100_123_456, u64::max_value];
 
         // write the ints to the file
@@ -2138,7 +2099,7 @@ mod tests {
 
     #[test]
     fn test_read_write_be() {
-        let path = Path("tmp/lib-io-test-read-write-be.tmp");
+        let path = Path::new("tmp/lib-io-test-read-write-be.tmp");
         let uints = [0, 1, 2, 42, 10_123, 100_123_456, u64::max_value];
 
         // write the ints to the file
@@ -2160,7 +2121,7 @@ mod tests {
 
     #[test]
     fn test_read_be_int_n() {
-        let path = Path("tmp/lib-io-test-read-be-int-n.tmp");
+        let path = Path::new("tmp/lib-io-test-read-be-int-n.tmp");
         let ints = [i32::min_value, -123456, -42, -5, 0, 1, i32::max_value];
 
         // write the ints to the file
@@ -2184,7 +2145,7 @@ mod tests {
 
     #[test]
     fn test_read_f32() {
-        let path = Path("tmp/lib-io-test-read-f32.tmp");
+        let path = Path::new("tmp/lib-io-test-read-f32.tmp");
         //big-endian floating-point 8.1250
         let buf = ~[0x41, 0x02, 0x00, 0x00];
 
@@ -2202,7 +2163,7 @@ mod tests {
 
     #[test]
     fn test_read_write_f32() {
-        let path = Path("tmp/lib-io-test-read-write-f32.tmp");
+        let path = Path::new("tmp/lib-io-test-read-write-f32.tmp");
         let f:f32 = 8.1250;
 
         {

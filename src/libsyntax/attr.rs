@@ -67,7 +67,7 @@ impl AttrMetaMethods for MetaItem {
         match self.node {
             MetaNameValue(_, ref v) => {
                 match v.node {
-                    ast::lit_str(s) => Some(s),
+                    ast::lit_str(s, _) => Some(s),
                     _ => None,
                 }
             },
@@ -83,7 +83,7 @@ impl AttrMetaMethods for MetaItem {
     }
 
     fn name_str_pair(&self) -> Option<(@str, @str)> {
-        self.value_str().map_move(|s| (self.name(), s))
+        self.value_str().map(|s| (self.name(), s))
     }
 }
 
@@ -127,7 +127,7 @@ impl AttributeMethods for Attribute {
 /* Constructors */
 
 pub fn mk_name_value_item_str(name: @str, value: @str) -> @MetaItem {
-    let value_lit = dummy_spanned(ast::lit_str(value));
+    let value_lit = dummy_spanned(ast::lit_str(value, ast::CookedStr));
     mk_name_value_item(name, value_lit)
 }
 
@@ -153,7 +153,7 @@ pub fn mk_attr(item: @MetaItem) -> Attribute {
 
 pub fn mk_sugared_doc_attr(text: @str, lo: BytePos, hi: BytePos) -> Attribute {
     let style = doc_comment_style(text);
-    let lit = spanned(lo, hi, ast::lit_str(text));
+    let lit = spanned(lo, hi, ast::lit_str(text, ast::CookedStr));
     let attr = Attribute_ {
         style: style,
         value: @spanned(lo, hi, MetaNameValue(@"doc", lit)),
@@ -168,17 +168,17 @@ pub fn mk_sugared_doc_attr(text: @str, lo: BytePos, hi: BytePos) -> Attribute {
 /// span included in the `==` comparison a plain MetaItem.
 pub fn contains(haystack: &[@ast::MetaItem],
                 needle: @ast::MetaItem) -> bool {
-    debug!("attr::contains (name=%s)", needle.name());
+    debug2!("attr::contains (name={})", needle.name());
     do haystack.iter().any |item| {
-        debug!("  testing: %s", item.name());
+        debug2!("  testing: {}", item.name());
         item.node == needle.node
     }
 }
 
 pub fn contains_name<AM: AttrMetaMethods>(metas: &[AM], name: &str) -> bool {
-    debug!("attr::contains_name (name=%s)", name);
+    debug2!("attr::contains_name (name={})", name);
     do metas.iter().any |item| {
-        debug!("  testing: %s", item.name());
+        debug2!("  testing: {}", item.name());
         name == item.name()
     }
 }
@@ -279,23 +279,23 @@ pub fn test_cfg<AM: AttrMetaMethods, It: Iterator<AM>>
     // this would be much nicer as a chain of iterator adaptors, but
     // this doesn't work.
     let some_cfg_matches = do metas.any |mi| {
-        debug!("testing name: %s", mi.name());
+        debug2!("testing name: {}", mi.name());
         if "cfg" == mi.name() { // it is a #[cfg()] attribute
-            debug!("is cfg");
+            debug2!("is cfg");
             no_cfgs = false;
              // only #[cfg(...)] ones are understood.
             match mi.meta_item_list() {
                 Some(cfg_meta) => {
-                    debug!("is cfg(...)");
+                    debug2!("is cfg(...)");
                     do cfg_meta.iter().all |cfg_mi| {
-                        debug!("cfg(%s[...])", cfg_mi.name());
+                        debug2!("cfg({}[...])", cfg_mi.name());
                         match cfg_mi.node {
                             ast::MetaList(s, ref not_cfgs) if "not" == s => {
-                                debug!("not!");
+                                debug2!("not!");
                                 // inside #[cfg(not(...))], so these need to all
                                 // not match.
                                 not_cfgs.iter().all(|mi| {
-                                    debug!("cfg(not(%s[...]))", mi.name());
+                                    debug2!("cfg(not({}[...]))", mi.name());
                                     !contains(cfg, *mi)
                                 })
                             }
@@ -309,7 +309,7 @@ pub fn test_cfg<AM: AttrMetaMethods, It: Iterator<AM>>
             false
         }
     };
-    debug!("test_cfg (no_cfgs=%?, some_cfg_matches=%?)", no_cfgs, some_cfg_matches);
+    debug2!("test_cfg (no_cfgs={}, some_cfg_matches={})", no_cfgs, some_cfg_matches);
     no_cfgs || some_cfg_matches
 }
 
@@ -340,7 +340,7 @@ pub fn find_stability<AM: AttrMetaMethods, It: Iterator<AM>>(mut metas: It) -> O
             "stable" => Stable,
             "frozen" => Frozen,
             "locked" => Locked,
-            _ => loop // not a stability level
+            _ => continue // not a stability level
         };
 
         return Some(Stability {
@@ -359,7 +359,7 @@ pub fn require_unique_names(diagnostic: @mut span_handler,
 
         if !set.insert(name) {
             diagnostic.span_fatal(meta.span,
-                                  fmt!("duplicate meta item `%s`", name));
+                                  format!("duplicate meta item `{}`", name));
         }
     }
 }

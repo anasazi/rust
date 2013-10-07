@@ -12,11 +12,11 @@
 // aux-build:cci_class_cast.rs
 extern mod cci_class_cast;
 use std::to_str::ToStr;
-use cci_class_cast::kitty::*;
+use cci_class_cast::kitty::cat;
 
 fn print_out(thing: @ToStr, expected: ~str) {
   let actual = thing.to_str();
-  info!("%s", actual);
+  info2!("{}", actual);
   assert_eq!(actual, expected);
 }
 

@@ -56,6 +56,7 @@ use clone::DeepClone;
 
 /// The option type
 #[deriving(Clone, DeepClone, Eq)]
+#[allow(missing_doc)]
 pub enum Option<T> {
     None,
     Some(T),
@@ -95,6 +96,30 @@ impl<T: ToStr> ToStr for Option<T> {
 }
 
 impl<T> Option<T> {
+    /// Convert from `Option<T>` to `Option<&T>`
+    #[inline]
+    pub fn as_ref<'r>(&'r self) -> Option<&'r T> {
+        match *self { Some(ref x) => Some(x), None => None }
+    }
+
+    /// Convert from `Option<T>` to `Option<&mut T>`
+    #[inline]
+    pub fn as_mut<'r>(&'r mut self) -> Option<&'r mut T> {
+        match *self { Some(ref mut x) => Some(x), None => None }
+    }
+
+    /// Maps an `Option<T>` to `Option<U>` by applying a function to a contained value.
+    #[inline]
+    pub fn map<U>(self, f: &fn(T) -> U) -> Option<U> {
+        match self { Some(x) => Some(f(x)), None => None }
+    }
+
+    /// Applies a function to the contained value or returns a default.
+    #[inline]
+    pub fn map_default<U>(self, def: U, f: &fn(T) -> U) -> U {
+        match self { None => def, Some(t) => f(t) }
+    }
+
     /// Return an iterator over the possibly contained value
     #[inline]
     pub fn iter<'r>(&'r self) -> OptionIterator<&'r T> {
@@ -148,26 +173,6 @@ impl<T> Option<T> {
         }
     }
 
-    /// Returns `None` if the option is `None`, otherwise calls `f` with a
-    /// reference to the wrapped value and returns the result.
-    #[inline]
-    pub fn and_then_ref<'a, U>(&'a self, f: &fn(&'a T) -> Option<U>) -> Option<U> {
-        match *self {
-            Some(ref x) => f(x),
-            None => None
-        }
-    }
-
-    /// Returns `None` if the option is `None`, otherwise calls `f` with a
-    /// mutable reference to the wrapped value and returns the result.
-    #[inline]
-    pub fn and_then_mut_ref<'a, U>(&'a mut self, f: &fn(&'a mut T) -> Option<U>) -> Option<U> {
-        match *self {
-            Some(ref mut x) => f(x),
-            None => None
-        }
-    }
-
     /// Returns the option if it contains a value, otherwise returns `optb`.
     #[inline]
     pub fn or(self, optb: Option<T>) -> Option<T> {
@@ -194,45 +199,6 @@ impl<T> Option<T> {
             Some(x) => if(f(&x)) {Some(x)} else {None},
             None => None
         }
-    }
-
-    /// Maps a `Some` value from one type to another by reference
-    #[inline]
-    pub fn map<'a, U>(&'a self, f: &fn(&'a T) -> U) -> Option<U> {
-        match *self { Some(ref x) => Some(f(x)), None => None }
-    }
-
-    /// Maps a `Some` value from one type to another by a mutable reference
-    #[inline]
-    pub fn map_mut<'a, U>(&'a mut self, f: &fn(&'a mut T) -> U) -> Option<U> {
-        match *self { Some(ref mut x) => Some(f(x)), None => None }
-    }
-
-    /// Applies a function to the contained value or returns a default
-    #[inline]
-    pub fn map_default<'a, U>(&'a self, def: U, f: &fn(&'a T) -> U) -> U {
-        match *self { None => def, Some(ref t) => f(t) }
-    }
-
-    /// Maps a `Some` value from one type to another by a mutable reference,
-    /// or returns a default value.
-    #[inline]
-    pub fn map_mut_default<'a, U>(&'a mut self, def: U, f: &fn(&'a mut T) -> U) -> U {
-        match *self { Some(ref mut x) => f(x), None => def }
-    }
-
-    /// As `map`, but consumes the option and gives `f` ownership to avoid
-    /// copying.
-    #[inline]
-    pub fn map_move<U>(self, f: &fn(T) -> U) -> Option<U> {
-        match self { Some(x) => Some(f(x)), None => None }
-    }
-
-    /// As `map_default`, but consumes the option and gives `f`
-    /// ownership to avoid copying.
-    #[inline]
-    pub fn map_move_default<U>(self, def: U, f: &fn(T) -> U) -> U {
-        match self { None => def, Some(t) => f(t) }
     }
 
     /// Take the value out of the option, leaving a `None` in its place.
@@ -278,7 +244,7 @@ impl<T> Option<T> {
     pub fn get_ref<'a>(&'a self) -> &'a T {
         match *self {
             Some(ref x) => x,
-            None => fail!("called `Option::get_ref()` on a `None` value"),
+            None => fail2!("called `Option::get_ref()` on a `None` value"),
         }
     }
 
@@ -298,7 +264,7 @@ impl<T> Option<T> {
     pub fn get_mut_ref<'a>(&'a mut self) -> &'a mut T {
         match *self {
             Some(ref mut x) => x,
-            None => fail!("called `Option::get_mut_ref()` on a `None` value"),
+            None => fail2!("called `Option::get_mut_ref()` on a `None` value"),
         }
     }
 
@@ -320,7 +286,7 @@ impl<T> Option<T> {
     pub fn unwrap(self) -> T {
         match self {
             Some(x) => x,
-            None => fail!("called `Option::unwrap()` on a `None` value"),
+            None => fail2!("called `Option::unwrap()` on a `None` value"),
         }
     }
 
@@ -333,7 +299,7 @@ impl<T> Option<T> {
     #[inline]
     pub fn take_unwrap(&mut self) -> T {
         if self.is_none() {
-            fail!("called `Option::take_unwrap()` on a `None` value")
+            fail2!("called `Option::take_unwrap()` on a `None` value")
         }
         self.take().unwrap()
     }
@@ -348,7 +314,7 @@ impl<T> Option<T> {
     pub fn expect(self, reason: &str) -> T {
         match self {
             Some(val) => val,
-            None => fail!(reason.to_owned()),
+            None => fail2!("{}", reason.to_owned()),
         }
     }
 
@@ -722,21 +688,23 @@ mod tests {
         let new_val = 11;
 
         let mut x = Some(val);
-        let mut it = x.mut_iter();
+        {
+            let mut it = x.mut_iter();
 
-        assert_eq!(it.size_hint(), (1, Some(1)));
+            assert_eq!(it.size_hint(), (1, Some(1)));
 
-        match it.next() {
-            Some(interior) => {
-                assert_eq!(*interior, val);
-                *interior = new_val;
-                assert_eq!(x, Some(new_val));
+            match it.next() {
+                Some(interior) => {
+                    assert_eq!(*interior, val);
+                    *interior = new_val;
+                }
+                None => assert!(false),
             }
-            None => assert!(false),
-        }
 
-        assert_eq!(it.size_hint(), (0, Some(0)));
-        assert!(it.next().is_none());
+            assert_eq!(it.size_hint(), (0, Some(0)));
+            assert!(it.next().is_none());
+        }
+        assert_eq!(x, Some(new_val));
     }
 
     #[test]

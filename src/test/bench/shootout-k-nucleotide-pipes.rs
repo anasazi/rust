@@ -29,8 +29,8 @@ use std::vec;
 
 // given a map, print a sorted version of it
 fn sort_and_fmt(mm: &HashMap<~[u8], uint>, total: uint) -> ~str {
-   fn pct(xx: uint, yy: uint) -> float {
-      return (xx as float) * 100f / (yy as float);
+   fn pct(xx: uint, yy: uint) -> f64 {
+      return (xx as f64) * 100.0 / (yy as f64);
    }
 
    fn le_by_val<TT:Clone,
@@ -75,7 +75,8 @@ fn sort_and_fmt(mm: &HashMap<~[u8], uint>, total: uint) -> ~str {
            let b = str::raw::from_utf8(k);
            // FIXME: #4318 Instead of to_ascii and to_str_ascii, could use
            // to_ascii_move and to_str_move to not do a unnecessary copy.
-           buffer.push_str(fmt!("%s %0.3f\n", b.to_ascii().to_upper().to_str_ascii(), v));
+           buffer.push_str(format!("{} {:0.3f}\n",
+                                   b.to_ascii().to_upper().to_str_ascii(), v));
        }
    }
 
@@ -142,11 +143,11 @@ fn make_sequence_processor(sz: uint,
    let buffer = match sz {
        1u => { sort_and_fmt(&freqs, total) }
        2u => { sort_and_fmt(&freqs, total) }
-       3u => { fmt!("%u\t%s", find(&freqs, ~"GGT"), "GGT") }
-       4u => { fmt!("%u\t%s", find(&freqs, ~"GGTA"), "GGTA") }
-       6u => { fmt!("%u\t%s", find(&freqs, ~"GGTATT"), "GGTATT") }
-      12u => { fmt!("%u\t%s", find(&freqs, ~"GGTATTTTAATT"), "GGTATTTTAATT") }
-      18u => { fmt!("%u\t%s", find(&freqs, ~"GGTATTTTAATTTATAGT"), "GGTATTTTAATTTATAGT") }
+       3u => { format!("{}\t{}", find(&freqs, ~"GGT"), "GGT") }
+       4u => { format!("{}\t{}", find(&freqs, ~"GGTA"), "GGTA") }
+       6u => { format!("{}\t{}", find(&freqs, ~"GGTATT"), "GGTATT") }
+      12u => { format!("{}\t{}", find(&freqs, ~"GGTATTTTAATT"), "GGTATTTTAATT") }
+      18u => { format!("{}\t{}", find(&freqs, ~"GGTATTTTAATTTATAGT"), "GGTATTTTAATTTATAGT") }
         _ => { ~"" }
    };
 
@@ -155,17 +156,21 @@ fn make_sequence_processor(sz: uint,
 
 // given a FASTA file on stdin, process sequence THREE
 fn main() {
+    use std::rt::io::{Reader, Open};
+    use std::rt::io::file::FileInfo;
+    use std::rt::io::native::stdio;
+    use std::rt::io::buffered::BufferedReader;
+
     let rdr = if os::getenv("RUST_BENCH").is_some() {
-       // FIXME: Using this compile-time env variable is a crummy way to
-       // get to this massive data set, but include_bin! chokes on it (#2598)
-       let path = Path(env!("CFG_SRC_DIR"))
-           .push_rel(&Path("src/test/bench/shootout-k-nucleotide.data"));
-       io::file_reader(&path).unwrap()
-   } else {
-      io::stdin()
-   };
-
-
+        // FIXME: Using this compile-time env variable is a crummy way to
+        // get to this massive data set, but include_bin! chokes on it (#2598)
+        let mut path = Path::new(env!("CFG_SRC_DIR"));
+        path.push("src/test/bench/shootout-k-nucleotide.data");
+        ~path.open_reader(Open).unwrap() as ~Reader
+    } else {
+        ~stdio::stdin() as ~Reader
+    };
+    let mut rdr = BufferedReader::new(rdr);
 
     // initialize each sequence sorter
     let sizes = ~[1u,2,3,4,6,12,18];
@@ -192,10 +197,13 @@ fn main() {
    // reading the sequence of interest
    let mut proc_mode = false;
 
-   while !rdr.eof() {
-      let line: ~str = rdr.read_line();
+   loop {
+      let line = match rdr.read_line() {
+          Some(ln) => ln, None => break,
+      };
+      let line = line.trim().to_owned();
 
-      if line.len() == 0u { loop; }
+      if line.len() == 0u { continue; }
 
       match (line[0] as char, proc_mode) {
 

@@ -26,7 +26,7 @@ use vec;
 /// An atomically reference counted pointer.
 ///
 /// Enforces no shared-memory safety.
-#[unsafe_no_drop_flag]
+//#[unsafe_no_drop_flag] FIXME: #9758
 pub struct UnsafeArc<T> {
     data: *mut ArcData<T>,
 }
@@ -172,7 +172,7 @@ impl<T: Send> UnsafeArc<T> {
                     // If 'put' returns the server end back to us, we were rejected;
                     // someone else was trying to unwrap. Avoid guaranteed deadlock.
                     cast::forget(data);
-                    fail!("Another task is already unwrapping this Arc!");
+                    fail2!("Another task is already unwrapping this Arc!");
                 }
             }
         }
@@ -386,7 +386,7 @@ impl<T:Send> Exclusive<T> {
         let rec = self.x.get();
         do (*rec).lock.lock {
             if (*rec).failed {
-                fail!("Poisoned Exclusive::new - another task failed inside!");
+                fail2!("Poisoned Exclusive::new - another task failed inside!");
             }
             (*rec).failed = true;
             let result = f(&mut (*rec).data);
@@ -427,6 +427,8 @@ mod tests {
     use util;
     use sys::size_of;
 
+    //#[unsafe_no_drop_flag] FIXME: #9758
+    #[ignore]
     #[test]
     fn test_size() {
         assert_eq!(size_of::<UnsafeArc<[int, ..10]>>(), size_of::<*[int, ..10]>());
@@ -618,7 +620,7 @@ mod tests {
             let x2 = x.clone();
             do task::spawn {
                 do 10.times { task::deschedule(); } // try to let the unwrapper go
-                fail!(); // punt it awake from its deadlock
+                fail2!(); // punt it awake from its deadlock
             }
             let _z = x.unwrap();
             unsafe { do x2.with |_hello| { } }

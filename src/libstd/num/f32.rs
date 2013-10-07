@@ -11,6 +11,7 @@
 //! Operations and constants for `f32`
 #[allow(missing_doc)];
 #[allow(non_uppercase_statics)];
+#[allow(non_uppercase_pattern_statics)];
 
 use default::Default;
 use libc::c_int;
@@ -589,6 +590,9 @@ impl Primitive for f32 {
 
     #[inline]
     fn bytes(_: Option<f32>) -> uint { Primitive::bits(Some(0f32)) / 8 }
+
+    #[inline]
+    fn is_signed(_: Option<f32>) -> bool { true }
 }
 
 impl Float for f32 {
@@ -816,8 +820,8 @@ impl num::ToStrRadix for f32 {
     fn to_str_radix(&self, rdx: uint) -> ~str {
         let (r, special) = strconv::float_to_str_common(
             *self, rdx, true, strconv::SignNeg, strconv::DigAll);
-        if special { fail!("number has a special value, \
-                          try to_str_radix_special() if those are expected") }
+        if special { fail2!("number has a special value, \
+                             try to_str_radix_special() if those are expected") }
         r
     }
 }

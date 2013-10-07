@@ -8,19 +8,45 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+//! Rustdoc's HTML Rendering module
+//!
+//! This modules contains the bulk of the logic necessary for rendering a
+//! rustdoc `clean::Crate` instance to a set of static HTML pages. This
+//! rendering process is largely driven by the `format!` syntax extension to
+//! perform all I/O into files and streams.
+//!
+//! The rendering process is largely driven by the `Context` and `Cache`
+//! structures. The cache is pre-populated by crawling the crate in question,
+//! and then it is shared among the various rendering tasks. The cache is meant
+//! to be a fairly large structure not implementing `Clone` (because it's shared
+//! among tasks). The context, however, should be a lightweight structure. This
+//! is cloned per-task and contains information about what is currently being
+//! rendered.
+//!
+//! In order to speed up rendering (mostly because of markdown rendering), the
+//! rendering process has been parallelized. This parallelization is only
+//! exposed through the `crate` method on the context, and then also from the
+//! fact that the shared cache is stored in TLS (and must be accessed as such).
+//!
+//! In addition to rendering the crate itself, this module is also responsible
+//! for creating the corresponding search index and source file renderings.
+//! These tasks are not parallelized (they haven't been a bottleneck yet), and
+//! both occur before the crate is rendered.
+
 use std::cell::Cell;
 use std::comm::{SharedPort, SharedChan};
 use std::comm;
 use std::fmt;
-use std::hashmap::HashMap;
+use std::hashmap::{HashMap, HashSet};
 use std::local_data;
 use std::rt::io::buffered::BufferedWriter;
 use std::rt::io::file::{FileInfo, DirectoryInfo};
 use std::rt::io::file;
 use std::rt::io;
+use std::rt::io::Reader;
+use std::str;
 use std::task;
 use std::unstable::finally::Finally;
-use std::util;
 use std::vec;
 
 use extra::arc::RWArc;
@@ -33,44 +59,137 @@ use syntax::attr;
 use clean;
 use doctree;
 use fold::DocFolder;
+use html::escape::Escape;
 use html::format::{VisSpace, Method, PuritySpace};
 use html::layout;
 use html::markdown::Markdown;
 
+/// Major driving force in all rustdoc rendering. This contains information
+/// about where in the tree-like hierarchy rendering is occurring and controls
+/// how the current page is being rendered.
+///
+/// It is intended that this context is a lightweight object which can be fairly
+/// easily cloned because it is cloned per work-job (about once per item in the
+/// rustdoc tree).
 #[deriving(Clone)]
 pub struct Context {
+    /// Current hierarchy of components leading down to what's currently being
+    /// rendered
     current: ~[~str],
+    /// String representation of how to get back to the root path of the 'doc/'
+    /// folder in terms of a relative URL.
     root_path: ~str,
+    /// The current destination folder of where HTML artifacts should be placed.
+    /// This changes as the context descends into the module hierarchy.
     dst: Path,
+    /// This describes the layout of each page, and is not modified after
+    /// creation of the context (contains info like the favicon)
     layout: layout::Layout,
+    /// This map is a list of what should be displayed on the sidebar of the
+    /// current page. The key is the section header (traits, modules,
+    /// functions), and the value is the list of containers belonging to this
+    /// header. This map will change depending on the surrounding context of the
+    /// page.
     sidebar: HashMap<~str, ~[~str]>,
+    /// This flag indicates whether [src] links should be generated or not. If
+    /// the source files are present in the html rendering, then this will be
+    /// `true`.
+    include_sources: bool,
 }
 
+/// Indicates where an external crate can be found.
+pub enum ExternalLocation {
+    /// Remote URL root of the external crate
+    Remote(~str),
+    /// This external crate can be found in the local doc/ folder
+    Local,
+    /// The external crate could not be found.
+    Unknown,
+}
+
+/// Different ways an implementor of a trait can be rendered.
 enum Implementor {
+    /// Paths are displayed specially by omitting the `impl XX for` cruft
     PathType(clean::Type),
+    /// This is the generic representation of an trait implementor, used for
+    /// primitive types and otherwise non-path types.
     OtherType(clean::Generics, /* trait */ clean::Type, /* for */ clean::Type),
 }
 
-struct Cache {
-    // typaram id => name of that typaram
+/// This cache is used to store information about the `clean::Crate` being
+/// rendered in order to provide more useful documentation. This contains
+/// information like all implementors of a trait, all traits a type implements,
+/// documentation for all known traits, etc.
+///
+/// This structure purposefully does not implement `Clone` because it's intended
+/// to be a fairly large and expensive structure to clone. Instead this adheres
+/// to both `Send` and `Freeze` so it may be stored in a `RWArc` instance and
+/// shared among the various rendering tasks.
+pub struct Cache {
+    /// Mapping of typaram ids to the name of the type parameter. This is used
+    /// when pretty-printing a type (so pretty printing doesn't have to
+    /// painfully maintain a context like this)
     typarams: HashMap<ast::NodeId, ~str>,
-    // type id => all implementations for that type
-    impls: HashMap<ast::NodeId, ~[clean::Impl]>,
-    // path id => (full qualified path, shortty) -- used to generate urls
+
+    /// Maps a type id to all known implementations for that type. This is only
+    /// recognized for intra-crate `ResolvedPath` types, and is used to print
+    /// out extra documentation on the page of an enum/struct.
+    ///
+    /// The values of the map are a list of implementations and documentation
+    /// found on that implementation.
+    impls: HashMap<ast::NodeId, ~[(clean::Impl, Option<~str>)]>,
+
+    /// Maintains a mapping of local crate node ids to the fully qualified name
+    /// and "short type description" of that node. This is used when generating
+    /// URLs when a type is being linked to. External paths are not located in
+    /// this map because the `External` type itself has all the information
+    /// necessary.
     paths: HashMap<ast::NodeId, (~[~str], &'static str)>,
-    // trait id => method name => dox
+
+    /// This map contains information about all known traits of this crate.
+    /// Implementations of a crate should inherit the documentation of the
+    /// parent trait if no extra documentation is specified, and this map is
+    /// keyed on trait id with a value of a 'method name => documentation'
+    /// mapping.
     traits: HashMap<ast::NodeId, HashMap<~str, ~str>>,
-    // trait id => implementors of the trait
+
+    /// When rendering traits, it's often useful to be able to list all
+    /// implementors of the trait, and this mapping is exactly, that: a mapping
+    /// of trait ids to the list of known implementors of the trait
     implementors: HashMap<ast::NodeId, ~[Implementor]>,
+
+    /// Cache of where external crate documentation can be found.
+    extern_locations: HashMap<ast::CrateNum, ExternalLocation>,
+
+    // Private fields only used when initially crawling a crate to build a cache
 
     priv stack: ~[~str],
     priv parent_stack: ~[ast::NodeId],
     priv search_index: ~[IndexItem],
 }
 
+/// Helper struct to render all source code to HTML pages
+struct SourceCollector<'self> {
+    cx: &'self mut Context,
+
+    /// Processed source-file paths
+    seen: HashSet<~str>,
+    /// Root destination to place all HTML output into
+    dst: Path,
+}
+
+/// Wrapper struct to render the source code of a file. This will do things like
+/// adding line numbers to the left-hand side.
+struct Source<'self>(&'self str);
+
+// Helper structs for rendering items/sidebars and carrying along contextual
+// information
+
 struct Item<'self> { cx: &'self Context, item: &'self clean::Item, }
 struct Sidebar<'self> { cx: &'self Context, item: &'self clean::Item, }
 
+/// Struct representing one entry in the JS search index. These are all emitted
+/// by hand to a large JS file at the end of cache-creation.
 struct IndexItem {
     ty: &'static str,
     name: ~str,
@@ -78,6 +197,8 @@ struct IndexItem {
     desc: ~str,
     parent: Option<ast::NodeId>,
 }
+
+// TLS keys used to carry information around during rendering.
 
 local_data_key!(pub cache_key: RWArc<Cache>)
 local_data_key!(pub current_location_key: ~[~str])
@@ -94,6 +215,7 @@ pub fn run(mut crate: clean::Crate, dst: Path) {
             favicon: ~"",
             crate: crate.name.clone(),
         },
+        include_sources: true,
     };
     mkdir(&cx.dst);
 
@@ -106,6 +228,9 @@ pub fn run(mut crate: clean::Crate, dst: Path) {
                     }
                     clean::NameValue(~"html_logo_url", ref s) => {
                         cx.layout.logo = s.to_owned();
+                    }
+                    clean::Word(~"html_no_source") => {
+                        cx.include_sources = false;
                     }
                     _ => {}
                 }
@@ -124,20 +249,22 @@ pub fn run(mut crate: clean::Crate, dst: Path) {
         stack: ~[],
         parent_stack: ~[],
         search_index: ~[],
+        extern_locations: HashMap::new(),
     };
     cache.stack.push(crate.name.clone());
     crate = cache.fold_crate(crate);
 
     // Add all the static files
-    let dst = cx.dst.push(crate.name);
+    let mut dst = cx.dst.join(crate.name.as_slice());
     mkdir(&dst);
-    write(dst.push("jquery.js"), include_str!("static/jquery-2.0.3.min.js"));
-    write(dst.push("main.js"), include_str!("static/main.js"));
-    write(dst.push("main.css"), include_str!("static/main.css"));
-    write(dst.push("normalize.css"), include_str!("static/normalize.css"));
+    write(dst.join("jquery.js"), include_str!("static/jquery-2.0.3.min.js"));
+    write(dst.join("main.js"), include_str!("static/main.js"));
+    write(dst.join("main.css"), include_str!("static/main.css"));
+    write(dst.join("normalize.css"), include_str!("static/normalize.css"));
 
+    // Publish the search index
     {
-        let dst = dst.push("search-index.js");
+        dst.push("search-index.js");
         let mut w = BufferedWriter::new(dst.open_writer(io::CreateOrTruncate));
         let w = &mut w as &mut io::Writer;
         write!(w, "var searchIndex = [");
@@ -162,20 +289,43 @@ pub fn run(mut crate: clean::Crate, dst: Path) {
         w.flush();
     }
 
-    // Now render the whole crate.
+    // Render all source files (this may turn into a giant no-op)
+    {
+        info2!("emitting source files");
+        let dst = cx.dst.join("src");
+        mkdir(&dst);
+        let dst = dst.join(crate.name.as_slice());
+        mkdir(&dst);
+        let mut folder = SourceCollector {
+            dst: dst,
+            seen: HashSet::new(),
+            cx: &mut cx,
+        };
+        crate = folder.fold_crate(crate);
+    }
+
+    for (&n, e) in crate.externs.iter() {
+        cache.extern_locations.insert(n, extern_location(e, &cx.dst));
+    }
+
+    // And finally render the whole crate's documentation
     cx.crate(crate, cache);
 }
 
+/// Writes the entire contents of a string to a destination, not attempting to
+/// catch any errors.
 fn write(dst: Path, contents: &str) {
     let mut w = dst.open_writer(io::CreateOrTruncate);
     w.write(contents.as_bytes());
 }
 
+/// Makes a directory on the filesystem, failing the task if an error occurs and
+/// skipping if the directory already exists.
 fn mkdir(path: &Path) {
     do io::io_error::cond.trap(|err| {
         error2!("Couldn't create directory `{}`: {}",
-                path.to_str(), err.desc);
-        fail!()
+                path.display(), err.desc);
+        fail2!()
     }).inside {
         if !path.is_dir() {
             file::mkdir(path);
@@ -183,7 +333,141 @@ fn mkdir(path: &Path) {
     }
 }
 
-impl<'self> DocFolder for Cache {
+/// Takes a path to a source file and cleans the path to it. This canonicalizes
+/// things like ".." to components which preserve the "top down" hierarchy of a
+/// static HTML tree.
+// FIXME (#9639): The closure should deal with &[u8] instead of &str
+fn clean_srcpath(src: &[u8], f: &fn(&str)) {
+    let p = Path::new(src);
+    if p.as_vec() != bytes!(".") {
+        for c in p.str_component_iter().map(|x|x.unwrap()) {
+            if ".." == c {
+                f("up");
+            } else {
+                f(c.as_slice())
+            }
+        }
+    }
+}
+
+/// Attempts to find where an external crate is located, given that we're
+/// rendering in to the specified source destination.
+fn extern_location(e: &clean::ExternalCrate, dst: &Path) -> ExternalLocation {
+    // See if there's documentation generated into the local directory
+    let local_location = dst.join(e.name.as_slice());
+    if local_location.is_dir() {
+        return Local;
+    }
+
+    // Failing that, see if there's an attribute specifying where to find this
+    // external crate
+    for attr in e.attrs.iter() {
+        match *attr {
+            clean::List(~"doc", ref list) => {
+                for attr in list.iter() {
+                    match *attr {
+                        clean::NameValue(~"html_root_url", ref s) => {
+                            if s.ends_with("/") {
+                                return Remote(s.to_owned());
+                            }
+                            return Remote(*s + "/");
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Well, at least we tried.
+    return Unknown;
+}
+
+impl<'self> DocFolder for SourceCollector<'self> {
+    fn fold_item(&mut self, item: clean::Item) -> Option<clean::Item> {
+        // If we're including source files, and we haven't seen this file yet,
+        // then we need to render it out to the filesystem
+        if self.cx.include_sources && !self.seen.contains(&item.source.filename) {
+
+            // If it turns out that we couldn't read this file, then we probably
+            // can't read any of the files (generating html output from json or
+            // something like that), so just don't include sources for the
+            // entire crate. The other option is maintaining this mapping on a
+            // per-file basis, but that's probably not worth it...
+            self.cx.include_sources = self.emit_source(item.source.filename);
+            self.seen.insert(item.source.filename.clone());
+
+            if !self.cx.include_sources {
+                println!("warning: source code was requested to be rendered, \
+                          but `{}` is a missing source file.",
+                         item.source.filename);
+                println!("         skipping rendering of source code");
+            }
+        }
+
+        self.fold_item_recur(item)
+    }
+}
+
+impl<'self> SourceCollector<'self> {
+    /// Renders the given filename into its corresponding HTML source file.
+    fn emit_source(&mut self, filename: &str) -> bool {
+        let p = Path::new(filename);
+
+        // Read the contents of the file
+        let mut contents = ~[];
+        {
+            let mut buf = [0, ..1024];
+            let r = do io::io_error::cond.trap(|_| {}).inside {
+                p.open_reader(io::Open)
+            };
+            // If we couldn't open this file, then just returns because it
+            // probably means that it's some standard library macro thing and we
+            // can't have the source to it anyway.
+            let mut r = match r {
+                Some(r) => r,
+                // eew macro hacks
+                None => return filename == "<std-macros>"
+            };
+
+            // read everything
+            loop {
+                match r.read(buf) {
+                    Some(n) => contents.push_all(buf.slice_to(n)),
+                    None => break
+                }
+            }
+        }
+        let contents = str::from_utf8_owned(contents);
+
+        // Create the intermediate directories
+        let mut cur = self.dst.clone();
+        let mut root_path = ~"../../";
+        do clean_srcpath(p.dirname()) |component| {
+            cur.push(component);
+            mkdir(&cur);
+            root_path.push_str("../");
+        }
+
+        cur.push(p.filename().expect("source has no filename") + bytes!(".html"));
+        let w = cur.open_writer(io::CreateOrTruncate);
+        let mut w = BufferedWriter::new(w);
+
+        let title = cur.filename_display().with_str(|s| format!("{} -- source", s));
+        let page = layout::Page {
+            title: title,
+            ty: "source",
+            root_path: root_path,
+        };
+        layout::render(&mut w as &mut io::Writer, &self.cx.layout,
+                       &page, &(""), &Source(contents.as_slice()));
+        w.flush();
+        return true;
+    }
+}
+
+impl DocFolder for Cache {
     fn fold_item(&mut self, item: clean::Item) -> Option<clean::Item> {
         // Register any generics to their corresponding string. This is used
         // when pretty-printing types
@@ -248,7 +532,9 @@ impl<'self> DocFolder for Cache {
         match item.name {
             Some(ref s) => {
                 let parent = match item.inner {
-                    clean::TyMethodItem(*) | clean::VariantItem(*) => {
+                    clean::TyMethodItem(*) |
+                    clean::StructFieldItem(*) |
+                    clean::VariantItem(*) => {
                         Some((Some(*self.parent_stack.last()),
                               self.stack.slice_to(self.stack.len() - 1)))
 
@@ -257,8 +543,12 @@ impl<'self> DocFolder for Cache {
                         if self.parent_stack.len() == 0 {
                             None
                         } else {
-                            Some((Some(*self.parent_stack.last()),
-                                  self.stack.as_slice()))
+                            let last = self.parent_stack.last();
+                            let amt = match self.paths.find(last) {
+                                Some(&(_, "trait")) => self.stack.len() - 1,
+                                Some(*) | None => self.stack.len(),
+                            };
+                            Some((Some(*last), self.stack.slice_to(amt)))
                         }
                     }
                     _ => Some((None, self.stack.as_slice()))
@@ -299,7 +589,7 @@ impl<'self> DocFolder for Cache {
 
         // Maintain the parent stack
         let parent_pushed = match item.inner {
-            clean::TraitItem(*) | clean::EnumItem(*) => {
+            clean::TraitItem(*) | clean::EnumItem(*) | clean::StructItem(*) => {
                 self.parent_stack.push(item.id); true
             }
             clean::ImplItem(ref i) => {
@@ -317,20 +607,33 @@ impl<'self> DocFolder for Cache {
         // implementations elsewhere
         let ret = match self.fold_item_recur(item) {
             Some(item) => {
-                match item.inner {
-                    clean::ImplItem(i) => {
+                match item {
+                    clean::Item{ attrs, inner: clean::ImplItem(i), _ } => {
                         match i.for_ {
                             clean::ResolvedPath { id, _ } => {
                                 let v = do self.impls.find_or_insert_with(id) |_| {
                                     ~[]
                                 };
-                                v.push(i);
+                                // extract relevant documentation for this impl
+                                match attrs.move_iter().find(|a| {
+                                    match *a {
+                                        clean::NameValue(~"doc", _) => true,
+                                        _ => false
+                                    }
+                                }) {
+                                    Some(clean::NameValue(_, dox)) => {
+                                        v.push((i, Some(dox)));
+                                    }
+                                    Some(*) | None => {
+                                        v.push((i, None));
+                                    }
+                                }
                             }
                             _ => {}
                         }
                         None
                     }
-                    _ => Some(item),
+                    i => Some(i),
                 }
             }
             i => i,
@@ -351,14 +654,14 @@ impl<'self> Cache {
 }
 
 impl Context {
+    /// Recurse in the directory structure and change the "root path" to make
+    /// sure it always points to the top (relatively)
     fn recurse<T>(&mut self, s: ~str, f: &fn(&mut Context) -> T) -> T {
-        // Recurse in the directory structure and change the "root path" to make
-        // sure it always points to the top (relatively)
         if s.len() == 0 {
             fail2!("what {:?}", self);
         }
-        let next = self.dst.push(s);
-        let prev = util::replace(&mut self.dst, next);
+        let prev = self.dst.clone();
+        self.dst.push(s.as_slice());
         self.root_path.push_str("../");
         self.current.push(s);
 
@@ -374,7 +677,9 @@ impl Context {
         return ret;
     }
 
-    /// Processes
+    /// Main method for rendering a crate. This parallelizes the task of
+    /// rendering a crate, and requires ownership of the crate in order to break
+    /// it up into its separate components.
     fn crate(self, mut crate: clean::Crate, cache: Cache) {
         enum Work {
             Die,
@@ -396,6 +701,11 @@ impl Context {
         let prog_chan = SharedChan::new(prog_chan);
         let cache = RWArc::new(cache);
 
+        // Each worker thread receives work from a shared port and publishes
+        // new work onto the corresponding shared port. All of the workers are
+        // using the same channel/port. Through this, the crate is recursed on
+        // in a hierarchical fashion, and parallelization is only achieved if
+        // one node in the hierarchy has more than one child (very common).
         for i in range(0, WORKERS) {
             let port = port.clone();
             let chan = chan.clone();
@@ -436,8 +746,12 @@ impl Context {
             }
         }
 
+        // Send off the initial job
         chan.send(Process(self, item));
         let mut jobs = 1;
+
+        // Keep track of the number of jobs active in the system and kill
+        // everything once there are no more jobs remaining.
         loop {
             match prog_port.recv() {
                 JobNew => jobs += 1,
@@ -452,6 +766,11 @@ impl Context {
         }
     }
 
+    /// Non-parellelized version of rendering an item. This will take the input
+    /// item, render its contents, and then invoke the specified closure with
+    /// all sub-items which need to be rendered.
+    ///
+    /// The rendering driver uses this closure to queue up more work.
     fn item(&mut self, item: clean::Item, f: &fn(&mut Context, clean::Item)) {
         fn render(w: io::file::FileWriter, cx: &mut Context, it: &clean::Item,
                   pushname: bool) {
@@ -489,7 +808,7 @@ impl Context {
                 let item = Cell::new(item);
                 do self.recurse(name) |this| {
                     let item = item.take();
-                    let dst = this.dst.push("index.html");
+                    let dst = this.dst.join("index.html");
                     let writer = dst.open_writer(io::CreateOrTruncate);
                     render(writer.unwrap(), this, &item, false);
 
@@ -507,31 +826,9 @@ impl Context {
             // Things which don't have names (like impls) don't get special
             // pages dedicated to them.
             _ if item.name.is_some() => {
-                let dst = self.dst.push(item_path(&item));
+                let dst = self.dst.join(item_path(&item));
                 let writer = dst.open_writer(io::CreateOrTruncate);
                 render(writer.unwrap(), self, &item, true);
-
-                // recurse if necessary
-                let name = item.name.get_ref().clone();
-                match item.inner {
-                    clean::EnumItem(e) => {
-                        let mut it = e.variants.move_iter();
-                        do self.recurse(name) |this| {
-                            for item in it {
-                                f(this, item);
-                            }
-                        }
-                    }
-                    clean::StructItem(s) => {
-                        let mut it = s.fields.move_iter();
-                        do self.recurse(name) |this| {
-                            for item in it {
-                                f(this, item);
-                            }
-                        }
-                    }
-                    _ => {}
-                }
             }
 
             _ => {}
@@ -581,6 +878,25 @@ impl<'self> fmt::Default for Item<'self> {
             None => {}
         }
 
+        if it.cx.include_sources {
+            let mut path = ~[];
+            do clean_srcpath(it.item.source.filename.as_bytes()) |component| {
+                path.push(component.to_owned());
+            }
+            let href = if it.item.source.loline == it.item.source.hiline {
+                format!("{}", it.item.source.loline)
+            } else {
+                format!("{}-{}", it.item.source.loline, it.item.source.hiline)
+            };
+            write!(fmt.buf,
+                   "<a class='source'
+                       href='{root}src/{crate}/{path}.html\\#{href}'>[src]</a>",
+                   root = it.cx.root_path,
+                   crate = it.cx.layout.crate,
+                   path = path.connect("/"),
+                   href = href);
+        }
+
         // Write the breadcrumb trail header for the top
         write!(fmt.buf, "<h1 class='fqn'>");
         match it.item.inner {
@@ -613,9 +929,6 @@ impl<'self> fmt::Default for Item<'self> {
             clean::StructItem(ref s) => item_struct(fmt.buf, it.item, s),
             clean::EnumItem(ref e) => item_enum(fmt.buf, it.item, e),
             clean::TypedefItem(ref t) => item_typedef(fmt.buf, it.item, t),
-            clean::VariantItem(*) => item_variant(fmt.buf, it.cx, it.item),
-            clean::StructFieldItem(*) => item_struct_field(fmt.buf, it.cx,
-                                                           it.item),
             _ => {}
         }
     }
@@ -789,7 +1102,7 @@ fn item_module(w: &mut io::Writer, cx: &Context,
             }
 
             _ => {
-                if myitem.name.is_none() { loop }
+                if myitem.name.is_none() { continue }
                 write!(w, "
                     <tr>
                         <td><a class='{class}' href='{href}'
@@ -862,7 +1175,8 @@ fn item_trait(w: &mut io::Writer, it: &clean::Item, t: &clean::Trait) {
     document(w, it);
 
     fn meth(w: &mut io::Writer, m: &clean::TraitMethod) {
-        write!(w, "<h3 id='fn.{}' class='method'><code>",
+        write!(w, "<h3 id='{}.{}' class='method'><code>",
+               shortty(m.item()),
                *m.item().name.get_ref());
         render_method(w, m.item(), false);
         write!(w, "</code></h3>");
@@ -923,13 +1237,15 @@ fn render_method(w: &mut io::Writer, meth: &clean::Item, withlink: bool) {
            g: &clean::Generics, selfty: &clean::SelfTy, d: &clean::FnDecl,
            withlink: bool) {
         write!(w, "{}fn {withlink, select,
-                            true{<a href='\\#fn.{name}' class='fnname'>{name}</a>}
+                            true{<a href='\\#{ty}.{name}'
+                                    class='fnname'>{name}</a>}
                             other{<span class='fnname'>{name}</span>}
                         }{generics}{decl}",
                match purity {
                    ast::unsafe_fn => "unsafe ",
                    _ => "",
                },
+               ty = shortty(it),
                name = it.name.get_ref().as_slice(),
                generics = *g,
                decl = Method(selfty, d),
@@ -948,10 +1264,25 @@ fn render_method(w: &mut io::Writer, meth: &clean::Item, withlink: bool) {
 
 fn item_struct(w: &mut io::Writer, it: &clean::Item, s: &clean::Struct) {
     write!(w, "<pre class='struct'>");
-    render_struct(w, it, Some(&s.generics), s.struct_type, s.fields, "");
+    render_struct(w, it, Some(&s.generics), s.struct_type, s.fields,
+                  s.fields_stripped, "", true);
     write!(w, "</pre>");
 
     document(w, it);
+    match s.struct_type {
+        doctree::Plain => {
+            write!(w, "<h2 class='fields'>Fields</h2>\n<table>");
+            for field in s.fields.iter() {
+                write!(w, "<tr><td id='structfield.{name}'>\
+                                <code>{name}</code></td><td>",
+                       name = field.name.get_ref().as_slice());
+                document(w, field);
+                write!(w, "</td></tr>");
+            }
+            write!(w, "</table>");
+        }
+        _ => {}
+    }
     render_methods(w, it);
 }
 
@@ -965,34 +1296,50 @@ fn item_enum(w: &mut io::Writer, it: &clean::Item, e: &clean::Enum) {
     } else {
         write!(w, " \\{\n");
         for v in e.variants.iter() {
-            let name = format!("<a name='variant.{0}'>{0}</a>",
-                               v.name.get_ref().as_slice());
+            write!(w, "    ");
+            let name = v.name.get_ref().as_slice();
             match v.inner {
                 clean::VariantItem(ref var) => {
                     match var.kind {
-                        clean::CLikeVariant => write!(w, "    {},\n", name),
+                        clean::CLikeVariant => write!(w, "{}", name),
                         clean::TupleVariant(ref tys) => {
-                            write!(w, "    {}(", name);
+                            write!(w, "{}(", name);
                             for (i, ty) in tys.iter().enumerate() {
                                 if i > 0 { write!(w, ", ") }
                                 write!(w, "{}", *ty);
                             }
-                            write!(w, "),\n");
+                            write!(w, ")");
                         }
                         clean::StructVariant(ref s) => {
                             render_struct(w, v, None, s.struct_type, s.fields,
-                                          "    ");
+                                          s.fields_stripped, "    ", false);
                         }
                     }
                 }
                 _ => unreachable!()
             }
+            write!(w, ",\n");
+        }
+
+        if e.variants_stripped {
+            write!(w, "    // some variants omitted\n");
         }
         write!(w, "\\}");
     }
     write!(w, "</pre>");
 
     document(w, it);
+    if e.variants.len() > 0 {
+        write!(w, "<h2 class='variants'>Variants</h2>\n<table>");
+        for variant in e.variants.iter() {
+            write!(w, "<tr><td id='variant.{name}'><code>{name}</code></td><td>",
+                   name = variant.name.get_ref().as_slice());
+            document(w, variant);
+            write!(w, "</td></tr>");
+        }
+        write!(w, "</table>");
+
+    }
     render_methods(w, it);
 }
 
@@ -1000,9 +1347,12 @@ fn render_struct(w: &mut io::Writer, it: &clean::Item,
                  g: Option<&clean::Generics>,
                  ty: doctree::StructType,
                  fields: &[clean::Item],
-                 tab: &str) {
-    write!(w, "{}struct {}",
+                 fields_stripped: bool,
+                 tab: &str,
+                 structhead: bool) {
+    write!(w, "{}{}{}",
            VisSpace(it.visibility),
+           if structhead {"struct "} else {""},
            it.name.get_ref().as_slice());
     match g {
         Some(g) => write!(w, "{}", *g),
@@ -1010,19 +1360,22 @@ fn render_struct(w: &mut io::Writer, it: &clean::Item,
     }
     match ty {
         doctree::Plain => {
-            write!(w, " \\{\n");
+            write!(w, " \\{\n{}", tab);
             for field in fields.iter() {
                 match field.inner {
                     clean::StructFieldItem(ref ty) => {
-                        write!(w, "    {}<a name='field.{name}'>{name}</a>: \
-                                   {},\n{}",
+                        write!(w, "    {}{}: {},\n{}",
                                VisSpace(field.visibility),
+                               field.name.get_ref().as_slice(),
                                ty.type_,
-                               tab,
-                               name = field.name.get_ref().as_slice());
+                               tab);
                     }
                     _ => unreachable!()
                 }
+            }
+
+            if fields_stripped {
+                write!(w, "    // some fields omitted\n{}", tab);
             }
             write!(w, "\\}");
         }
@@ -1049,22 +1402,26 @@ fn render_methods(w: &mut io::Writer, it: &clean::Item) {
         do cache.read |c| {
             match c.impls.find(&it.id) {
                 Some(v) => {
-                    let mut non_trait = v.iter().filter(|i| i.trait_.is_none());
+                    let mut non_trait = v.iter().filter(|p| {
+                        p.n0_ref().trait_.is_none()
+                    });
                     let non_trait = non_trait.to_owned_vec();
-                    let mut traits = v.iter().filter(|i| i.trait_.is_some());
+                    let mut traits = v.iter().filter(|p| {
+                        p.n0_ref().trait_.is_some()
+                    });
                     let traits = traits.to_owned_vec();
 
                     if non_trait.len() > 0 {
                         write!(w, "<h2 id='methods'>Methods</h2>");
-                        for &i in non_trait.iter() {
-                            render_impl(w, i);
+                        for &(ref i, ref dox) in non_trait.move_iter() {
+                            render_impl(w, i, dox);
                         }
                     }
                     if traits.len() > 0 {
                         write!(w, "<h2 id='implementations'>Trait \
                                    Implementations</h2>");
-                        for &i in traits.iter() {
-                            render_impl(w, i);
+                        for &(ref i, ref dox) in traits.move_iter() {
+                            render_impl(w, i, dox);
                         }
                     }
                 }
@@ -1074,7 +1431,7 @@ fn render_methods(w: &mut io::Writer, it: &clean::Item) {
     }
 }
 
-fn render_impl(w: &mut io::Writer, i: &clean::Impl) {
+fn render_impl(w: &mut io::Writer, i: &clean::Impl, dox: &Option<~str>) {
     write!(w, "<h3 class='impl'><code>impl{} ", i.generics);
     let trait_id = match i.trait_ {
         Some(ref ty) => {
@@ -1087,22 +1444,32 @@ fn render_impl(w: &mut io::Writer, i: &clean::Impl) {
         None => None
     };
     write!(w, "{}</code></h3>", i.for_);
+    match *dox {
+        Some(ref dox) => {
+            write!(w, "<div class='docblock'>{}</div>",
+                   Markdown(dox.as_slice()));
+        }
+        None => {}
+    }
     write!(w, "<div class='methods'>");
     for meth in i.methods.iter() {
-        write!(w, "<h4 id='fn.{}' class='method'><code>",
+        write!(w, "<h4 id='method.{}' class='method'><code>",
                *meth.name.get_ref());
         render_method(w, meth, false);
         write!(w, "</code></h4>\n");
         match meth.doc_value() {
             Some(s) => {
                 write!(w, "<div class='docblock'>{}</div>", Markdown(s));
-                loop
+                continue
             }
             None => {}
         }
 
         // No documentation? Attempt to slurp in the trait's documentation
-        let trait_id = match trait_id { Some(id) => id, None => loop };
+        let trait_id = match trait_id {
+            None => continue,
+            Some(id) => id,
+        };
         do local_data::get(cache_key) |cache| {
             do cache.unwrap().read |cache| {
                 let name = meth.name.get_ref().as_slice();
@@ -1185,7 +1552,7 @@ fn build_sidebar(m: &clean::Module) -> HashMap<~str, ~[~str]> {
     for item in m.items.iter() {
         let short = shortty(item);
         let myname = match item.name {
-            None => loop,
+            None => continue,
             Some(ref s) => s.to_owned(),
         };
         let v = map.find_or_insert_with(short.to_owned(), |_| ~[]);
@@ -1198,20 +1565,22 @@ fn build_sidebar(m: &clean::Module) -> HashMap<~str, ~[~str]> {
     return map;
 }
 
-fn item_variant(w: &mut io::Writer, cx: &Context, it: &clean::Item) {
-    write!(w, "<DOCTYPE html><html><head>\
-                <meta http-equiv='refresh' content='0; \
-                      url=../enum.{}.html\\#variant.{}'>\
-               </head><body></body></html>",
-           *cx.current.last(),
-           it.name.get_ref().as_slice());
-}
-
-fn item_struct_field(w: &mut io::Writer, cx: &Context, it: &clean::Item) {
-    write!(w, "<DOCTYPE html><html><head>\
-                <meta http-equiv='refresh' content='0; \
-                      url=../struct.{}.html\\#field.{}'>\
-               </head><body></body></html>",
-           *cx.current.last(),
-           it.name.get_ref().as_slice());
+impl<'self> fmt::Default for Source<'self> {
+    fn fmt(s: &Source<'self>, fmt: &mut fmt::Formatter) {
+        let lines = s.line_iter().len();
+        let mut cols = 0;
+        let mut tmp = lines;
+        while tmp > 0 {
+            cols += 1;
+            tmp /= 10;
+        }
+        write!(fmt.buf, "<pre class='line-numbers'>");
+        for i in range(1, lines + 1) {
+            write!(fmt.buf, "<span id='{0:u}'>{0:1$u}</span>\n", i, cols);
+        }
+        write!(fmt.buf, "</pre>");
+        write!(fmt.buf, "<pre class='rust'>");
+        write!(fmt.buf, "{}", Escape(s.as_slice()));
+        write!(fmt.buf, "</pre>");
+    }
 }

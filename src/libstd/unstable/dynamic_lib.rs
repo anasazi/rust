@@ -12,7 +12,7 @@
 
 Dynamic library facilities.
 
-A simple wrapper over the platforms dynamic library facilities
+A simple wrapper over the platform's dynamic library facilities
 
 */
 use c_str::ToCStr;
@@ -33,7 +33,7 @@ impl Drop for DynamicLibrary {
             }
         } {
             Ok(()) => {},
-            Err(str) => fail!(str)
+            Err(str) => fail2!("{}", str)
         }
     }
 }
@@ -80,7 +80,6 @@ impl DynamicLibrary {
     }
 }
 
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -90,21 +89,18 @@ mod test {
     use libc;
 
     #[test]
-    // #[ignore(cfg(windows))] // FIXME #8818
-    #[ignore] // FIXME #9137 this library isn't thread-safe
+    #[ignore(cfg(windows))] // FIXME #8818
     fn test_loading_cosine() {
         // The math library does not need to be loaded since it is already
         // statically linked in
         let libm = match DynamicLibrary::open(None) {
-            Err(error) => fail!("Could not load self as module: %s", error),
+            Err(error) => fail2!("Could not load self as module: {}", error),
             Ok(libm) => libm
         };
 
-        // Unfortunately due to issue #6194 it is not possible to call
-        // this as a C function
         let cosine: extern fn(libc::c_double) -> libc::c_double = unsafe {
             match libm.symbol("cos") {
-                Err(error) => fail!("Could not load function cos: %s", error),
+                Err(error) => fail2!("Could not load function cos: {}", error),
                 Ok(cosine) => cosine
             }
         };
@@ -113,8 +109,8 @@ mod test {
         let expected_result = 1.0;
         let result = cosine(argument);
         if result != expected_result {
-            fail!("cos(%?) != %? but equaled %? instead", argument,
-                  expected_result, result)
+            fail2!("cos({:?}) != {:?} but equaled {:?} instead", argument,
+                   expected_result, result)
         }
     }
 
@@ -122,14 +118,13 @@ mod test {
     #[cfg(target_os = "linux")]
     #[cfg(target_os = "macos")]
     #[cfg(target_os = "freebsd")]
-    #[ignore] // FIXME #9137 this library isn't thread-safe
     fn test_errors_do_not_crash() {
         // Open /dev/null as a library to get an error, and make sure
         // that only causes an error, and not a crash.
-        let path = GenericPath::from_str("/dev/null");
+        let path = GenericPath::new("/dev/null");
         match DynamicLibrary::open(Some(&path)) {
             Err(_) => {}
-            Ok(_) => fail!("Successfully opened the empty library.")
+            Ok(_) => fail2!("Successfully opened the empty library.")
         }
     }
 }
@@ -164,17 +159,25 @@ pub mod dl {
         #[fixed_stack_segment]; #[inline(never)];
 
         unsafe {
+            // dlerror isn't thread safe, so we need to lock around this entire
+            // sequence. `atomically` asserts that we don't do anything that
+            // would cause this task to be descheduled, which could deadlock
+            // the scheduler if it happens while the lock is held.
+            // FIXME #9105 use a Rust mutex instead of C++ mutexes.
             do atomically {
+                rust_take_dlerror_lock();
                 let _old_error = dlerror();
 
                 let result = f();
 
                 let last_error = dlerror();
-                if ptr::null() == last_error {
+                let ret = if ptr::null() == last_error {
                     Ok(result)
                 } else {
                     Err(str::raw::from_c_str(last_error))
-                }
+                };
+                rust_drop_dlerror_lock();
+                ret
             }
         }
     }
@@ -197,6 +200,11 @@ pub mod dl {
         Local = 0,
     }
 
+    extern {
+        fn rust_take_dlerror_lock();
+        fn rust_drop_dlerror_lock();
+    }
+
     #[link_name = "dl"]
     extern {
         fn dlopen(filename: *libc::c_char, flag: libc::c_int) -> *libc::c_void;
@@ -217,7 +225,7 @@ pub mod dl {
 
     pub unsafe fn open_external(filename: &path::Path) -> *libc::c_void {
         #[fixed_stack_segment]; #[inline(never)];
-        do os::win32::as_utf16_p(filename.to_str()) |raw_name| {
+        do os::win32::as_utf16_p(filename.as_str().unwrap()) |raw_name| {
             LoadLibraryW(raw_name)
         }
     }
@@ -241,11 +249,12 @@ pub mod dl {
                 if 0 == error {
                     Ok(result)
                 } else {
-                    Err(fmt!("Error code %?", error))
+                    Err(format!("Error code {}", error))
                 }
             }
         }
     }
+
     pub unsafe fn symbol(handle: *libc::c_void, symbol: *libc::c_char) -> *libc::c_void {
         #[fixed_stack_segment]; #[inline(never)];
         GetProcAddress(handle, symbol)

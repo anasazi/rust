@@ -239,13 +239,14 @@ literal : string_lit | char_lit | num_lit ;
 
 ~~~~~~~~ {.ebnf .gram}
 char_lit : '\x27' char_body '\x27' ;
-string_lit : '"' string_body * '"' ;
+string_lit : '"' string_body * '"' | 'r' raw_string ;
 
 char_body : non_single_quote
           | '\x5c' [ '\x27' | common_escape ] ;
 
 string_body : non_double_quote
             | '\x5c' [ '\x22' | common_escape ] ;
+raw_string : '"' raw_string_body '"' | '#' raw_string '#' ;
 
 common_escape : '\x5c'
               | 'n' | 'r' | 't' | '0'
@@ -267,9 +268,10 @@ which must be _escaped_ by a preceding U+005C character (`\`).
 
 A _string literal_ is a sequence of any Unicode characters enclosed within
 two `U+0022` (double-quote) characters, with the exception of `U+0022`
-itself, which must be _escaped_ by a preceding `U+005C` character (`\`).
+itself, which must be _escaped_ by a preceding `U+005C` character (`\`),
+or a _raw string literal_.
 
-Some additional _escapes_ are available in either character or string
+Some additional _escapes_ are available in either character or non-raw string
 literals. An escape starts with a `U+005C` (`\`) and continues with one of
 the following forms:
 
@@ -285,8 +287,34 @@ the following forms:
   * A _whitespace escape_ is one of the characters `U+006E` (`n`), `U+0072`
     (`r`), or `U+0074` (`t`), denoting the unicode values `U+000A` (LF),
     `U+000D` (CR) or `U+0009` (HT) respectively.
-  * The _backslash escape_ is the character U+005C (`\`) which must be
+  * The _backslash escape_ is the character `U+005C` (`\`) which must be
     escaped in order to denote *itself*.
+
+Raw string literals do not process any escapes. They start with the character
+`U+0072` (`r`), followed zero or more of the character `U+0023` (`#`) and a
+`U+0022` (double-quote) character. The _raw string body_ is not defined in the
+EBNF grammar above: it can contain any sequence of Unicode characters and is
+terminated only by another `U+0022` (double-quote) character, followed by the
+same number of `U+0023` (`#`) characters that preceeded the opening `U+0022`
+(double-quote) character.
+
+All Unicode characters contained in the raw string body represent themselves,
+the characters `U+0022` (double-quote) (except when followed by at least as
+many `U+0023` (`#`) characters as were used to start the raw string literal) or
+`U+005C` (`\`) do not have any special meaning.
+
+Examples for string literals:
+
+~~~
+"foo"; r"foo";                     // foo
+"\"foo\""; r#""foo""#;             // "foo"
+
+"foo #\"# bar";
+r##"foo #"# bar"##;                // foo #"# bar
+
+"\x52"; "R"; r"R";                 // R
+"\\x52"; r"\x52";                  // \x52
+~~~
 
 #### Number literals
 
@@ -363,19 +391,17 @@ A _floating-point literal_ has one of two forms:
   second decimal literal.
 * A single _decimal literal_ followed by an _exponent_.
 
-By default, a floating-point literal is of type `float`. A
-floating-point literal may be followed (immediately, without any
-spaces) by a _floating-point suffix_, which changes the type of the
-literal. There are three floating-point suffixes: `f` (for the base
-`float` type), `f32`, and `f64` (the 32-bit and 64-bit floating point
-types).
+By default, a floating-point literal has a generic type, but will fall back to
+`f64`. A floating-point literal may be followed (immediately, without any
+spaces) by a _floating-point suffix_, which changes the type of the literal.
+There are two floating-point suffixes: `f32`, and `f64` (the 32-bit and 64-bit
+floating point types).
 
 Examples of floating-point literals of various forms:
 
 ~~~~
-123.0;                             // type float
-0.1;                               // type float
-3f;                                // type float
+123.0;                             // type f64
+0.1;                               // type f64
 0.1f32;                            // type f32
 12E+99_f64;                        // type f64
 ~~~~
@@ -683,15 +709,15 @@ mod math {
     type complex = (f64, f64);
     fn sin(f: f64) -> f64 {
         ...
-# fail!();
+# fail2!();
     }
     fn cos(f: f64) -> f64 {
         ...
-# fail!();
+# fail2!();
     }
     fn tan(f: f64) -> f64 {
         ...
-# fail!();
+# fail2!();
     }
 }
 ~~~~~~~~
@@ -817,12 +843,14 @@ An example of `use` declarations:
 use std::num::sin;
 use std::option::{Some, None};
 
-fn main() {
-    // Equivalent to 'info!(std::num::sin(1.0));'
-    info!(sin(1.0));
+# fn foo<T>(_: T){}
 
-    // Equivalent to 'info!(~[std::option::Some(1.0), std::option::None]);'
-    info!(~[Some(1.0), None]);
+fn main() {
+    // Equivalent to 'std::num::sin(1.0);'
+    sin(1.0);
+
+    // Equivalent to 'foo(~[std::option::Some(1.0), std::option::None]);'
+    foo(~[Some(1.0), None]);
 }
 ~~~~
 
@@ -1040,8 +1068,8 @@ output slot type would normally be. For example:
 
 ~~~~
 fn my_err(s: &str) -> ! {
-    info!(s);
-    fail!();
+    info2!("{}", s);
+    fail2!();
 }
 ~~~~
 
@@ -1059,7 +1087,7 @@ were declared without the `!` annotation, the following code would not
 typecheck:
 
 ~~~~
-# fn my_err(s: &str) -> ! { fail!() }
+# fn my_err(s: &str) -> ! { fail2!() }
 
 fn f(i: int) -> int {
    if i == 42 {
@@ -1177,8 +1205,8 @@ a = Cat;
 Enumeration constructors can have either named or unnamed fields:
 ~~~~
 enum Animal {
-    Dog (~str, float),
-    Cat { name: ~str, weight: float }
+    Dog (~str, f64),
+    Cat { name: ~str, weight: f64 }
 }
 
 let mut a: Animal = Dog(~"Cocoa", 37.2);
@@ -1342,17 +1370,17 @@ For example:
 trait Num {
     fn from_int(n: int) -> Self;
 }
-impl Num for float {
-    fn from_int(n: int) -> float { n as float }
+impl Num for f64 {
+    fn from_int(n: int) -> f64 { n as f64 }
 }
-let x: float = Num::from_int(42);
+let x: f64 = Num::from_int(42);
 ~~~~
 
 Traits may inherit from other traits. For example, in
 
 ~~~~
-trait Shape { fn area() -> float; }
-trait Circle : Shape { fn radius() -> float; }
+trait Shape { fn area() -> f64; }
+trait Circle : Shape { fn radius() -> f64; }
 ~~~~
 
 the syntax `Circle : Shape` means that types that implement `Circle` must also have an implementation for `Shape`.
@@ -1365,9 +1393,9 @@ methods of the supertrait may be called on values of subtrait-bound type paramet
 Referring to the previous example of `trait Circle : Shape`:
 
 ~~~
-# trait Shape { fn area(&self) -> float; }
-# trait Circle : Shape { fn radius(&self) -> float; }
-fn radius_times_area<T: Circle>(c: T) -> float {
+# trait Shape { fn area(&self) -> f64; }
+# trait Circle : Shape { fn radius(&self) -> f64; }
+fn radius_times_area<T: Circle>(c: T) -> f64 {
     // `c` is both a Circle and a Shape
     c.radius() * c.area()
 }
@@ -1376,10 +1404,10 @@ fn radius_times_area<T: Circle>(c: T) -> float {
 Likewise, supertrait methods may also be called on trait objects.
 
 ~~~ {.xfail-test}
-# trait Shape { fn area(&self) -> float; }
-# trait Circle : Shape { fn radius(&self) -> float; }
-# impl Shape for int { fn area(&self) -> float { 0.0 } }
-# impl Circle for int { fn radius(&self) -> float { 0.0 } }
+# trait Shape { fn area(&self) -> f64; }
+# trait Circle : Shape { fn radius(&self) -> f64; }
+# impl Shape for int { fn area(&self) -> f64 { 0.0 } }
+# impl Circle for int { fn radius(&self) -> f64 { 0.0 } }
 # let mycircle = 0;
 
 let mycircle: Circle = @mycircle as @Circle;
@@ -1393,14 +1421,14 @@ An _implementation_ is an item that implements a [trait](#traits) for a specific
 Implementations are defined with the keyword `impl`.
 
 ~~~~
-# struct Point {x: float, y: float};
+# struct Point {x: f64, y: f64};
 # type Surface = int;
-# struct BoundingBox {x: float, y: float, width: float, height: float};
+# struct BoundingBox {x: f64, y: f64, width: f64, height: f64};
 # trait Shape { fn draw(&self, Surface); fn bounding_box(&self) -> BoundingBox; }
 # fn do_draw_circle(s: Surface, c: Circle) { }
 
 struct Circle {
-    radius: float,
+    radius: f64,
     center: Point,
 }
 
@@ -1500,6 +1528,171 @@ declared in an extern block
 is `extern "abi" fn(A1, ..., An) -> R`,
 where `A1...An` are the declared types of its arguments
 and `R` is the decalred return type.
+
+## Visibility and Privacy
+
+These two terms are often used interchangeably, and what they are attempting to
+convey is the answer to the question "Can this item be used at this location?"
+
+Rust's name resolution operates on a global hierarchy of namespaces. Each level
+in the hierarchy can be thought of as some item. The items are one of those
+mentioned above, but also include external crates. Declaring or defining a new
+module can be thought of as inserting a new tree into the hierarchy at the
+location of the definition.
+
+To control whether interfaces can be used across modules, Rust checks each use
+of an item to see whether it should be allowed or not. This is where privacy
+warnings are generated, or otherwise "you used a private item of another module
+and weren't allowed to."
+
+By default, everything in rust is *private*, with two exceptions. The first
+exception is that struct fields are public by default (but the struct itself is
+still private by default), and the remaining exception is that enum variants in
+a `pub` enum are the default visibility of the enum container itself.. You are
+allowed to alter this default visibility with the `pub` keyword (or `priv`
+keyword for struct fields and enum variants). When an item is declared as `pub`,
+it can be thought of as being accessible to the outside world. For example:
+
+~~~
+// Declare a private struct
+struct Foo;
+
+// Declare a public struct with a private field
+pub struct Bar {
+    priv field: int
+}
+
+// Declare a public enum with public and private variants
+pub enum State {
+    PubliclyAccessibleState,
+    priv PrivatelyAccessibleState
+}
+~~~
+
+With the notion of an item being either public or private, Rust allows item
+accesses in two cases:
+
+1. If an item is public, then it can be used externally through any of its
+   public ancestors.
+2. If an item is private, it may be accessed by the current module and its
+   descendants.
+
+These two cases are surprisingly powerful for creating module hierarchies
+exposing public APIs while hiding internal implementation details. To help
+explain, here's a few use cases and what they would entail.
+
+* A library developer needs to expose functionality to crates which link against
+  their library. As a consequence of the first case, this means that anything
+  which is usable externally must be `pub` from the root down to the destination
+  item. Any private item in the chain will disallow external accesses.
+
+* A crate needs a global available "helper module" to itself, but it doesn't
+  want to expose the helper module as a public API. To accomplish this, the root
+  of the crate's hierarchy would have a private module which then internally has
+  a "public api". Because the entire crate is an ancestor of the root, then the
+  entire local crate can access this private module through the second case.
+
+* When writing unit tests for a module, it's often a common idiom to have an
+  immediate child of the module to-be-tested named `mod test`. This module could
+  access any items of the parent module through the second case, meaning that
+  internal implementation details could also be seamlessly tested from the child
+  module.
+
+In the second case, it mentions that a private item "can be accessed" by the
+current module and its descendants, but the exact meaning of accessing an item
+depends on what the item is. Accessing a module, for example, would mean looking
+inside of it (to import more items). On the other hand, accessing a function
+would mean that it is invoked.
+
+Here's an example of a program which exemplifies the three cases outlined above.
+
+~~~
+// This module is private, meaning that no external crate can access this
+// module. Because it is private at the root of this current crate, however, any
+// module in the crate may access any publicly visible item in this module.
+mod crate_helper_module {
+
+    // This function can be used by anything in the current crate
+    pub fn crate_helper() {}
+
+    // This function *cannot* be used by anything else in the crate. It is not
+    // publicly visible outside of the `crate_helper_module`, so only this
+    // current module and its descendants may access it.
+    fn implementation_detail() {}
+}
+
+// This function is "public to the root" meaning that it's available to external
+// crates linking against this one.
+pub fn public_api() {}
+
+// Similarly to 'public_api', this module is public so external crates may look
+// inside of it.
+pub mod submodule {
+    use crate_helper_module;
+
+    pub fn my_method() {
+        // Any item in the local crate may invoke the helper module's public
+        // interface through a combination of the two rules above.
+        crate_helper_module::crate_helper();
+    }
+
+    // This function is hidden to any module which is not a descendant of
+    // `submodule`
+    fn my_implementation() {}
+
+    #[cfg(test)]
+    mod test {
+
+        #[test]
+        fn test_my_implementation() {
+            // Because this module is a descendant of `submodule`, it's allowed
+            // to access private items inside of `submodule` without a privacy
+            // violation.
+            super::my_implementation();
+        }
+    }
+}
+
+# fn main() {}
+~~~
+
+For a rust program to pass the privacy checking pass, all paths must be valid
+accesses given the two rules above. This includes all use statements,
+expressions, types, etc.
+
+### Re-exporting and Visibility
+
+Rust allows publicly re-exporting items through a `pub use` directive. Because
+this is a public directive, this allows the item to be used in the current
+module through the rules above. It essentially allows public access into the
+re-exported item. For example, this program is valid:
+
+~~~
+pub use api = self::implementation;
+
+mod implementation {
+    pub fn f() {}
+}
+
+# fn main() {}
+~~~
+
+This means that any external crate referencing `implementation::f` would receive
+a privacy violation, while the path `api::f` would be allowed.
+
+When re-exporting a private item, it can be thought of as allowing the "privacy
+chain" being short-circuited through the reexport instead of passing through the
+namespace hierarchy as it normally would.
+
+### Glob imports and Visibility
+
+Currently glob imports are considered an "experimental" language feature. For
+sanity purpose along with helping the implementation, glob imports will only
+import public items from their destination, not private items.
+
+> **Note:** This is subject to change, glob exports may be removed entirely or
+> they could possibly import private items for a privacy error to later be
+> issued if the item is used.
 
 ## Attributes
 
@@ -1775,6 +1968,7 @@ Supported traits for `deriving` are:
   `obj.to_str()` has similar output as `fmt!("%?", obj)`, but it differs in that
   each constituent field of the type must also implement `ToStr` and will have
   `field.to_str()` invoked to build up the result.
+* `FromPrimitive`, to create an instance from a numeric primitve.
 
 ### Stability
 One can indicate the stability of an API using the following attributes:
@@ -1831,6 +2025,58 @@ fn main() {
 > **Note:** Currently these are only checked when applied to
 > individual functions, structs, methods and enum variants, *not* to
 > entire modules, traits, impls or enums themselves.
+
+### Compiler Features
+
+Certain aspects of Rust may be implemented in the compiler, but they're not
+necessarily ready for every-day use. These features are often of "prototype
+quality" or "almost production ready", but may not be stable enough to be
+considered a full-fleged language feature.
+
+For this reason, rust recognizes a special crate-level attribute of the form:
+
+~~~ {.xfail-test}
+#[feature(feature1, feature2, feature3)]
+~~~
+
+This directive informs the compiler that the feature list: `feature1`,
+`feature2`, and `feature3` should all be enabled. This is only recognized at a
+crate-level, not at a module-level. Without this directive, all features are
+considered off, and using the features will result in a compiler error.
+
+The currently implemented features of the compiler are:
+
+* `macro_rules` - The definition of new macros. This does not encompass
+                  macro-invocation, that is always enabled by default, this only
+                  covers the definition of new macros. There are currently
+                  various problems with invoking macros, how they interact with
+                  their environment, and possibly how they are used outside of
+                  location in which they are defined. Macro definitions are
+                  likely to change slightly in the future, so they are currently
+                  hidden behind this feature.
+
+* `globs` - Importing everything in a module through `*`. This is currently a
+            large source of bugs in name resolution for Rust, and it's not clear
+            whether this will continue as a feature or not. For these reasons,
+            the glob import statement has been hidden behind this feature flag.
+
+* `struct_variant` - Structural enum variants (those with named fields). It is
+                     currently unknown whether this style of enum variant is as
+                     fully supported as the tuple-forms, and it's not certain
+                     that this style of variant should remain in the language.
+                     For now this style of variant is hidden behind a feature
+                     flag.
+
+If a feature is promoted to a language feature, then all existing programs will
+start to receive compilation warnings about #[feature] directives which enabled
+the new feature (because the directive is no longer necessary). However, if
+a feature is decided to be removed from the language, errors will be issued (if
+there isn't a parser error first). The directive in this case is no longer
+necessary, and it's likely that existing code will break if the feature isn't
+removed.
+
+If a unknown feature is found in a directive, it results in a compiler error. An
+unknown feature is one which has never been recognized by the compiler.
 
 # Statements and expressions
 
@@ -1968,7 +2214,7 @@ values.
 
 ~~~~~~~~ {.tuple}
 (0,);
-(0f, 4.5f);
+(0.0, 4.5);
 ("a", 4u, true);
 ~~~~~~~~
 
@@ -2000,12 +2246,12 @@ A _unit-like structure expression_ consists only of the [path](#paths) of a [str
 The following are examples of structure expressions:
 
 ~~~~
-# struct Point { x: float, y: float }
-# struct TuplePoint(float, float);
+# struct Point { x: f64, y: f64 }
+# struct TuplePoint(f64, f64);
 # mod game { pub struct User<'self> { name: &'self str, age: uint, score: uint } }
 # struct Cookie; fn some_fn<T>(t: T) {}
-Point {x: 10f, y: 20f};
-TuplePoint(10f, 20f);
+Point {x: 10.0, y: 20.0};
+TuplePoint(10.0, 20.0);
 let u = game::User {name: "Joe", age: 35, score: 100_000};
 some_fn::<Cookie>(Cookie);
 ~~~~
@@ -2246,12 +2492,12 @@ Any other cast is unsupported and will fail to compile.
 An example of an `as` expression:
 
 ~~~~
-# fn sum(v: &[float]) -> float { 0.0 }
-# fn len(v: &[float]) -> int { 0 }
+# fn sum(v: &[f64]) -> f64 { 0.0 }
+# fn len(v: &[f64]) -> int { 0 }
 
-fn avg(v: &[float]) -> float {
-  let sum: float = sum(v);
-  let sz: float = len(v) as float;
+fn avg(v: &[f64]) -> f64 {
+  let sum: f64 = sum(v);
+  let sz: f64 = len(v) as f64;
   return sum / sz;
 }
 ~~~~
@@ -2382,7 +2628,7 @@ fn ten_times(f: &fn(int)) {
     }
 }
 
-ten_times(|j| println(fmt!("hello, %d", j)));
+ten_times(|j| println!("hello, {}", j));
 
 ~~~~
 
@@ -2594,9 +2840,9 @@ enum List<X> { Nil, Cons(X, @List<X>) }
 let x: List<int> = Cons(10, @Cons(11, @Nil));
 
 match x {
-    Cons(_, @Nil) => fail!("singleton list"),
+    Cons(_, @Nil) => fail2!("singleton list"),
     Cons(*)       => return,
-    Nil           => fail!("empty list")
+    Nil           => fail2!("empty list")
 }
 ~~~~
 
@@ -2633,7 +2879,7 @@ match x {
         return;
     }
     _ => {
-        fail!();
+        fail2!();
     }
 }
 ~~~~
@@ -2687,7 +2933,7 @@ guard may refer to the variables bound within the pattern they follow.
 let message = match maybe_digit {
   Some(x) if x < 10 => process_digit(x),
   Some(x) => process_other(x),
-  None => fail!()
+  None => fail2!()
 };
 ~~~~
 
@@ -2763,19 +3009,6 @@ The Rust type `int`^[A Rust `int` is analogous to a C99 `intptr_t`.] is a
 two's complement signed integer type with target-machine-dependent size. Its
 size, in bits, is equal to the size of the rust type `uint` on the same target
 machine.
-
-
-#### Machine-dependent floating point type
-
-The Rust type `float` is a machine-specific type equal to one of the supported
-Rust floating-point machine types (`f32` or `f64`). It is the largest
-floating-point type that is directly supported by hardware on the target
-machine, or if the target machine has no floating-point hardware support, the
-largest floating-point type supported by the software floating-point library
-used to support the other floating-point machine types.
-
-Note that due to the preference for hardware-supported floating-point, the
-type `float` may not be equal to the largest *supported* floating-point type.
 
 
 ### Textual types
@@ -3472,10 +3705,10 @@ that demonstrates all four of them:
 
 ```rust
 fn main() {
-    error!("This is an error log")
-    warn!("This is a warn log")
-    info!("this is an info log")
-    debug!("This is a debug log")
+    error2!("This is an error log")
+    warn2!("This is a warn log")
+    info2!("this is an info log")
+    debug2!("This is a debug log")
 }
 ```
 
@@ -3483,9 +3716,9 @@ These four log levels correspond to levels 1-4, as controlled by `RUST_LOG`:
 
 ```bash
 $ RUST_LOG=rust=3 ./rust
-rust: ~"\"This is an error log\""
-rust: ~"\"This is a warn log\""
-rust: ~"\"this is an info log\""
+This is an error log
+This is a warn log
+this is an info log
 ```
 
 # Appendix: Rationales and design tradeoffs

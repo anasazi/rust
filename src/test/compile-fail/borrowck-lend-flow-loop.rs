@@ -16,8 +16,8 @@
 
 fn borrow(_v: &int) {}
 fn borrow_mut(_v: &mut int) {}
-fn cond() -> bool { fail!() }
-fn produce<T>() -> T { fail!(); }
+fn cond() -> bool { fail2!() }
+fn produce<T>() -> T { fail2!(); }
 
 fn inc(v: &mut ~int) {
     *v = ~(**v + 1);
@@ -135,7 +135,7 @@ fn loop_loop_pops_scopes<'r>(_v: &'r mut [uint], f: &fn(&'r mut uint) -> bool) {
             // this borrow is limited to the scope of `r`...
             let r: &'r mut uint = produce();
             if !f(&mut *r) {
-                loop; // ...so it is not live as exit (and re-enter) the `while` loop here
+                continue; // ...so it is not live as exit (and re-enter) the `while` loop here
             }
         }
     }

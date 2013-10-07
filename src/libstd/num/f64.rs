@@ -12,6 +12,7 @@
 
 #[allow(missing_doc)];
 #[allow(non_uppercase_statics)];
+#[allow(non_uppercase_pattern_statics)];
 
 use default::Default;
 use libc::c_int;
@@ -637,6 +638,9 @@ impl Primitive for f64 {
 
     #[inline]
     fn bytes(_: Option<f64>) -> uint { Primitive::bits(Some(0f64)) / 8 }
+
+    #[inline]
+    fn is_signed(_: Option<f64>) -> bool { true }
 }
 
 impl Float for f64 {
@@ -864,8 +868,8 @@ impl num::ToStrRadix for f64 {
     fn to_str_radix(&self, rdx: uint) -> ~str {
         let (r, special) = strconv::float_to_str_common(
             *self, rdx, true, strconv::SignNeg, strconv::DigAll);
-        if special { fail!("number has a special value, \
-                          try to_str_radix_special() if those are expected") }
+        if special { fail2!("number has a special value, \
+                             try to_str_radix_special() if those are expected") }
         r
     }
 }

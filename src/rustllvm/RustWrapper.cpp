@@ -548,14 +548,21 @@ extern "C" LLVMValueRef LLVMDIBuilderCreateStructType(
     LLVMValueRef DerivedFrom,
     LLVMValueRef Elements,
     unsigned RunTimeLang,
-    LLVMValueRef VTableHolder) {
+    LLVMValueRef VTableHolder,
+    const char *UniqueId) {
     return wrap(Builder->createStructType(
-        unwrapDI<DIDescriptor>(Scope), Name,
-        unwrapDI<DIFile>(File), LineNumber,
-        SizeInBits, AlignInBits, Flags,
+        unwrapDI<DIDescriptor>(Scope),
+        Name,
+        unwrapDI<DIFile>(File),
+        LineNumber,
+        SizeInBits,
+        AlignInBits,
+        Flags,
         unwrapDI<DIType>(DerivedFrom),
-        unwrapDI<DIArray>(Elements), RunTimeLang,
-        unwrapDI<MDNode*>(VTableHolder)));
+        unwrapDI<DIArray>(Elements),
+        RunTimeLang,
+        unwrapDI<MDNode*>(VTableHolder),
+        UniqueId));
 }
 
 extern "C" LLVMValueRef LLVMDIBuilderCreateMemberType(
@@ -795,4 +802,11 @@ extern "C" void LLVMDICompositeTypeSetTypeArray(
     LLVMValueRef TypeArray)
 {
     unwrapDI<DICompositeType>(CompositeType).setTypeArray(unwrapDI<DIArray>(TypeArray));
+}
+
+extern "C" char *LLVMTypeToString(LLVMTypeRef Type) {
+    std::string s;
+    llvm::raw_string_ostream os(s);
+    unwrap<llvm::Type>(Type)->print(os);
+    return strdup(os.str().data());
 }

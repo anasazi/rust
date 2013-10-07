@@ -8,14 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[feature(struct_variant)];
+
 enum Foo {
     Bar {
         a: int,
         b: int
     },
     Baz {
-        c: float,
-        d: float
+        c: f64,
+        d: f64
     }
 }
 
