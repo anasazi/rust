@@ -8,6 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[feature(managed_boxes)];
+#[crate_id="req"];
+// NOTE: remove after the next snapshot
 #[link(name = "req")];
 #[crate_type = "lib"];
 

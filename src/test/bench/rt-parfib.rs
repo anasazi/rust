@@ -13,8 +13,6 @@ extern mod extra;
 use std::os;
 use std::uint;
 use std::rt::test::spawntask_later;
-use std::cell::Cell;
-use std::comm::oneshot;
 
 // A simple implementation of parfib. One subtree is found in a new
 // task and communicated over a oneshot pipe, the other is found
@@ -25,10 +23,9 @@ fn parfib(n: uint) -> uint {
         return 1;
     }
 
-    let (port,chan) = oneshot::<uint>();
-    let chan = Cell::new(chan);
+    let (port,chan) = Chan::new();
     do spawntask_later {
-        chan.take().send(parfib(n-1));
+        chan.send(parfib(n-1));
     };
     let m2 = parfib(n-2);
     return (port.recv() + m2);

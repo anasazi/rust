@@ -21,6 +21,8 @@ pub fn expand_deriving_to_str(cx: @ExtCtxt,
                               in_items: ~[@item])
     -> ~[@item] {
     let trait_def = TraitDef {
+        cx: cx, span: span,
+
         path: Path::new(~["std", "to_str", "ToStr"]),
         additional_bounds: ~[],
         generics: LifetimeBounds::empty(),
@@ -31,24 +33,26 @@ pub fn expand_deriving_to_str(cx: @ExtCtxt,
                 explicit_self: borrowed_explicit_self(),
                 args: ~[],
                 ret_ty: Ptr(~Literal(Path::new_local("str")), Send),
+                inline: false,
                 const_nonmatching: false,
                 combine_substructure: to_str_substructure
             }
         ]
     };
-    trait_def.expand(cx, span, mitem, in_items)
+    trait_def.expand(mitem, in_items)
 }
 
 // It used to be the case that this deriving implementation invoked
-// std::sys::log_str, but this isn't sufficient because it doesn't invoke the
-// to_str() method on each field. Hence we mirror the logic of the log_str()
-// method, but with tweaks to call to_str() on sub-fields.
+// std::repr::repr_to_str, but this isn't sufficient because it
+// doesn't invoke the to_str() method on each field. Hence we mirror
+// the logic of the repr_to_str() method, but with tweaks to call to_str()
+// on sub-fields.
 fn to_str_substructure(cx: @ExtCtxt, span: Span,
                        substr: &Substructure) -> @Expr {
     let to_str = cx.ident_of("to_str");
 
     let doit = |start: &str, end: @str, name: ast::Ident,
-                fields: &[(Option<ast::Ident>, @Expr, ~[@Expr])]| {
+                fields: &[FieldInfo]| {
         if fields.len() == 0 {
             cx.expr_str_uniq(span, cx.str_of(name))
         } else {
@@ -64,7 +68,7 @@ fn to_str_substructure(cx: @ExtCtxt, span: Span,
                 stmts.push(cx.stmt_expr(call));
             };
 
-            for (i, &(name, e, _)) in fields.iter().enumerate() {
+            for (i, &FieldInfo {name, span, self_, .. }) in fields.iter().enumerate() {
                 if i > 0 {
                     push(cx.expr_str(span, @", "));
                 }
@@ -75,7 +79,7 @@ fn to_str_substructure(cx: @ExtCtxt, span: Span,
                         push(cx.expr_str(span, name.to_managed()));
                     }
                 }
-                push(cx.expr_method_call(span, e, to_str, ~[]));
+                push(cx.expr_method_call(span, self_, to_str, ~[]));
             }
             push(cx.expr_str(span, end));
 
@@ -85,7 +89,7 @@ fn to_str_substructure(cx: @ExtCtxt, span: Span,
 
     return match *substr.fields {
         Struct(ref fields) => {
-            if fields.len() == 0 || fields[0].n0_ref().is_none() {
+            if fields.len() == 0 || fields[0].name.is_none() {
                 doit("(", @")", substr.type_ident, *fields)
             } else {
                 doit("{", @"}", substr.type_ident, *fields)
@@ -94,9 +98,9 @@ fn to_str_substructure(cx: @ExtCtxt, span: Span,
 
         EnumMatching(_, variant, ref fields) => {
             match variant.node.kind {
-                ast::tuple_variant_kind(*) =>
+                ast::tuple_variant_kind(..) =>
                     doit("(", @")", variant.node.name, *fields),
-                ast::struct_variant_kind(*) =>
+                ast::struct_variant_kind(..) =>
                     doit("{", @"}", variant.node.name, *fields),
             }
         }

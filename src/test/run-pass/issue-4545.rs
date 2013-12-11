@@ -8,8 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-fast windows doesn't like aux-build
+// xfail-fast check-fast doesn't like aux-build
 // aux-build:issue-4545.rs
 
-extern mod somelib(name = "issue-4545");
+extern mod somelib = "issue-4545";
 fn main() { somelib::mk::<int>(); }

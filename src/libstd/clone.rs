@@ -29,12 +29,27 @@ pub trait Clone {
     /// are copied to maintain uniqueness, while the contents of
     /// managed pointers are not copied.
     fn clone(&self) -> Self;
+
+    /// Perform copy-assignment from `source`.
+    ///
+    /// `a.clone_from(&b)` is equivalent to `a = b.clone()` in functionality,
+    /// but can be overridden to reuse the resources of `a` to avoid unnecessary
+    /// allocations.
+    #[inline(always)]
+    fn clone_from(&mut self, source: &Self) {
+        *self = source.clone()
+    }
 }
 
 impl<T: Clone> Clone for ~T {
-    /// Return a deep copy of the owned box.
+    /// Return a copy of the owned box.
     #[inline]
     fn clone(&self) -> ~T { ~(**self).clone() }
+
+    /// Perform copy-assignment from `source` by reusing the existing allocation.
+    fn clone_from(&mut self, source: &~T) {
+        **self = (**source).clone()
+    }
 }
 
 impl<T> Clone for @T {
@@ -49,22 +64,22 @@ impl<T> Clone for @mut T {
     fn clone(&self) -> @mut T { *self }
 }
 
-impl<'self, T> Clone for &'self T {
+impl<'a, T> Clone for &'a T {
     /// Return a shallow copy of the borrowed pointer.
     #[inline]
-    fn clone(&self) -> &'self T { *self }
+    fn clone(&self) -> &'a T { *self }
 }
 
-impl<'self, T> Clone for &'self [T] {
+impl<'a, T> Clone for &'a [T] {
     /// Return a shallow copy of the slice.
     #[inline]
-    fn clone(&self) -> &'self [T] { *self }
+    fn clone(&self) -> &'a [T] { *self }
 }
 
-impl<'self> Clone for &'self str {
+impl<'a> Clone for &'a str {
     /// Return a shallow copy of the slice.
     #[inline]
-    fn clone(&self) -> &'self str { *self }
+    fn clone(&self) -> &'a str { *self }
 }
 
 macro_rules! clone_impl(
@@ -118,16 +133,31 @@ extern_fn_clone!(A, B, C, D, E, F, G, H)
 
 /// A trait distinct from `Clone` which represents "deep copies" of things like
 /// managed boxes which would otherwise not be copied.
-pub trait DeepClone {
+pub trait DeepClone: Clone {
     /// Return a deep copy of the value. Unlike `Clone`, the contents of shared pointer types
     /// *are* copied.
     fn deep_clone(&self) -> Self;
+
+    /// Perform deep copy-assignment from `source`.
+    ///
+    /// `a.deep_clone_from(&b)` is equivalent to `a = b.deep_clone()` in
+    /// functionality, but can be overridden to reuse the resources of `a` to
+    /// avoid unnecessary allocations.
+    #[inline(always)]
+    fn deep_clone_from(&mut self, source: &Self) {
+        *self = source.deep_clone()
+    }
 }
 
 impl<T: DeepClone> DeepClone for ~T {
     /// Return a deep copy of the owned box.
     #[inline]
     fn deep_clone(&self) -> ~T { ~(**self).deep_clone() }
+
+    /// Perform deep copy-assignment from `source` by reusing the existing allocation.
+    fn deep_clone_from(&mut self, source: &~T) {
+        **self = (**source).deep_clone()
+    }
 }
 
 // FIXME: #6525: should also be implemented for `T: Send + DeepClone`
@@ -232,6 +262,22 @@ fn test_borrowed_clone() {
     let y: &int = &x;
     let z: &int = (&y).clone();
     assert_eq!(*z, 5);
+}
+
+#[test]
+fn test_clone_from() {
+    let a = ~5;
+    let mut b = ~10;
+    b.clone_from(&a);
+    assert_eq!(*b, 5);
+}
+
+#[test]
+fn test_deep_clone_from() {
+    let a = ~5;
+    let mut b = ~10;
+    b.deep_clone_from(&a);
+    assert_eq!(*b, 5);
 }
 
 #[test]

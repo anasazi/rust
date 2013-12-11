@@ -9,9 +9,9 @@
 // except according to those terms.
 
 fn main() {
-    let f: &fn() -> int = || {
+    let f: || -> int = || {
         let i: int;
         i //~ ERROR use of possibly uninitialized variable: `i`
     };
-    error2!("{:?}", f());
+    error!("{:?}", f());
 }

@@ -10,45 +10,43 @@
 
 #[allow(dead_assignment)];
 
-use std::comm;
-
 pub fn main() { test00(); }
 
 fn test00() {
     let mut r: int = 0;
     let mut sum: int = 0;
-    let (p, c) = comm::stream();
+    let (p, c) = Chan::new();
     c.send(1);
     c.send(2);
     c.send(3);
     c.send(4);
     r = p.recv();
     sum += r;
-    info2!("{}", r);
+    info!("{}", r);
     r = p.recv();
     sum += r;
-    info2!("{}", r);
+    info!("{}", r);
     r = p.recv();
     sum += r;
-    info2!("{}", r);
+    info!("{}", r);
     r = p.recv();
     sum += r;
-    info2!("{}", r);
+    info!("{}", r);
     c.send(5);
     c.send(6);
     c.send(7);
     c.send(8);
     r = p.recv();
     sum += r;
-    info2!("{}", r);
+    info!("{}", r);
     r = p.recv();
     sum += r;
-    info2!("{}", r);
+    info!("{}", r);
     r = p.recv();
     sum += r;
-    info2!("{}", r);
+    info!("{}", r);
     r = p.recv();
     sum += r;
-    info2!("{}", r);
+    info!("{}", r);
     assert_eq!(sum, 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8);
 }

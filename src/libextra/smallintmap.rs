@@ -164,8 +164,11 @@ impl<V> SmallIntMap<V> {
 }
 
 impl<V:Clone> SmallIntMap<V> {
-    pub fn update_with_key(&mut self, key: uint, val: V,
-                           ff: &fn(uint, V, V) -> V) -> bool {
+    pub fn update_with_key(&mut self,
+                           key: uint,
+                           val: V,
+                           ff: |uint, V, V| -> V)
+                           -> bool {
         let new_val = match self.find(&key) {
             None => val,
             Some(orig) => ff(key, (*orig).clone(), val)
@@ -173,8 +176,7 @@ impl<V:Clone> SmallIntMap<V> {
         self.insert(key, new_val)
     }
 
-    pub fn update(&mut self, key: uint, newval: V, ff: &fn(V, V) -> V)
-                  -> bool {
+    pub fn update(&mut self, key: uint, newval: V, ff: |V, V| -> V) -> bool {
         self.update_with_key(key, newval, |_k, v, v1| ff(v,v1))
     }
 }
@@ -182,7 +184,7 @@ impl<V:Clone> SmallIntMap<V> {
 
 macro_rules! iterator {
     (impl $name:ident -> $elem:ty, $getter:ident) => {
-        impl<'self, T> Iterator<$elem> for $name<'self, T> {
+        impl<'a, T> Iterator<$elem> for $name<'a, T> {
             #[inline]
             fn next(&mut self) -> Option<$elem> {
                 while self.front < self.back {
@@ -211,7 +213,7 @@ macro_rules! iterator {
 
 macro_rules! double_ended_iterator {
     (impl $name:ident -> $elem:ty, $getter:ident) => {
-        impl<'self, T> DoubleEndedIterator<$elem> for $name<'self, T> {
+        impl<'a, T> DoubleEndedIterator<$elem> for $name<'a, T> {
             #[inline]
             fn next_back(&mut self) -> Option<$elem> {
                 while self.front < self.back {
@@ -232,25 +234,25 @@ macro_rules! double_ended_iterator {
     }
 }
 
-pub struct SmallIntMapIterator<'self, T> {
+pub struct SmallIntMapIterator<'a, T> {
     priv front: uint,
     priv back: uint,
-    priv iter: VecIterator<'self, Option<T>>
+    priv iter: VecIterator<'a, Option<T>>
 }
 
-iterator!(impl SmallIntMapIterator -> (uint, &'self T), get_ref)
-double_ended_iterator!(impl SmallIntMapIterator -> (uint, &'self T), get_ref)
-pub type SmallIntMapRevIterator<'self, T> = Invert<SmallIntMapIterator<'self, T>>;
+iterator!(impl SmallIntMapIterator -> (uint, &'a T), get_ref)
+double_ended_iterator!(impl SmallIntMapIterator -> (uint, &'a T), get_ref)
+pub type SmallIntMapRevIterator<'a, T> = Invert<SmallIntMapIterator<'a, T>>;
 
-pub struct SmallIntMapMutIterator<'self, T> {
+pub struct SmallIntMapMutIterator<'a, T> {
     priv front: uint,
     priv back: uint,
-    priv iter: VecMutIterator<'self, Option<T>>
+    priv iter: VecMutIterator<'a, Option<T>>
 }
 
-iterator!(impl SmallIntMapMutIterator -> (uint, &'self mut T), get_mut_ref)
-double_ended_iterator!(impl SmallIntMapMutIterator -> (uint, &'self mut T), get_mut_ref)
-pub type SmallIntMapMutRevIterator<'self, T> = Invert<SmallIntMapMutIterator<'self, T>>;
+iterator!(impl SmallIntMapMutIterator -> (uint, &'a mut T), get_mut_ref)
+double_ended_iterator!(impl SmallIntMapMutIterator -> (uint, &'a mut T), get_mut_ref)
+pub type SmallIntMapMutRevIterator<'a, T> = Invert<SmallIntMapMutIterator<'a, T>>;
 
 #[cfg(test)]
 mod test_map {
@@ -265,7 +267,7 @@ mod test_map {
         assert!(m.insert(5, 14));
         let new = 100;
         match m.find_mut(&5) {
-            None => fail2!(), Some(x) => *x = new
+            None => fail!(), Some(x) => *x = new
         }
         assert_eq!(m.find(&5), Some(&new));
     }

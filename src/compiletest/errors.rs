@@ -8,21 +8,18 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use std::io::buffered::BufferedReader;
+use std::io::File;
+
 pub struct ExpectedError { line: uint, kind: ~str, msg: ~str }
 
 // Load any test directives embedded in the file
 pub fn load_errors(testfile: &Path) -> ~[ExpectedError] {
-    use std::rt::io::Open;
-    use std::rt::io::file::FileInfo;
-    use std::rt::io::buffered::BufferedReader;
 
     let mut error_patterns = ~[];
-    let mut rdr = BufferedReader::new(testfile.open_reader(Open).unwrap());
+    let mut rdr = BufferedReader::new(File::open(testfile).unwrap());
     let mut line_num = 1u;
-    loop {
-        let ln = match rdr.read_line() {
-            Some(ln) => ln, None => break,
-        };
+    for ln in rdr.lines() {
         error_patterns.push_all_move(parse_expected(line_num, ln));
         line_num += 1u;
     }
@@ -52,16 +49,14 @@ fn parse_expected(line_num: uint, line: ~str) -> ~[ExpectedError] {
     let start_kind = idx;
     while idx < len && line[idx] != (' ' as u8) { idx += 1u; }
 
-    // FIXME: #4318 Instead of to_ascii and to_str_ascii, could use
-    // to_ascii_consume and to_str_consume to not do a unnecessary copy.
     let kind = line.slice(start_kind, idx);
-    let kind = kind.to_ascii().to_lower().to_str_ascii();
+    let kind = kind.to_ascii().to_lower().into_str();
 
     // Extract msg:
     while idx < len && line[idx] == (' ' as u8) { idx += 1u; }
     let msg = line.slice(idx, len).to_owned();
 
-    debug2!("line={} kind={} msg={}", line_num - adjust_line, kind, msg);
+    debug!("line={} kind={} msg={}", line_num - adjust_line, kind, msg);
 
     return ~[ExpectedError{line: line_num - adjust_line, kind: kind,
                            msg: msg}];

@@ -11,6 +11,6 @@
 use std::io;
 
 pub fn main() {
-    let stdout = &io::stdout() as &io::WriterUtil;
-    stdout.write_line("Hello!");
+    let stdout = &mut io::stdout() as &mut io::Writer;
+    stdout.write(bytes!("Hello!"));
 }

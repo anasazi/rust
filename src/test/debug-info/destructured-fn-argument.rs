@@ -8,6 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// xfail-android: FIXME(#10381)
+
+#[feature(managed_boxes)];
+
 // compile-flags:-Z extra-debug-info
 // debugger:rbreak zzz
 // debugger:run
@@ -217,7 +221,7 @@ fn ignored_tuple_element((m, _, n): (int, u16, i32)) {
     zzz();
 }
 
-fn ignored_struct_field(Struct { b: o, _ }: Struct) {
+fn ignored_struct_field(Struct { b: o, .. }: Struct) {
     zzz();
 }
 
@@ -258,7 +262,7 @@ fn ref_binding_in_tuple((ref ff, gg): (int, (int, int))) {
     zzz();
 }
 
-fn ref_binding_in_struct(Struct { b: ref hh, _ }: Struct) {
+fn ref_binding_in_struct(Struct { b: ref hh, .. }: Struct) {
     zzz();
 }
 

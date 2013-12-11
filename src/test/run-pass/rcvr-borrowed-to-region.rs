@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[feature(managed_boxes)];
+
 trait get {
     fn get(self) -> int;
 }
@@ -15,7 +17,7 @@ trait get {
 // Note: impl on a slice; we're checking that the pointers below
 // correctly get borrowed to `&`. (similar to impling for `int`, with
 // `&self` instead of `self`.)
-impl<'self> get for &'self int {
+impl<'a> get for &'a int {
     fn get(self) -> int {
         return *self;
     }
@@ -28,16 +30,16 @@ pub fn main() {
 
     let x = @6;
     let y = x.get();
-    info2!("y={}", y);
+    info!("y={}", y);
     assert_eq!(y, 6);
 
     let x = ~6;
     let y = x.get();
-    info2!("y={}", y);
+    info!("y={}", y);
     assert_eq!(y, 6);
 
     let x = &6;
     let y = x.get();
-    info2!("y={}", y);
+    info!("y={}", y);
     assert_eq!(y, 6);
 }

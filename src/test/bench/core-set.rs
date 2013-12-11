@@ -1,3 +1,5 @@
+// xfail-pretty
+
 // Copyright 2013 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
@@ -13,7 +15,6 @@ extern mod extra;
 use extra::bitv::BitvSet;
 use extra::treemap::TreeSet;
 use std::hashmap::HashSet;
-use std::io;
 use std::os;
 use std::rand;
 use std::uint;
@@ -28,7 +29,7 @@ struct Results {
     delete_strings: f64
 }
 
-fn timed(result: &mut f64, op: &fn()) {
+fn timed(result: &mut f64, op: ||) {
     let start = extra::time::precise_time_s();
     op();
     let end = extra::time::precise_time_s();
@@ -37,15 +38,14 @@ fn timed(result: &mut f64, op: &fn()) {
 
 impl Results {
     pub fn bench_int<T:MutableSet<uint>,
-                 R: rand::Rng>(
-                 &mut self,
-                 rng: &mut R,
-                 num_keys: uint,
-                 rand_cap: uint,
-                 f: &fn() -> T) {
-        {
+                     R: rand::Rng>(
+                     &mut self,
+                     rng: &mut R,
+                     num_keys: uint,
+                     rand_cap: uint,
+                     f: || -> T) { {
             let mut set = f();
-            do timed(&mut self.sequential_ints) {
+            timed(&mut self.sequential_ints, || {
                 for i in range(0u, num_keys) {
                     set.insert(i);
                 }
@@ -53,16 +53,16 @@ impl Results {
                 for i in range(0u, num_keys) {
                     assert!(set.contains(&i));
                 }
-            }
+            })
         }
 
         {
             let mut set = f();
-            do timed(&mut self.random_ints) {
+            timed(&mut self.random_ints, || {
                 for _ in range(0, num_keys) {
                     set.insert(rng.gen::<uint>() % rand_cap);
                 }
-            }
+            })
         }
 
         {
@@ -71,23 +71,23 @@ impl Results {
                 set.insert(i);
             }
 
-            do timed(&mut self.delete_ints) {
+            timed(&mut self.delete_ints, || {
                 for i in range(0u, num_keys) {
                     assert!(set.remove(&i));
                 }
-            }
+            })
         }
     }
 
     pub fn bench_str<T:MutableSet<~str>,
-                 R:rand::Rng>(
-                 &mut self,
-                 rng: &mut R,
-                 num_keys: uint,
-                 f: &fn() -> T) {
+                     R:rand::Rng>(
+                     &mut self,
+                     rng: &mut R,
+                     num_keys: uint,
+                     f: || -> T) {
         {
             let mut set = f();
-            do timed(&mut self.sequential_strings) {
+            timed(&mut self.sequential_strings, || {
                 for i in range(0u, num_keys) {
                     set.insert(i.to_str());
                 }
@@ -95,17 +95,17 @@ impl Results {
                 for i in range(0u, num_keys) {
                     assert!(set.contains(&i.to_str()));
                 }
-            }
+            })
         }
 
         {
             let mut set = f();
-            do timed(&mut self.random_strings) {
+            timed(&mut self.random_strings, || {
                 for _ in range(0, num_keys) {
                     let s = rng.gen::<uint>().to_str();
                     set.insert(s);
                 }
-            }
+            })
         }
 
         {
@@ -113,22 +113,21 @@ impl Results {
             for i in range(0u, num_keys) {
                 set.insert(i.to_str());
             }
-            do timed(&mut self.delete_strings) {
+            timed(&mut self.delete_strings, || {
                 for i in range(0u, num_keys) {
                     assert!(set.remove(&i.to_str()));
                 }
-            }
+            })
         }
     }
 }
 
 fn write_header(header: &str) {
-    io::stdout().write_str(header);
-    io::stdout().write_str("\n");
+    println(header);
 }
 
 fn write_row(label: &str, value: f64) {
-    io::stdout().write_str(format!("{:30s} {} s\n", label, value));
+    println!("{:30s} {} s\n", label, value);
 }
 
 fn write_results(label: &str, results: &Results) {

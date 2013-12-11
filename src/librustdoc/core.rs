@@ -10,6 +10,7 @@
 
 use rustc;
 use rustc::{driver, middle};
+use rustc::middle::privacy;
 
 use syntax::ast;
 use syntax::diagnostic;
@@ -18,6 +19,7 @@ use syntax;
 
 use std::os;
 use std::local_data;
+use std::hashmap::{HashSet};
 
 use visit_ast::RustdocVisitor;
 use clean;
@@ -29,10 +31,18 @@ pub struct DocContext {
     sess: driver::session::Session
 }
 
+pub struct CrateAnalysis {
+    exported_items: privacy::ExportedItems,
+}
+
 /// Parses, resolves, and typechecks the given crate
-fn get_ast_and_resolve(cpath: &Path, libs: ~[Path]) -> DocContext {
+fn get_ast_and_resolve(cpath: &Path,
+                       libs: HashSet<Path>, cfgs: ~[~str]) -> (DocContext, CrateAnalysis) {
     use syntax::codemap::dummy_spanned;
-    use rustc::driver::driver::*;
+    use rustc::driver::driver::{file_input, build_configuration,
+                                phase_1_parse_input,
+                                phase_2_configure_and_expand,
+                                phase_3_run_analysis_passes};
 
     let parsesess = parse::new_parse_sess(None);
     let input = file_input(cpath.clone());
@@ -41,6 +51,7 @@ fn get_ast_and_resolve(cpath: &Path, libs: ~[Path]) -> DocContext {
         binary: @"rustdoc",
         maybe_sysroot: Some(@os::self_exe_path().unwrap().dir_path()),
         addl_lib_search_paths: @mut libs,
+        outputs: ~[driver::session::OutputDylib],
         .. (*rustc::driver::session::basic_options()).clone()
     };
 
@@ -56,26 +67,32 @@ fn get_ast_and_resolve(cpath: &Path, libs: ~[Path]) -> DocContext {
                                               span_diagnostic_handler);
 
     let mut cfg = build_configuration(sess);
-    cfg.push(@dummy_spanned(ast::MetaWord(@"stage2")));
+    for cfg_ in cfgs.move_iter() {
+        cfg.push(@dummy_spanned(ast::MetaWord(cfg_.to_managed())));
+    }
 
     let mut crate = phase_1_parse_input(sess, cfg.clone(), &input);
     crate = phase_2_configure_and_expand(sess, cfg, crate);
-    let analysis = phase_3_run_analysis_passes(sess, &crate);
+    let driver::driver::CrateAnalysis {
+        exported_items, ty_cx, ..
+    } = phase_3_run_analysis_passes(sess, &crate);
 
-    debug2!("crate: {:?}", crate);
-    DocContext { crate: crate, tycx: analysis.ty_cx, sess: sess }
+    debug!("crate: {:?}", crate);
+    return (DocContext { crate: crate, tycx: ty_cx, sess: sess },
+            CrateAnalysis { exported_items: exported_items });
 }
 
-pub fn run_core (libs: ~[Path], path: &Path) -> clean::Crate {
-    let ctxt = @get_ast_and_resolve(path, libs);
-    debug2!("defmap:");
+pub fn run_core (libs: HashSet<Path>, cfgs: ~[~str], path: &Path) -> (clean::Crate, CrateAnalysis) {
+    let (ctxt, analysis) = get_ast_and_resolve(path, libs, cfgs);
+    let ctxt = @ctxt;
+    debug!("defmap:");
     for (k, v) in ctxt.tycx.def_map.iter() {
-        debug2!("{:?}: {:?}", k, v);
+        debug!("{:?}: {:?}", k, v);
     }
     local_data::set(super::ctxtkey, ctxt);
 
     let v = @mut RustdocVisitor::new();
     v.visit(&ctxt.crate);
 
-    v.clean()
+    (v.clean(), analysis)
 }

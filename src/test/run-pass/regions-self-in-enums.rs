@@ -8,8 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-enum int_wrapper<'self> {
-    int_wrapper_ctor(&'self int)
+enum int_wrapper<'a> {
+    int_wrapper_ctor(&'a int)
 }
 
 pub fn main() {
@@ -19,5 +19,5 @@ pub fn main() {
     match y {
         int_wrapper_ctor(zz) => { z = zz; }
     }
-    info2!("{:?}", *z);
+    info!("{:?}", *z);
 }

@@ -7,7 +7,9 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
+
 use std::cast;
+use syntax::pkgid::PkgId;
 
 // EBML enum definitions and utils shared by the encoder and decoder
 
@@ -89,7 +91,7 @@ pub static tag_path_elt_name: uint = 0x43u;
 pub static tag_item_field: uint = 0x44u;
 pub static tag_struct_mut: uint = 0x45u;
 
-pub static tag_region_param: uint = 0x46u;
+pub static tag_item_variances: uint = 0x46;
 pub static tag_mod_impl_trait: uint = 0x47u;
 /*
   trait items contain tag_item_trait_method elements,
@@ -112,6 +114,7 @@ pub static tag_items_data_item_reexport_name: uint = 0x4f;
 
 // used to encode crate_ctxt side tables
 #[deriving(Eq)]
+#[repr(uint)]
 pub enum astencode_tag { // Reserves 0x50 -- 0x6f
     tag_ast = 0x50,
 
@@ -143,7 +146,7 @@ impl astencode_tag {
     pub fn from_uint(value : uint) -> Option<astencode_tag> {
         let is_a_tag = first_astencode_tag <= value && value <= last_astencode_tag;
         if !is_a_tag { None } else {
-            Some(unsafe { cast::transmute(value as int) })
+            Some(unsafe { cast::transmute(value) })
         }
     }
 }
@@ -192,10 +195,17 @@ pub static tag_path_elt_pretty_name: uint = 0x87;
 pub static tag_path_elt_pretty_name_ident: uint = 0x88;
 pub static tag_path_elt_pretty_name_extra: uint = 0x89;
 
+pub static tag_region_param_def: uint = 0x100;
+pub static tag_region_param_def_ident: uint = 0x101;
+pub static tag_region_param_def_def_id: uint = 0x102;
+
+pub static tag_native_libraries: uint = 0x103;
+pub static tag_native_libraries_lib: uint = 0x104;
+pub static tag_native_libraries_name: uint = 0x105;
+pub static tag_native_libraries_kind: uint = 0x106;
+
+#[deriving(Clone)]
 pub struct LinkMeta {
-    name: @str,
-    vers: @str,
-    // Optional package ID
-    package_id: Option<@str>, // non-None if this was a URL-like package ID
-    extras_hash: @str
+    pkgid: PkgId,
+    crate_hash: @str,
 }

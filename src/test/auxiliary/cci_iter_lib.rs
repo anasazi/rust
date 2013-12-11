@@ -8,10 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[crate_id="cci_iter_lib"];
+// NOTE: remove after the next snapshot
 #[link(name="cci_iter_lib", vers="0.0")];
 
 #[inline]
-pub fn iter<T>(v: &[T], f: &fn(&T)) {
+pub fn iter<T>(v: &[T], f: |&T|) {
     let mut i = 0u;
     let n = v.len();
     while i < n {

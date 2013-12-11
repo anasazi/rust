@@ -8,16 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// LLVM wrappers are intended to be called from trans,
-// which already runs in a #[fixed_stack_segment]
-#[allow(cstack)];
 #[allow(non_uppercase_pattern_statics)];
 
 use std::c_str::ToCStr;
 use std::hashmap::HashMap;
 use std::libc::{c_uint, c_ushort, c_void, free};
 use std::str::raw::from_c_str;
-use std::option;
 
 use middle::trans::type_::Type;
 
@@ -29,12 +25,14 @@ pub static False: Bool = 0 as Bool;
 
 // Consts for the LLVM CallConv type, pre-cast to uint.
 
+#[deriving(Eq)]
 pub enum CallConv {
     CCallConv = 0,
     FastCallConv = 8,
     ColdCallConv = 9,
     X86StdcallCallConv = 64,
     X86FastcallCallConv = 65,
+    X86_64_Win64 = 79,
 }
 
 pub enum Visibility {
@@ -129,24 +127,28 @@ pub enum RealPredicate {
 
 // The LLVM TypeKind type - must stay in sync with the def of
 // LLVMTypeKind in llvm/include/llvm-c/Core.h
-pub type TypeKind = u32;
-pub static Void: TypeKind      = 0;
-pub static Half: TypeKind      = 1;
-pub static Float: TypeKind     = 2;
-pub static Double: TypeKind    = 3;
-pub static X86_FP80: TypeKind  = 4;
-pub static FP128: TypeKind     = 5;
-pub static PPC_FP128: TypeKind = 6;
-pub static Label: TypeKind     = 7;
-pub static Integer: TypeKind   = 8;
-pub static Function: TypeKind  = 9;
-pub static Struct: TypeKind    = 10;
-pub static Array: TypeKind     = 11;
-pub static Pointer: TypeKind   = 12;
-pub static Vector: TypeKind    = 13;
-pub static Metadata: TypeKind  = 14;
-pub static X86_MMX: TypeKind   = 15;
+#[deriving(Eq)]
+#[repr(C)]
+pub enum TypeKind {
+    Void      = 0,
+    Half      = 1,
+    Float     = 2,
+    Double    = 3,
+    X86_FP80  = 4,
+    FP128     = 5,
+    PPC_FP128 = 6,
+    Label     = 7,
+    Integer   = 8,
+    Function  = 9,
+    Struct    = 10,
+    Array     = 11,
+    Pointer   = 12,
+    Vector    = 13,
+    Metadata  = 14,
+    X86_MMX   = 15,
+}
 
+#[repr(C)]
 pub enum AtomicBinOp {
     Xchg = 0,
     Add  = 1,
@@ -161,6 +163,7 @@ pub enum AtomicBinOp {
     UMin = 10,
 }
 
+#[repr(C)]
 pub enum AtomicOrdering {
     NotAtomic = 0,
     Unordered = 1,
@@ -173,6 +176,7 @@ pub enum AtomicOrdering {
 }
 
 // Consts for the LLVMCodeGenFileType type (in include/llvm/c/TargetMachine.h)
+#[repr(C)]
 pub enum FileType {
     AssemblyFile = 0,
     ObjectFile = 1
@@ -194,6 +198,7 @@ pub enum AsmDialect {
 }
 
 #[deriving(Eq)]
+#[repr(C)]
 pub enum CodeGenOptLevel {
     CodeGenLevelNone = 0,
     CodeGenLevelLess = 1,
@@ -201,6 +206,7 @@ pub enum CodeGenOptLevel {
     CodeGenLevelAggressive = 3,
 }
 
+#[repr(C)]
 pub enum RelocMode {
     RelocDefault = 0,
     RelocStatic = 1,
@@ -208,6 +214,7 @@ pub enum RelocMode {
     RelocDynamicNoPic = 3,
 }
 
+#[repr(C)]
 pub enum CodeGenModel {
     CodeModelDefault = 0,
     CodeModelJITDefault = 1,
@@ -250,6 +257,8 @@ pub enum Pass_opaque {}
 pub type PassRef = *Pass_opaque;
 pub enum TargetMachine_opaque {}
 pub type TargetMachineRef = *TargetMachine_opaque;
+pub enum Archive_opaque {}
+pub type ArchiveRef = *Archive_opaque;
 
 pub mod debuginfo {
     use super::{ValueRef};
@@ -293,13 +302,24 @@ pub mod llvm {
     use super::{Bool, BuilderRef, ContextRef, MemoryBufferRef, ModuleRef};
     use super::{ObjectFileRef, Opcode, PassManagerRef, PassManagerBuilderRef};
     use super::{SectionIteratorRef, TargetDataRef, TypeKind, TypeRef, UseRef};
-    use super::{ValueRef, TargetMachineRef, FileType};
+    use super::{ValueRef, TargetMachineRef, FileType, ArchiveRef};
     use super::{CodeGenModel, RelocMode, CodeGenOptLevel};
     use super::debuginfo::*;
-    use std::libc::{c_char, c_int, c_longlong, c_ushort, c_uint, c_ulonglong};
+    use std::libc::{c_char, c_int, c_longlong, c_ushort, c_uint, c_ulonglong,
+                    size_t};
 
-    #[link_args = "-Lrustllvm -lrustllvm"]
-    #[link_name = "rustllvm"]
+    // Link to our native llvm bindings (things that we need to use the C++ api
+    // for) and because llvm is written in C++ we need to link against libstdc++
+    //
+    // You'll probably notice that there is an omission of all LLVM libraries
+    // from this location. This is because the set of LLVM libraries that we
+    // link to is mostly defined by LLVM, and the `llvm-config` tool is used to
+    // figure out the exact set of libraries. To do this, the build system
+    // generates an llvmdeps.rs file next to this one which will be
+    // automatically updated whenever LLVM is updated to include an up-to-date
+    // set of the libraries we need to link to LLVM for.
+    #[link(name = "rustllvm", kind = "static")]
+    #[link(name = "stdc++")]
     extern {
         /* Create and destroy contexts. */
         pub fn LLVMContextCreate() -> ContextRef;
@@ -692,6 +712,8 @@ pub mod llvm {
 
         pub fn LLVMAddReturnAttribute(Fn: ValueRef, PA: c_uint);
         pub fn LLVMRemoveReturnAttribute(Fn: ValueRef, PA: c_uint);
+
+        pub fn LLVMAddColdAttribute(Fn: ValueRef);
 
         pub fn LLVMRemoveFunctionAttr(Fn: ValueRef,
                                       PA: c_ulonglong,
@@ -1383,6 +1405,11 @@ pub mod llvm {
         pub fn LLVMPassManagerBuilderPopulateFunctionPassManager(
             PMB: PassManagerBuilderRef,
             PM: PassManagerRef);
+        pub fn LLVMPassManagerBuilderPopulateLTOPassManager(
+            PMB: PassManagerBuilderRef,
+            PM: PassManagerRef,
+            Internalize: Bool,
+            RunInliner: Bool);
 
         /** Destroys a memory buffer. */
         pub fn LLVMDisposeMemoryBuffer(MemBuf: MemoryBufferRef);
@@ -1417,22 +1444,20 @@ pub mod llvm {
             LLVMDisposeMemoryBuffer() to get rid of it. */
         pub fn LLVMRustCreateMemoryBufferWithContentsOfFile(Path: *c_char)
             -> MemoryBufferRef;
+        /** Borrows the contents of the memory buffer (doesn't copy it) */
+        pub fn LLVMCreateMemoryBufferWithMemoryRange(InputData: *c_char,
+                                                     InputDataLength: size_t,
+                                                     BufferName: *c_char,
+                                                     RequiresNull: Bool)
+            -> MemoryBufferRef;
+        pub fn LLVMCreateMemoryBufferWithMemoryRangeCopy(InputData: *c_char,
+                                                         InputDataLength: size_t,
+                                                         BufferName: *c_char)
+            -> MemoryBufferRef;
 
         /** Returns a string describing the last error caused by an LLVMRust*
             call. */
         pub fn LLVMRustGetLastError() -> *c_char;
-
-        /** Prepare the JIT. Returns a memory manager that can load crates. */
-        pub fn LLVMRustPrepareJIT(__morestack: *()) -> *();
-
-        /** Load a crate into the memory manager. */
-        pub fn LLVMRustLoadCrate(MM: *(), Filename: *c_char) -> bool;
-
-        /** Execute the JIT engine. */
-        pub fn LLVMRustBuildJIT(MM: *(),
-                                M: ModuleRef,
-                                EnableSegmentedStacks: bool)
-                                -> ExecutionEngineRef;
 
         /// Print the pass timings since static dtors aren't picking them up.
         pub fn LLVMRustPrintPassTimings();
@@ -1718,6 +1743,18 @@ pub mod llvm {
         pub fn LLVMRustSetNormalizedTarget(M: ModuleRef, triple: *c_char);
         pub fn LLVMRustAddAlwaysInlinePass(P: PassManagerBuilderRef,
                                            AddLifetimes: bool);
+        pub fn LLVMRustLinkInExternalBitcode(M: ModuleRef,
+                                             bc: *c_char,
+                                             len: size_t) -> bool;
+        pub fn LLVMRustRunRestrictionPass(M: ModuleRef,
+                                          syms: **c_char,
+                                          len: size_t);
+        pub fn LLVMRustMarkAllFunctionsNounwind(M: ModuleRef);
+
+        pub fn LLVMRustOpenArchive(path: *c_char) -> ArchiveRef;
+        pub fn LLVMRustArchiveReadSection(AR: ArchiveRef, name: *c_char,
+                                          out_len: *mut size_t) -> *c_char;
+        pub fn LLVMRustDestroyArchive(AR: ArchiveRef);
     }
 }
 
@@ -1740,6 +1777,12 @@ pub fn SetLinkage(Global: ValueRef, Link: Linkage) {
 pub fn SetUnnamedAddr(Global: ValueRef, Unnamed: bool) {
     unsafe {
         llvm::LLVMSetUnnamedAddr(Global, Unnamed as Bool);
+    }
+}
+
+pub fn set_thread_local(global: ValueRef, is_thread_local: bool) {
+    unsafe {
+        llvm::LLVMSetThreadLocal(global, is_thread_local as Bool);
     }
 }
 
@@ -1838,9 +1881,9 @@ pub struct TargetData {
 }
 
 pub fn mk_target_data(string_rep: &str) -> TargetData {
-    let lltd = do string_rep.with_c_str |buf| {
+    let lltd = string_rep.with_c_str(|buf| {
         unsafe { llvm::LLVMCreateTargetData(buf) }
-    };
+    });
 
     TargetData {
         lltd: lltd,
@@ -1886,38 +1929,32 @@ pub fn mk_pass_manager() -> PassManager {
 
 /* Memory-managed interface to object files. */
 
-pub struct object_file_res {
-    ObjectFile: ObjectFileRef,
+pub struct ObjectFile {
+    llof: ObjectFileRef,
 }
 
-impl Drop for object_file_res {
-    fn drop(&mut self) {
+impl ObjectFile {
+    // This will take ownership of llmb
+    pub fn new(llmb: MemoryBufferRef) -> Option<ObjectFile> {
         unsafe {
-            llvm::LLVMDisposeObjectFile(self.ObjectFile);
+            let llof = llvm::LLVMCreateObjectFile(llmb);
+            if llof as int == 0 {
+                llvm::LLVMDisposeMemoryBuffer(llmb);
+                return None
+            }
+
+            Some(ObjectFile {
+                llof: llof,
+            })
         }
     }
 }
 
-pub fn object_file_res(ObjFile: ObjectFileRef) -> object_file_res {
-    object_file_res {
-        ObjectFile: ObjFile
-    }
-}
-
-pub struct ObjectFile {
-    llof: ObjectFileRef,
-    dtor: @object_file_res
-}
-
-pub fn mk_object_file(llmb: MemoryBufferRef) -> Option<ObjectFile> {
-    unsafe {
-        let llof = llvm::LLVMCreateObjectFile(llmb);
-        if llof as int == 0 { return option::None::<ObjectFile>; }
-
-        option::Some(ObjectFile {
-            llof: llof,
-            dtor: @object_file_res(llof)
-        })
+impl Drop for ObjectFile {
+    fn drop(&mut self) {
+        unsafe {
+            llvm::LLVMDisposeObjectFile(self.llof);
+        }
     }
 }
 

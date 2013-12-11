@@ -49,8 +49,6 @@ use middle::trans::type_::Type;
 use syntax::ast;
 use syntax::abi::AbiSet;
 use syntax::ast_map;
-use syntax::visit;
-use syntax::visit::Visitor;
 
 // Represents a (possibly monomorphized) top-level fn item or method
 // item.  Note that this is just the fn-ptr and is not a Rust closure
@@ -79,7 +77,7 @@ pub struct Callee {
 
 pub fn trans(bcx: @mut Block, expr: &ast::Expr) -> Callee {
     let _icx = push_ctxt("trans_callee");
-    debug2!("callee::trans(expr={})", expr.repr(bcx.tcx()));
+    debug!("callee::trans(expr={})", expr.repr(bcx.tcx()));
 
     // pick out special kinds of expressions that can be called:
     match expr.node {
@@ -95,11 +93,11 @@ pub fn trans(bcx: @mut Block, expr: &ast::Expr) -> Callee {
     fn datum_callee(bcx: @mut Block, expr: &ast::Expr) -> Callee {
         let DatumBlock {bcx, datum} = expr::trans_to_datum(bcx, expr);
         match ty::get(datum.ty).sty {
-            ty::ty_bare_fn(*) => {
+            ty::ty_bare_fn(..) => {
                 let llval = datum.to_appropriate_llval(bcx);
                 return Callee {bcx: bcx, data: Fn(FnData {llfn: llval})};
             }
-            ty::ty_closure(*) => {
+            ty::ty_closure(..) => {
                 return Callee {bcx: bcx, data: Closure(datum)};
             }
             _ => {
@@ -138,19 +136,19 @@ pub fn trans(bcx: @mut Block, expr: &ast::Expr) -> Callee {
             ast::DefStruct(def_id) => {
                 fn_callee(bcx, trans_fn_ref(bcx, def_id, ref_expr.id))
             }
-            ast::DefStatic(*) |
-            ast::DefArg(*) |
-            ast::DefLocal(*) |
-            ast::DefBinding(*) |
-            ast::DefUpvar(*) |
-            ast::DefSelf(*) => {
+            ast::DefStatic(..) |
+            ast::DefArg(..) |
+            ast::DefLocal(..) |
+            ast::DefBinding(..) |
+            ast::DefUpvar(..) |
+            ast::DefSelf(..) => {
                 datum_callee(bcx, ref_expr)
             }
-            ast::DefMod(*) | ast::DefForeignMod(*) | ast::DefTrait(*) |
-            ast::DefTy(*) | ast::DefPrimTy(*) |
-            ast::DefUse(*) | ast::DefTyParamBinder(*) |
-            ast::DefRegion(*) | ast::DefLabel(*) | ast::DefTyParam(*) |
-            ast::DefSelfTy(*) | ast::DefMethod(*) => {
+            ast::DefMod(..) | ast::DefForeignMod(..) | ast::DefTrait(..) |
+            ast::DefTy(..) | ast::DefPrimTy(..) |
+            ast::DefUse(..) | ast::DefTyParamBinder(..) |
+            ast::DefRegion(..) | ast::DefLabel(..) | ast::DefTyParam(..) |
+            ast::DefSelfTy(..) | ast::DefMethod(..) => {
                 bcx.tcx().sess.span_bug(
                     ref_expr.span,
                     format!("Cannot translate def {:?} \
@@ -180,7 +178,7 @@ pub fn trans_fn_ref(bcx: @mut Block,
 
     let type_params = node_id_type_params(bcx, ref_id);
     let vtables = node_vtables(bcx, ref_id);
-    debug2!("trans_fn_ref(def_id={}, ref_id={:?}, type_params={}, vtables={})",
+    debug!("trans_fn_ref(def_id={}, ref_id={:?}, type_params={}, vtables={})",
            def_id.repr(bcx.tcx()), ref_id, type_params.repr(bcx.tcx()),
            vtables.repr(bcx.tcx()));
     trans_fn_ref_with_vtables(bcx, def_id, ref_id, type_params, vtables)
@@ -266,7 +264,7 @@ pub fn trans_fn_ref_with_vtables(
     let ccx = bcx.ccx();
     let tcx = ccx.tcx;
 
-    debug2!("trans_fn_ref_with_vtables(bcx={}, def_id={}, ref_id={:?}, \
+    debug!("trans_fn_ref_with_vtables(bcx={}, def_id={}, ref_id={:?}, \
             type_params={}, vtables={})",
            bcx.to_str(),
            def_id.repr(bcx.tcx()),
@@ -329,7 +327,7 @@ pub fn trans_fn_ref_with_vtables(
                 resolve_default_method_vtables(bcx, impl_id,
                                                method, &substs, vtables);
 
-            debug2!("trans_fn_with_vtables - default method: \
+            debug!("trans_fn_with_vtables - default method: \
                     substs = {}, trait_subst = {}, \
                     first_subst = {}, new_subst = {}, \
                     vtables = {}, \
@@ -472,7 +470,7 @@ pub fn trans_method_call(in_cx: @mut Block,
                          dest: expr::Dest)
                          -> @mut Block {
     let _icx = push_ctxt("trans_method_call");
-    debug2!("trans_method_call(call_ex={}, rcvr={})",
+    debug!("trans_method_call(call_ex={}, rcvr={})",
            call_ex.repr(in_cx.tcx()),
            rcvr.repr(in_cx.tcx()));
     trans_call_inner(
@@ -483,7 +481,7 @@ pub fn trans_method_call(in_cx: @mut Block,
         |cx| {
             match cx.ccx().maps.method_map.find_copy(&call_ex.id) {
                 Some(origin) => {
-                    debug2!("origin for {}: {}",
+                    debug!("origin for {}: {}",
                            call_ex.repr(in_cx.tcx()),
                            origin.repr(in_cx.tcx()));
 
@@ -562,45 +560,18 @@ pub fn trans_lang_call_with_type_params(bcx: @mut Block,
                                                       substituted);
                     new_llval = PointerCast(callee.bcx, fn_data.llfn, llfnty);
                 }
-                _ => fail2!()
+                _ => fail!()
             }
             Callee { bcx: callee.bcx, data: Fn(FnData { llfn: new_llval }) }
         },
         ArgVals(args), Some(dest), DontAutorefArg).bcx;
 }
 
-
-struct CalleeTranslationVisitor {
-    flag: bool,
-}
-
-impl Visitor<()> for CalleeTranslationVisitor {
-
-    fn visit_item(&mut self, _:@ast::item, _:()) { }
-
-    fn visit_expr(&mut self, e:@ast::Expr, _:()) {
-
-            if !self.flag {
-                match e.node {
-                  ast::ExprRet(_) => self.flag = true,
-                  _ => visit::walk_expr(self, e, ()),
-                }
-            }
-    }
-
-}
-
-pub fn body_contains_ret(body: &ast::Block) -> bool {
-    let mut v = CalleeTranslationVisitor{ flag: false };
-    visit::walk_block(&mut v, body, ());
-    v.flag
-}
-
 pub fn trans_call_inner(in_cx: @mut Block,
                         call_info: Option<NodeInfo>,
                         callee_ty: ty::t,
                         ret_ty: ty::t,
-                        get_callee: &fn(@mut Block) -> Callee,
+                        get_callee: |@mut Block| -> Callee,
                         args: CallArgs,
                         dest: Option<expr::Dest>,
                         autoref_arg: AutorefArg)
@@ -616,7 +587,7 @@ pub fn trans_call_inner(in_cx: @mut Block,
      */
 
 
-    do base::with_scope_result(in_cx, call_info, "call") |cx| {
+    base::with_scope_result(in_cx, call_info, "call", |cx| {
         let callee = get_callee(cx);
         let mut bcx = callee.bcx;
         let ccx = cx.ccx();
@@ -718,7 +689,7 @@ pub fn trans_call_inner(in_cx: @mut Block,
             // The `noalias` attribute on the return value is useful to a function ptr caller.
             match ty::get(ret_ty).sty {
                 // `~` pointer return values never alias because ownership is transferred
-                ty::ty_uniq(*) |
+                ty::ty_uniq(..) |
                 ty::ty_evec(_, ty::vstore_uniq) => {
                     attrs.push((0, NoAliasAttribute));
                 }
@@ -726,7 +697,7 @@ pub fn trans_call_inner(in_cx: @mut Block,
             }
 
             // Invoke the actual rust fn and update bcx/llresult.
-            let (llret, b) = base::invoke(bcx, llfn, llargs, attrs);
+            let (llret, b) = base::invoke(bcx, llfn, llargs, attrs, call_info);
             bcx = b;
             llresult = llret;
 
@@ -750,8 +721,12 @@ pub fn trans_call_inner(in_cx: @mut Block,
             let mut llargs = ~[];
             bcx = trans_args(bcx, args, callee_ty,
                              autoref_arg, &mut llargs);
+            let arg_tys = match args {
+                ArgExprs(a) => a.iter().map(|x| expr_ty(bcx, *x)).collect(),
+                ArgVals(_) => fail!("expected arg exprs.")
+            };
             bcx = foreign::trans_native_call(bcx, callee_ty,
-                                             llfn, opt_llretslot.unwrap(), llargs);
+                                             llfn, opt_llretslot.unwrap(), llargs, arg_tys);
         }
 
         // If the caller doesn't care about the result of this fn call,
@@ -772,12 +747,12 @@ pub fn trans_call_inner(in_cx: @mut Block,
         }
 
         rslt(bcx, llresult)
-    }
+    })
 }
 
-pub enum CallArgs<'self> {
-    ArgExprs(&'self [@ast::Expr]),
-    ArgVals(&'self [ValueRef])
+pub enum CallArgs<'a> {
+    ArgExprs(&'a [@ast::Expr]),
+    ArgVals(&'a [ValueRef])
 }
 
 pub fn trans_args(cx: @mut Block,
@@ -789,6 +764,7 @@ pub fn trans_args(cx: @mut Block,
     let _icx = push_ctxt("trans_args");
     let mut temp_cleanups = ~[];
     let arg_tys = ty::ty_fn_args(fn_ty);
+    let variadic = ty::fn_is_variadic(fn_ty);
 
     let mut bcx = cx;
 
@@ -797,10 +773,17 @@ pub fn trans_args(cx: @mut Block,
     // to cast her view of the arguments to the caller's view.
     match args {
       ArgExprs(arg_exprs) => {
+        let num_formal_args = arg_tys.len();
         for (i, arg_expr) in arg_exprs.iter().enumerate() {
+            let arg_ty = if i >= num_formal_args {
+                assert!(variadic);
+                expr_ty_adjusted(cx, *arg_expr)
+            } else {
+                arg_tys[i]
+            };
             let arg_val = unpack_result!(bcx, {
                 trans_arg_expr(bcx,
-                               arg_tys[i],
+                               arg_ty,
                                ty::ByCopy,
                                *arg_expr,
                                &mut temp_cleanups,
@@ -840,7 +823,7 @@ pub fn trans_arg_expr(bcx: @mut Block,
     let _icx = push_ctxt("trans_arg_expr");
     let ccx = bcx.ccx();
 
-    debug2!("trans_arg_expr(formal_arg_ty=({}), self_mode={:?}, arg_expr={})",
+    debug!("trans_arg_expr(formal_arg_ty=({}), self_mode={:?}, arg_expr={})",
            formal_arg_ty.repr(bcx.tcx()),
            self_mode,
            arg_expr.repr(bcx.tcx()));
@@ -850,7 +833,7 @@ pub fn trans_arg_expr(bcx: @mut Block,
     let arg_datum = arg_datumblock.datum;
     let bcx = arg_datumblock.bcx;
 
-    debug2!("   arg datum: {}", arg_datum.to_str(bcx.ccx()));
+    debug!("   arg datum: {}", arg_datum.to_str(bcx.ccx()));
 
     let mut val;
     if ty::type_is_bot(arg_datum.ty) {
@@ -890,11 +873,11 @@ pub fn trans_arg_expr(bcx: @mut Block,
 
                 val = match self_mode {
                     ty::ByRef => {
-                        debug2!("by ref arg with type {}", bcx.ty_to_str(arg_datum.ty));
+                        debug!("by ref arg with type {}", bcx.ty_to_str(arg_datum.ty));
                         arg_datum.to_ref_llval(bcx)
                     }
                     ty::ByCopy => {
-                        debug2!("by copy arg with type {}", bcx.ty_to_str(arg_datum.ty));
+                        debug!("by copy arg with type {}", bcx.ty_to_str(arg_datum.ty));
                         arg_datum.to_appropriate_llval(bcx)
                     }
                 }
@@ -904,12 +887,12 @@ pub fn trans_arg_expr(bcx: @mut Block,
         if formal_arg_ty != arg_datum.ty {
             // this could happen due to e.g. subtyping
             let llformal_arg_ty = type_of::type_of_explicit_arg(ccx, formal_arg_ty);
-            debug2!("casting actual type ({}) to match formal ({})",
+            debug!("casting actual type ({}) to match formal ({})",
                    bcx.val_to_str(val), bcx.llty_str(llformal_arg_ty));
             val = PointerCast(bcx, val, llformal_arg_ty);
         }
     }
 
-    debug2!("--- trans_arg_expr passing {}", bcx.val_to_str(val));
+    debug!("--- trans_arg_expr passing {}", bcx.val_to_str(val));
     return rslt(bcx, val);
 }

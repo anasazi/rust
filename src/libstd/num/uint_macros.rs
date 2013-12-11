@@ -8,23 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// FIXME(#4375): this shouldn't have to be a nested module named 'generated'
-
 #[macro_escape];
 #[doc(hidden)];
 
-macro_rules! uint_module (($T:ty, $T_SIGNED:ty, $bits:expr) => (mod generated {
-
-#[allow(non_uppercase_statics)];
-
-use default::Default;
-use num::BitCount;
-use num::{ToStrRadix, FromStrRadix};
-use num::{CheckedDiv, Zero, One, strconv};
-use prelude::*;
-use str;
-
-pub use cmp::{min, max};
+macro_rules! uint_module (($T:ty, $T_SIGNED:ty, $bits:expr) => (
 
 pub static bits : uint = $bits;
 pub static bytes : uint = ($bits / 8);
@@ -136,7 +123,7 @@ impl Neg<$T> for $T {
 impl Unsigned for $T {}
 
 impl Integer for $T {
-    /// Calculates `div` (`\`) and `rem` (`%`) simultaneously
+    /// Calculates `div` (`/`) and `rem` (`%`) simultaneously
     #[inline]
     fn div_rem(&self, other: &$T) -> ($T,$T) {
         (*self / *other, *self % *other)
@@ -266,15 +253,15 @@ impl FromStrRadix for $T {
 
 /// Convert to a string as a byte slice in a given base.
 #[inline]
-pub fn to_str_bytes<U>(n: $T, radix: uint, f: &fn(v: &[u8]) -> U) -> U {
+pub fn to_str_bytes<U>(n: $T, radix: uint, f: |v: &[u8]| -> U) -> U {
     // The radix can be as low as 2, so we need at least 64 characters for a
     // base 2 number.
     let mut buf = [0u8, ..64];
     let mut cur = 0;
-    do strconv::int_to_str_bytes_common(n, radix, strconv::SignNone) |i| {
+    strconv::int_to_str_bytes_common(n, radix, strconv::SignNone, |i| {
         buf[cur] = i;
         cur += 1;
-    }
+    });
     f(buf.slice(0, cur))
 }
 
@@ -291,9 +278,9 @@ impl ToStrRadix for $T {
     #[inline]
     fn to_str_radix(&self, radix: uint) -> ~str {
         let mut buf = ~[];
-        do strconv::int_to_str_bytes_common(*self, radix, strconv::SignNone) |i| {
+        strconv::int_to_str_bytes_common(*self, radix, strconv::SignNone, |i| {
             buf.push(i);
-        }
+        });
         // We know we generated valid utf-8, so we don't need to go through that
         // check.
         unsafe { str::raw::from_utf8_owned(buf) }
@@ -337,7 +324,7 @@ mod tests {
     use super::*;
 
     use num;
-    use sys;
+    use mem;
     use u16;
 
     #[test]
@@ -431,8 +418,8 @@ mod tests {
     #[test]
     fn test_primitive() {
         let none: Option<$T> = None;
-        assert_eq!(Primitive::bits(none), sys::size_of::<$T>() * 8);
-        assert_eq!(Primitive::bytes(none), sys::size_of::<$T>());
+        assert_eq!(Primitive::bits(none), mem::size_of::<$T>() * 8);
+        assert_eq!(Primitive::bytes(none), mem::size_of::<$T>());
     }
 
     #[test]
@@ -554,4 +541,4 @@ mod tests {
     }
 }
 
-}))
+))

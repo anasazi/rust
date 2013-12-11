@@ -9,6 +9,7 @@
 // except according to those terms.
 
 // xfail-fast
+// xfail-pretty
 // aux-build:foreign_lib.rs
 
 // The purpose of this test is to check that we can
@@ -17,7 +18,6 @@
 
 extern mod foreign_lib;
 
-#[fixed_stack_segment] #[inline(never)]
 pub fn main() {
     unsafe {
         let _foo = foreign_lib::rustrt::rust_get_test_int();

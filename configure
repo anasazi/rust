@@ -336,7 +336,7 @@ then
 fi
 
 
-DEFAULT_BUILD_TRIPLE="${CFG_CPUTYPE}-${CFG_OSTYPE}"
+DEFAULT_BUILD="${CFG_CPUTYPE}-${CFG_OSTYPE}"
 
 CFG_SRC_DIR="$(cd $(dirname $0) && pwd)/"
 CFG_BUILD_DIR="$(pwd)/"
@@ -364,7 +364,6 @@ fi
 BOOL_OPTIONS=""
 VAL_OPTIONS=""
 
-opt sharedstd 1 "build libstd as a shared library"
 opt valgrind 0 "run tests with valgrind (memcheck by default)"
 opt helgrind 0 "run tests with helgrind instead of memcheck"
 opt docs     1 "build documentation"
@@ -385,11 +384,20 @@ opt pax-flags 0 "apply PaX flags to rustc binaries (required for GRSecurity/PaX-
 valopt prefix "/usr/local" "set installation prefix"
 valopt local-rust-root "/usr/local" "set prefix for local rust binary"
 valopt llvm-root "" "set LLVM root"
-valopt build-triple "${DEFAULT_BUILD_TRIPLE}" "LLVM build triple"
-valopt host-triples "${CFG_BUILD_TRIPLE}" "LLVM host triples"
-valopt target-triples "${CFG_HOST_TRIPLES}" "LLVM target triples"
 valopt android-cross-path "/opt/ndk_standalone" "Android NDK standalone path"
 valopt mingw32-cross-path "" "MinGW32 cross compiler path"
+
+valopt build "${DEFAULT_BUILD}" "GNUs ./configure syntax LLVM build triple"
+valopt host "${CFG_BUILD}" "GNUs ./configure syntax LLVM host triples"
+valopt target "${CFG_HOST}" "GNUs ./configure syntax LLVM target triples"
+
+valopt localstatedir "/var/lib" "local state directory"
+valopt sysconfdir "/etc" "install system configuration files"
+
+valopt datadir "${CFG_PREFIX}/share" "install data"
+valopt infodir "${CFG_PREFIX}/share/info" "install additional info"
+valopt mandir "${CFG_PREFIX}/share/man" "install man pages in PATH"
+valopt libdir "${CFG_PREFIX}/lib" "install libraries"
 
 # Validate Options
 step_msg "validating $CFG_SELF args"
@@ -454,13 +462,15 @@ then
         # extract the first 2 version fields, ignore everything else
         sed 's/pandoc \([0-9]*\)\.\([0-9]*\).*/\1 \2/')
 
+    MIN_PV_MAJOR="1"
+    MIN_PV_MINOR="9"
     # these patterns are shell globs, *not* regexps
     PV_MAJOR=${PV_MAJOR_MINOR% *}
     PV_MINOR=${PV_MAJOR_MINOR#* }
-    if [ "$PV_MAJOR" -lt "1" ] || [ "$PV_MINOR" -lt "8" ]
+    if [ "$PV_MAJOR" -lt "$MIN_PV_MAJOR" ] || [ "$PV_MINOR" -lt "$MIN_PV_MINOR" ]
     then
-		step_msg "pandoc $PV_MAJOR.$PV_MINOR is too old. disabling"
-		BAD_PANDOC=1
+        step_msg "pandoc $PV_MAJOR.$PV_MINOR is too old. Need at least $MIN_PV_MAJOR.$MIN_PV_MINOR. Disabling"
+        BAD_PANDOC=1
     fi
 fi
 
@@ -509,14 +519,20 @@ then
     fi
 fi
 
+BIN_SUF=
+if [ $CFG_OSTYPE = "pc-mingw32" ]
+then
+    BIN_SUF=.exe
+fi
+
 if [ ! -z "$CFG_ENABLE_LOCAL_RUST" ]
 then
-    if [ ! -f ${CFG_LOCAL_RUST_ROOT}/bin/rustc ]
+    if [ ! -f ${CFG_LOCAL_RUST_ROOT}/bin/rustc${BIN_SUF} ]
     then
         err "no local rust to use"
     else
-        LRV=`${CFG_LOCAL_RUST_ROOT}/bin/rustc --version`
-        step_msg "using rustc at: ${CFG_LOCAL_RUST_ROOT} with version: " $LRV
+        LRV=`${CFG_LOCAL_RUST_ROOT}/bin/rustc${BIN_SUF} --version`
+        step_msg "using rustc at: ${CFG_LOCAL_RUST_ROOT} with version: $LRV"
     fi
 fi
 
@@ -528,10 +544,43 @@ then
     putvar CFG_ENABLE_CLANG
 fi
 
-
 if [ -z "$CFG_ENABLE_CLANG" -a -z "$CFG_GCC" ]
 then
     err "either clang or gcc is required"
+fi
+
+# OS X 10.9, gcc is actually clang. This can cause some confusion in the build
+# system, so if we find that gcc is clang, we should just use clang directly.
+if [ $CFG_OSTYPE = apple-darwin -a -z "$CFG_ENABLE_CLANG" ]
+then
+    CFG_OSX_GCC_VERSION=$("$CFG_GCC" --version 2>&1 | grep "Apple LLVM version")
+    if [ $? -eq 0 ]
+    then
+        step_msg "on OS X 10.9, forcing use of clang"
+        CFG_ENABLE_CLANG=1
+        putvar CFG_ENABLE_CLANG
+    else 
+        # on OS X, with xcode 5 and newer, certain developers may have 
+        # cc, gcc and g++ point to a  mixture of clang and gcc
+        # if so, this will create very strange build errors 
+        # this last stanza is to detect some such problems and save the future rust
+        # contributor some time solving that issue.
+        # this detection could be generalized to other OSes aside from OS X
+        # but the issue seems most likely to happen on OS X
+
+        chk_cc () {
+            $1 --version 2> /dev/null | grep -q $2
+        }
+        # check that gcc, cc and g++ all point to the same compiler.
+        # note that for xcode 5, g++ points to clang, not clang++
+        if !((chk_cc gcc clang  && chk_cc g++ clang) ||
+            (chk_cc gcc gcc  &&( chk_cc g++ g++ || chk g++ gcc))) then
+            err "the gcc and g++ in your path point to different compilers. 
+Check which versions are in your path with  cc --version and g++ --version. 
+To resolve this problem, either fix your PATH  or run configure with --enable-clang"
+        fi
+
+    fi
 fi
 
 if [ ! -z "$CFG_LLVM_ROOT" -a -e "$CFG_LLVM_ROOT/bin/llvm-config" ]
@@ -542,12 +591,12 @@ then
     LLVM_VERSION=$($LLVM_CONFIG --version)
 
     case $LLVM_VERSION in
-	(3.3|3.3svn|3.2|3.2svn)
-	    msg "found ok version of LLVM: $LLVM_VERSION"
-	    ;;
-	(*)
-	    err "bad LLVM version: $LLVM_VERSION, need >=3.0svn"
-	    ;;
+        (3.3|3.3svn|3.2|3.2svn)
+            msg "found ok version of LLVM: $LLVM_VERSION"
+            ;;
+        (*)
+            err "bad LLVM version: $LLVM_VERSION, need >=3.0svn"
+            ;;
     esac
 fi
 
@@ -555,7 +604,7 @@ if [ ! -z "$CFG_ENABLE_CLANG" ]
 then
     if [ -z "$CFG_CLANG" ]
     then
-	err "clang requested but not found"
+        err "clang requested but not found"
     fi
     CFG_CLANG_VERSION=$("$CFG_CLANG" \
                       --version \
@@ -587,25 +636,25 @@ then
 fi
 
 # a little post-processing of various config values
-
 CFG_PREFIX=${CFG_PREFIX%/}
-CFG_HOST_TRIPLES="$(echo $CFG_HOST_TRIPLES | tr ',' ' ')"
-CFG_TARGET_TRIPLES="$(echo $CFG_TARGET_TRIPLES | tr ',' ' ')"
-CFG_SUPPORTED_TARGET_TRIPLES="$(grep ^CC_*=* $CFG_SRC_DIR/mk/platform.mk | sed -e 's/^CC_//' -e 's/\([^=]*\).*/\1/' | xargs)"
+CFG_MANDIR=${CFG_MANDIR%/}
+CFG_HOST="$(echo $CFG_HOST | tr ',' ' ')"
+CFG_TARGET="$(echo $CFG_TARGET | tr ',' ' ')"
+CFG_SUPPORTED_TARGET="$(grep ^CC_*=* ${CFG_SRC_DIR}mk/platform.mk | sed -e 's/^CC_//' -e 's/\([^=]*\).*/\1/' | xargs)"
 
 # copy host-triples to target-triples so that hosts are a subset of targets
 V_TEMP=""
-for i in $CFG_HOST_TRIPLES $CFG_TARGET_TRIPLES;
+for i in $CFG_HOST $CFG_TARGET;
 do
    echo "$V_TEMP" | grep -qF $i || V_TEMP="$V_TEMP${V_TEMP:+ }$i"
 done
-CFG_TARGET_TRIPLES=$V_TEMP
+CFG_TARGET=$V_TEMP
 
 # check target-specific tool-chains
-for i in $CFG_TARGET_TRIPLES
+for i in $CFG_TARGET
 do
     L_CHECK=false
-    for j in $CFG_SUPPORTED_TARGET_TRIPLES
+    for j in $CFG_SUPPORTED_TARGET
     do
         if [ $i = $j ]
         then
@@ -632,6 +681,13 @@ do
             if [ ! -f $CFG_ANDROID_CROSS_PATH/bin/arm-linux-androideabi-ar ]
             then
                 err "NDK $CFG_ANDROID_CROSS_PATH/bin/arm-linux-androideabi-ar not found"
+            fi
+            ;;
+
+        arm-apple-darwin)
+            if [ $CFG_OSTYPE != apple-darwin ]
+            then
+                err "The iOS target is only supported on Mac OS X"
             fi
             ;;
 
@@ -664,17 +720,17 @@ do
     make_dir $i
 done
 
-for t in $CFG_HOST_TRIPLES
+for t in $CFG_HOST
 do
     make_dir $t/llvm
 done
 
-for t in $CFG_HOST_TRIPLES
+for t in $CFG_HOST
 do
     make_dir $t/rustllvm
 done
 
-for t in $CFG_TARGET_TRIPLES
+for t in $CFG_TARGET
 do
   make_dir $t/rt
   for s in 0 1 2 3
@@ -684,9 +740,8 @@ do
     make_dir $t/rt/libuv/src/ares
     make_dir $t/rt/libuv/src/eio
     make_dir $t/rt/libuv/src/ev
-    make_dir $t/rt/jemalloc
     for i in                                          \
-      isaac linenoise sync test \
+      isaac sync test \
       arch/i386 arch/x86_64 arch/arm arch/mips  \
       sundown/src sundown/html
     do
@@ -704,9 +759,9 @@ then
     CFG_LIBDIR=bin
 fi
 
-for h in $CFG_HOST_TRIPLES
+for h in $CFG_HOST
 do
-    for t in $CFG_TARGET_TRIPLES
+    for t in $CFG_TARGET
     do
         for i in 0 1 2 3
         do
@@ -786,7 +841,7 @@ fi
 # Configure llvm, only if necessary
 step_msg "looking at LLVM"
 CFG_LLVM_SRC_DIR=${CFG_SRC_DIR}src/llvm/
-for t in $CFG_HOST_TRIPLES
+for t in $CFG_HOST
 do
     do_reconfigure=1
 
@@ -855,6 +910,15 @@ do
         # Try to have LLVM pull in as few dependencies as possible (#9397)
         LLVM_OPTS="$LLVM_OPTS --disable-zlib --disable-libffi"
 
+        # Use win32 native thread/lock apis instead of pthread wrapper.
+        # (llvm's configure tries to find pthread first, so we have to disable it explicitly.)
+        # Also note that pthreads works badly on mingw-w64 systems: #8996
+        case "$CFG_BUILD" in
+            (*-mingw32)
+            LLVM_OPTS="$LLVM_OPTS --disable-pthreads"
+            ;;
+        esac
+
         case "$CFG_C_COMPILER" in
             ("ccache clang")
             LLVM_CXX_32="ccache clang++ -m32 -Qunused-arguments"
@@ -864,11 +928,11 @@ do
             LLVM_CC_64="ccache clang -Qunused-arguments"
             ;;
             ("clang")
-            LLVM_CXX_32="clang++ -m32"
-            LLVM_CC_32="clang -m32"
+            LLVM_CXX_32="clang++ -m32 -Qunused-arguments"
+            LLVM_CC_32="clang -m32 -Qunused-arguments"
 
-            LLVM_CXX_64="clang++"
-            LLVM_CC_64="clang"
+            LLVM_CXX_64="clang++ -Qunused-arguments"
+            LLVM_CC_64="clang -Qunused-arguments"
             ;;
             ("ccache gcc")
             LLVM_CXX_32="ccache g++ -m32"
@@ -962,20 +1026,15 @@ putvar CFG_OSTYPE
 putvar CFG_CPUTYPE
 putvar CFG_CONFIGURE_ARGS
 putvar CFG_PREFIX
-putvar CFG_BUILD_TRIPLE
-putvar CFG_HOST_TRIPLES
-putvar CFG_TARGET_TRIPLES
+putvar CFG_BUILD
+putvar CFG_HOST
+putvar CFG_TARGET
 putvar CFG_C_COMPILER
 putvar CFG_LIBDIR
 putvar CFG_DISABLE_MANAGE_SUBMODULES
 putvar CFG_ANDROID_CROSS_PATH
 putvar CFG_MINGW32_CROSS_PATH
-
-if [ ! -z "$CFG_ENABLE_PAX_FLAGS" ]
-then
-    putvar CFG_ENABLE_PAX_FLAGS
-    putvar CFG_PAXCTL
-fi
+putvar CFG_MANDIR
 
 # Avoid spurious warnings from clang by feeding it original source on
 # ccache-miss rather than preprocessed input.
@@ -1016,7 +1075,7 @@ fi
 putvar CFG_LLVM_ROOT
 putvar CFG_LLVM_SRC_DIR
 
-for t in $CFG_HOST_TRIPLES
+for t in $CFG_HOST
 do
     CFG_LLVM_BUILD_DIR=$(echo CFG_LLVM_BUILD_DIR_${t} | tr - _)
     CFG_LLVM_INST_DIR=$(echo CFG_LLVM_INST_DIR_${t} | tr - _)

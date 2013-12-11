@@ -10,12 +10,12 @@
 
 use std::comm;
 
-fn foo(blk: ~fn:Send()) {
+fn foo(blk: proc()) {
     blk();
 }
 
 pub fn main() {
-    let (p,c) = comm::stream();
+    let (p,c) = Chan::new();
     do foo {
         c.send(());
     }

@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// xfail-android: FIXME(#10381)
+
 // compile-flags:-Z extra-debug-info
 // debugger:rbreak zzz
 // debugger:run
@@ -39,7 +41,7 @@ fn main() {
 
     let owned = ~5;
 
-    let closure: ~fn() = || {
+    let closure: proc() = proc() {
         zzz();
         do_something(&constant, &a_struct.a, owned);
     };

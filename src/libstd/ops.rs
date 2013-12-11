@@ -352,7 +352,7 @@ pub trait BitOr<RHS,Result> {
  * # Example
  *
  * A trivial implementation of `BitXor`. When `Foo ^ Foo` happens, it ends up
- * calling `bixtor`, and therefore, `main` prints `Bitwise Xor-ing!`.
+ * calling `bitxor`, and therefore, `main` prints `Bitwise Xor-ing!`.
  *
  * ```
  * struct Foo;
@@ -481,8 +481,8 @@ mod bench {
 
     #[bench]
     fn alloc_obj_with_dtor(bh: &mut BenchHarness) {
-        do bh.iter {
+        bh.iter(|| {
             HasDtor { x : 10 };
-        }
+        })
     }
 }

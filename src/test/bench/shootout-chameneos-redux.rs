@@ -12,13 +12,9 @@
 
 extern mod extra;
 
-use std::cell::Cell;
-use std::comm::{stream, SharedChan};
-use std::io;
 use std::option;
 use std::os;
 use std::task;
-use std::uint;
 
 fn print_complements() {
     let all = [Blue, Red, Yellow];
@@ -66,7 +62,7 @@ fn show_digit(nn: uint) -> ~str {
         7 => {~"seven"}
         8 => {~"eight"}
         9 => {~"nine"}
-        _ => {fail2!("expected digits from 0 to 9...")}
+        _ => {fail!("expected digits from 0 to 9...")}
     }
 }
 
@@ -141,10 +137,8 @@ fn creature(
 fn rendezvous(nn: uint, set: ~[color]) {
 
     // these ports will allow us to hear from the creatures
-    let (from_creatures, to_rendezvous) = stream::<CreatureInfo>();
-    let to_rendezvous = SharedChan::new(to_rendezvous);
-    let (from_creatures_log, to_rendezvous_log) = stream::<~str>();
-    let to_rendezvous_log = SharedChan::new(to_rendezvous_log);
+    let (from_creatures, to_rendezvous) = SharedChan::<CreatureInfo>::new();
+    let (from_creatures_log, to_rendezvous_log) = SharedChan::<~str>::new();
 
     // these channels will be passed to the creatures so they can talk to us
 
@@ -157,10 +151,12 @@ fn rendezvous(nn: uint, set: ~[color]) {
             let col = *col;
             let to_rendezvous = to_rendezvous.clone();
             let to_rendezvous_log = to_rendezvous_log.clone();
-            let (from_rendezvous, to_creature) = stream();
-            let from_rendezvous = Cell::new(from_rendezvous);
-            do task::spawn || {
-                creature(ii, col, from_rendezvous.take(), to_rendezvous.clone(),
+            let (from_rendezvous, to_creature) = Chan::new();
+            do task::spawn {
+                creature(ii,
+                         col,
+                         from_rendezvous,
+                         to_rendezvous.clone(),
                          to_rendezvous_log.clone());
             }
             to_creature
@@ -191,15 +187,15 @@ fn rendezvous(nn: uint, set: ~[color]) {
     }
 
     // print each color in the set
-    io::println(show_color_list(set));
+    println(show_color_list(set));
 
     // print each creature's stats
     for rep in report.iter() {
-        io::println(*rep);
+        println(*rep);
     }
 
     // print the total number of creatures met
-    io::println(show_number(creatures_met));
+    println(show_number(creatures_met));
 }
 
 fn main() {
@@ -215,10 +211,10 @@ fn main() {
     let nn = from_str::<uint>(args[1]).unwrap();
 
     print_complements();
-    io::println("");
+    println("");
 
     rendezvous(nn, ~[Blue, Red, Yellow]);
-    io::println("");
+    println("");
 
     rendezvous(nn,
         ~[Blue, Red, Yellow, Red, Yellow, Blue, Red, Yellow, Red, Blue]);

@@ -34,7 +34,10 @@
 //! Context itself, span_lint should be used instead of add_lint.
 
 use driver::session;
+use middle::privacy;
+use middle::trans::adt; // for `adt::is_ffi_safe`
 use middle::ty;
+use middle::typeck;
 use middle::pat_util;
 use metadata::csearch;
 use util::ppaux::{ty_to_str};
@@ -57,12 +60,12 @@ use syntax::codemap::Span;
 use syntax::codemap;
 use syntax::parse::token;
 use syntax::{ast, ast_util, visit};
+use syntax::ast_util::IdVisitingOperation;
 use syntax::visit::Visitor;
 
 #[deriving(Clone, Eq)]
 pub enum lint {
     ctypes,
-    cstack,
     unused_imports,
     unnecessary_qualification,
     while_true,
@@ -72,7 +75,11 @@ pub enum lint {
     non_uppercase_statics,
     non_uppercase_pattern_statics,
     type_limits,
+    type_overflow,
     unused_unsafe,
+    unsafe_block,
+    attribute_usage,
+    unknown_features,
 
     managed_heap_memory,
     owned_heap_memory,
@@ -82,6 +89,7 @@ pub enum lint {
     dead_assignment,
     unused_mut,
     unnecessary_allocation,
+    dead_code,
 
     missing_doc,
     unreachable_code,
@@ -133,13 +141,6 @@ static lint_table: &'static [(&'static str, LintSpec)] = &[
         lint: ctypes,
         desc: "proper use of std::libc types in foreign modules",
         default: warn
-     }),
-
-    ("cstack",
-     LintSpec {
-        lint: cstack,
-        desc: "only invoke foreign functions from fixedstacksegment fns",
-        default: deny
      }),
 
     ("unused_imports",
@@ -226,10 +227,32 @@ static lint_table: &'static [(&'static str, LintSpec)] = &[
         default: warn
      }),
 
+    ("type_overflow",
+     LintSpec {
+        lint: type_overflow,
+        desc: "literal out of range for its type",
+        default: warn
+     }),
+
+
     ("unused_unsafe",
      LintSpec {
         lint: unused_unsafe,
         desc: "unnecessary use of an `unsafe` block",
+        default: warn
+    }),
+
+    ("unsafe_block",
+     LintSpec {
+        lint: unsafe_block,
+        desc: "usage of an `unsafe` block",
+        default: allow
+    }),
+
+    ("attribute_usage",
+     LintSpec {
+        lint: attribute_usage,
+        desc: "detects bad use of attributes",
         default: warn
     }),
 
@@ -258,6 +281,13 @@ static lint_table: &'static [(&'static str, LintSpec)] = &[
      LintSpec {
         lint: unnecessary_allocation,
         desc: "detects unnecessary allocations that can be eliminated",
+        default: warn
+    }),
+
+    ("dead_code",
+     LintSpec {
+        lint: dead_code,
+        desc: "detect piece of code that will never be used",
         default: warn
     }),
 
@@ -302,6 +332,13 @@ static lint_table: &'static [(&'static str, LintSpec)] = &[
         desc: "mass-change the level for lints which produce warnings",
         default: warn
     }),
+
+    ("unknown_features",
+     LintSpec {
+        lint: unknown_features,
+        desc: "unknown features found in create-level #[feature] directives",
+        default: deny,
+    }),
 ];
 
 /*
@@ -316,21 +353,34 @@ pub fn get_lint_dict() -> LintDict {
     return map;
 }
 
-struct Context {
+struct Context<'a> {
     // All known lint modes (string versions)
     dict: @LintDict,
     // Current levels of each lint warning
     cur: SmallIntMap<(level, LintSource)>,
     // context we're checking in (used to access fields like sess)
     tcx: ty::ctxt,
+    // maps from an expression id that corresponds to a method call to the
+    // details of the method to be invoked
+    method_map: typeck::method_map,
+    // Items exported by the crate; used by the missing_doc lint.
+    exported_items: &'a privacy::ExportedItems,
+    // The id of the current `ast::struct_def` being walked.
+    cur_struct_def_id: ast::NodeId,
+    // Whether some ancestor of the current node was marked
+    // #[doc(hidden)].
+    is_doc_hidden: bool,
 
     // When recursing into an attributed node of the ast which modifies lint
     // levels, this stack keeps track of the previous lint levels of whatever
     // was modified.
     lint_stack: ~[(lint, level, LintSource)],
+
+    // id of the last visited negated expression
+    negated_expr_id: ast::NodeId
 }
 
-impl Context {
+impl<'a> Context<'a> {
     fn get_level(&self, lint: lint) -> level {
         match self.cur.find(&(lint as uint)) {
           Some(&(lvl, _)) => lvl,
@@ -359,7 +409,7 @@ impl Context {
                 return *k;
             }
         }
-        fail2!("unregistered lint {:?}", lint);
+        fail!("unregistered lint {:?}", lint);
     }
 
     fn span_lint(&self, lint: lint, span: Span, msg: &str) {
@@ -380,7 +430,7 @@ impl Context {
                 format!("{} [-{} {}]", msg,
                     match level {
                         warn => 'W', deny => 'D', forbid => 'F',
-                        allow => fail2!()
+                        allow => fail!()
                     }, self.lint_to_str(lint).replace("_", "-"))
             },
             Node(src) => {
@@ -391,7 +441,7 @@ impl Context {
         match level {
             warn =>          { self.tcx.sess.span_warn(span, msg); }
             deny | forbid => { self.tcx.sess.span_err(span, msg);  }
-            allow => fail2!(),
+            allow => fail!(),
         }
 
         for &span in note.iter() {
@@ -404,14 +454,15 @@ impl Context {
      * current lint context, call the provided function, then reset the
      * lints in effect to their previous state.
      */
-    fn with_lint_attrs(&mut self, attrs: &[ast::Attribute],
-                       f: &fn(&mut Context)) {
+    fn with_lint_attrs(&mut self,
+                       attrs: &[ast::Attribute],
+                       f: |&mut Context|) {
         // Parse all of the lint attributes, and then add them all to the
         // current dictionary of lint information. Along the way, keep a history
         // of what we changed so we can roll everything back after invoking the
         // specified closure
         let mut pushed = 0u;
-        do each_lint(self.tcx.sess, attrs) |meta, level, lintname| {
+        each_lint(self.tcx.sess, attrs, |meta, level, lintname| {
             match self.dict.find_equiv(&lintname) {
                 None => {
                     self.span_lint(
@@ -437,18 +488,25 @@ impl Context {
                 }
             }
             true
-        };
+        });
+
+        let old_is_doc_hidden = self.is_doc_hidden;
+        self.is_doc_hidden = self.is_doc_hidden ||
+            attrs.iter().any(|attr| ("doc" == attr.name() && match attr.meta_item_list()
+                                     { None => false,
+                                       Some(l) => attr::contains_name(l, "hidden") }));
 
         f(self);
 
         // rollback
-        do pushed.times {
+        self.is_doc_hidden = old_is_doc_hidden;
+        pushed.times(|| {
             let (lint, lvl, src) = self.lint_stack.pop();
             self.set_level(lint, lvl, src);
-        }
+        })
     }
 
-    fn visit_ids(&self, f: &fn(&mut ast_util::IdVisitor<Context>)) {
+    fn visit_ids(&self, f: |&mut ast_util::IdVisitor<Context>|) {
         let mut v = ast_util::IdVisitor {
             operation: self,
             pass_through_items: false,
@@ -460,7 +518,8 @@ impl Context {
 
 pub fn each_lint(sess: session::Session,
                  attrs: &[ast::Attribute],
-                 f: &fn(@ast::MetaItem, level, @str) -> bool) -> bool {
+                 f: |@ast::MetaItem, level, @str| -> bool)
+                 -> bool {
     let xs = [allow, warn, deny, forbid];
     for &level in xs.iter() {
         let level_name = level_to_str(level);
@@ -495,7 +554,7 @@ fn check_while_true_expr(cx: &Context, e: &ast::Expr) {
         ast::ExprWhile(cond, _) => {
             match cond.node {
                 ast::ExprLit(@codemap::Spanned {
-                    node: ast::lit_bool(true), _}) =>
+                    node: ast::lit_bool(true), ..}) =>
                 {
                     cx.span_lint(while_true, e.span,
                                  "denote infinite loops with loop { ... }");
@@ -514,7 +573,48 @@ fn check_type_limits(cx: &Context, e: &ast::Expr) {
                 cx.span_lint(type_limits, e.span,
                              "comparison is useless due to type limits");
             }
-        }
+        },
+        ast::ExprLit(lit) => {
+            match ty::get(ty::expr_ty(cx.tcx, e)).sty {
+                ty::ty_int(t) => {
+                    let int_type = if t == ast::ty_i {
+                        cx.tcx.sess.targ_cfg.int_type
+                    } else { t };
+                    let (min, max) = int_ty_range(int_type);
+                    let mut lit_val: i64 = match lit.node {
+                        ast::lit_int(v, _) => v,
+                        ast::lit_uint(v, _) => v as i64,
+                        ast::lit_int_unsuffixed(v) => v,
+                        _ => fail!()
+                    };
+                    if cx.negated_expr_id == e.id {
+                        lit_val *= -1;
+                    }
+                    if  lit_val < min || lit_val > max {
+                        cx.span_lint(type_overflow, e.span,
+                                     "literal out of range for its type");
+                    }
+                },
+                ty::ty_uint(t) => {
+                    let uint_type = if t == ast::ty_u {
+                        cx.tcx.sess.targ_cfg.uint_type
+                    } else { t };
+                    let (min, max) = uint_ty_range(uint_type);
+                    let lit_val: u64 = match lit.node {
+                        ast::lit_int(v, _) => v as u64,
+                        ast::lit_uint(v, _) => v,
+                        ast::lit_int_unsuffixed(v) => v as u64,
+                        _ => fail!()
+                    };
+                    if  lit_val < min || lit_val > max {
+                        cx.span_lint(type_overflow, e.span,
+                                     "literal out of range for its type");
+                    }
+                },
+
+                _ => ()
+            };
+        },
         _ => ()
     };
 
@@ -526,7 +626,7 @@ fn check_type_limits(cx: &Context, e: &ast::Expr) {
             ast::BiGt => v >= min,
             ast::BiGe => v > min,
             ast::BiEq | ast::BiNe => v >= min && v <= max,
-            _ => fail2!()
+            _ => fail!()
         }
     }
 
@@ -582,7 +682,7 @@ fn check_type_limits(cx: &Context, e: &ast::Expr) {
                         ast::lit_int_unsuffixed(v) => v,
                         _ => return true
                     },
-                    _ => fail2!()
+                    _ => fail!()
                 };
                 is_valid(norm_binop, lit_val, min, max)
             }
@@ -595,7 +695,7 @@ fn check_type_limits(cx: &Context, e: &ast::Expr) {
                         ast::lit_int_unsuffixed(v) => v as u64,
                         _ => return true
                     },
-                    _ => fail2!()
+                    _ => fail!()
                 };
                 is_valid(norm_binop, lit_val, min, max)
             }
@@ -627,6 +727,14 @@ fn check_item_ctypes(cx: &Context, it: &ast::item) {
                                 "found rust type `uint` in foreign module, while \
                                 libc::c_uint or libc::c_ulong should be used");
                     }
+                    ast::DefTy(def_id) => {
+                        if !adt::is_ffi_safe(cx.tcx, def_id) {
+                            cx.span_lint(ctypes, ty.span,
+                                         "found enum type without foreign-function-safe \
+                                          representation annotation in foreign module");
+                            // hmm... this message could be more helpful
+                        }
+                    }
                     _ => ()
                 }
             }
@@ -637,19 +745,19 @@ fn check_item_ctypes(cx: &Context, it: &ast::item) {
 
     fn check_foreign_fn(cx: &Context, decl: &ast::fn_decl) {
         for input in decl.inputs.iter() {
-            check_ty(cx, &input.ty);
+            check_ty(cx, input.ty);
         }
-        check_ty(cx, &decl.output)
+        check_ty(cx, decl.output)
     }
 
     match it.node {
       ast::item_foreign_mod(ref nmod) if !nmod.abis.is_intrinsic() => {
         for ni in nmod.items.iter() {
             match ni.node {
-                ast::foreign_item_fn(ref decl, _) => {
+                ast::foreign_item_fn(decl, _) => {
                     check_foreign_fn(cx, decl);
                 }
-                ast::foreign_item_static(ref t, _) => { check_ty(cx, t); }
+                ast::foreign_item_static(t, _) => { check_ty(cx, t); }
             }
         }
       }
@@ -666,9 +774,21 @@ fn check_heap_type(cx: &Context, span: Span, ty: ty::t) {
         let mut n_uniq = 0;
         ty::fold_ty(cx.tcx, ty, |t| {
             match ty::get(t).sty {
-              ty::ty_box(_) => n_box += 1,
-              ty::ty_uniq(_) => n_uniq += 1,
-              _ => ()
+                ty::ty_box(_) | ty::ty_estr(ty::vstore_box) |
+                ty::ty_evec(_, ty::vstore_box) |
+                ty::ty_trait(_, _, ty::BoxTraitStore, _, _) => {
+                    n_box += 1;
+                }
+                ty::ty_uniq(_) | ty::ty_estr(ty::vstore_uniq) |
+                ty::ty_evec(_, ty::vstore_uniq) |
+                ty::ty_trait(_, _, ty::UniqTraitStore, _, _) => {
+                    n_uniq += 1;
+                }
+                ty::ty_closure(ref c) if c.sigil == ast::OwnedSigil => {
+                    n_uniq += 1;
+                }
+
+                _ => ()
             };
             t
         });
@@ -689,10 +809,10 @@ fn check_heap_type(cx: &Context, span: Span, ty: ty::t) {
 
 fn check_heap_item(cx: &Context, it: &ast::item) {
     match it.node {
-        ast::item_fn(*) |
-        ast::item_ty(*) |
-        ast::item_enum(*) |
-        ast::item_struct(*) => check_heap_type(cx, it.span,
+        ast::item_fn(..) |
+        ast::item_ty(..) |
+        ast::item_enum(..) |
+        ast::item_struct(..) => check_heap_type(cx, it.span,
                                                ty::node_id_to_type(cx.tcx,
                                                                    it.id)),
         _ => ()
@@ -711,6 +831,85 @@ fn check_heap_item(cx: &Context, it: &ast::item) {
     }
 }
 
+static crate_attrs: &'static [&'static str] = &[
+// NOTE: remove pkgid after snapshot
+    "crate_type", "feature", "no_uv", "no_main", "no_std", "pkgid", "crate_id",
+    "desc", "comment", "license", "copyright", // not used in rustc now
+];
+
+
+static obsolete_attrs: &'static [(&'static str, &'static str)] = &[
+    ("abi", "Use `extern \"abi\" fn` instead"),
+    ("auto_encode", "Use `#[deriving(Encodable)]` instead"),
+    ("auto_decode", "Use `#[deriving(Decodable)]` instead"),
+    ("fast_ffi", "Remove it"),
+    ("fixed_stack_segment", "Remove it"),
+    ("rust_stack", "Remove it"),
+];
+
+static other_attrs: &'static [&'static str] = &[
+    // item-level
+    "address_insignificant", // can be crate-level too
+    "thread_local", // for statics
+    "allow", "deny", "forbid", "warn", // lint options
+    "deprecated", "experimental", "unstable", "stable", "locked", "frozen", //item stability
+    "crate_map", "cfg", "doc", "export_name", "link_section", "no_freeze",
+    "no_mangle", "no_send", "static_assert", "unsafe_no_drop_flag",
+    "packed", "simd", "repr", "deriving", "unsafe_destructor", "link",
+
+    //mod-level
+    "path", "link_name", "link_args", "nolink", "macro_escape", "no_implicit_prelude",
+
+    // fn-level
+    "test", "bench", "should_fail", "ignore", "inline", "lang", "main", "start",
+    "no_split_stack", "cold",
+
+    // internal attribute: bypass privacy inside items
+    "!resolve_unexported",
+];
+
+fn check_crate_attrs_usage(cx: &Context, attrs: &[ast::Attribute]) {
+
+    for attr in attrs.iter() {
+        let name = attr.node.value.name();
+        let mut iter = crate_attrs.iter().chain(other_attrs.iter());
+        if !iter.any(|other_attr| { name.equiv(other_attr) }) {
+            cx.span_lint(attribute_usage, attr.span, "unknown crate attribute");
+        }
+    }
+}
+
+fn check_attrs_usage(cx: &Context, attrs: &[ast::Attribute]) {
+    // check if element has crate-level, obsolete, or any unknown attributes.
+
+    for attr in attrs.iter() {
+        let name = attr.node.value.name();
+        for crate_attr in crate_attrs.iter() {
+            if name.equiv(crate_attr) {
+                let msg = match attr.node.style {
+                    ast::AttrOuter => "crate-level attribute should be an inner attribute: \
+                                       add semicolon at end",
+                    ast::AttrInner => "crate-level attribute should be in the root module",
+                };
+                cx.span_lint(attribute_usage, attr.span, msg);
+                return;
+            }
+        }
+
+        for &(obs_attr, obs_alter) in obsolete_attrs.iter() {
+            if name.equiv(&obs_attr) {
+                cx.span_lint(attribute_usage, attr.span,
+                             format!("obsolete attribute: {:s}", obs_alter));
+                return;
+            }
+        }
+
+        if !other_attrs.iter().any(|other_attr| { name.equiv(other_attr) }) {
+            cx.span_lint(attribute_usage, attr.span, "unknown attribute");
+        }
+    }
+}
+
 fn check_heap_expr(cx: &Context, e: &ast::Expr) {
     let ty = ty::expr_ty(cx.tcx, e);
     check_heap_type(cx, e.span, ty);
@@ -718,7 +917,7 @@ fn check_heap_expr(cx: &Context, e: &ast::Expr) {
 
 fn check_path_statement(cx: &Context, s: &ast::Stmt) {
     match s.node {
-        ast::StmtSemi(@ast::Expr { node: ast::ExprPath(_), _ }, _) => {
+        ast::StmtSemi(@ast::Expr { node: ast::ExprPath(_), .. }, _) => {
             cx.span_lint(path_statement, s.span,
                          "path statement with no effect");
         }
@@ -748,10 +947,10 @@ fn check_item_non_camel_case_types(cx: &Context, it: &ast::item) {
     }
 
     match it.node {
-        ast::item_ty(*) | ast::item_struct(*) => {
+        ast::item_ty(..) | ast::item_struct(..) => {
             check_case(cx, "type", it.ident, it.span)
         }
-        ast::item_trait(*) => {
+        ast::item_trait(..) => {
             check_case(cx, "trait", it.ident, it.span)
         }
         ast::item_enum(ref enum_definition, _) => {
@@ -772,7 +971,7 @@ fn check_item_non_uppercase_statics(cx: &Context, it: &ast::item) {
             // check for lowercase letters rather than non-uppercase
             // ones (some scripts don't have a concept of
             // upper/lowercase)
-            if s.iter().any(|c| c.is_lowercase()) {
+            if s.chars().any(|c| c.is_lowercase()) {
                 cx.span_lint(non_uppercase_statics, it.span,
                              "static constant should have an uppercase identifier");
             }
@@ -788,7 +987,7 @@ fn check_pat_non_uppercase_statics(cx: &Context, p: &ast::Pat) {
             // last identifier alone is right choice for this lint.
             let ident = path.segments.last().identifier;
             let s = cx.tcx.sess.str_of(ident);
-            if s.iter().any(|c| c.is_lowercase()) {
+            if s.chars().any(|c| c.is_lowercase()) {
                 cx.span_lint(non_uppercase_pattern_statics, path.span,
                              "static constant in pattern should be all caps");
             }
@@ -799,8 +998,7 @@ fn check_pat_non_uppercase_statics(cx: &Context, p: &ast::Pat) {
 
 fn check_unused_unsafe(cx: &Context, e: &ast::Expr) {
     match e.node {
-        // Don't warn about generated blocks, that'll just pollute the
-        // output.
+        // Don't warn about generated blocks, that'll just pollute the output.
         ast::ExprBlock(ref blk) => {
             if blk.rules == ast::UnsafeBlock(ast::UserProvided) &&
                 !cx.tcx.used_unsafe.contains(&blk.id) {
@@ -812,199 +1010,223 @@ fn check_unused_unsafe(cx: &Context, e: &ast::Expr) {
     }
 }
 
-fn check_unused_mut_pat(cx: &Context, p: @ast::Pat) {
-    let mut used = false;
-    let mut bindings = 0;
-    do pat_util::pat_bindings(cx.tcx.def_map, p) |_, id, _, _| {
-        used = used || cx.tcx.used_mut_nodes.contains(&id);
-        bindings += 1;
-    }
-    if !used {
-        let msg = if bindings == 1 {
-            "variable does not need to be mutable"
-        } else {
-            "variables do not need to be mutable"
-        };
-        cx.span_lint(unused_mut, p.span, msg);
+fn check_unsafe_block(cx: &Context, e: &ast::Expr) {
+    match e.node {
+        // Don't warn about generated blocks, that'll just pollute the output.
+        ast::ExprBlock(ref blk) if blk.rules == ast::UnsafeBlock(ast::UserProvided) => {
+            cx.span_lint(unsafe_block, blk.span, "usage of an `unsafe` block");
+        }
+        _ => ()
     }
 }
 
-fn check_unused_mut_fn_decl(cx: &Context, fd: &ast::fn_decl) {
-    for arg in fd.inputs.iter() {
-        if arg.is_mutbl {
-            check_unused_mut_pat(cx, arg.pat);
+fn check_unused_mut_pat(cx: &Context, p: &ast::Pat) {
+    match p.node {
+        ast::PatIdent(ast::BindByValue(ast::MutMutable),
+                      ref path, _) if pat_util::pat_is_binding(cx.tcx.def_map, p)=> {
+            // `let mut _a = 1;` doesn't need a warning.
+            let initial_underscore = match path.segments {
+                [ast::PathSegment { identifier: id, .. }] => {
+                    cx.tcx.sess.str_of(id).starts_with("_")
+                }
+                _ => {
+                    cx.tcx.sess.span_bug(p.span,
+                                         "mutable binding that doesn't \
+                                         consist of exactly one segment");
+                }
+            };
+
+            if !initial_underscore && !cx.tcx.used_mut_nodes.contains(&p.id) {
+                cx.span_lint(unused_mut, p.span,
+                             "variable does not need to be mutable");
+            }
         }
+        _ => ()
     }
+}
+
+enum Allocation {
+    VectorAllocation,
+    BoxAllocation
 }
 
 fn check_unnecessary_allocation(cx: &Context, e: &ast::Expr) {
-    // Warn if string and vector literals with sigils are immediately borrowed.
-    // Those can have the sigil removed.
-    match e.node {
+    // Warn if string and vector literals with sigils, or boxing expressions,
+    // are immediately borrowed.
+    let allocation = match e.node {
         ast::ExprVstore(e2, ast::ExprVstoreUniq) |
         ast::ExprVstore(e2, ast::ExprVstoreBox) => {
             match e2.node {
-                ast::ExprLit(@codemap::Spanned{node: ast::lit_str(*), _}) |
-                ast::ExprVec(*) => {}
+                ast::ExprLit(@codemap::Spanned{node: ast::lit_str(..), ..}) |
+                ast::ExprVec(..) => VectorAllocation,
                 _ => return
             }
         }
+        ast::ExprUnary(_, ast::UnUniq, _) |
+        ast::ExprUnary(_, ast::UnBox(..), _) => BoxAllocation,
 
         _ => return
-    }
+    };
+
+    let report = |msg| {
+        cx.span_lint(unnecessary_allocation, e.span, msg);
+    };
 
     match cx.tcx.adjustments.find_copy(&e.id) {
-        Some(@ty::AutoDerefRef(ty::AutoDerefRef {
-            autoref: Some(ty::AutoBorrowVec(*)), _ })) => {
-            cx.span_lint(unnecessary_allocation, e.span,
-                         "unnecessary allocation, the sigil can be removed");
+        Some(@ty::AutoDerefRef(ty::AutoDerefRef { autoref, .. })) => {
+            match (allocation, autoref) {
+                (VectorAllocation, Some(ty::AutoBorrowVec(..))) => {
+                    report("unnecessary allocation, the sigil can be removed");
+                }
+                (BoxAllocation, Some(ty::AutoPtr(_, ast::MutImmutable))) => {
+                    report("unnecessary allocation, use & instead");
+                }
+                (BoxAllocation, Some(ty::AutoPtr(_, ast::MutMutable))) => {
+                    report("unnecessary allocation, use &mut instead");
+                }
+                _ => ()
+            }
         }
 
         _ => ()
     }
 }
 
-struct MissingDocLintVisitor(ty::ctxt);
+fn check_missing_doc_attrs(cx: &Context,
+                           id: Option<ast::NodeId>,
+                           attrs: &[ast::Attribute],
+                           sp: Span,
+                           desc: &'static str) {
+    // If we're building a test harness, then warning about
+    // documentation is probably not really relevant right now.
+    if cx.tcx.sess.opts.test { return }
 
-impl MissingDocLintVisitor {
-    fn check_attrs(&self, attrs: &[ast::Attribute], id: ast::NodeId,
-                   sp: Span, msg: ~str) {
-        if !attrs.iter().any(|a| a.node.is_sugared_doc) {
-            self.sess.add_lint(missing_doc, id, sp, msg);
-        }
+    // `#[doc(hidden)]` disables missing_doc check.
+    if cx.is_doc_hidden { return }
+
+    // Only check publicly-visible items, using the result from the privacy pass. It's an option so
+    // the crate root can also use this function (it doesn't have a NodeId).
+    match id {
+        Some(ref id) if !cx.exported_items.contains(id) => return,
+        _ => ()
     }
 
-    fn check_struct(&self, sdef: &ast::struct_def) {
-        for field in sdef.fields.iter() {
-            match field.node.kind {
-                ast::named_field(_, vis) if vis != ast::private => {
-                    self.check_attrs(field.node.attrs, field.node.id, field.span,
-                                     ~"missing documentation for a field");
-                }
-                ast::unnamed_field | ast::named_field(*) => {}
-            }
+    let has_doc = attrs.iter().any(|a| {
+        match a.node.value.node {
+            ast::MetaNameValue(ref name, _) if "doc" == *name => true,
+            _ => false
         }
-    }
-
-    fn doc_hidden(&self, attrs: &[ast::Attribute]) -> bool {
-        do attrs.iter().any |attr| {
-            "doc" == attr.name() &&
-                match attr.meta_item_list() {
-                    Some(l) => attr::contains_name(l, "hidden"),
-                    None    => false // not of the form #[doc(...)]
-                }
-        }
+    });
+    if !has_doc {
+        cx.span_lint(missing_doc, sp,
+                     format!("missing documentation for {}", desc));
     }
 }
 
-impl Visitor<()> for MissingDocLintVisitor {
-    fn visit_ty_method(&mut self, m:&ast::TypeMethod, _: ()) {
-        if self.doc_hidden(m.attrs) { return }
+fn check_missing_doc_item(cx: &Context, it: &ast::item) {
+    let desc = match it.node {
+        ast::item_fn(..) => "a function",
+        ast::item_mod(..) => "a module",
+        ast::item_enum(..) => "an enum",
+        ast::item_struct(..) => "a struct",
+        ast::item_trait(..) => "a trait",
+        _ => return
+    };
+    check_missing_doc_attrs(cx, Some(it.id), it.attrs, it.span, desc);
+}
 
-        // All ty_method objects are linted about because they're part of a
-        // trait (no visibility)
-        self.check_attrs(m.attrs, m.id, m.span,
-                         ~"missing documentation for a method");
-        visit::walk_ty_method(self, m, ());
-    }
-
-    fn visit_fn(&mut self, fk: &visit::fn_kind, d: &ast::fn_decl,
-                b: &ast::Block, sp: Span, id: ast::NodeId, _: ()) {
-        // Only warn about explicitly public methods.
-        match *fk {
-            visit::fk_method(_, _, m) => {
-                if self.doc_hidden(m.attrs) {
-                    return;
-                }
-                // If we're in a trait implementation, no need to duplicate
-                // documentation
-                if m.vis == ast::public {
-                    self.check_attrs(m.attrs, id, sp,
-                                     ~"missing documentation for a method");
-                }
-            }
-            _ => {}
-        }
-        visit::walk_fn(self, fk, d, b, sp, id, ());
-    }
-
-    fn visit_item(&mut self, it: @ast::item, _: ()) {
-        // If we're building a test harness, then warning about documentation is
-        // probably not really relevant right now
-        if self.sess.opts.test { return }
-        if self.doc_hidden(it.attrs) { return }
-
-        match it.node {
-            ast::item_struct(sdef, _) if it.vis == ast::public => {
-                self.check_attrs(it.attrs, it.id, it.span,
-                                 ~"missing documentation for a struct");
-                self.check_struct(sdef);
-            }
-
-            // Skip implementations because they inherit documentation from the
-            // trait (which was already linted)
-            ast::item_impl(_, Some(*), _, _) => return,
-
-            ast::item_trait(*) if it.vis == ast::public => {
-                self.check_attrs(it.attrs, it.id, it.span,
-                                 ~"missing documentation for a trait");
-            }
-
-            ast::item_fn(*) if it.vis == ast::public => {
-                self.check_attrs(it.attrs, it.id, it.span,
-                                 ~"missing documentation for a function");
-            }
-
-            ast::item_enum(ref edef, _) if it.vis == ast::public => {
-                self.check_attrs(it.attrs, it.id, it.span,
-                                 ~"missing documentation for an enum");
-                for variant in edef.variants.iter() {
-                    if variant.node.vis == ast::private { continue; }
-
-                    self.check_attrs(variant.node.attrs, variant.node.id,
-                                     variant.span,
-                                     ~"missing documentation for a variant");
-                    match variant.node.kind {
-                        ast::struct_variant_kind(sdef) => {
-                            self.check_struct(sdef);
-                        }
-                        _ => ()
+fn check_missing_doc_method(cx: &Context, m: &ast::method) {
+    let did = ast::DefId {
+        crate: ast::LOCAL_CRATE,
+        node: m.id
+    };
+    match cx.tcx.methods.find(&did) {
+        None => cx.tcx.sess.span_bug(m.span, "missing method descriptor?!"),
+        Some(md) => {
+            match md.container {
+                // Always check default methods defined on traits.
+                ty::TraitContainer(..) => {}
+                // For methods defined on impls, it depends on whether
+                // it is an implementation for a trait or is a plain
+                // impl.
+                ty::ImplContainer(cid) => {
+                    match ty::impl_trait_ref(cx.tcx, cid) {
+                        Some(..) => return, // impl for trait: don't doc
+                        None => {} // plain impl: doc according to privacy
                     }
                 }
             }
-
-            _ => {}
         }
-        visit::walk_item(self, it, ());
     }
+    check_missing_doc_attrs(cx, Some(m.id), m.attrs, m.span, "a method");
+}
+
+fn check_missing_doc_ty_method(cx: &Context, tm: &ast::TypeMethod) {
+    check_missing_doc_attrs(cx, Some(tm.id), tm.attrs, tm.span, "a type method");
+}
+
+fn check_missing_doc_struct_field(cx: &Context, sf: &ast::struct_field) {
+    match sf.node.kind {
+        ast::named_field(_, vis) if vis != ast::private =>
+            check_missing_doc_attrs(cx, Some(cx.cur_struct_def_id), sf.node.attrs,
+                                    sf.span, "a struct field"),
+        _ => {}
+    }
+}
+
+fn check_missing_doc_variant(cx: &Context, v: &ast::variant) {
+    check_missing_doc_attrs(cx, Some(v.node.id), v.node.attrs, v.span, "a variant");
 }
 
 /// Checks for use of items with #[deprecated], #[experimental] and
 /// #[unstable] (or none of them) attributes.
 fn check_stability(cx: &Context, e: &ast::Expr) {
-    let def = match e.node {
-        ast::ExprMethodCall(*) |
-        ast::ExprPath(*) |
-        ast::ExprStruct(*) => {
+    let id = match e.node {
+        ast::ExprPath(..) | ast::ExprStruct(..) => {
             match cx.tcx.def_map.find(&e.id) {
-                Some(&def) => def,
+                Some(&def) => ast_util::def_id_of_def(def),
+                None => return
+            }
+        }
+        ast::ExprMethodCall(..) => {
+            match cx.method_map.find(&e.id) {
+                Some(&typeck::method_map_entry { origin, .. }) => {
+                    match origin {
+                        typeck::method_static(def_id) => {
+                            // If this implements a trait method, get def_id
+                            // of the method inside trait definition.
+                            // Otherwise, use the current def_id (which refers
+                            // to the method inside impl).
+                            ty::trait_method_of_method(
+                                cx.tcx, def_id).unwrap_or(def_id)
+                        }
+                        typeck::method_param(typeck::method_param {
+                            trait_id: trait_id,
+                            method_num: index,
+                            ..
+                        })
+                        | typeck::method_object(typeck::method_object {
+                            trait_id: trait_id,
+                            method_num: index,
+                            ..
+                        }) => ty::trait_method(cx.tcx, trait_id, index).def_id
+                    }
+                }
                 None => return
             }
         }
         _ => return
     };
 
-    let id = ast_util::def_id_of_def(def);
-
     let stability = if ast_util::is_local(id) {
         // this crate
         match cx.tcx.items.find(&id.node) {
             Some(ast_node) => {
-                let s = do ast_node.with_attrs |attrs| {
-                    do attrs.map |a| {
+                let s = ast_node.with_attrs(|attrs| {
+                    attrs.map(|a| {
                         attr::find_stability(a.iter().map(|a| a.meta()))
-                    }
-                };
+                    })
+                });
                 match s {
                     Some(s) => s,
 
@@ -1014,7 +1236,8 @@ fn check_stability(cx: &Context, e: &ast::Expr) {
                     None => return
                 }
             }
-            _ => cx.tcx.sess.bug(format!("handle_def: {:?} not found", id))
+            _ => cx.tcx.sess.span_bug(e.span,
+                                      format!("handle_def: {:?} not found", id))
         }
     } else {
         // cross-crate
@@ -1022,28 +1245,28 @@ fn check_stability(cx: &Context, e: &ast::Expr) {
         let mut s = None;
         // run through all the attributes and take the first
         // stability one.
-        do csearch::get_item_attrs(cx.tcx.cstore, id) |meta_items| {
+        csearch::get_item_attrs(cx.tcx.cstore, id, |meta_items| {
             if s.is_none() {
                 s = attr::find_stability(meta_items.move_iter())
             }
-        }
+        });
         s
     };
 
     let (lint, label) = match stability {
         // no stability attributes == Unstable
         None => (unstable, "unmarked"),
-        Some(attr::Stability { level: attr::Unstable, _ }) =>
+        Some(attr::Stability { level: attr::Unstable, .. }) =>
                 (unstable, "unstable"),
-        Some(attr::Stability { level: attr::Experimental, _ }) =>
+        Some(attr::Stability { level: attr::Experimental, .. }) =>
                 (experimental, "experimental"),
-        Some(attr::Stability { level: attr::Deprecated, _ }) =>
+        Some(attr::Stability { level: attr::Deprecated, .. }) =>
                 (deprecated, "deprecated"),
         _ => return
     };
 
     let msg = match stability {
-        Some(attr::Stability { text: Some(ref s), _ }) => {
+        Some(attr::Stability { text: Some(ref s), .. }) => {
             format!("use of {} item: {}", label, *s)
         }
         _ => format!("use of {} item", label)
@@ -1052,33 +1275,64 @@ fn check_stability(cx: &Context, e: &ast::Expr) {
     cx.span_lint(lint, e.span, msg);
 }
 
-impl Visitor<()> for Context {
+impl<'a> Visitor<()> for Context<'a> {
     fn visit_item(&mut self, it: @ast::item, _: ()) {
-        do self.with_lint_attrs(it.attrs) |cx| {
+        self.with_lint_attrs(it.attrs, |cx| {
             check_item_ctypes(cx, it);
             check_item_non_camel_case_types(cx, it);
             check_item_non_uppercase_statics(cx, it);
             check_heap_item(cx, it);
+            check_missing_doc_item(cx, it);
+            check_attrs_usage(cx, it.attrs);
 
-            do cx.visit_ids |v| {
-                v.visit_item(it, ());
-            }
+            cx.visit_ids(|v| v.visit_item(it, ()));
 
             visit::walk_item(cx, it, ());
-        }
+        })
     }
 
-    fn visit_pat(&mut self, p: @ast::Pat, _: ()) {
+    fn visit_foreign_item(&mut self, it: @ast::foreign_item, _: ()) {
+        self.with_lint_attrs(it.attrs, |cx| {
+            check_attrs_usage(cx, it.attrs);
+            visit::walk_foreign_item(cx, it, ());
+        })
+    }
+
+    fn visit_view_item(&mut self, i: &ast::view_item, _: ()) {
+        self.with_lint_attrs(i.attrs, |cx| {
+            check_attrs_usage(cx, i.attrs);
+            visit::walk_view_item(cx, i, ());
+        })
+    }
+
+    fn visit_pat(&mut self, p: &ast::Pat, _: ()) {
         check_pat_non_uppercase_statics(self, p);
+        check_unused_mut_pat(self, p);
+
         visit::walk_pat(self, p, ());
     }
 
     fn visit_expr(&mut self, e: @ast::Expr, _: ()) {
+        match e.node {
+            ast::ExprUnary(_, ast::UnNeg, expr) => {
+                // propagate negation, if the negation itself isn't negated
+                if self.negated_expr_id != e.id {
+                    self.negated_expr_id = expr.id;
+                }
+            },
+            ast::ExprParen(expr) => if self.negated_expr_id == e.id {
+                self.negated_expr_id = expr.id
+            },
+            _ => ()
+        };
+
         check_while_true_expr(self, e);
         check_stability(self, e);
         check_unused_unsafe(self, e);
+        check_unsafe_block(self, e);
         check_unnecessary_allocation(self, e);
         check_heap_expr(self, e);
+
         check_type_limits(self, e);
 
         visit::walk_expr(self, e, ());
@@ -1090,48 +1344,73 @@ impl Visitor<()> for Context {
         visit::walk_stmt(self, s, ());
     }
 
-    fn visit_ty_method(&mut self, tm: &ast::TypeMethod, _: ()) {
-        check_unused_mut_fn_decl(self, &tm.decl);
-        visit::walk_ty_method(self, tm, ());
-    }
-
-    fn visit_trait_method(&mut self, tm: &ast::trait_method, _: ()) {
-        match *tm {
-            ast::required(ref m) => check_unused_mut_fn_decl(self, &m.decl),
-            ast::provided(ref m) => check_unused_mut_fn_decl(self, &m.decl)
-        }
-        visit::walk_trait_method(self, tm, ());
-    }
-
-    fn visit_local(&mut self, l: @ast::Local, _: ()) {
-        if l.is_mutbl {
-            check_unused_mut_pat(self, l.pat);
-        }
-        visit::walk_local(self, l, ());
-    }
-
     fn visit_fn(&mut self, fk: &visit::fn_kind, decl: &ast::fn_decl,
-                body: &ast::Block, span: Span, id: ast::NodeId, _: ()) {
+                body: ast::P<ast::Block>, span: Span, id: ast::NodeId, _: ()) {
         let recurse = |this: &mut Context| {
-            check_unused_mut_fn_decl(this, decl);
             visit::walk_fn(this, fk, decl, body, span, id, ());
         };
 
         match *fk {
             visit::fk_method(_, _, m) => {
-                do self.with_lint_attrs(m.attrs) |cx| {
-                    do cx.visit_ids |v| {
+                self.with_lint_attrs(m.attrs, |cx| {
+                    check_missing_doc_method(cx, m);
+                    check_attrs_usage(cx, m.attrs);
+
+                    cx.visit_ids(|v| {
                         v.visit_fn(fk, decl, body, span, id, ());
-                    }
+                    });
                     recurse(cx);
-                }
+                })
             }
             _ => recurse(self),
         }
     }
+
+
+    fn visit_ty_method(&mut self, t: &ast::TypeMethod, _: ()) {
+        self.with_lint_attrs(t.attrs, |cx| {
+            check_missing_doc_ty_method(cx, t);
+            check_attrs_usage(cx, t.attrs);
+
+            visit::walk_ty_method(cx, t, ());
+        })
+    }
+
+    fn visit_struct_def(&mut self,
+                        s: @ast::struct_def,
+                        i: ast::Ident,
+                        g: &ast::Generics,
+                        id: ast::NodeId,
+                        _: ()) {
+        let old_id = self.cur_struct_def_id;
+        self.cur_struct_def_id = id;
+        visit::walk_struct_def(self, s, i, g, id, ());
+        self.cur_struct_def_id = old_id;
+    }
+
+    fn visit_struct_field(&mut self, s: &ast::struct_field, _: ()) {
+        self.with_lint_attrs(s.node.attrs, |cx| {
+            check_missing_doc_struct_field(cx, s);
+            check_attrs_usage(cx, s.node.attrs);
+
+            visit::walk_struct_field(cx, s, ());
+        })
+    }
+
+    fn visit_variant(&mut self, v: &ast::variant, g: &ast::Generics, _: ()) {
+        self.with_lint_attrs(v.node.attrs, |cx| {
+            check_missing_doc_variant(cx, v);
+            check_attrs_usage(cx, v.node.attrs);
+
+            visit::walk_variant(cx, v, g, ());
+        })
+    }
+
+    // FIXME(#10894) should continue recursing
+    fn visit_ty(&mut self, _t: &ast::Ty, _: ()) {}
 }
 
-impl ast_util::IdVisitingOperation for Context {
+impl<'a> IdVisitingOperation for Context<'a> {
     fn visit_id(&self, id: ast::NodeId) {
         match self.tcx.sess.lints.pop(&id) {
             None => {}
@@ -1144,18 +1423,20 @@ impl ast_util::IdVisitingOperation for Context {
     }
 }
 
-pub fn check_crate(tcx: ty::ctxt, crate: &ast::Crate) {
-    // This visitor contains more state than is currently maintained in Context,
-    // and there's no reason for the Context to keep track of this information
-    // really
-    let mut dox = MissingDocLintVisitor(tcx);
-    visit::walk_crate(&mut dox, crate, ());
-
+pub fn check_crate(tcx: ty::ctxt,
+                   method_map: typeck::method_map,
+                   exported_items: &privacy::ExportedItems,
+                   crate: &ast::Crate) {
     let mut cx = Context {
         dict: @get_lint_dict(),
         cur: SmallIntMap::new(),
         tcx: tcx,
+        method_map: method_map,
+        exported_items: exported_items,
+        cur_struct_def_id: -1,
+        is_doc_hidden: false,
         lint_stack: ~[],
+        negated_expr_id: -1
     };
 
     // Install default lint levels, followed by the command line levels, and
@@ -1166,13 +1447,20 @@ pub fn check_crate(tcx: ty::ctxt, crate: &ast::Crate) {
     for &(lint, level) in tcx.sess.opts.lint_opts.iter() {
         cx.set_level(lint, level, CommandLine);
     }
-    do cx.with_lint_attrs(crate.attrs) |cx| {
-        do cx.visit_ids |v| {
+    cx.with_lint_attrs(crate.attrs, |cx| {
+        cx.visit_id(ast::CRATE_NODE_ID);
+        cx.visit_ids(|v| {
             v.visited_outermost = true;
             visit::walk_crate(v, crate, ());
-        }
+        });
+
+        check_crate_attrs_usage(cx, crate.attrs);
+        // since the root module isn't visited as an item (because it isn't an item), warn for it
+        // here.
+        check_missing_doc_attrs(cx, None, crate.attrs, crate.span, "crate");
+
         visit::walk_crate(cx, crate, ());
-    }
+    });
 
     // If we missed any lints added to the session, then there's a bug somewhere
     // in the iteration code.

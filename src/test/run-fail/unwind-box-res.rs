@@ -10,10 +10,12 @@
 
 // error-pattern:fail
 
+#[feature(managed_boxes)];
+
 use std::cast;
 
 fn failfn() {
-    fail2!();
+    fail!();
 }
 
 struct r {
@@ -41,6 +43,6 @@ fn main() {
         cast::forget(i1);
         let x = @r(i1p);
         failfn();
-        error2!("{:?}", x);
+        error!("{:?}", x);
     }
 }

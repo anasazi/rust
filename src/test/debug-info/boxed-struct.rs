@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// xfail-android: FIXME(#10381)
+
 // compile-flags:-Z extra-debug-info
 // debugger:rbreak zzz
 // debugger:run
@@ -25,6 +27,7 @@
 // debugger:print managed_dtor->val
 // check:$4 = {x = 33, y = 333, z = 3333, w = 33333}
 
+#[feature(managed_boxes)];
 #[allow(unused_variable)];
 
 struct StructWithSomePadding {

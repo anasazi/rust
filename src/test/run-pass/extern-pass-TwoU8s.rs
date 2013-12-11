@@ -18,11 +18,11 @@ struct TwoU8s {
     one: u8, two: u8
 }
 
+#[link(name = "rustrt")]
 extern {
     pub fn rust_dbg_extern_identity_TwoU8s(v: TwoU8s) -> TwoU8s;
 }
 
-#[fixed_stack_segment] #[inline(never)]
 pub fn main() {
     unsafe {
         let x = TwoU8s {one: 22, two: 23};

@@ -8,13 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-fast
-// -*- rust -*-
+#[feature(managed_boxes)];
 
-type compare<T> = &'static fn(T, T) -> bool;
+// xfail-fast
+
+type compare<T> = 'static |T, T| -> bool;
 
 fn test_generic<T:Clone>(expected: T, eq: compare<T>) {
-    let actual: T = match true { true => { expected.clone() }, _ => fail2!("wat") };
+    let actual: T = match true { true => { expected.clone() }, _ => fail!("wat") };
     assert!((eq(expected, actual)));
 }
 

@@ -9,21 +9,15 @@
 // except according to those terms.
 
 #[cfg(rustpkg)]
-extern mod this(name = "rustpkg");
+extern mod this = "rustpkg";
 
 #[cfg(rustdoc)]
-extern mod this(name = "rustdoc");
-
-#[cfg(rusti)]
-extern mod this(name = "rusti");
-
-#[cfg(rust)]
-extern mod this(name = "rust");
+extern mod this = "rustdoc";
 
 #[cfg(rustc)]
-extern mod this(name = "rustc");
+extern mod this = "rustc";
 
 #[cfg(rustdoc_ng)]
-extern mod this(name = "rustdoc_ng");
+extern mod this = "rustdoc_ng";
 
 fn main() { this::main() }

@@ -32,10 +32,10 @@ impl parser_attr for Parser {
     fn parse_outer_attributes(&self) -> ~[ast::Attribute] {
         let mut attrs: ~[ast::Attribute] = ~[];
         loop {
-            debug2!("parse_outer_attributes: self.token={:?}",
+            debug!("parse_outer_attributes: self.token={:?}",
                    self.token);
             match *self.token {
-              token::INTERPOLATED(token::nt_attr(*)) => {
+              token::INTERPOLATED(token::nt_attr(..)) => {
                 attrs.push(self.parse_attribute(false));
               }
               token::POUND => {
@@ -67,7 +67,7 @@ impl parser_attr for Parser {
     // if permit_inner is true, then a trailing `;` indicates an inner
     // attribute
     fn parse_attribute(&self, permit_inner: bool) -> ast::Attribute {
-        debug2!("parse_attributes: permit_inner={:?} self.token={:?}",
+        debug!("parse_attributes: permit_inner={:?} self.token={:?}",
                permit_inner, self.token);
         let (span, value) = match *self.token {
             INTERPOLATED(token::nt_attr(attr)) => {
@@ -121,7 +121,7 @@ impl parser_attr for Parser {
         let mut next_outer_attrs: ~[ast::Attribute] = ~[];
         loop {
             let attr = match *self.token {
-                token::INTERPOLATED(token::nt_attr(*)) => {
+                token::INTERPOLATED(token::nt_attr(..)) => {
                     self.parse_attribute(true)
                 }
                 token::POUND => {
@@ -161,6 +161,16 @@ impl parser_attr for Parser {
             token::EQ => {
                 self.bump();
                 let lit = self.parse_lit();
+                // FIXME #623 Non-string meta items are not serialized correctly;
+                // just forbid them for now
+                match lit.node {
+                    ast::lit_str(..) => (),
+                    _ => {
+                        self.span_err(
+                            lit.span,
+                            "non-string literals are not allowed in meta-items");
+                    }
+                }
                 let hi = self.span.hi;
                 @spanned(lo, hi, ast::MetaNameValue(name, lit))
             }

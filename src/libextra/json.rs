@@ -20,8 +20,9 @@ use std::char;
 use std::cast::transmute;
 use std::f64;
 use std::hashmap::HashMap;
-use std::io::WriterUtil;
 use std::io;
+use std::io::Decorator;
+use std::io::mem::MemWriter;
 use std::num;
 use std::str;
 use std::to_str;
@@ -49,16 +50,16 @@ pub type Object = TreeMap<~str, Json>;
 /// returned
 pub struct Error {
     /// The line number at which the error occurred
-    line: uint,
+    priv line: uint,
     /// The column number at which the error occurred
-    col: uint,
+    priv col: uint,
     /// A message describing the type of the error
-    msg: @~str,
+    priv msg: ~str,
 }
 
 fn escape_str(s: &str) -> ~str {
     let mut escaped = ~"\"";
-    for c in s.iter() {
+    for c in s.chars() {
         match c {
           '"' => escaped.push_str("\\\""),
           '\\' => escaped.push_str("\\\\"),
@@ -78,27 +79,25 @@ fn escape_str(s: &str) -> ~str {
 
 fn spaces(n: uint) -> ~str {
     let mut ss = ~"";
-    do n.times {
-        ss.push_str(" ");
-    }
+    n.times(|| ss.push_str(" "));
     return ss;
 }
 
 /// A structure for implementing serialization to JSON.
-pub struct Encoder {
-    priv wr: @io::Writer,
+pub struct Encoder<'a> {
+    priv wr: &'a mut io::Writer,
 }
 
-/// Creates a new JSON encoder whose output will be written to the writer
-/// specified.
-pub fn Encoder(wr: @io::Writer) -> Encoder {
-    Encoder {
-        wr: wr
+impl<'a> Encoder<'a> {
+    /// Creates a new JSON encoder whose output will be written to the writer
+    /// specified.
+    pub fn new<'a>(wr: &'a mut io::Writer) -> Encoder<'a> {
+        Encoder { wr: wr }
     }
 }
 
-impl serialize::Encoder for Encoder {
-    fn emit_nil(&mut self) { self.wr.write_str("null") }
+impl<'a> serialize::Encoder for Encoder<'a> {
+    fn emit_nil(&mut self) { write!(self.wr, "null") }
 
     fn emit_uint(&mut self, v: uint) { self.emit_f64(v as f64); }
     fn emit_u64(&mut self, v: u64) { self.emit_f64(v as f64); }
@@ -114,46 +113,46 @@ impl serialize::Encoder for Encoder {
 
     fn emit_bool(&mut self, v: bool) {
         if v {
-            self.wr.write_str("true");
+            write!(self.wr, "true");
         } else {
-            self.wr.write_str("false");
+            write!(self.wr, "false");
         }
     }
 
-    fn emit_f64(&mut self, v: f64) { self.wr.write_str(f64::to_str_digits(v, 6u)) }
+    fn emit_f64(&mut self, v: f64) {
+        write!(self.wr, "{}", f64::to_str_digits(v, 6u))
+    }
     fn emit_f32(&mut self, v: f32) { self.emit_f64(v as f64); }
 
     fn emit_char(&mut self, v: char) { self.emit_str(str::from_char(v)) }
-    fn emit_str(&mut self, v: &str) { self.wr.write_str(escape_str(v)) }
+    fn emit_str(&mut self, v: &str) {
+        write!(self.wr, "{}", escape_str(v))
+    }
 
-    fn emit_enum(&mut self, _name: &str, f: &fn(&mut Encoder)) { f(self) }
+    fn emit_enum(&mut self, _name: &str, f: |&mut Encoder<'a>|) { f(self) }
 
     fn emit_enum_variant(&mut self,
                          name: &str,
                          _id: uint,
                          cnt: uint,
-                         f: &fn(&mut Encoder)) {
+                         f: |&mut Encoder<'a>|) {
         // enums are encoded as strings or objects
         // Bunny => "Bunny"
         // Kangaroo(34,"William") => {"variant": "Kangaroo", "fields": [34,"William"]}
         if cnt == 0 {
-            self.wr.write_str(escape_str(name));
+            write!(self.wr, "{}", escape_str(name));
         } else {
-            self.wr.write_char('{');
-            self.wr.write_str("\"variant\"");
-            self.wr.write_char(':');
-            self.wr.write_str(escape_str(name));
-            self.wr.write_char(',');
-            self.wr.write_str("\"fields\"");
-            self.wr.write_str(":[");
+            write!(self.wr, "\\{\"variant\":");
+            write!(self.wr, "{}", escape_str(name));
+            write!(self.wr, ",\"fields\":[");
             f(self);
-            self.wr.write_str("]}");
+            write!(self.wr, "]\\}");
         }
     }
 
-    fn emit_enum_variant_arg(&mut self, idx: uint, f: &fn(&mut Encoder)) {
+    fn emit_enum_variant_arg(&mut self, idx: uint, f: |&mut Encoder<'a>|) {
         if idx != 0 {
-            self.wr.write_char(',');
+            write!(self.wr, ",");
         }
         f(self);
     }
@@ -162,101 +161,102 @@ impl serialize::Encoder for Encoder {
                                 name: &str,
                                 id: uint,
                                 cnt: uint,
-                                f: &fn(&mut Encoder)) {
+                                f: |&mut Encoder<'a>|) {
         self.emit_enum_variant(name, id, cnt, f)
     }
 
     fn emit_enum_struct_variant_field(&mut self,
                                       _: &str,
                                       idx: uint,
-                                      f: &fn(&mut Encoder)) {
+                                      f: |&mut Encoder<'a>|) {
         self.emit_enum_variant_arg(idx, f)
     }
 
-    fn emit_struct(&mut self, _: &str, _: uint, f: &fn(&mut Encoder)) {
-        self.wr.write_char('{');
+    fn emit_struct(&mut self, _: &str, _: uint, f: |&mut Encoder<'a>|) {
+        write!(self.wr, r"\{");
         f(self);
-        self.wr.write_char('}');
+        write!(self.wr, r"\}");
     }
 
     fn emit_struct_field(&mut self,
                          name: &str,
                          idx: uint,
-                         f: &fn(&mut Encoder)) {
-        if idx != 0 { self.wr.write_char(','); }
-        self.wr.write_str(escape_str(name));
-        self.wr.write_char(':');
+                         f: |&mut Encoder<'a>|) {
+        if idx != 0 { write!(self.wr, ",") }
+        write!(self.wr, "{}:", escape_str(name));
         f(self);
     }
 
-    fn emit_tuple(&mut self, len: uint, f: &fn(&mut Encoder)) {
+    fn emit_tuple(&mut self, len: uint, f: |&mut Encoder<'a>|) {
         self.emit_seq(len, f)
     }
-    fn emit_tuple_arg(&mut self, idx: uint, f: &fn(&mut Encoder)) {
+    fn emit_tuple_arg(&mut self, idx: uint, f: |&mut Encoder<'a>|) {
         self.emit_seq_elt(idx, f)
     }
 
     fn emit_tuple_struct(&mut self,
                          _name: &str,
                          len: uint,
-                         f: &fn(&mut Encoder)) {
+                         f: |&mut Encoder<'a>|) {
         self.emit_seq(len, f)
     }
-    fn emit_tuple_struct_arg(&mut self, idx: uint, f: &fn(&mut Encoder)) {
+    fn emit_tuple_struct_arg(&mut self, idx: uint, f: |&mut Encoder<'a>|) {
         self.emit_seq_elt(idx, f)
     }
 
-    fn emit_option(&mut self, f: &fn(&mut Encoder)) { f(self); }
+    fn emit_option(&mut self, f: |&mut Encoder<'a>|) { f(self); }
     fn emit_option_none(&mut self) { self.emit_nil(); }
-    fn emit_option_some(&mut self, f: &fn(&mut Encoder)) { f(self); }
+    fn emit_option_some(&mut self, f: |&mut Encoder<'a>|) { f(self); }
 
-    fn emit_seq(&mut self, _len: uint, f: &fn(&mut Encoder)) {
-        self.wr.write_char('[');
+    fn emit_seq(&mut self, _len: uint, f: |&mut Encoder<'a>|) {
+        write!(self.wr, "[");
         f(self);
-        self.wr.write_char(']');
+        write!(self.wr, "]");
     }
 
-    fn emit_seq_elt(&mut self, idx: uint, f: &fn(&mut Encoder)) {
+    fn emit_seq_elt(&mut self, idx: uint, f: |&mut Encoder<'a>|) {
         if idx != 0 {
-            self.wr.write_char(',');
+            write!(self.wr, ",");
         }
         f(self)
     }
 
-    fn emit_map(&mut self, _len: uint, f: &fn(&mut Encoder)) {
-        self.wr.write_char('{');
+    fn emit_map(&mut self, _len: uint, f: |&mut Encoder<'a>|) {
+        write!(self.wr, r"\{");
         f(self);
-        self.wr.write_char('}');
+        write!(self.wr, r"\}");
     }
 
-    fn emit_map_elt_key(&mut self, idx: uint, f: &fn(&mut Encoder)) {
-        if idx != 0 { self.wr.write_char(','); }
+    fn emit_map_elt_key(&mut self, idx: uint, f: |&mut Encoder<'a>|) {
+        if idx != 0 { write!(self.wr, ",") }
         f(self)
     }
 
-    fn emit_map_elt_val(&mut self, _idx: uint, f: &fn(&mut Encoder)) {
-        self.wr.write_char(':');
+    fn emit_map_elt_val(&mut self, _idx: uint, f: |&mut Encoder<'a>|) {
+        write!(self.wr, ":");
         f(self)
     }
 }
 
 /// Another encoder for JSON, but prints out human-readable JSON instead of
 /// compact data
-pub struct PrettyEncoder {
-    priv wr: @io::Writer,
+pub struct PrettyEncoder<'a> {
+    priv wr: &'a mut io::Writer,
     priv indent: uint,
 }
 
-/// Creates a new encoder whose output will be written to the specified writer
-pub fn PrettyEncoder(wr: @io::Writer) -> PrettyEncoder {
-    PrettyEncoder {
-        wr: wr,
-        indent: 0,
+impl<'a> PrettyEncoder<'a> {
+    /// Creates a new encoder whose output will be written to the specified writer
+    pub fn new<'a>(wr: &'a mut io::Writer) -> PrettyEncoder<'a> {
+        PrettyEncoder {
+            wr: wr,
+            indent: 0,
+        }
     }
 }
 
-impl serialize::Encoder for PrettyEncoder {
-    fn emit_nil(&mut self) { self.wr.write_str("null") }
+impl<'a> serialize::Encoder for PrettyEncoder<'a> {
+    fn emit_nil(&mut self) { write!(self.wr, "null") }
 
     fn emit_uint(&mut self, v: uint) { self.emit_f64(v as f64); }
     fn emit_u64(&mut self, v: u64) { self.emit_f64(v as f64); }
@@ -272,19 +272,21 @@ impl serialize::Encoder for PrettyEncoder {
 
     fn emit_bool(&mut self, v: bool) {
         if v {
-            self.wr.write_str("true");
+            write!(self.wr, "true");
         } else {
-            self.wr.write_str("false");
+            write!(self.wr, "false");
         }
     }
 
-    fn emit_f64(&mut self, v: f64) { self.wr.write_str(f64::to_str_digits(v, 6u)) }
+    fn emit_f64(&mut self, v: f64) {
+        write!(self.wr, "{}", f64::to_str_digits(v, 6u))
+    }
     fn emit_f32(&mut self, v: f32) { self.emit_f64(v as f64); }
 
     fn emit_char(&mut self, v: char) { self.emit_str(str::from_char(v)) }
-    fn emit_str(&mut self, v: &str) { self.wr.write_str(escape_str(v)); }
+    fn emit_str(&mut self, v: &str) { write!(self.wr, "{}", escape_str(v)); }
 
-    fn emit_enum(&mut self, _name: &str, f: &fn(&mut PrettyEncoder)) {
+    fn emit_enum(&mut self, _name: &str, f: |&mut PrettyEncoder<'a>|) {
         f(self)
     }
 
@@ -292,31 +294,25 @@ impl serialize::Encoder for PrettyEncoder {
                          name: &str,
                          _: uint,
                          cnt: uint,
-                         f: &fn(&mut PrettyEncoder)) {
+                         f: |&mut PrettyEncoder<'a>|) {
         if cnt == 0 {
-            self.wr.write_str(escape_str(name));
+            write!(self.wr, "{}", escape_str(name));
         } else {
-            self.wr.write_char('[');
             self.indent += 2;
-            self.wr.write_char('\n');
-            self.wr.write_str(spaces(self.indent));
-            self.wr.write_str(escape_str(name));
-            self.wr.write_str(",\n");
+            write!(self.wr, "[\n{}{},\n", spaces(self.indent), escape_str(name));
             f(self);
-            self.wr.write_char('\n');
             self.indent -= 2;
-            self.wr.write_str(spaces(self.indent));
-            self.wr.write_char(']');
+            write!(self.wr, "\n{}]", spaces(self.indent));
         }
     }
 
     fn emit_enum_variant_arg(&mut self,
                              idx: uint,
-                             f: &fn(&mut PrettyEncoder)) {
+                             f: |&mut PrettyEncoder<'a>|) {
         if idx != 0 {
-            self.wr.write_str(",\n");
+            write!(self.wr, ",\n");
         }
-        self.wr.write_str(spaces(self.indent));
+        write!(self.wr, "{}", spaces(self.indent));
         f(self)
     }
 
@@ -324,14 +320,14 @@ impl serialize::Encoder for PrettyEncoder {
                                 name: &str,
                                 id: uint,
                                 cnt: uint,
-                                f: &fn(&mut PrettyEncoder)) {
+                                f: |&mut PrettyEncoder<'a>|) {
         self.emit_enum_variant(name, id, cnt, f)
     }
 
     fn emit_enum_struct_variant_field(&mut self,
                                       _: &str,
                                       idx: uint,
-                                      f: &fn(&mut PrettyEncoder)) {
+                                      f: |&mut PrettyEncoder<'a>|) {
         self.emit_enum_variant_arg(idx, f)
     }
 
@@ -339,108 +335,100 @@ impl serialize::Encoder for PrettyEncoder {
     fn emit_struct(&mut self,
                    _: &str,
                    len: uint,
-                   f: &fn(&mut PrettyEncoder)) {
+                   f: |&mut PrettyEncoder<'a>|) {
         if len == 0 {
-            self.wr.write_str("{}");
+            write!(self.wr, "\\{\\}");
         } else {
-            self.wr.write_char('{');
+            write!(self.wr, "\\{");
             self.indent += 2;
             f(self);
-            self.wr.write_char('\n');
             self.indent -= 2;
-            self.wr.write_str(spaces(self.indent));
-            self.wr.write_char('}');
+            write!(self.wr, "\n{}\\}", spaces(self.indent));
         }
     }
 
     fn emit_struct_field(&mut self,
                          name: &str,
                          idx: uint,
-                         f: &fn(&mut PrettyEncoder)) {
+                         f: |&mut PrettyEncoder<'a>|) {
         if idx == 0 {
-            self.wr.write_char('\n');
+            write!(self.wr, "\n");
         } else {
-            self.wr.write_str(",\n");
+            write!(self.wr, ",\n");
         }
-        self.wr.write_str(spaces(self.indent));
-        self.wr.write_str(escape_str(name));
-        self.wr.write_str(": ");
+        write!(self.wr, "{}{}: ", spaces(self.indent), escape_str(name));
         f(self);
     }
 
-    fn emit_tuple(&mut self, len: uint, f: &fn(&mut PrettyEncoder)) {
+    fn emit_tuple(&mut self, len: uint, f: |&mut PrettyEncoder<'a>|) {
         self.emit_seq(len, f)
     }
-    fn emit_tuple_arg(&mut self, idx: uint, f: &fn(&mut PrettyEncoder)) {
+    fn emit_tuple_arg(&mut self, idx: uint, f: |&mut PrettyEncoder<'a>|) {
         self.emit_seq_elt(idx, f)
     }
 
     fn emit_tuple_struct(&mut self,
                          _: &str,
                          len: uint,
-                         f: &fn(&mut PrettyEncoder)) {
+                         f: |&mut PrettyEncoder<'a>|) {
         self.emit_seq(len, f)
     }
     fn emit_tuple_struct_arg(&mut self,
                              idx: uint,
-                             f: &fn(&mut PrettyEncoder)) {
+                             f: |&mut PrettyEncoder<'a>|) {
         self.emit_seq_elt(idx, f)
     }
 
-    fn emit_option(&mut self, f: &fn(&mut PrettyEncoder)) { f(self); }
+    fn emit_option(&mut self, f: |&mut PrettyEncoder<'a>|) { f(self); }
     fn emit_option_none(&mut self) { self.emit_nil(); }
-    fn emit_option_some(&mut self, f: &fn(&mut PrettyEncoder)) { f(self); }
+    fn emit_option_some(&mut self, f: |&mut PrettyEncoder<'a>|) { f(self); }
 
-    fn emit_seq(&mut self, len: uint, f: &fn(&mut PrettyEncoder)) {
+    fn emit_seq(&mut self, len: uint, f: |&mut PrettyEncoder<'a>|) {
         if len == 0 {
-            self.wr.write_str("[]");
+            write!(self.wr, "[]");
         } else {
-            self.wr.write_char('[');
+            write!(self.wr, "[");
             self.indent += 2;
             f(self);
-            self.wr.write_char('\n');
             self.indent -= 2;
-            self.wr.write_str(spaces(self.indent));
-            self.wr.write_char(']');
+            write!(self.wr, "\n{}]", spaces(self.indent));
         }
     }
 
-    fn emit_seq_elt(&mut self, idx: uint, f: &fn(&mut PrettyEncoder)) {
+    fn emit_seq_elt(&mut self, idx: uint, f: |&mut PrettyEncoder<'a>|) {
         if idx == 0 {
-            self.wr.write_char('\n');
+            write!(self.wr, "\n");
         } else {
-            self.wr.write_str(",\n");
+            write!(self.wr, ",\n");
         }
-        self.wr.write_str(spaces(self.indent));
+        write!(self.wr, "{}", spaces(self.indent));
         f(self)
     }
 
-    fn emit_map(&mut self, len: uint, f: &fn(&mut PrettyEncoder)) {
+    fn emit_map(&mut self, len: uint, f: |&mut PrettyEncoder<'a>|) {
         if len == 0 {
-            self.wr.write_str("{}");
+            write!(self.wr, "\\{\\}");
         } else {
-            self.wr.write_char('{');
+            write!(self.wr, "\\{");
             self.indent += 2;
             f(self);
-            self.wr.write_char('\n');
             self.indent -= 2;
-            self.wr.write_str(spaces(self.indent));
-            self.wr.write_char('}');
+            write!(self.wr, "\n{}\\}", spaces(self.indent));
         }
     }
 
-    fn emit_map_elt_key(&mut self, idx: uint, f: &fn(&mut PrettyEncoder)) {
+    fn emit_map_elt_key(&mut self, idx: uint, f: |&mut PrettyEncoder<'a>|) {
         if idx == 0 {
-            self.wr.write_char('\n');
+            write!(self.wr, "\n");
         } else {
-            self.wr.write_str(",\n");
+            write!(self.wr, ",\n");
         }
-        self.wr.write_str(spaces(self.indent));
+        write!(self.wr, "{}", spaces(self.indent));
         f(self);
     }
 
-    fn emit_map_elt_val(&mut self, _idx: uint, f: &fn(&mut PrettyEncoder)) {
-        self.wr.write_str(": ");
+    fn emit_map_elt_val(&mut self, _idx: uint, f: |&mut PrettyEncoder<'a>|) {
+        write!(self.wr, ": ");
         f(self);
     }
 }
@@ -460,41 +448,45 @@ impl<E: serialize::Encoder> serialize::Encodable<E> for Json {
 
 impl Json{
     /// Encodes a json value into a io::writer.  Uses a single line.
-    pub fn to_writer(&self, wr: @io::Writer) {
-        let mut encoder = Encoder(wr);
+    pub fn to_writer(&self, wr: &mut io::Writer) {
+        let mut encoder = Encoder::new(wr);
         self.encode(&mut encoder)
     }
 
     /// Encodes a json value into a io::writer.
     /// Pretty-prints in a more readable format.
-    pub fn to_pretty_writer(&self, wr: @io::Writer) {
-        let mut encoder = PrettyEncoder(wr);
+    pub fn to_pretty_writer(&self, wr: &mut io::Writer) {
+        let mut encoder = PrettyEncoder::new(wr);
         self.encode(&mut encoder)
     }
 
     /// Encodes a json value into a string
     pub fn to_pretty_str(&self) -> ~str {
-        io::with_str_writer(|wr| self.to_pretty_writer(wr))
+        let mut s = MemWriter::new();
+        self.to_pretty_writer(&mut s as &mut io::Writer);
+        str::from_utf8_owned(s.inner())
     }
 }
 
 pub struct Parser<T> {
-    priv rdr: ~T,
+    priv rdr: T,
     priv ch: char,
     priv line: uint,
     priv col: uint,
 }
 
-/// Decode a json value from an Iterator<char>
-pub fn Parser<T : Iterator<char>>(rdr: ~T) -> Parser<T> {
-    let mut p = Parser {
-        rdr: rdr,
-        ch: '\x00',
-        line: 1,
-        col: 0,
-    };
-    p.bump();
-    p
+impl<T: Iterator<char>> Parser<T> {
+    /// Decode a json value from an Iterator<char>
+    pub fn new(rdr: T) -> Parser<T> {
+        let mut p = Parser {
+            rdr: rdr,
+            ch: '\x00',
+            line: 1,
+            col: 0,
+        };
+        p.bump();
+        p
+    }
 }
 
 impl<T: Iterator<char>> Parser<T> {
@@ -539,7 +531,7 @@ impl<T : Iterator<char>> Parser<T> {
     }
 
     fn error<T>(&self, msg: ~str) -> Result<T, Error> {
-        Err(Error { line: self.line, col: self.col, msg: @msg })
+        Err(Error { line: self.line, col: self.col, msg: msg })
     }
 
     fn parse_value(&mut self) -> Result<Json, Error> {
@@ -571,7 +563,7 @@ impl<T : Iterator<char>> Parser<T> {
     }
 
     fn parse_ident(&mut self, ident: &str, value: Json) -> Result<Json, Error> {
-        if ident.iter().all(|c| c == self.next_char()) {
+        if ident.chars().all(|c| c == self.next_char()) {
             self.bump();
             Ok(value)
         } else {
@@ -816,7 +808,7 @@ impl<T : Iterator<char>> Parser<T> {
         while !self.eof() {
             self.parse_whitespace();
 
-            if self.ch != '"' {
+            if self.ch != '\"' {
                 return self.error(~"key must be a string");
             }
 
@@ -853,16 +845,16 @@ impl<T : Iterator<char>> Parser<T> {
     }
 }
 
-/// Decodes a json value from an @io::Reader
-pub fn from_reader(rdr: @io::Reader) -> Result<Json, Error> {
-    let s = str::from_utf8(rdr.read_whole_stream());
-    let mut parser = Parser(~s.iter());
+/// Decodes a json value from an `&mut io::Reader`
+pub fn from_reader(rdr: &mut io::Reader) -> Result<Json, Error> {
+    let s = str::from_utf8_owned(rdr.read_to_end());
+    let mut parser = Parser::new(s.chars());
     parser.parse()
 }
 
 /// Decodes a json value from a string
 pub fn from_str(s: &str) -> Result<Json, Error> {
-    let mut parser = Parser(~s.iter());
+    let mut parser = Parser::new(s.chars());
     parser.parse()
 }
 
@@ -871,19 +863,43 @@ pub struct Decoder {
     priv stack: ~[Json],
 }
 
-/// Creates a new decoder instance for decoding the specified JSON value.
-pub fn Decoder(json: Json) -> Decoder {
-    Decoder {
-        stack: ~[json]
+impl Decoder {
+    /// Creates a new decoder instance for decoding the specified JSON value.
+    pub fn new(json: Json) -> Decoder {
+        Decoder {
+            stack: ~[json]
+        }
+    }
+}
+
+impl Decoder {
+    fn err(&self, msg: &str) -> ! {
+        fail!("JSON decode error: {}", msg);
+    }
+    fn missing_field(&self, field: &str, object: ~Object) -> ! {
+        self.err(format!("missing required '{}' field in object: {}",
+                         field, Object(object).to_str()))
+    }
+    fn expected(&self, expected: &str, found: &Json) -> ! {
+        let found_s = match *found {
+            Null => "null",
+            List(..) => "list",
+            Object(..) => "object",
+            Number(..) => "number",
+            String(..) => "string",
+            Boolean(..) => "boolean"
+        };
+        self.err(format!("expected {expct} but found {fnd}: {val}",
+                         expct=expected, fnd=found_s, val=found.to_str()))
     }
 }
 
 impl serialize::Decoder for Decoder {
     fn read_nil(&mut self) -> () {
-        debug2!("read_nil");
+        debug!("read_nil");
         match self.stack.pop() {
             Null => (),
-            value => fail2!("not a null: {:?}", value)
+            value => self.expected("null", &value)
         }
     }
 
@@ -900,88 +916,99 @@ impl serialize::Decoder for Decoder {
     fn read_int(&mut self) -> int { self.read_f64() as int }
 
     fn read_bool(&mut self) -> bool {
-        debug2!("read_bool");
+        debug!("read_bool");
         match self.stack.pop() {
             Boolean(b) => b,
-            value => fail2!("not a boolean: {:?}", value)
+            value => self.expected("boolean", &value)
         }
     }
 
     fn read_f64(&mut self) -> f64 {
-        debug2!("read_f64");
+        debug!("read_f64");
         match self.stack.pop() {
             Number(f) => f,
-            value => fail2!("not a number: {:?}", value)
+            value => self.expected("number", &value)
         }
     }
     fn read_f32(&mut self) -> f32 { self.read_f64() as f32 }
     fn read_f32(&mut self) -> f32 { self.read_f64() as f32 }
 
     fn read_char(&mut self) -> char {
-        let mut v = ~[];
         let s = self.read_str();
-        for c in s.iter() { v.push(c) }
-        if v.len() != 1 { fail2!("string must have one character") }
-        v[0]
+        {
+            let mut it = s.chars();
+            match (it.next(), it.next()) {
+                // exactly one character
+                (Some(c), None) => return c,
+                _ => ()
+            }
+        }
+        self.expected("single character string", &String(s))
     }
 
     fn read_str(&mut self) -> ~str {
-        debug2!("read_str");
+        debug!("read_str");
         match self.stack.pop() {
             String(s) => s,
-            json => fail2!("not a string: {:?}", json)
+            value => self.expected("string", &value)
         }
     }
 
-    fn read_enum<T>(&mut self, name: &str, f: &fn(&mut Decoder) -> T) -> T {
-        debug2!("read_enum({})", name);
+    fn read_enum<T>(&mut self, name: &str, f: |&mut Decoder| -> T) -> T {
+        debug!("read_enum({})", name);
         f(self)
     }
 
     fn read_enum_variant<T>(&mut self,
                             names: &[&str],
-                            f: &fn(&mut Decoder, uint) -> T)
+                            f: |&mut Decoder, uint| -> T)
                             -> T {
-        debug2!("read_enum_variant(names={:?})", names);
+        debug!("read_enum_variant(names={:?})", names);
         let name = match self.stack.pop() {
             String(s) => s,
-            Object(o) => {
-                let n = match o.find(&~"variant").expect("invalidly encoded json") {
-                    &String(ref s) => s.clone(),
-                    _ => fail2!("invalidly encoded json"),
+            Object(mut o) => {
+                let n = match o.pop(&~"variant") {
+                    Some(String(s)) => s,
+                    Some(val) => self.expected("string", &val),
+                    None => self.missing_field("variant", o)
                 };
-                match o.find(&~"fields").expect("invalidly encoded json") {
-                    &List(ref l) => {
-                        for field in l.rev_iter() {
+                match o.pop(&~"fields") {
+                    Some(List(l)) => {
+                        for field in l.move_rev_iter() {
                             self.stack.push(field.clone());
                         }
                     },
-                    _ => fail2!("invalidly encoded json")
+                    Some(val) => self.expected("list", &val),
+                    None => {
+                        // re-insert the variant field so we're
+                        // printing the "whole" struct in the error
+                        // message... ick.
+                        o.insert(~"variant", String(n));
+                        self.missing_field("fields", o);
+                    }
                 }
                 n
             }
-            ref json => fail2!("invalid variant: {:?}", *json),
+            json => self.expected("string or object", &json)
         };
         let idx = match names.iter().position(|n| str::eq_slice(*n, name)) {
             Some(idx) => idx,
-            None => fail2!("Unknown variant name: {}", name),
+            None => self.err(format!("unknown variant name: {}", name))
         };
         f(self, idx)
     }
 
-    fn read_enum_variant_arg<T>(&mut self,
-                                idx: uint,
-                                f: &fn(&mut Decoder) -> T)
+    fn read_enum_variant_arg<T>(&mut self, idx: uint, f: |&mut Decoder| -> T)
                                 -> T {
-        debug2!("read_enum_variant_arg(idx={})", idx);
+        debug!("read_enum_variant_arg(idx={})", idx);
         f(self)
     }
 
     fn read_enum_struct_variant<T>(&mut self,
                                    names: &[&str],
-                                   f: &fn(&mut Decoder, uint) -> T)
+                                   f: |&mut Decoder, uint| -> T)
                                    -> T {
-        debug2!("read_enum_struct_variant(names={:?})", names);
+        debug!("read_enum_struct_variant(names={:?})", names);
         self.read_enum_variant(names, f)
     }
 
@@ -989,18 +1016,18 @@ impl serialize::Decoder for Decoder {
     fn read_enum_struct_variant_field<T>(&mut self,
                                          name: &str,
                                          idx: uint,
-                                         f: &fn(&mut Decoder) -> T)
+                                         f: |&mut Decoder| -> T)
                                          -> T {
-        debug2!("read_enum_struct_variant_field(name={}, idx={})", name, idx);
+        debug!("read_enum_struct_variant_field(name={}, idx={})", name, idx);
         self.read_enum_variant_arg(idx, f)
     }
 
     fn read_struct<T>(&mut self,
                       name: &str,
                       len: uint,
-                      f: &fn(&mut Decoder) -> T)
+                      f: |&mut Decoder| -> T)
                       -> T {
-        debug2!("read_struct(name={}, len={})", name, len);
+        debug!("read_struct(name={}, len={})", name, len);
         let value = f(self);
         self.stack.pop();
         value
@@ -1009,14 +1036,13 @@ impl serialize::Decoder for Decoder {
     fn read_struct_field<T>(&mut self,
                             name: &str,
                             idx: uint,
-                            f: &fn(&mut Decoder) -> T)
+                            f: |&mut Decoder| -> T)
                             -> T {
-        debug2!("read_struct_field(name={}, idx={})", name, idx);
+        debug!("read_struct_field(name={}, idx={})", name, idx);
         match self.stack.pop() {
-            Object(obj) => {
-                let mut obj = obj;
+            Object(mut obj) => {
                 let value = match obj.pop(&name.to_owned()) {
-                    None => fail2!("no such field: {}", name),
+                    None => self.missing_field(name, obj),
                     Some(json) => {
                         self.stack.push(json);
                         f(self)
@@ -1025,48 +1051,45 @@ impl serialize::Decoder for Decoder {
                 self.stack.push(Object(obj));
                 value
             }
-            value => fail2!("not an object: {:?}", value)
+            value => self.expected("object", &value)
         }
     }
 
-    fn read_tuple<T>(&mut self, f: &fn(&mut Decoder, uint) -> T) -> T {
-        debug2!("read_tuple()");
+    fn read_tuple<T>(&mut self, f: |&mut Decoder, uint| -> T) -> T {
+        debug!("read_tuple()");
         self.read_seq(f)
     }
 
-    fn read_tuple_arg<T>(&mut self,
-                         idx: uint,
-                         f: &fn(&mut Decoder) -> T)
-                         -> T {
-        debug2!("read_tuple_arg(idx={})", idx);
+    fn read_tuple_arg<T>(&mut self, idx: uint, f: |&mut Decoder| -> T) -> T {
+        debug!("read_tuple_arg(idx={})", idx);
         self.read_seq_elt(idx, f)
     }
 
     fn read_tuple_struct<T>(&mut self,
                             name: &str,
-                            f: &fn(&mut Decoder, uint) -> T)
+                            f: |&mut Decoder, uint| -> T)
                             -> T {
-        debug2!("read_tuple_struct(name={})", name);
+        debug!("read_tuple_struct(name={})", name);
         self.read_tuple(f)
     }
 
     fn read_tuple_struct_arg<T>(&mut self,
                                 idx: uint,
-                                f: &fn(&mut Decoder) -> T)
+                                f: |&mut Decoder| -> T)
                                 -> T {
-        debug2!("read_tuple_struct_arg(idx={})", idx);
+        debug!("read_tuple_struct_arg(idx={})", idx);
         self.read_tuple_arg(idx, f)
     }
 
-    fn read_option<T>(&mut self, f: &fn(&mut Decoder, bool) -> T) -> T {
+    fn read_option<T>(&mut self, f: |&mut Decoder, bool| -> T) -> T {
         match self.stack.pop() {
             Null => f(self, false),
             value => { self.stack.push(value); f(self, true) }
         }
     }
 
-    fn read_seq<T>(&mut self, f: &fn(&mut Decoder, uint) -> T) -> T {
-        debug2!("read_seq()");
+    fn read_seq<T>(&mut self, f: |&mut Decoder, uint| -> T) -> T {
+        debug!("read_seq()");
         let len = match self.stack.pop() {
             List(list) => {
                 let len = list.len();
@@ -1075,18 +1098,18 @@ impl serialize::Decoder for Decoder {
                 }
                 len
             }
-            _ => fail2!("not a list"),
+            value => self.expected("list", &value)
         };
         f(self, len)
     }
 
-    fn read_seq_elt<T>(&mut self, idx: uint, f: &fn(&mut Decoder) -> T) -> T {
-        debug2!("read_seq_elt(idx={})", idx);
+    fn read_seq_elt<T>(&mut self, idx: uint, f: |&mut Decoder| -> T) -> T {
+        debug!("read_seq_elt(idx={})", idx);
         f(self)
     }
 
-    fn read_map<T>(&mut self, f: &fn(&mut Decoder, uint) -> T) -> T {
-        debug2!("read_map()");
+    fn read_map<T>(&mut self, f: |&mut Decoder, uint| -> T) -> T {
+        debug!("read_map()");
         let len = match self.stack.pop() {
             Object(obj) => {
                 let len = obj.len();
@@ -1096,22 +1119,20 @@ impl serialize::Decoder for Decoder {
                 }
                 len
             }
-            json => fail2!("not an object: {:?}", json),
+            value => self.expected("object", &value)
         };
         f(self, len)
     }
 
-    fn read_map_elt_key<T>(&mut self,
-                           idx: uint,
-                           f: &fn(&mut Decoder) -> T)
+    fn read_map_elt_key<T>(&mut self, idx: uint, f: |&mut Decoder| -> T)
                            -> T {
-        debug2!("read_map_elt_key(idx={})", idx);
+        debug!("read_map_elt_key(idx={})", idx);
         f(self)
     }
 
-    fn read_map_elt_val<T>(&mut self, idx: uint, f: &fn(&mut Decoder) -> T)
+    fn read_map_elt_val<T>(&mut self, idx: uint, f: |&mut Decoder| -> T)
                            -> T {
-        debug2!("read_map_elt_val(idx={})", idx);
+        debug!("read_map_elt_val(idx={})", idx);
         f(self)
     }
 }
@@ -1182,10 +1203,6 @@ impl ToJson for Json {
     fn to_json(&self) -> Json { (*self).clone() }
 }
 
-impl ToJson for @Json {
-    fn to_json(&self) -> Json { (**self).to_json() }
-}
-
 impl ToJson for int {
     fn to_json(&self) -> Json { Number(*self as f64) }
 }
@@ -1246,10 +1263,6 @@ impl ToJson for ~str {
     fn to_json(&self) -> Json { String((*self).clone()) }
 }
 
-impl ToJson for @~str {
-    fn to_json(&self) -> Json { String((**self).clone()) }
-}
-
 impl<A:ToJson,B:ToJson> ToJson for (A, B) {
     fn to_json(&self) -> Json {
         match *self {
@@ -1306,13 +1319,15 @@ impl<A:ToJson> ToJson for Option<A> {
 impl to_str::ToStr for Json {
     /// Encodes a json value into a string
     fn to_str(&self) -> ~str {
-      io::with_str_writer(|wr| self.to_writer(wr))
+        let mut s = MemWriter::new();
+        self.to_writer(&mut s as &mut io::Writer);
+        str::from_utf8_owned(s.inner())
     }
 }
 
 impl to_str::ToStr for Error {
     fn to_str(&self) -> ~str {
-        format!("{}:{}: {}", self.line, self.col, *self.msg)
+        format!("{}:{}: {}", self.line, self.col, self.msg)
     }
 }
 
@@ -1322,7 +1337,6 @@ mod tests {
     use super::*;
 
     use std::io;
-
     use serialize::Decodable;
     use treemap::TreeMap;
 
@@ -1493,37 +1507,47 @@ mod tests {
         assert_eq!(a.clone(), from_str(a.to_pretty_str()).unwrap());
     }
 
+    fn with_str_writer(f: |&mut io::Writer|) -> ~str {
+        use std::io::mem::MemWriter;
+        use std::io::Decorator;
+        use std::str;
+
+        let mut m = MemWriter::new();
+        f(&mut m as &mut io::Writer);
+        str::from_utf8_owned(m.inner())
+    }
+
     #[test]
     fn test_write_enum() {
         let animal = Dog;
         assert_eq!(
-            do io::with_str_writer |wr| {
-                let mut encoder = Encoder(wr);
+            with_str_writer(|wr| {
+                let mut encoder = Encoder::new(wr);
                 animal.encode(&mut encoder);
-            },
+            }),
             ~"\"Dog\""
         );
         assert_eq!(
-            do io::with_str_writer |wr| {
-                let mut encoder = PrettyEncoder(wr);
+            with_str_writer(|wr| {
+                let mut encoder = PrettyEncoder::new(wr);
                 animal.encode(&mut encoder);
-            },
+            }),
             ~"\"Dog\""
         );
 
         let animal = Frog(~"Henry", 349);
         assert_eq!(
-            do io::with_str_writer |wr| {
-                let mut encoder = Encoder(wr);
+            with_str_writer(|wr| {
+                let mut encoder = Encoder::new(wr);
                 animal.encode(&mut encoder);
-            },
+            }),
             ~"{\"variant\":\"Frog\",\"fields\":[\"Henry\",349]}"
         );
         assert_eq!(
-            do io::with_str_writer |wr| {
-                let mut encoder = PrettyEncoder(wr);
+            with_str_writer(|wr| {
+                let mut encoder = PrettyEncoder::new(wr);
                 animal.encode(&mut encoder);
-            },
+            }),
             ~"\
             [\n  \
                 \"Frog\",\n  \
@@ -1536,68 +1560,68 @@ mod tests {
     #[test]
     fn test_write_some() {
         let value = Some(~"jodhpurs");
-        let s = do io::with_str_writer |wr| {
-            let mut encoder = Encoder(wr);
+        let s = with_str_writer(|wr| {
+            let mut encoder = Encoder::new(wr);
             value.encode(&mut encoder);
-        };
+        });
         assert_eq!(s, ~"\"jodhpurs\"");
 
         let value = Some(~"jodhpurs");
-        let s = do io::with_str_writer |wr| {
-            let mut encoder = PrettyEncoder(wr);
+        let s = with_str_writer(|wr| {
+            let mut encoder = PrettyEncoder::new(wr);
             value.encode(&mut encoder);
-        };
+        });
         assert_eq!(s, ~"\"jodhpurs\"");
     }
 
     #[test]
     fn test_write_none() {
         let value: Option<~str> = None;
-        let s = do io::with_str_writer |wr| {
-            let mut encoder = Encoder(wr);
+        let s = with_str_writer(|wr| {
+            let mut encoder = Encoder::new(wr);
             value.encode(&mut encoder);
-        };
+        });
         assert_eq!(s, ~"null");
 
-        let s = do io::with_str_writer |wr| {
-            let mut encoder = Encoder(wr);
+        let s = with_str_writer(|wr| {
+            let mut encoder = Encoder::new(wr);
             value.encode(&mut encoder);
-        };
+        });
         assert_eq!(s, ~"null");
     }
 
     #[test]
     fn test_trailing_characters() {
         assert_eq!(from_str("nulla"),
-            Err(Error {line: 1u, col: 5u, msg: @~"trailing characters"}));
+            Err(Error {line: 1u, col: 5u, msg: ~"trailing characters"}));
         assert_eq!(from_str("truea"),
-            Err(Error {line: 1u, col: 5u, msg: @~"trailing characters"}));
+            Err(Error {line: 1u, col: 5u, msg: ~"trailing characters"}));
         assert_eq!(from_str("falsea"),
-            Err(Error {line: 1u, col: 6u, msg: @~"trailing characters"}));
+            Err(Error {line: 1u, col: 6u, msg: ~"trailing characters"}));
         assert_eq!(from_str("1a"),
-            Err(Error {line: 1u, col: 2u, msg: @~"trailing characters"}));
+            Err(Error {line: 1u, col: 2u, msg: ~"trailing characters"}));
         assert_eq!(from_str("[]a"),
-            Err(Error {line: 1u, col: 3u, msg: @~"trailing characters"}));
+            Err(Error {line: 1u, col: 3u, msg: ~"trailing characters"}));
         assert_eq!(from_str("{}a"),
-            Err(Error {line: 1u, col: 3u, msg: @~"trailing characters"}));
+            Err(Error {line: 1u, col: 3u, msg: ~"trailing characters"}));
     }
 
     #[test]
     fn test_read_identifiers() {
         assert_eq!(from_str("n"),
-            Err(Error {line: 1u, col: 2u, msg: @~"invalid syntax"}));
+            Err(Error {line: 1u, col: 2u, msg: ~"invalid syntax"}));
         assert_eq!(from_str("nul"),
-            Err(Error {line: 1u, col: 4u, msg: @~"invalid syntax"}));
+            Err(Error {line: 1u, col: 4u, msg: ~"invalid syntax"}));
 
         assert_eq!(from_str("t"),
-            Err(Error {line: 1u, col: 2u, msg: @~"invalid syntax"}));
+            Err(Error {line: 1u, col: 2u, msg: ~"invalid syntax"}));
         assert_eq!(from_str("truz"),
-            Err(Error {line: 1u, col: 4u, msg: @~"invalid syntax"}));
+            Err(Error {line: 1u, col: 4u, msg: ~"invalid syntax"}));
 
         assert_eq!(from_str("f"),
-            Err(Error {line: 1u, col: 2u, msg: @~"invalid syntax"}));
+            Err(Error {line: 1u, col: 2u, msg: ~"invalid syntax"}));
         assert_eq!(from_str("faz"),
-            Err(Error {line: 1u, col: 3u, msg: @~"invalid syntax"}));
+            Err(Error {line: 1u, col: 3u, msg: ~"invalid syntax"}));
 
         assert_eq!(from_str("null"), Ok(Null));
         assert_eq!(from_str("true"), Ok(Boolean(true)));
@@ -1609,15 +1633,15 @@ mod tests {
 
     #[test]
     fn test_decode_identifiers() {
-        let mut decoder = Decoder(from_str("null").unwrap());
+        let mut decoder = Decoder::new(from_str("null").unwrap());
         let v: () = Decodable::decode(&mut decoder);
         assert_eq!(v, ());
 
-        let mut decoder = Decoder(from_str("true").unwrap());
+        let mut decoder = Decoder::new(from_str("true").unwrap());
         let v: bool = Decodable::decode(&mut decoder);
         assert_eq!(v, true);
 
-        let mut decoder = Decoder(from_str("false").unwrap());
+        let mut decoder = Decoder::new(from_str("false").unwrap());
         let v: bool = Decodable::decode(&mut decoder);
         assert_eq!(v, false);
     }
@@ -1625,20 +1649,20 @@ mod tests {
     #[test]
     fn test_read_number() {
         assert_eq!(from_str("+"),
-            Err(Error {line: 1u, col: 1u, msg: @~"invalid syntax"}));
+            Err(Error {line: 1u, col: 1u, msg: ~"invalid syntax"}));
         assert_eq!(from_str("."),
-            Err(Error {line: 1u, col: 1u, msg: @~"invalid syntax"}));
+            Err(Error {line: 1u, col: 1u, msg: ~"invalid syntax"}));
 
         assert_eq!(from_str("-"),
-            Err(Error {line: 1u, col: 2u, msg: @~"invalid number"}));
+            Err(Error {line: 1u, col: 2u, msg: ~"invalid number"}));
         assert_eq!(from_str("00"),
-            Err(Error {line: 1u, col: 2u, msg: @~"invalid number"}));
+            Err(Error {line: 1u, col: 2u, msg: ~"invalid number"}));
         assert_eq!(from_str("1."),
-            Err(Error {line: 1u, col: 3u, msg: @~"invalid number"}));
+            Err(Error {line: 1u, col: 3u, msg: ~"invalid number"}));
         assert_eq!(from_str("1e"),
-            Err(Error {line: 1u, col: 3u, msg: @~"invalid number"}));
+            Err(Error {line: 1u, col: 3u, msg: ~"invalid number"}));
         assert_eq!(from_str("1e+"),
-            Err(Error {line: 1u, col: 4u, msg: @~"invalid number"}));
+            Err(Error {line: 1u, col: 4u, msg: ~"invalid number"}));
 
         assert_eq!(from_str("3"), Ok(Number(3.0)));
         assert_eq!(from_str("3.1"), Ok(Number(3.1)));
@@ -1652,31 +1676,31 @@ mod tests {
 
     #[test]
     fn test_decode_numbers() {
-        let mut decoder = Decoder(from_str("3").unwrap());
+        let mut decoder = Decoder::new(from_str("3").unwrap());
         let v: f64 = Decodable::decode(&mut decoder);
         assert_eq!(v, 3.0);
 
-        let mut decoder = Decoder(from_str("3.1").unwrap());
+        let mut decoder = Decoder::new(from_str("3.1").unwrap());
         let v: f64 = Decodable::decode(&mut decoder);
         assert_eq!(v, 3.1);
 
-        let mut decoder = Decoder(from_str("-1.2").unwrap());
+        let mut decoder = Decoder::new(from_str("-1.2").unwrap());
         let v: f64 = Decodable::decode(&mut decoder);
         assert_eq!(v, -1.2);
 
-        let mut decoder = Decoder(from_str("0.4").unwrap());
+        let mut decoder = Decoder::new(from_str("0.4").unwrap());
         let v: f64 = Decodable::decode(&mut decoder);
         assert_eq!(v, 0.4);
 
-        let mut decoder = Decoder(from_str("0.4e5").unwrap());
+        let mut decoder = Decoder::new(from_str("0.4e5").unwrap());
         let v: f64 = Decodable::decode(&mut decoder);
         assert_eq!(v, 0.4e5);
 
-        let mut decoder = Decoder(from_str("0.4e15").unwrap());
+        let mut decoder = Decoder::new(from_str("0.4e15").unwrap());
         let v: f64 = Decodable::decode(&mut decoder);
         assert_eq!(v, 0.4e15);
 
-        let mut decoder = Decoder(from_str("0.4e-01").unwrap());
+        let mut decoder = Decoder::new(from_str("0.4e-01").unwrap());
         let v: f64 = Decodable::decode(&mut decoder);
         assert_eq!(v, 0.4e-01);
     }
@@ -1684,10 +1708,10 @@ mod tests {
     #[test]
     fn test_read_str() {
         assert_eq!(from_str("\""),
-            Err(Error {line: 1u, col: 2u, msg: @~"EOF while parsing string"
+            Err(Error {line: 1u, col: 2u, msg: ~"EOF while parsing string"
         }));
         assert_eq!(from_str("\"lol"),
-            Err(Error {line: 1u, col: 5u, msg: @~"EOF while parsing string"
+            Err(Error {line: 1u, col: 5u, msg: ~"EOF while parsing string"
         }));
 
         assert_eq!(from_str("\"\""), Ok(String(~"")));
@@ -1704,39 +1728,39 @@ mod tests {
 
     #[test]
     fn test_decode_str() {
-        let mut decoder = Decoder(from_str("\"\"").unwrap());
+        let mut decoder = Decoder::new(from_str("\"\"").unwrap());
         let v: ~str = Decodable::decode(&mut decoder);
         assert_eq!(v, ~"");
 
-        let mut decoder = Decoder(from_str("\"foo\"").unwrap());
+        let mut decoder = Decoder::new(from_str("\"foo\"").unwrap());
         let v: ~str = Decodable::decode(&mut decoder);
         assert_eq!(v, ~"foo");
 
-        let mut decoder = Decoder(from_str("\"\\\"\"").unwrap());
+        let mut decoder = Decoder::new(from_str("\"\\\"\"").unwrap());
         let v: ~str = Decodable::decode(&mut decoder);
         assert_eq!(v, ~"\"");
 
-        let mut decoder = Decoder(from_str("\"\\b\"").unwrap());
+        let mut decoder = Decoder::new(from_str("\"\\b\"").unwrap());
         let v: ~str = Decodable::decode(&mut decoder);
         assert_eq!(v, ~"\x08");
 
-        let mut decoder = Decoder(from_str("\"\\n\"").unwrap());
+        let mut decoder = Decoder::new(from_str("\"\\n\"").unwrap());
         let v: ~str = Decodable::decode(&mut decoder);
         assert_eq!(v, ~"\n");
 
-        let mut decoder = Decoder(from_str("\"\\r\"").unwrap());
+        let mut decoder = Decoder::new(from_str("\"\\r\"").unwrap());
         let v: ~str = Decodable::decode(&mut decoder);
         assert_eq!(v, ~"\r");
 
-        let mut decoder = Decoder(from_str("\"\\t\"").unwrap());
+        let mut decoder = Decoder::new(from_str("\"\\t\"").unwrap());
         let v: ~str = Decodable::decode(&mut decoder);
         assert_eq!(v, ~"\t");
 
-        let mut decoder = Decoder(from_str("\"\\u12ab\"").unwrap());
+        let mut decoder = Decoder::new(from_str("\"\\u12ab\"").unwrap());
         let v: ~str = Decodable::decode(&mut decoder);
         assert_eq!(v, ~"\u12ab");
 
-        let mut decoder = Decoder(from_str("\"\\uAB12\"").unwrap());
+        let mut decoder = Decoder::new(from_str("\"\\uAB12\"").unwrap());
         let v: ~str = Decodable::decode(&mut decoder);
         assert_eq!(v, ~"\uAB12");
     }
@@ -1744,15 +1768,15 @@ mod tests {
     #[test]
     fn test_read_list() {
         assert_eq!(from_str("["),
-            Err(Error {line: 1u, col: 2u, msg: @~"EOF while parsing value"}));
+            Err(Error {line: 1u, col: 2u, msg: ~"EOF while parsing value"}));
         assert_eq!(from_str("[1"),
-            Err(Error {line: 1u, col: 3u, msg: @~"EOF while parsing list"}));
+            Err(Error {line: 1u, col: 3u, msg: ~"EOF while parsing list"}));
         assert_eq!(from_str("[1,"),
-            Err(Error {line: 1u, col: 4u, msg: @~"EOF while parsing value"}));
+            Err(Error {line: 1u, col: 4u, msg: ~"EOF while parsing value"}));
         assert_eq!(from_str("[1,]"),
-            Err(Error {line: 1u, col: 4u, msg: @~"invalid syntax"}));
+            Err(Error {line: 1u, col: 4u, msg: ~"invalid syntax"}));
         assert_eq!(from_str("[6 7]"),
-            Err(Error {line: 1u, col: 4u, msg: @~"expected `,` or `]`"}));
+            Err(Error {line: 1u, col: 4u, msg: ~"expected `,` or `]`"}));
 
         assert_eq!(from_str("[]"), Ok(List(~[])));
         assert_eq!(from_str("[ ]"), Ok(List(~[])));
@@ -1769,27 +1793,27 @@ mod tests {
 
     #[test]
     fn test_decode_list() {
-        let mut decoder = Decoder(from_str("[]").unwrap());
+        let mut decoder = Decoder::new(from_str("[]").unwrap());
         let v: ~[()] = Decodable::decode(&mut decoder);
         assert_eq!(v, ~[]);
 
-        let mut decoder = Decoder(from_str("[null]").unwrap());
+        let mut decoder = Decoder::new(from_str("[null]").unwrap());
         let v: ~[()] = Decodable::decode(&mut decoder);
         assert_eq!(v, ~[()]);
 
-        let mut decoder = Decoder(from_str("[true]").unwrap());
+        let mut decoder = Decoder::new(from_str("[true]").unwrap());
         let v: ~[bool] = Decodable::decode(&mut decoder);
         assert_eq!(v, ~[true]);
 
-        let mut decoder = Decoder(from_str("[true]").unwrap());
+        let mut decoder = Decoder::new(from_str("[true]").unwrap());
         let v: ~[bool] = Decodable::decode(&mut decoder);
         assert_eq!(v, ~[true]);
 
-        let mut decoder = Decoder(from_str("[3, 1]").unwrap());
+        let mut decoder = Decoder::new(from_str("[3, 1]").unwrap());
         let v: ~[int] = Decodable::decode(&mut decoder);
         assert_eq!(v, ~[3, 1]);
 
-        let mut decoder = Decoder(from_str("[[3], [1, 2]]").unwrap());
+        let mut decoder = Decoder::new(from_str("[[3], [1, 2]]").unwrap());
         let v: ~[~[uint]] = Decodable::decode(&mut decoder);
         assert_eq!(v, ~[~[3], ~[1, 2]]);
     }
@@ -1800,49 +1824,49 @@ mod tests {
             Err(Error {
                 line: 1u,
                 col: 2u,
-                msg: @~"EOF while parsing object"}));
+                msg: ~"EOF while parsing object"}));
         assert_eq!(from_str("{ "),
             Err(Error {
                 line: 1u,
                 col: 3u,
-                msg: @~"EOF while parsing object"}));
+                msg: ~"EOF while parsing object"}));
         assert_eq!(from_str("{1"),
             Err(Error {
                 line: 1u,
                 col: 2u,
-                msg: @~"key must be a string"}));
+                msg: ~"key must be a string"}));
         assert_eq!(from_str("{ \"a\""),
             Err(Error {
                 line: 1u,
                 col: 6u,
-                msg: @~"EOF while parsing object"}));
+                msg: ~"EOF while parsing object"}));
         assert_eq!(from_str("{\"a\""),
             Err(Error {
                 line: 1u,
                 col: 5u,
-                msg: @~"EOF while parsing object"}));
+                msg: ~"EOF while parsing object"}));
         assert_eq!(from_str("{\"a\" "),
             Err(Error {
                 line: 1u,
                 col: 6u,
-                msg: @~"EOF while parsing object"}));
+                msg: ~"EOF while parsing object"}));
 
         assert_eq!(from_str("{\"a\" 1"),
-            Err(Error {line: 1u, col: 6u, msg: @~"expected `:`"}));
+            Err(Error {line: 1u, col: 6u, msg: ~"expected `:`"}));
         assert_eq!(from_str("{\"a\":"),
-            Err(Error {line: 1u, col: 6u, msg: @~"EOF while parsing value"}));
+            Err(Error {line: 1u, col: 6u, msg: ~"EOF while parsing value"}));
         assert_eq!(from_str("{\"a\":1"),
             Err(Error {
                 line: 1u,
                 col: 7u,
-                msg: @~"EOF while parsing object"}));
+                msg: ~"EOF while parsing object"}));
         assert_eq!(from_str("{\"a\":1 1"),
-            Err(Error {line: 1u, col: 8u, msg: @~"expected `,` or `}`"}));
+            Err(Error {line: 1u, col: 8u, msg: ~"expected `,` or `}`"}));
         assert_eq!(from_str("{\"a\":1,"),
             Err(Error {
                 line: 1u,
                 col: 8u,
-                msg: @~"EOF while parsing object"}));
+                msg: ~"EOF while parsing object"}));
 
         assert_eq!(from_str("{}").unwrap(), mk_object([]));
         assert_eq!(from_str("{\"a\": 3}").unwrap(),
@@ -1891,7 +1915,7 @@ mod tests {
                 { \"a\": null, \"b\": 2, \"c\": [\"abc\", \"xyz\"] }
             ]
         }";
-        let mut decoder = Decoder(from_str(s).unwrap());
+        let mut decoder = Decoder::new(from_str(s).unwrap());
         let v: Outer = Decodable::decode(&mut decoder);
         assert_eq!(
             v,
@@ -1905,23 +1929,23 @@ mod tests {
 
     #[test]
     fn test_decode_option() {
-        let mut decoder = Decoder(from_str("null").unwrap());
+        let mut decoder = Decoder::new(from_str("null").unwrap());
         let value: Option<~str> = Decodable::decode(&mut decoder);
         assert_eq!(value, None);
 
-        let mut decoder = Decoder(from_str("\"jodhpurs\"").unwrap());
+        let mut decoder = Decoder::new(from_str("\"jodhpurs\"").unwrap());
         let value: Option<~str> = Decodable::decode(&mut decoder);
         assert_eq!(value, Some(~"jodhpurs"));
     }
 
     #[test]
     fn test_decode_enum() {
-        let mut decoder = Decoder(from_str("\"Dog\"").unwrap());
+        let mut decoder = Decoder::new(from_str("\"Dog\"").unwrap());
         let value: Animal = Decodable::decode(&mut decoder);
         assert_eq!(value, Dog);
 
-        let mut decoder =
-            Decoder(from_str("{\"variant\":\"Frog\",\"fields\":[\"Henry\",349]}").unwrap());
+        let s = "{\"variant\":\"Frog\",\"fields\":[\"Henry\",349]}";
+        let mut decoder = Decoder::new(from_str(s).unwrap());
         let value: Animal = Decodable::decode(&mut decoder);
         assert_eq!(value, Frog(~"Henry", 349));
     }
@@ -1929,7 +1953,7 @@ mod tests {
     #[test]
     fn test_decode_map() {
         let s = ~"{\"a\": \"Dog\", \"b\": {\"variant\":\"Frog\",\"fields\":[\"Henry\", 349]}}";
-        let mut decoder = Decoder(from_str(s).unwrap());
+        let mut decoder = Decoder::new(from_str(s).unwrap());
         let mut map: TreeMap<~str, Animal> = Decodable::decode(&mut decoder);
 
         assert_eq!(map.pop(&~"a"), Some(Dog));
@@ -1942,6 +1966,73 @@ mod tests {
             Err(Error {
                 line: 3u,
                 col: 8u,
-                msg: @~"EOF while parsing object"}));
+                msg: ~"EOF while parsing object"}));
+    }
+
+    #[deriving(Decodable)]
+    struct DecodeStruct {
+        x: f64,
+        y: bool,
+        z: ~str,
+        w: ~[DecodeStruct]
+    }
+    #[deriving(Decodable)]
+    enum DecodeEnum {
+        A(f64),
+        B(~str)
+    }
+    fn check_err<T: Decodable<Decoder>>(to_parse: &'static str, expected_error: &str) {
+        use std::task;
+        let res = do task::try {
+            // either fails in `decode` (which is what we want), or
+            // returns Some(error_message)/None if the string was
+            // invalid or valid JSON.
+            match from_str(to_parse) {
+                Err(e) => Some(e.to_str()),
+                Ok(json) => {
+                    let _: T = Decodable::decode(&mut Decoder::new(json));
+                    None
+                }
+            }
+        };
+        match res {
+            Ok(Some(parse_error)) => fail!("`{}` is not valid json: {}",
+                                           to_parse, parse_error),
+            Ok(None) => fail!("`{}` parsed & decoded ok, expecting error `{}`",
+                              to_parse, expected_error),
+            Err(e) => {
+                let err = e.as_ref::<~str>().unwrap();
+                assert!(err.contains(expected_error),
+                        "`{}` errored incorrectly, found `{}` expecting `{}`",
+                        to_parse, *err, expected_error);
+            }
+        }
+    }
+    #[test]
+    fn test_decode_errors_struct() {
+        check_err::<DecodeStruct>("[]", "object but found list");
+        check_err::<DecodeStruct>("{\"x\": true, \"y\": true, \"z\": \"\", \"w\": []}",
+                                  "number but found boolean");
+        check_err::<DecodeStruct>("{\"x\": 1, \"y\": [], \"z\": \"\", \"w\": []}",
+                                  "boolean but found list");
+        check_err::<DecodeStruct>("{\"x\": 1, \"y\": true, \"z\": {}, \"w\": []}",
+                                  "string but found object");
+        check_err::<DecodeStruct>("{\"x\": 1, \"y\": true, \"z\": \"\", \"w\": null}",
+                                  "list but found null");
+        check_err::<DecodeStruct>("{\"x\": 1, \"y\": true, \"z\": \"\"}",
+                                  "'w' field in object");
+    }
+    #[test]
+    fn test_decode_errors_enum() {
+        check_err::<DecodeEnum>("{}",
+                                "'variant' field in object");
+        check_err::<DecodeEnum>("{\"variant\": 1}",
+                                "string but found number");
+        check_err::<DecodeEnum>("{\"variant\": \"A\"}",
+                                "'fields' field in object");
+        check_err::<DecodeEnum>("{\"variant\": \"A\", \"fields\": null}",
+                                "list but found null");
+        check_err::<DecodeEnum>("{\"variant\": \"C\", \"fields\": []}",
+                                "unknown variant name");
     }
 }

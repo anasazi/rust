@@ -11,11 +11,11 @@
 
 use metadata::encoder;
 use middle::ty::{ReSkolemized, ReVar};
-use middle::ty::{bound_region, br_anon, br_named, br_self, br_cap_avoid};
-use middle::ty::{br_fresh, ctxt, field};
+use middle::ty::{BoundRegion, BrAnon, BrNamed};
+use middle::ty::{BrFresh, ctxt};
 use middle::ty::{mt, t, param_ty};
-use middle::ty::{re_bound, re_free, re_scope, re_infer, re_static, Region,
-                 re_empty};
+use middle::ty::{ReFree, ReScope, ReInfer, ReStatic, Region,
+                 ReEmpty};
 use middle::ty::{ty_bool, ty_char, ty_bot, ty_box, ty_struct, ty_enum};
 use middle::ty::{ty_err, ty_estr, ty_evec, ty_float, ty_bare_fn, ty_closure};
 use middle::ty::{ty_nil, ty_opaque_box, ty_opaque_closure_ptr, ty_param};
@@ -71,7 +71,7 @@ pub fn explain_region(cx: ctxt, region: ty::Region) -> ~str {
 pub fn explain_region_and_span(cx: ctxt, region: ty::Region)
                             -> (~str, Option<Span>) {
     return match region {
-      re_scope(node_id) => {
+      ReScope(node_id) => {
         match cx.items.find(&node_id) {
           Some(&ast_map::node_block(ref blk)) => {
             explain_span(cx, "block", blk.span)
@@ -81,11 +81,11 @@ pub fn explain_region_and_span(cx: ctxt, region: ty::Region)
           }
           Some(&ast_map::node_expr(expr)) => {
             match expr.node {
-              ast::ExprCall(*) => explain_span(cx, "call", expr.span),
-              ast::ExprMethodCall(*) => {
+              ast::ExprCall(..) => explain_span(cx, "call", expr.span),
+              ast::ExprMethodCall(..) => {
                 explain_span(cx, "method call", expr.span)
               },
-              ast::ExprMatch(*) => explain_span(cx, "match", expr.span),
+              ast::ExprMatch(..) => explain_span(cx, "match", expr.span),
               _ => explain_span(cx, "expression", expr.span)
             }
           }
@@ -93,7 +93,7 @@ pub fn explain_region_and_span(cx: ctxt, region: ty::Region)
               explain_span(cx, "statement", stmt.span)
           }
           Some(&ast_map::node_item(it, _)) if (match it.node {
-                ast::item_fn(*) => true, _ => false}) => {
+                ast::item_fn(..) => true, _ => false}) => {
               explain_span(cx, "function body", it.span)
           }
           Some(_) | None => {
@@ -104,11 +104,11 @@ pub fn explain_region_and_span(cx: ctxt, region: ty::Region)
         }
       }
 
-      re_free(ref fr) => {
+      ReFree(ref fr) => {
         let prefix = match fr.bound_region {
-          br_anon(idx) => format!("the anonymous lifetime \\#{} defined on",
+          BrAnon(idx) => format!("the anonymous lifetime \\#{} defined on",
                                idx + 1),
-          br_fresh(_) => format!("an anonymous lifetime defined on"),
+          BrFresh(_) => format!("an anonymous lifetime defined on"),
           _ => format!("the lifetime {} as defined on",
                     bound_region_ptr_to_str(cx, fr.bound_region))
         };
@@ -118,6 +118,11 @@ pub fn explain_region_and_span(cx: ctxt, region: ty::Region)
             let (msg, opt_span) = explain_span(cx, "block", blk.span);
             (format!("{} {}", prefix, msg), opt_span)
           }
+          Some(&ast_map::node_item(it, _)) if match it.node {
+                ast::item_impl(..) => true, _ => false} => {
+            let (msg, opt_span) = explain_span(cx, "impl", it.span);
+            (format!("{} {}", prefix, msg), opt_span)
+          }
           Some(_) | None => {
             // this really should not happen
             (format!("{} node {}", prefix, fr.scope_id), None)
@@ -125,13 +130,13 @@ pub fn explain_region_and_span(cx: ctxt, region: ty::Region)
         }
       }
 
-      re_static => { (~"the static lifetime", None) }
+      ReStatic => { (~"the static lifetime", None) }
 
-      re_empty => { (~"the empty lifetime", None) }
+      ReEmpty => { (~"the empty lifetime", None) }
 
       // I believe these cases should not occur (except when debugging,
       // perhaps)
-      re_infer(_) | re_bound(_) => {
+      ty::ReInfer(_) | ty::ReEarlyBound(..) | ty::ReLateBound(..) => {
         (format!("lifetime {:?}", region), None)
       }
     };
@@ -145,27 +150,28 @@ pub fn explain_region_and_span(cx: ctxt, region: ty::Region)
     }
 }
 
-pub fn bound_region_ptr_to_str(cx: ctxt, br: bound_region) -> ~str {
+pub fn bound_region_ptr_to_str(cx: ctxt, br: BoundRegion) -> ~str {
     bound_region_to_str(cx, "&", true, br)
 }
 
 pub fn bound_region_to_str(cx: ctxt,
                            prefix: &str, space: bool,
-                           br: bound_region) -> ~str {
+                           br: BoundRegion) -> ~str {
     let space_str = if space { " " } else { "" };
 
-    if cx.sess.verbose() { return format!("{}{:?}{}", prefix, br, space_str); }
+    if cx.sess.verbose() {
+        return format!("{}{}{}", prefix, br.repr(cx), space_str);
+    }
 
     match br {
-      br_named(id)         => format!("{}'{}{}", prefix, cx.sess.str_of(id), space_str),
-      br_self              => format!("{}'self{}", prefix, space_str),
-      br_anon(_)           => prefix.to_str(),
-      br_fresh(_)          => prefix.to_str(),
-      br_cap_avoid(_, br)  => bound_region_to_str(cx, prefix, space, *br)
+      BrNamed(_, ident)   => format!("{}'{}{}", prefix,
+                                      cx.sess.str_of(ident), space_str),
+      BrAnon(_)           => prefix.to_str(),
+      BrFresh(_)          => prefix.to_str(),
     }
 }
 
-pub fn re_scope_id_to_str(cx: ctxt, node_id: ast::NodeId) -> ~str {
+pub fn ReScope_id_to_str(cx: ctxt, node_id: ast::NodeId) -> ~str {
     match cx.items.find(&node_id) {
       Some(&ast_map::node_block(ref blk)) => {
         format!("<block at {}>",
@@ -173,18 +179,18 @@ pub fn re_scope_id_to_str(cx: ctxt, node_id: ast::NodeId) -> ~str {
       }
       Some(&ast_map::node_expr(expr)) => {
         match expr.node {
-          ast::ExprCall(*) => {
+          ast::ExprCall(..) => {
             format!("<call at {}>",
                  cx.sess.codemap.span_to_str(expr.span))
           }
-          ast::ExprMatch(*) => {
+          ast::ExprMatch(..) => {
             format!("<match at {}>",
                  cx.sess.codemap.span_to_str(expr.span))
           }
-          ast::ExprAssignOp(*) |
-          ast::ExprUnary(*) |
-          ast::ExprBinary(*) |
-          ast::ExprIndex(*) => {
+          ast::ExprAssignOp(..) |
+          ast::ExprUnary(..) |
+          ast::ExprBinary(..) |
+          ast::ExprIndex(..) => {
             format!("<method at {}>",
                  cx.sess.codemap.span_to_str(expr.span))
           }
@@ -198,7 +204,7 @@ pub fn re_scope_id_to_str(cx: ctxt, node_id: ast::NodeId) -> ~str {
         format!("<unknown-{}>", node_id)
       }
       _ => { cx.sess.bug(
-          format!("re_scope refers to {}",
+          format!("ReScope refers to {}",
                ast_map::node_id_to_str(cx.items, node_id,
                                        token::get_ident_interner()))) }
     }
@@ -215,7 +221,7 @@ pub fn region_to_str(cx: ctxt, prefix: &str, space: bool, region: Region) -> ~st
     let space_str = if space { " " } else { "" };
 
     if cx.sess.verbose() {
-        return format!("{}{:?}{}", prefix, region, space_str);
+        return format!("{}{}{}", prefix, region.repr(cx), space_str);
     }
 
     // These printouts are concise.  They do not contain all the information
@@ -223,15 +229,16 @@ pub fn region_to_str(cx: ctxt, prefix: &str, space: bool, region: Region) -> ~st
     // to fit that into a short string.  Hence the recommendation to use
     // `explain_region()` or `note_and_explain_region()`.
     match region {
-        re_scope(_) => prefix.to_str(),
-        re_bound(br) => bound_region_to_str(cx, prefix, space, br),
-        re_free(ref fr) => bound_region_to_str(cx, prefix, space, fr.bound_region),
-        re_infer(ReSkolemized(_, br)) => {
+        ty::ReScope(_) => prefix.to_str(),
+        ty::ReEarlyBound(_, _, ident) => cx.sess.str_of(ident).to_owned(),
+        ty::ReLateBound(_, br) => bound_region_to_str(cx, prefix, space, br),
+        ty::ReFree(ref fr) => bound_region_to_str(cx, prefix, space, fr.bound_region),
+        ty::ReInfer(ReSkolemized(_, br)) => {
             bound_region_to_str(cx, prefix, space, br)
         }
-        re_infer(ReVar(_)) => prefix.to_str(),
-        re_static => format!("{}'static{}", prefix, space_str),
-        re_empty => format!("{}'<empty>{}", prefix, space_str)
+        ty::ReInfer(ReVar(_)) => prefix.to_str(),
+        ty::ReStatic => format!("{}'static{}", prefix, space_str),
+        ty::ReEmpty => format!("{}'<empty>{}", prefix, space_str)
     }
 }
 
@@ -279,7 +286,7 @@ pub fn vstore_ty_to_str(cx: ctxt, mt: &mt, vs: ty::vstore) -> ~str {
     }
 }
 
-pub fn vec_map_to_str<T>(ts: &[T], f: &fn(t: &T) -> ~str) -> ~str {
+pub fn vec_map_to_str<T>(ts: &[T], f: |t: &T| -> ~str) -> ~str {
     let tstrs = ts.map(f);
     format!("[{}]", tstrs.connect(", "))
 }
@@ -289,9 +296,10 @@ pub fn tys_to_str(cx: ctxt, ts: &[t]) -> ~str {
 }
 
 pub fn fn_sig_to_str(cx: ctxt, typ: &ty::FnSig) -> ~str {
-    format!("fn{} -> {}",
-         tys_to_str(cx, typ.inputs.map(|a| *a)),
-         ty_to_str(cx, typ.output))
+    format!("fn{}{} -> {}",
+            typ.binder_id,
+            typ.inputs.repr(cx),
+            typ.output.repr(cx))
 }
 
 pub fn trait_ref_to_str(cx: ctxt, trait_ref: &ty::TraitRef) -> ~str {
@@ -308,10 +316,11 @@ pub fn ty_to_str(cx: ctxt, typ: t) -> ~str {
                       ident: Option<ast::Ident>,
                       sig: &ty::FnSig)
                       -> ~str {
-        let mut s = ~"extern ";
-
-        s.push_str(abis.to_str());
-        s.push_char(' ');
+        let mut s = if abis.is_rust() {
+            ~""
+        } else {
+            format!("extern {} ", abis.to_str())
+        };
 
         match purity {
             ast::impure_fn => {}
@@ -331,17 +340,24 @@ pub fn ty_to_str(cx: ctxt, typ: t) -> ~str {
           _ => { }
         }
 
-        push_sig_to_str(cx, &mut s, sig);
+        push_sig_to_str(cx, &mut s, '(', ')', sig);
 
         return s;
     }
-    fn closure_to_str(cx: ctxt, cty: &ty::ClosureTy) -> ~str
-    {
-        let mut s = cty.sigil.to_str();
+    fn closure_to_str(cx: ctxt, cty: &ty::ClosureTy) -> ~str {
+        let is_proc =
+            (cty.sigil, cty.onceness) == (ast::OwnedSigil, ast::Once);
+        let is_borrowed_closure = cty.sigil == ast::BorrowedSigil;
+
+        let mut s = if is_proc || is_borrowed_closure {
+            ~""
+        } else {
+            cty.sigil.to_str()
+        };
 
         match (cty.sigil, cty.region) {
-            (ast::ManagedSigil, ty::re_static) |
-            (ast::OwnedSigil, ty::re_static) => {}
+            (ast::ManagedSigil, ty::ReStatic) |
+            (ast::OwnedSigil, ty::ReStatic) => {}
 
             (_, region) => {
                 s.push_str(region_to_str(cx, "", true, region));
@@ -356,30 +372,57 @@ pub fn ty_to_str(cx: ctxt, typ: t) -> ~str {
             }
         };
 
-        match cty.onceness {
-            ast::Many => {}
-            ast::Once => {
-                s.push_str(cty.onceness.to_str());
-                s.push_char(' ');
+        if is_proc {
+            s.push_str("proc");
+        } else {
+            match cty.onceness {
+                ast::Many => {}
+                ast::Once => {
+                    s.push_str(cty.onceness.to_str());
+                    s.push_char(' ');
+                }
+            };
+
+            if !is_borrowed_closure {
+                s.push_str("fn");
             }
-        };
-
-        s.push_str("fn");
-
-        if !cty.bounds.is_empty() {
-            s.push_str(":");
         }
-        s.push_str(cty.bounds.repr(cx));
 
-        push_sig_to_str(cx, &mut s, &cty.sig);
+        if !is_borrowed_closure {
+            // Print bounds before `fn` if this is not a borrowed closure.
+            if !cty.bounds.is_empty() {
+                s.push_str(":");
+                s.push_str(cty.bounds.repr(cx));
+            }
+
+            push_sig_to_str(cx, &mut s, '(', ')', &cty.sig);
+        } else {
+            // Print bounds after the signature if this is a borrowed closure.
+            push_sig_to_str(cx, &mut s, '|', '|', &cty.sig);
+
+            if is_borrowed_closure {
+                if !cty.bounds.is_empty() {
+                    s.push_str(":");
+                    s.push_str(cty.bounds.repr(cx));
+                }
+            }
+        }
 
         return s;
     }
-    fn push_sig_to_str(cx: ctxt, s: &mut ~str, sig: &ty::FnSig) {
-        s.push_char('(');
+    fn push_sig_to_str(cx: ctxt,
+                       s: &mut ~str,
+                       bra: char,
+                       ket: char,
+                       sig: &ty::FnSig) {
+        s.push_char(bra);
         let strs = sig.inputs.map(|a| fn_input_to_str(cx, *a));
         s.push_str(strs.connect(", "));
-        s.push_char(')');
+        if sig.variadic {
+            s.push_str(", ...");
+        }
+        s.push_char(ket);
+
         if ty::get(sig.output).sty != ty_nil {
             s.push_str(" -> ");
             if ty::type_is_bot(sig.output) {
@@ -388,16 +431,6 @@ pub fn ty_to_str(cx: ctxt, typ: t) -> ~str {
                 s.push_str(ty_to_str(cx, sig.output));
             }
         }
-    }
-    fn method_to_str(cx: ctxt, m: ty::Method) -> ~str {
-        bare_fn_to_str(cx,
-                       m.fty.purity,
-                       m.fty.abis,
-                       Some(m.ident),
-                       &m.fty.sig) + ";"
-    }
-    fn field_to_str(cx: ctxt, f: field) -> ~str {
-        return format!("{}: {}", cx.sess.str_of(f.ident), mt_to_str(cx, &f.mt));
     }
 
     // if there is an id, print that instead of the structural type:
@@ -451,7 +484,7 @@ pub fn ty_to_str(cx: ctxt, typ: t) -> ~str {
           };
           if !cx.sess.verbose() { ident } else { format!("{}:{:?}", ident, did) }
       }
-      ty_self(*) => ~"Self",
+      ty_self(..) => ~"Self",
       ty_enum(did, ref substs) | ty_struct(did, ref substs) => {
         let path = ty::item_path(cx, did);
         let base = ast_map::path_to_str(path, cx.sess.intr());
@@ -534,7 +567,7 @@ fn repr_vec<T:Repr>(tcx: ctxt, v: &[T]) -> ~str {
     vec_map_to_str(v, |t| t.repr(tcx))
 }
 
-impl<'self, T:Repr> Repr for &'self [T] {
+impl<'a, T:Repr> Repr for &'a [T] {
     fn repr(&self, tcx: ctxt) -> ~str {
         repr_vec(tcx, *self)
     }
@@ -559,8 +592,17 @@ impl<T:Repr> Repr for ~[T] {
 
 impl Repr for ty::TypeParameterDef {
     fn repr(&self, tcx: ctxt) -> ~str {
-        format!("TypeParameterDef \\{{:?}, bounds: {}\\}",
-             self.def_id, self.bounds.repr(tcx))
+        format!("TypeParameterDef({:?}, {})",
+                self.def_id,
+                self.bounds.repr(tcx))
+    }
+}
+
+impl Repr for ty::RegionParameterDef {
+    fn repr(&self, tcx: ctxt) -> ~str {
+        format!("RegionParameterDef({}, {:?})",
+                tcx.sess.str_of(self.ident),
+                self.def_id)
     }
 }
 
@@ -597,6 +639,7 @@ impl Repr for ty::ParamBounds {
                 ty::BoundSend => ~"Send",
                 ty::BoundFreeze => ~"Freeze",
                 ty::BoundSized => ~"Sized",
+                ty::BoundPod => ~"Pod",
             });
         }
         for t in self.trait_bounds.iter() {
@@ -620,6 +663,15 @@ impl Repr for ast::Expr {
     }
 }
 
+impl Repr for ast::item {
+    fn repr(&self, tcx: ctxt) -> ~str {
+        format!("item({})",
+                ast_map::node_id_to_str(tcx.items,
+                                        self.id,
+                                        token::get_ident_interner()))
+    }
+}
+
 impl Repr for ast::Pat {
     fn repr(&self, tcx: ctxt) -> ~str {
         format!("pat({}: {})",
@@ -628,15 +680,58 @@ impl Repr for ast::Pat {
     }
 }
 
-impl Repr for ty::bound_region {
+impl Repr for ty::BoundRegion {
     fn repr(&self, tcx: ctxt) -> ~str {
-        bound_region_ptr_to_str(tcx, *self)
+        match *self {
+            ty::BrAnon(id) => format!("BrAnon({})", id),
+            ty::BrNamed(id, ident) => format!("BrNamed({}, {})",
+                                               id.repr(tcx),
+                                               ident.repr(tcx)),
+            ty::BrFresh(id) => format!("BrFresh({})", id),
+        }
     }
 }
 
 impl Repr for ty::Region {
     fn repr(&self, tcx: ctxt) -> ~str {
-        region_to_str(tcx, "", false, *self)
+        match *self {
+            ty::ReEarlyBound(id, index, ident) => {
+                format!("ReEarlyBound({}, {}, {})",
+                        id, index, ident.repr(tcx))
+            }
+
+            ty::ReLateBound(binder_id, ref bound_region) => {
+                format!("ReLateBound({}, {})",
+                        binder_id, bound_region.repr(tcx))
+            }
+
+            ty::ReFree(ref fr) => {
+                format!("ReFree({}, {})",
+                        fr.scope_id,
+                        fr.bound_region.repr(tcx))
+            }
+
+            ty::ReScope(id) => {
+                format!("ReScope({})", id)
+            }
+
+            ty::ReStatic => {
+                format!("ReStatic")
+            }
+
+            ty::ReInfer(ReVar(ref vid)) => {
+                format!("ReInfer({})", vid.id)
+            }
+
+            ty::ReInfer(ReSkolemized(id, ref bound_region)) => {
+                format!("re_skolemized({}, {})",
+                        id, bound_region.repr(tcx))
+            }
+
+            ty::ReEmpty => {
+                format!("ReEmpty")
+            }
+        }
     }
 }
 
@@ -647,12 +742,12 @@ impl Repr for ast::DefId {
         // and otherwise fallback to just printing the crate/node pair
         if self.crate == ast::LOCAL_CRATE {
             match tcx.items.find(&self.node) {
-                Some(&ast_map::node_item(*)) |
-                Some(&ast_map::node_foreign_item(*)) |
-                Some(&ast_map::node_method(*)) |
-                Some(&ast_map::node_trait_method(*)) |
-                Some(&ast_map::node_variant(*)) |
-                Some(&ast_map::node_struct_ctor(*)) => {
+                Some(&ast_map::node_item(..)) |
+                Some(&ast_map::node_foreign_item(..)) |
+                Some(&ast_map::node_method(..)) |
+                Some(&ast_map::node_trait_method(..)) |
+                Some(&ast_map::node_variant(..)) |
+                Some(&ast_map::node_struct_ctor(..)) => {
                     return format!("{:?}:{}", *self, ty::item_path_str(tcx, *self));
                 }
                 _ => {}
@@ -672,23 +767,38 @@ impl Repr for ty::ty_param_bounds_and_ty {
 
 impl Repr for ty::Generics {
     fn repr(&self, tcx: ctxt) -> ~str {
-        format!("Generics \\{type_param_defs: {}, region_param: {:?}\\}",
-             self.type_param_defs.repr(tcx),
-             self.region_param)
+        format!("Generics(type_param_defs: {}, region_param_defs: {})",
+                self.type_param_defs.repr(tcx),
+                self.region_param_defs.repr(tcx))
+    }
+}
+
+impl Repr for ty::ItemVariances {
+    fn repr(&self, tcx: ctxt) -> ~str {
+        format!("IterVariances(self_param={}, type_params={}, region_params={})",
+                self.self_param.repr(tcx),
+                self.type_params.repr(tcx),
+                self.region_params.repr(tcx))
+    }
+}
+
+impl Repr for ty::Variance {
+    fn repr(&self, _: ctxt) -> ~str {
+        self.to_str().to_owned()
     }
 }
 
 impl Repr for ty::Method {
     fn repr(&self, tcx: ctxt) -> ~str {
-        format!("method \\{ident: {}, generics: {}, transformed_self_ty: {}, \
-              fty: {}, explicit_self: {}, vis: {}, def_id: {}\\}",
-             self.ident.repr(tcx),
-             self.generics.repr(tcx),
-             self.transformed_self_ty.repr(tcx),
-             self.fty.repr(tcx),
-             self.explicit_self.repr(tcx),
-             self.vis.repr(tcx),
-             self.def_id.repr(tcx))
+        format!("method(ident: {}, generics: {}, transformed_self_ty: {}, \
+                fty: {}, explicit_self: {}, vis: {}, def_id: {})",
+                self.ident.repr(tcx),
+                self.generics.repr(tcx),
+                self.transformed_self_ty.repr(tcx),
+                self.fty.repr(tcx),
+                self.explicit_self.repr(tcx),
+                self.vis.repr(tcx),
+                self.def_id.repr(tcx))
     }
 }
 
@@ -817,6 +927,7 @@ impl UserString for ty::BuiltinBound {
             ty::BoundSend => ~"Send",
             ty::BoundFreeze => ~"Freeze",
             ty::BoundSized => ~"Sized",
+            ty::BoundPod => ~"Pod",
         }
     }
 }

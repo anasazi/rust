@@ -13,25 +13,24 @@
 extern mod extra;
 
 use extra::tempfile;
-use std::io::WriterUtil;
-use std::io;
-use std::os;
+use std::io::File;
 
 pub fn main() {
     let dir = tempfile::TempDir::new_in(&Path::new("."), "").unwrap();
     let path = dir.path().join("file");
 
     {
-        match io::file_writer(&path, [io::Create, io::Truncate]) {
-            Err(ref e) => fail2!("{}", e.clone()),
-            Ok(f) => {
+        match File::create(&path) {
+            None => unreachable!(),
+            Some(f) => {
+                let mut f = f;
                 for _ in range(0u, 1000) {
-                    f.write_u8(0);
+                    f.write([0]);
                 }
             }
         }
     }
 
     assert!(path.exists());
-    assert_eq!(path.get_size(), Some(1000));
+    assert_eq!(path.stat().size, 1000);
 }

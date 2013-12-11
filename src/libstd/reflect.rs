@@ -16,9 +16,9 @@ Runtime type reflection
 
 #[allow(missing_doc)];
 
-use unstable::intrinsics::{Opaque, TyDesc, TyVisitor};
+use unstable::intrinsics::{Disr, Opaque, TyDesc, TyVisitor};
 use libc::c_void;
-use sys;
+use mem;
 use unstable::raw;
 
 /**
@@ -28,7 +28,7 @@ use unstable::raw;
  * then build a MovePtrAdaptor wrapped around your struct.
  */
 pub trait MovePtr {
-    fn move_ptr(&mut self, adjustment: &fn(*c_void) -> *c_void);
+    fn move_ptr(&mut self, adjustment: |*c_void| -> *c_void);
     fn push_ptr(&mut self);
     fn pop_ptr(&mut self);
 }
@@ -41,7 +41,7 @@ pub fn align(size: uint, align: uint) -> uint {
 
 /// Adaptor to wrap around visitors implementing MovePtr.
 pub struct MovePtrAdaptor<V> {
-    inner: V
+    priv inner: V
 }
 pub fn MovePtrAdaptor<V:TyVisitor + MovePtr>(v: V) -> MovePtrAdaptor<V> {
     MovePtrAdaptor { inner: v }
@@ -50,26 +50,22 @@ pub fn MovePtrAdaptor<V:TyVisitor + MovePtr>(v: V) -> MovePtrAdaptor<V> {
 impl<V:TyVisitor + MovePtr> MovePtrAdaptor<V> {
     #[inline]
     pub fn bump(&mut self, sz: uint) {
-        do self.inner.move_ptr() |p| {
-            ((p as uint) + sz) as *c_void
-        };
+        self.inner.move_ptr(|p| ((p as uint) + sz) as *c_void)
     }
 
     #[inline]
     pub fn align(&mut self, a: uint) {
-        do self.inner.move_ptr() |p| {
-            align(p as uint, a) as *c_void
-        };
+        self.inner.move_ptr(|p| align(p as uint, a) as *c_void)
     }
 
     #[inline]
     pub fn align_to<T>(&mut self) {
-        self.align(sys::min_align_of::<T>());
+        self.align(mem::min_align_of::<T>());
     }
 
     #[inline]
     pub fn bump_past<T>(&mut self) {
-        self.bump(sys::size_of::<T>());
+        self.bump(mem::size_of::<T>());
     }
 }
 
@@ -382,8 +378,8 @@ impl<V:TyVisitor + MovePtr> TyVisitor for MovePtrAdaptor<V> {
         true
     }
 
-    fn visit_fn_output(&mut self, retstyle: uint, inner: *TyDesc) -> bool {
-        if ! self.inner.visit_fn_output(retstyle, inner) { return false; }
+    fn visit_fn_output(&mut self, retstyle: uint, variadic: bool, inner: *TyDesc) -> bool {
+        if ! self.inner.visit_fn_output(retstyle, variadic, inner) { return false; }
         true
     }
 
@@ -396,7 +392,7 @@ impl<V:TyVisitor + MovePtr> TyVisitor for MovePtrAdaptor<V> {
     }
 
     fn visit_enter_enum(&mut self, n_variants: uint,
-                        get_disr: extern unsafe fn(ptr: *Opaque) -> int,
+                        get_disr: extern unsafe fn(ptr: *Opaque) -> Disr,
                         sz: uint, align: uint)
                      -> bool {
         self.align(align);
@@ -407,7 +403,7 @@ impl<V:TyVisitor + MovePtr> TyVisitor for MovePtrAdaptor<V> {
     }
 
     fn visit_enter_enum_variant(&mut self, variant: uint,
-                                disr_val: int,
+                                disr_val: Disr,
                                 n_fields: uint,
                                 name: &str) -> bool {
         if ! self.inner.visit_enter_enum_variant(variant, disr_val,
@@ -426,7 +422,7 @@ impl<V:TyVisitor + MovePtr> TyVisitor for MovePtrAdaptor<V> {
     }
 
     fn visit_leave_enum_variant(&mut self, variant: uint,
-                                disr_val: int,
+                                disr_val: Disr,
                                 n_fields: uint,
                                 name: &str) -> bool {
         if ! self.inner.visit_leave_enum_variant(variant, disr_val,
@@ -437,7 +433,7 @@ impl<V:TyVisitor + MovePtr> TyVisitor for MovePtrAdaptor<V> {
     }
 
     fn visit_leave_enum(&mut self, n_variants: uint,
-                        get_disr: extern unsafe fn(ptr: *Opaque) -> int,
+                        get_disr: extern unsafe fn(ptr: *Opaque) -> Disr,
                         sz: uint, align: uint) -> bool {
         if ! self.inner.visit_leave_enum(n_variants, get_disr, sz, align) {
             return false;
@@ -478,11 +474,11 @@ impl<V:TyVisitor + MovePtr> TyVisitor for MovePtrAdaptor<V> {
     }
 
     fn visit_closure_ptr(&mut self, ck: uint) -> bool {
-        self.align_to::<~fn()>();
+        self.align_to::<proc()>();
         if ! self.inner.visit_closure_ptr(ck) {
             return false
         }
-        self.bump_past::<~fn()>();
+        self.bump_past::<proc()>();
         true
     }
 }

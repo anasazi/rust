@@ -52,13 +52,13 @@ pub type path = ~[path_elt];
 
 pub fn path_to_str_with_sep(p: &[path_elt], sep: &str, itr: @ident_interner)
                          -> ~str {
-    let strs = do p.map |e| {
+    let strs = p.map(|e| {
         match *e {
             path_mod(s) | path_name(s) | path_pretty_name(s, _) => {
                 itr.get(s.name)
             }
         }
-    };
+    });
     strs.connect(sep)
 }
 
@@ -111,18 +111,24 @@ pub enum ast_node {
     node_trait_method(@trait_method, DefId /* trait did */,
                       @path /* path to the trait */),
     node_method(@method, DefId /* impl did */, @path /* path to the impl */),
-    node_variant(variant, @item, @path),
+
+    /// node_variant represents a variant of an enum, e.g., for
+    /// `enum A { B, C, D }`, there would be a node_item for `A`, and a
+    /// node_variant item for each of `B`, `C`, and `D`.
+    node_variant(P<variant>, @item, @path),
     node_expr(@Expr),
     node_stmt(@Stmt),
     node_arg(@Pat),
     node_local(Ident),
-    node_block(Block),
+    node_block(P<Block>),
+
+    /// node_struct_ctor represents a tuple struct.
     node_struct_ctor(@struct_def, @item, @path),
     node_callee_scope(@Expr)
 }
 
 impl ast_node {
-    pub fn with_attrs<T>(&self, f: &fn(Option<&[Attribute]>) -> T) -> T {
+    pub fn with_attrs<T>(&self, f: |Option<&[Attribute]>| -> T) -> T {
         let attrs = match *self {
             node_item(i, _) => Some(i.attrs.as_slice()),
             node_foreign_item(fi, _, _, _) => Some(fi.attrs.as_slice()),
@@ -185,7 +191,7 @@ impl Ctx {
                                                          item,
                                                          p));
                     }
-                    _ => fail2!("struct def parent wasn't an item")
+                    _ => fail!("struct def parent wasn't an item")
                 }
             }
         }
@@ -208,7 +214,7 @@ impl Ctx {
     fn map_fn(&mut self,
               fk: &visit::fn_kind,
               decl: &fn_decl,
-              body: &Block,
+              body: P<Block>,
               sp: codemap::Span,
               id: NodeId) {
         for a in decl.inputs.iter() {
@@ -220,7 +226,7 @@ impl Ctx {
         }
         visit::walk_fn(self, fk, decl, body, sp, id, ());
         match *fk {
-            visit::fk_method(*) => { self.path.pop(); }
+            visit::fk_method(..) => { self.path.pop(); }
             _ => {}
         }
     }
@@ -230,13 +236,12 @@ impl Ctx {
         visit::walk_stmt(self, stmt, ());
     }
 
-    fn map_block(&mut self, b: &Block) {
-        // clone is FIXME #2543
-        self.map.insert(b.id, node_block((*b).clone()));
+    fn map_block(&mut self, b: P<Block>) {
+        self.map.insert(b.id, node_block(b));
         visit::walk_block(self, b, ());
     }
 
-    fn map_pat(&mut self, pat: @Pat) {
+    fn map_pat(&mut self, pat: &Pat) {
         match pat.node {
             PatIdent(_, ref path, _) => {
                 // Note: this is at least *potentially* a pattern...
@@ -256,7 +261,7 @@ impl Visitor<()> for Ctx {
         let item_path = @self.path.clone();
         self.map.insert(i.id, node_item(i, item_path));
         match i.node {
-            item_impl(_, ref maybe_trait, ref ty, ref ms) => {
+            item_impl(_, ref maybe_trait, ty, ref ms) => {
                 // Right now the ident on impls is __extensions__ which isn't
                 // very pretty when debugging, so attempt to select a better
                 // name to use.
@@ -271,13 +276,10 @@ impl Visitor<()> for Ctx {
                 self.path.push(elt);
             }
             item_enum(ref enum_definition, _) => {
-                for v in (*enum_definition).variants.iter() {
+                for &v in enum_definition.variants.iter() {
                     let elt = path_name(i.ident);
-                    // FIXME #2543: bad clone
                     self.map.insert(v.node.id,
-                                    node_variant((*v).clone(),
-                                                 i,
-                                                 self.extend(elt)));
+                                    node_variant(v, i, self.extend(elt)));
                 }
             }
             item_foreign_mod(ref nm) => {
@@ -332,14 +334,14 @@ impl Visitor<()> for Ctx {
             item_mod(_) | item_foreign_mod(_) => {
                 self.path.push(path_mod(i.ident));
             }
-            item_impl(*) => {} // this was guessed above.
+            item_impl(..) => {} // this was guessed above.
             _ => self.path.push(path_name(i.ident))
         }
         visit::walk_item(self, i, ());
         self.path.pop();
     }
 
-    fn visit_pat(&mut self, pat: @Pat, _: ()) {
+    fn visit_pat(&mut self, pat: &Pat, _: ()) {
         self.map_pat(pat);
         visit::walk_pat(self, pat, ())
     }
@@ -355,14 +357,14 @@ impl Visitor<()> for Ctx {
     fn visit_fn(&mut self,
                 function_kind: &fn_kind,
                 function_declaration: &fn_decl,
-                block: &Block,
+                block: P<Block>,
                 span: Span,
                 node_id: NodeId,
                 _: ()) {
         self.map_fn(function_kind, function_declaration, block, span, node_id)
     }
 
-    fn visit_block(&mut self, block: &Block, _: ()) {
+    fn visit_block(&mut self, block: P<Block>, _: ()) {
         self.map_block(block)
     }
 
@@ -401,7 +403,7 @@ pub fn map_decoded_item(diag: @mut span_handler,
     // don't decode and instantiate the impl, but just the method, we have to
     // add it to the table now. Likewise with foreign items.
     match *ii {
-        ii_item(*) => {} // fallthrough
+        ii_item(..) => {} // fallthrough
         ii_foreign(i) => {
             cx.map.insert(i.id, node_foreign_item(i,
                                                   AbiSet::Intrinsic(),
@@ -425,16 +427,16 @@ pub fn node_id_to_str(map: map, id: NodeId, itr: @ident_interner) -> ~str {
       Some(&node_item(item, path)) => {
         let path_str = path_ident_to_str(path, item.ident, itr);
         let item_str = match item.node {
-          item_static(*) => ~"static",
-          item_fn(*) => ~"fn",
-          item_mod(*) => ~"mod",
-          item_foreign_mod(*) => ~"foreign mod",
-          item_ty(*) => ~"ty",
-          item_enum(*) => ~"enum",
-          item_struct(*) => ~"struct",
-          item_trait(*) => ~"trait",
-          item_impl(*) => ~"impl",
-          item_mac(*) => ~"macro"
+          item_static(..) => ~"static",
+          item_fn(..) => ~"fn",
+          item_mod(..) => ~"mod",
+          item_foreign_mod(..) => ~"foreign mod",
+          item_ty(..) => ~"ty",
+          item_enum(..) => ~"enum",
+          item_struct(..) => ~"struct",
+          item_trait(..) => ~"trait",
+          item_impl(..) => ~"impl",
+          item_mac(..) => ~"macro"
         };
         format!("{} {} (id={})", item_str, path_str, id)
       }
@@ -471,7 +473,7 @@ pub fn node_id_to_str(map: map, id: NodeId, itr: @ident_interner) -> ~str {
       Some(&node_local(ident)) => {
         format!("local (id={}, name={})", id, itr.get(ident.name))
       }
-      Some(&node_block(ref block)) => {
+      Some(&node_block(block)) => {
         format!("block {} (id={})", pprust::block_to_str(block, itr), id)
       }
       Some(&node_struct_ctor(_, _, path)) => {
@@ -480,11 +482,31 @@ pub fn node_id_to_str(map: map, id: NodeId, itr: @ident_interner) -> ~str {
     }
 }
 
-pub fn node_item_query<Result>(items: map, id: NodeId,
-                               query: &fn(@item) -> Result,
-                               error_msg: ~str) -> Result {
+pub fn node_item_query<Result>(items: map, id: NodeId, query: |@item| -> Result, error_msg: ~str)
+                       -> Result {
     match items.find(&id) {
         Some(&node_item(it, _)) => query(it),
-        _ => fail2!("{}", error_msg)
+        _ => fail!("{}", error_msg)
+    }
+}
+
+pub fn node_span(items: map,
+                 id: ast::NodeId)
+                 -> Span {
+    match items.find(&id) {
+        Some(&node_item(item, _)) => item.span,
+        Some(&node_foreign_item(foreign_item, _, _, _)) => foreign_item.span,
+        Some(&node_trait_method(@required(ref type_method), _, _)) => type_method.span,
+        Some(&node_trait_method(@provided(ref method), _, _)) => method.span,
+        Some(&node_method(method, _, _)) => method.span,
+        Some(&node_variant(variant, _, _)) => variant.span,
+        Some(&node_expr(expr)) => expr.span,
+        Some(&node_stmt(stmt)) => stmt.span,
+        Some(&node_arg(pat)) => pat.span,
+        Some(&node_local(_)) => fail!("node_span: cannot get span from node_local"),
+        Some(&node_block(block)) => block.span,
+        Some(&node_struct_ctor(_, item, _)) => item.span,
+        Some(&node_callee_scope(expr)) => expr.span,
+        None => fail!("node_span: could not find id {}", id),
     }
 }

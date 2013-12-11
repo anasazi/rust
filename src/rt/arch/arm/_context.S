@@ -6,11 +6,14 @@
 .text
 .code 32
 .arm
+#if defined(__APPLE__)
+.align 2
+#else
 .align
+#endif
 
-
-.globl swap_registers
-swap_registers:
+.globl rust_swap_registers
+rust_swap_registers:
 	str r0, [r0, #0]
 	str r3, [r0, #12]
 	str r4, [r0, #16]

@@ -10,13 +10,20 @@
 
 //! Operations and constants for `uint`
 
-use num;
-use num::{CheckedAdd, CheckedSub, CheckedMul};
-use option::{Option, Some, None};
-use unstable::intrinsics;
-use sys;
+#[allow(non_uppercase_statics)];
 
-pub use self::generated::*;
+use prelude::*;
+
+use default::Default;
+use mem;
+use num::BitCount;
+use num::{CheckedAdd, CheckedSub, CheckedMul};
+use num::{CheckedDiv, Zero, One, strconv};
+use num::{ToStrRadix, FromStrRadix};
+use num;
+use option::{Option, Some, None};
+use str;
+use unstable::intrinsics;
 
 uint_module!(uint, int, ::int::bits)
 
@@ -77,15 +84,15 @@ impl num::Times for uint {
     #[inline]
     ///
     /// A convenience form for basic repetition. Given a uint `x`,
-    /// `do x.times { ... }` executes the given block x times.
+    /// `x.times(|| { ... })` executes the given block x times.
     ///
     /// Equivalent to `for uint::range(0, x) |_| { ... }`.
     ///
     /// Not defined on all integer types to permit unambiguous
     /// use with integer literals of inferred integer-type as
-    /// the self-value (eg. `do 100.times { ... }`).
+    /// the self-value (eg. `100.times(|| { ... })`).
     ///
-    fn times(&self, it: &fn()) {
+    fn times(&self, it: ||) {
         let mut i = *self;
         while i > 0 {
             it();
@@ -97,7 +104,7 @@ impl num::Times for uint {
 /// Returns the smallest power of 2 greater than or equal to `n`
 #[inline]
 pub fn next_power_of_two(n: uint) -> uint {
-    let halfbits: uint = sys::size_of::<uint>() * 4u;
+    let halfbits: uint = mem::size_of::<uint>() * 4u;
     let mut tmp: uint = n - 1u;
     let mut shift: uint = 1u;
     while shift <= halfbits { tmp |= tmp >> shift; shift <<= 1u; }
@@ -107,7 +114,7 @@ pub fn next_power_of_two(n: uint) -> uint {
 /// Returns the smallest power of 2 greater than or equal to `n`
 #[inline]
 pub fn next_power_of_two_opt(n: uint) -> Option<uint> {
-    let halfbits: uint = sys::size_of::<uint>() * 4u;
+    let halfbits: uint = mem::size_of::<uint>() * 4u;
     let mut tmp: uint = n - 1u;
     let mut shift: uint = 1u;
     while shift <= halfbits { tmp |= tmp >> shift; shift <<= 1u; }
@@ -244,6 +251,6 @@ pub fn test_times() {
     use num::Times;
     let ten = 10 as uint;
     let mut accum = 0;
-    do ten.times { accum += 1; }
+    ten.times(|| { accum += 1; });
     assert!((accum == 10));
 }

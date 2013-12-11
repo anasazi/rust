@@ -18,7 +18,7 @@ use std::vec;
 use syntax::ast_util::*;
 use syntax::attr::AttrMetaMethods;
 use syntax::attr;
-use syntax::codemap::{dummy_sp, Span, ExpnInfo, NameAndSpan};
+use syntax::codemap::{dummy_sp, Span, ExpnInfo, NameAndSpan, MacroAttribute};
 use syntax::codemap;
 use syntax::ext::base::ExtCtxt;
 use syntax::fold::ast_fold;
@@ -26,6 +26,7 @@ use syntax::fold;
 use syntax::opt_vec;
 use syntax::print::pprust;
 use syntax::{ast, ast_util};
+use syntax::util::small_vector::SmallVector;
 
 struct Test {
     span: Span,
@@ -76,9 +77,9 @@ impl fold::ast_fold for TestHarnessGenerator {
         }
     }
 
-    fn fold_item(&self, i: @ast::item) -> Option<@ast::item> {
+    fn fold_item(&self, i: @ast::item) -> SmallVector<@ast::item> {
         self.cx.path.push(i.ident);
-        debug2!("current path: {}",
+        debug!("current path: {}",
                ast_util::path_name_i(self.cx.path.clone()));
 
         if is_test_fn(self.cx, i) || is_bench_fn(i) {
@@ -91,7 +92,7 @@ impl fold::ast_fold for TestHarnessGenerator {
                                      tests");
                 }
                 _ => {
-                    debug2!("this is a test function");
+                    debug!("this is a test function");
                     let test = Test {
                         span: i.span,
                         path: self.cx.path.clone(),
@@ -100,7 +101,7 @@ impl fold::ast_fold for TestHarnessGenerator {
                         should_fail: should_fail(i)
                     };
                     self.cx.testfns.push(test);
-                    // debug2!("have {} test/bench functions",
+                    // debug!("have {} test/bench functions",
                     //        cx.testfns.len());
                 }
             }
@@ -108,7 +109,7 @@ impl fold::ast_fold for TestHarnessGenerator {
 
         let res = fold::noop_fold_item(i, self);
         self.cx.path.pop();
-        return res;
+        res
     }
 
     fn fold_mod(&self, m: &ast::_mod) -> ast::_mod {
@@ -118,13 +119,13 @@ impl fold::ast_fold for TestHarnessGenerator {
         fn nomain(cx: @mut TestCtxt, item: @ast::item) -> @ast::item {
             if !*cx.sess.building_library {
                 @ast::item {
-                    attrs: do item.attrs.iter().filter_map |attr| {
+                    attrs: item.attrs.iter().filter_map(|attr| {
                         if "main" != attr.name() {
                             Some(*attr)
                         } else {
                             None
                         }
-                    }.collect(),
+                    }).collect(),
                     .. (*item).clone()
                 }
             } else {
@@ -157,6 +158,7 @@ fn generate_test_harness(sess: session::Session, crate: ast::Crate)
         call_site: dummy_sp(),
         callee: NameAndSpan {
             name: @"test",
+            format: MacroAttribute,
             span: None
         }
     });
@@ -172,10 +174,10 @@ fn generate_test_harness(sess: session::Session, crate: ast::Crate)
 fn strip_test_functions(crate: ast::Crate) -> ast::Crate {
     // When not compiling with --test we should not compile the
     // #[test] functions
-    do config::strip_items(crate) |attrs| {
+    config::strip_items(crate, |attrs| {
         !attr::contains_name(attrs, "test") &&
         !attr::contains_name(attrs, "bench")
-    }
+    })
 }
 
 fn is_test_fn(cx: @mut TestCtxt, i: @ast::item) -> bool {
@@ -232,13 +234,13 @@ fn is_bench_fn(i: @ast::item) -> bool {
 }
 
 fn is_ignored(cx: @mut TestCtxt, i: @ast::item) -> bool {
-    do i.attrs.iter().any |attr| {
+    i.attrs.iter().any(|attr| {
         // check ignore(cfg(foo, bar))
         "ignore" == attr.name() && match attr.meta_item_list() {
             Some(ref cfgs) => attr::test_cfg(cx.config, cfgs.iter().map(|x| *x)),
             None => true
         }
-    }
+    })
 }
 
 fn should_fail(i: @ast::item) -> bool {
@@ -327,8 +329,8 @@ fn mk_test_module(cx: &TestCtxt) -> @ast::item {
         span: dummy_sp(),
      };
 
-    debug2!("Synthetic test module:\n{}\n",
-           pprust::item_to_str(@item.clone(), cx.sess.intr()));
+    debug!("Synthetic test module:\n{}\n",
+           pprust::item_to_str(&item, cx.sess.intr()));
 
     return @item;
 }
@@ -343,7 +345,7 @@ fn path_node(ids: ~[ast::Ident]) -> ast::Path {
         global: false,
         segments: ids.move_iter().map(|identifier| ast::PathSegment {
             identifier: identifier,
-            lifetime: None,
+            lifetimes: opt_vec::Empty,
             types: opt_vec::Empty,
         }).collect()
     }
@@ -355,7 +357,7 @@ fn path_node_global(ids: ~[ast::Ident]) -> ast::Path {
         global: true,
         segments: ids.move_iter().map(|identifier| ast::PathSegment {
             identifier: identifier,
-            lifetime: None,
+            lifetimes: opt_vec::Empty,
             types: opt_vec::Empty,
         }).collect()
     }
@@ -373,15 +375,14 @@ fn mk_tests(cx: &TestCtxt) -> @ast::item {
 }
 
 fn is_extra(crate: &ast::Crate) -> bool {
-    let items = attr::find_linkage_metas(crate.attrs);
-    match attr::last_meta_item_value_str_by_name(items, "name") {
-        Some(s) if "extra" == s => true,
+    match attr::find_pkgid(crate.attrs) {
+        Some(ref s) if "extra" == s.name => true,
         _ => false
     }
 }
 
 fn mk_test_descs(cx: &TestCtxt) -> @ast::Expr {
-    debug2!("building test vector from {} tests", cx.testfns.len());
+    debug!("building test vector from {} tests", cx.testfns.len());
     let mut descs = ~[];
     for test in cx.testfns.iter() {
         descs.push(mk_test_desc_and_fn_rec(cx, test));
@@ -404,7 +405,7 @@ fn mk_test_desc_and_fn_rec(cx: &TestCtxt, test: &Test) -> @ast::Expr {
     let span = test.span;
     let path = test.path.clone();
 
-    debug2!("encoding {}", ast_util::path_name_i(path));
+    debug!("encoding {}", ast_util::path_name_i(path));
 
     let name_lit: ast::lit =
         nospan(ast::lit_str(ast_util::path_name_i(path).to_managed(), ast::CookedStr));

@@ -8,14 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[feature(managed_boxes)];
+
 enum taggy {
     cons(@mut taggy),
     nil,
 }
 
 fn f() {
-    let box = @mut nil;
-    *box = cons(box);
+    let a_box = @mut nil;
+    *a_box = cons(a_box);
 }
 
 pub fn main() {

@@ -1,3 +1,5 @@
+// xfail-pretty
+
 // Copyright 2012 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
@@ -10,9 +12,11 @@
 
 // exec-env:RUST_POISON_ON_FREE=1
 
+#[feature(managed_boxes)];
+
 use std::ptr;
 
-fn borrow(x: &int, f: &fn(x: &int)) {
+fn borrow(x: &int, f: |x: &int|) {
     let before = *x;
     f(x);
     let after = *x;
@@ -23,14 +27,14 @@ struct F { f: ~int }
 
 pub fn main() {
     let mut x = @F {f: ~3};
-    do borrow(x.f) |b_x| {
+    borrow(x.f, |b_x| {
         assert_eq!(*b_x, 3);
         assert_eq!(ptr::to_unsafe_ptr(&(*x.f)), ptr::to_unsafe_ptr(&(*b_x)));
         x = @F {f: ~4};
 
-        info2!("ptr::to_unsafe_ptr(*b_x) = {:x}",
+        info!("ptr::to_unsafe_ptr(*b_x) = {:x}",
                ptr::to_unsafe_ptr(&(*b_x)) as uint);
         assert_eq!(*b_x, 3);
         assert!(ptr::to_unsafe_ptr(&(*x.f)) != ptr::to_unsafe_ptr(&(*b_x)));
-    }
+    })
 }

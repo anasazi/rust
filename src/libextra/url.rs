@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -12,31 +12,58 @@
 
 #[allow(missing_doc)];
 
-
+use std::io::{Reader, Seek};
+use std::io::mem::BufReader;
 use std::cmp::Eq;
-use std::io::{Reader, ReaderUtil};
-use std::io;
 use std::hashmap::HashMap;
 use std::to_bytes;
 use std::uint;
 
+/// A Uniform Resource Locator (URL).  A URL is a form of URI (Uniform Resource
+/// Identifier) that includes network location information, such as hostname or
+/// port number.
+///
+/// # Example
+///
+/// ```rust
+/// let url = Url { scheme: ~"https",
+///                 user: Some(UserInfo { user: ~"username", pass: None }),
+///                 host: ~"example.com",
+///                 port: Some(~"8080"),
+///                 path: ~"/foo/bar",
+///                 query: ~[(~"baz", ~"qux")],
+///                 fragment: Some(~"quz") };
+/// // https://username@example.com:8080/foo/bar?baz=qux#quz
+/// ```
 #[deriving(Clone, Eq)]
 pub struct Url {
+    /// The scheme part of a URL, such as `https` in the above example.
     scheme: ~str,
+    /// A URL subcomponent for user authentication.  `username` in the above example.
     user: Option<UserInfo>,
+    /// A domain name or IP address.  For example, `example.com`.
     host: ~str,
+    /// A TCP port number, for example `8080`.
     port: Option<~str>,
+    /// The path component of a URL, for example `/foo/bar`.
     path: ~str,
+    /// The query component of a URL.  `~[(~"baz", ~"qux")]` represents the
+    /// fragment `baz=qux` in the above example.
     query: Query,
+    /// The fragment component, such as `quz`.  Doesn't include the leading `#` character.
     fragment: Option<~str>
 }
 
+/// An optional subcomponent of a URI authority component.
 #[deriving(Clone, Eq)]
 pub struct UserInfo {
+    /// The user name.
     user: ~str,
+    /// Password or other scheme-specific authentication information.
     pass: Option<~str>
 }
 
+/// Represents the query component of a URI.
 pub type Query = ~[(~str, ~str)];
 
 impl Url {
@@ -68,42 +95,46 @@ impl UserInfo {
 }
 
 fn encode_inner(s: &str, full_url: bool) -> ~str {
-    do io::with_str_reader(s) |rdr| {
-        let mut out = ~"";
+    let mut rdr = BufReader::new(s.as_bytes());
+    let mut out = ~"";
 
-        while !rdr.eof() {
-            let ch = rdr.read_byte() as u8 as char;
-            match ch {
-              // unreserved:
-              'A' .. 'Z' |
-              'a' .. 'z' |
-              '0' .. '9' |
-              '-' | '.' | '_' | '~' => {
-                out.push_char(ch);
-              }
-              _ => {
-                  if full_url {
-                    match ch {
-                      // gen-delims:
-                      ':' | '/' | '?' | '#' | '[' | ']' | '@' |
+    loop {
+        let mut buf = [0];
+        let ch = match rdr.read(buf) {
+            None => break,
+            Some(..) => buf[0] as char,
+        };
 
-                      // sub-delims:
-                      '!' | '$' | '&' | '"' | '(' | ')' | '*' |
-                      '+' | ',' | ';' | '=' => {
-                        out.push_char(ch);
-                      }
+        match ch {
+          // unreserved:
+          'A' .. 'Z' |
+          'a' .. 'z' |
+          '0' .. '9' |
+          '-' | '.' | '_' | '~' => {
+            out.push_char(ch);
+          }
+          _ => {
+              if full_url {
+                match ch {
+                  // gen-delims:
+                  ':' | '/' | '?' | '#' | '[' | ']' | '@' |
 
-                      _ => out.push_str(format!("%{:X}", ch as uint))
-                    }
-                } else {
-                    out.push_str(format!("%{:X}", ch as uint));
+                  // sub-delims:
+                  '!' | '$' | '&' | '"' | '(' | ')' | '*' |
+                  '+' | ',' | ';' | '=' => {
+                    out.push_char(ch);
+                  }
+
+                  _ => out.push_str(format!("%{:X}", ch as uint))
                 }
-              }
+            } else {
+                out.push_str(format!("%{:X}", ch as uint));
             }
+          }
         }
-
-        out
     }
+
+    out
 }
 
 /**
@@ -128,41 +159,49 @@ pub fn encode_component(s: &str) -> ~str {
 }
 
 fn decode_inner(s: &str, full_url: bool) -> ~str {
-    do io::with_str_reader(s) |rdr| {
-        let mut out = ~"";
+    let mut rdr = BufReader::new(s.as_bytes());
+    let mut out = ~"";
 
-        while !rdr.eof() {
-            match rdr.read_char() {
-              '%' => {
-                let bytes = rdr.read_bytes(2u);
-                let ch = uint::parse_bytes(bytes, 16u).unwrap() as u8 as char;
-
-                if full_url {
-                    // Only decode some characters:
-                    match ch {
-                      // gen-delims:
-                      ':' | '/' | '?' | '#' | '[' | ']' | '@' |
-
-                      // sub-delims:
-                      '!' | '$' | '&' | '"' | '(' | ')' | '*' |
-                      '+' | ',' | ';' | '=' => {
-                        out.push_char('%');
-                        out.push_char(bytes[0u] as char);
-                        out.push_char(bytes[1u] as char);
-                      }
-
-                      ch => out.push_char(ch)
-                    }
-                } else {
-                      out.push_char(ch);
-                }
-              }
-              ch => out.push_char(ch)
+    loop {
+        let mut buf = [0];
+        let ch = match rdr.read(buf) {
+            None => break,
+            Some(..) => buf[0] as char
+        };
+        match ch {
+          '%' => {
+            let mut bytes = [0, 0];
+            match rdr.read(bytes) {
+                Some(2) => {}
+                _ => fail!() // XXX: malformed url?
             }
-        }
+            let ch = uint::parse_bytes(bytes, 16u).unwrap() as u8 as char;
 
-        out
+            if full_url {
+                // Only decode some characters:
+                match ch {
+                  // gen-delims:
+                  ':' | '/' | '?' | '#' | '[' | ']' | '@' |
+
+                  // sub-delims:
+                  '!' | '$' | '&' | '"' | '(' | ')' | '*' |
+                  '+' | ',' | ';' | '=' => {
+                    out.push_char('%');
+                    out.push_char(bytes[0u] as char);
+                    out.push_char(bytes[1u] as char);
+                  }
+
+                  ch => out.push_char(ch)
+                }
+            } else {
+                  out.push_char(ch);
+            }
+          }
+          ch => out.push_char(ch)
+        }
     }
+
+    out
 }
 
 /**
@@ -182,22 +221,25 @@ pub fn decode_component(s: &str) -> ~str {
 }
 
 fn encode_plus(s: &str) -> ~str {
-    do io::with_str_reader(s) |rdr| {
-        let mut out = ~"";
+    let mut rdr = BufReader::new(s.as_bytes());
+    let mut out = ~"";
 
-        while !rdr.eof() {
-            let ch = rdr.read_byte() as u8 as char;
-            match ch {
-              'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '_' | '.' | '-' => {
-                out.push_char(ch);
-              }
-              ' ' => out.push_char('+'),
-              _ => out.push_str(format!("%{:X}", ch as uint))
-            }
+    loop {
+        let mut buf = [0];
+        let ch = match rdr.read(buf) {
+            Some(..) => buf[0] as char,
+            None => break,
+        };
+        match ch {
+          'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '_' | '.' | '-' => {
+            out.push_char(ch);
+          }
+          ' ' => out.push_char('+'),
+          _ => out.push_str(format!("%{:X}", ch as uint))
         }
-
-        out
     }
+
+    out
 }
 
 /**
@@ -230,61 +272,69 @@ pub fn encode_form_urlencoded(m: &HashMap<~str, ~[~str]>) -> ~str {
  * type into a hashmap.
  */
 pub fn decode_form_urlencoded(s: &[u8]) -> HashMap<~str, ~[~str]> {
-    do io::with_bytes_reader(s) |rdr| {
-        let mut m = HashMap::new();
-        let mut key = ~"";
-        let mut value = ~"";
-        let mut parsing_key = true;
+    let mut rdr = BufReader::new(s);
+    let mut m = HashMap::new();
+    let mut key = ~"";
+    let mut value = ~"";
+    let mut parsing_key = true;
 
-        while !rdr.eof() {
-            match rdr.read_char() {
-                '&' | ';' => {
-                    if key != ~"" && value != ~"" {
-                        let mut values = match m.pop(&key) {
-                            Some(values) => values,
-                            None => ~[],
-                        };
-
-                        values.push(value);
-                        m.insert(key, values);
-                    }
-
-                    parsing_key = true;
-                    key = ~"";
-                    value = ~"";
-                }
-                '=' => parsing_key = false,
-                ch => {
-                    let ch = match ch {
-                        '%' => {
-                            let bytes = rdr.read_bytes(2u);
-                            uint::parse_bytes(bytes, 16u).unwrap() as u8 as char
-                        }
-                        '+' => ' ',
-                        ch => ch
+    loop {
+        let mut buf = [0];
+        let ch = match rdr.read(buf) {
+            Some(..) => buf[0] as char,
+            None => break,
+        };
+        match ch {
+            '&' | ';' => {
+                if key != ~"" && value != ~"" {
+                    let mut values = match m.pop(&key) {
+                        Some(values) => values,
+                        None => ~[],
                     };
 
-                    if parsing_key {
-                        key.push_char(ch)
-                    } else {
-                        value.push_char(ch)
+                    values.push(value);
+                    m.insert(key, values);
+                }
+
+                parsing_key = true;
+                key = ~"";
+                value = ~"";
+            }
+            '=' => parsing_key = false,
+            ch => {
+                let ch = match ch {
+                    '%' => {
+                        let mut bytes = [0, 0];
+                        match rdr.read(bytes) {
+                            Some(2) => {}
+                            _ => fail!() // XXX: malformed?
+                        }
+                        uint::parse_bytes(bytes, 16u).unwrap() as u8 as char
                     }
+                    '+' => ' ',
+                    ch => ch
+                };
+
+                if parsing_key {
+                    key.push_char(ch)
+                } else {
+                    value.push_char(ch)
                 }
             }
         }
-
-        if key != ~"" && value != ~"" {
-            let mut values = match m.pop(&key) {
-                Some(values) => values,
-                None => ~[],
-            };
-
-            values.push(value);
-            m.insert(key, values);
-        }
-
-        m
     }
+
+    if key != ~"" && value != ~"" {
+        let mut values = match m.pop(&key) {
+            Some(values) => values,
+            None => ~[],
+        };
+
+        values.push(value);
+        m.insert(key, values);
+    }
+
+    m
 }
 
 
@@ -292,16 +342,18 @@ fn split_char_first(s: &str, c: char) -> (~str, ~str) {
     let len = s.len();
     let mut index = len;
     let mut mat = 0;
-    do io::with_str_reader(s) |rdr| {
-        let mut ch;
-        while !rdr.eof() {
-            ch = rdr.read_byte() as u8 as char;
-            if ch == c {
-                // found a match, adjust markers
-                index = rdr.tell()-1;
-                mat = 1;
-                break;
-            }
+    let mut rdr = BufReader::new(s.as_bytes());
+    loop {
+        let mut buf = [0];
+        let ch = match rdr.read(buf) {
+            Some(..) => buf[0] as char,
+            None => break,
+        };
+        if ch == c {
+            // found a match, adjust markers
+            index = (rdr.tell() as uint) - 1;
+            mat = 1;
+            break;
         }
     }
     if index+mat == len {
@@ -310,16 +362,6 @@ fn split_char_first(s: &str, c: char) -> (~str, ~str) {
         return (s.slice(0, index).to_owned(),
              s.slice(index + mat, s.len()).to_owned());
     }
-}
-
-fn userinfo_from_str(uinfo: &str) -> UserInfo {
-    let (user, p) = split_char_first(uinfo, ':');
-    let pass = if p.is_empty() {
-        None
-    } else {
-        Some(p)
-    };
-    return UserInfo::new(user, pass);
 }
 
 fn userinfo_to_str(userinfo: &UserInfo) -> ~str {
@@ -332,7 +374,7 @@ fn userinfo_to_str(userinfo: &UserInfo) -> ~str {
 fn query_from_str(rawquery: &str) -> Query {
     let mut query: Query = ~[];
     if !rawquery.is_empty() {
-        for p in rawquery.split_iter('&') {
+        for p in rawquery.split('&') {
             let (k, v) = split_char_first(p, '=');
             query.push((decode_component(k), decode_component(v)));
         };
@@ -340,6 +382,16 @@ fn query_from_str(rawquery: &str) -> Query {
     return query;
 }
 
+/**
+ * Converts an instance of a URI `Query` type to a string.
+ *
+ * # Example
+ *
+ * ```rust
+ * let query = ~[(~"title", ~"The Village"), (~"north", ~"52.91"), (~"west", ~"4.10")];
+ * println(query_to_str(&query));  // title=The%20Village&north=52.91&west=4.10
+ * ```
+ */
 pub fn query_to_str(query: &Query) -> ~str {
     let mut strvec = ~[];
     for kv in query.iter() {
@@ -357,7 +409,7 @@ pub fn query_to_str(query: &Query) -> ~str {
 
 // returns the scheme and the rest of the url, or a parsing error
 pub fn get_scheme(rawurl: &str) -> Result<(~str, ~str), ~str> {
-    for (i,c) in rawurl.iter().enumerate() {
+    for (i,c) in rawurl.chars().enumerate() {
         match c {
           'A' .. 'Z' | 'a' .. 'z' => continue,
           '0' .. '9' | '+' | '-' | '.' => {
@@ -419,7 +471,7 @@ fn get_authority(rawurl: &str) ->
     let mut begin = 2;
     let mut end = len;
 
-    for (i,c) in rawurl.iter().enumerate() {
+    for (i,c) in rawurl.chars().enumerate() {
         if i < 2 { continue; } // ignore the leading //
 
         // deal with input class first
@@ -553,11 +605,11 @@ fn get_path(rawurl: &str, authority: bool) ->
     Result<(~str, ~str), ~str> {
     let len = rawurl.len();
     let mut end = len;
-    for (i,c) in rawurl.iter().enumerate() {
+    for (i,c) in rawurl.chars().enumerate() {
         match c {
           'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '&' |'\'' | '(' | ')' | '.'
           | '@' | ':' | '%' | '/' | '+' | '!' | '*' | ',' | ';' | '='
-          | '_' | '-' => {
+          | '_' | '-' | '~' => {
             continue;
           }
           '?' | '#' => {
@@ -671,9 +723,13 @@ pub fn to_str(url: &Url) -> ~str {
     };
 
     let authority = if url.host.is_empty() {
+        // If port is Some, we're in a nonsensical situation. Too bad.
         ~""
     } else {
-        format!("//{}{}", user, url.host)
+        match url.port {
+            Some(ref port) => format!("//{}{}:{}", user, url.host, *port),
+            None => format!("//{}{}", user, url.host),
+        }
     };
 
     let query = if url.query.is_empty() {
@@ -796,7 +852,7 @@ mod tests {
 
     #[test]
     fn test_url_parse() {
-        let url = ~"http://user:pass@rust-lang.org:8080/doc?s=v#something";
+        let url = ~"http://user:pass@rust-lang.org:8080/doc/~u?s=v#something";
 
         let up = from_str(url);
         let u = up.unwrap();
@@ -804,7 +860,7 @@ mod tests {
         assert_eq!(&u.user, &Some(UserInfo::new(~"user", Some(~"pass"))));
         assert_eq!(&u.host, &~"rust-lang.org");
         assert_eq!(&u.port, &Some(~"8080"));
-        assert_eq!(&u.path, &~"/doc");
+        assert_eq!(&u.path, &~"/doc/~u");
         assert_eq!(&u.query, &~[(~"s", ~"v")]);
         assert_eq!(&u.fragment, &Some(~"something"));
     }
@@ -892,6 +948,12 @@ mod tests {
     #[test]
     fn test_minimal_url_parse_and_format() {
         let url = ~"http://rust-lang.org/doc";
+        assert_eq!(from_str(url).unwrap().to_str(), url);
+    }
+
+    #[test]
+    fn test_url_with_port_parse_and_format() {
+        let url = ~"http://rust-lang.org:80/doc";
         assert_eq!(from_str(url).unwrap().to_str(), url);
     }
 

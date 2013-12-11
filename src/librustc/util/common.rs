@@ -15,23 +15,32 @@ use syntax::visit;
 use syntax::visit::Visitor;
 
 use std::hashmap::HashSet;
+use std::local_data;
 use extra;
 
-pub fn time<T, U>(do_it: bool, what: &str, u: U, f: &fn(U) -> T) -> T {
+pub fn time<T, U>(do_it: bool, what: &str, u: U, f: |U| -> T) -> T {
+    local_data_key!(depth: uint);
     if !do_it { return f(u); }
+
+    let old = local_data::get(depth, |d| d.map(|a| *a).unwrap_or(0));
+    local_data::set(depth, old + 1);
+
     let start = extra::time::precise_time_s();
     let rv = f(u);
     let end = extra::time::precise_time_s();
-    println!("time: {:3.3f} s\t{}", end - start, what);
+
+    println!("{}time: {:3.3f} s\t{}", "  ".repeat(old), end - start, what);
+    local_data::set(depth, old);
+
     rv
 }
 
-pub fn indent<R>(op: &fn() -> R) -> R {
+pub fn indent<R>(op: || -> R) -> R {
     // Use in conjunction with the log post-processor like `src/etc/indenter`
     // to make debug output more readable.
-    debug2!(">>");
+    debug!(">>");
     let r = op();
-    debug2!("<< (Result = {:?})", r);
+    debug!("<< (Result = {:?})", r);
     r
 }
 
@@ -40,7 +49,7 @@ pub struct _indenter {
 }
 
 impl Drop for _indenter {
-    fn drop(&mut self) { debug2!("<<"); }
+    fn drop(&mut self) { debug!("<<"); }
 }
 
 pub fn _indenter(_i: ()) -> _indenter {
@@ -50,7 +59,7 @@ pub fn _indenter(_i: ()) -> _indenter {
 }
 
 pub fn indenter() -> _indenter {
-    debug2!(">>");
+    debug!(">>");
     _indenter(())
 }
 
@@ -60,18 +69,18 @@ pub fn field_exprs(fields: ~[ast::Field]) -> ~[@ast::Expr] {
     fields.map(|f| f.expr)
 }
 
-struct LoopQueryVisitor<'self> {
-    p: &'self fn(&ast::Expr_) -> bool,
+struct LoopQueryVisitor<'a> {
+    p: 'a |&ast::Expr_| -> bool,
     flag: bool,
 }
 
-impl<'self> Visitor<()> for LoopQueryVisitor<'self> {
+impl<'a> Visitor<()> for LoopQueryVisitor<'a> {
     fn visit_expr(&mut self, e: @ast::Expr, _: ()) {
         self.flag |= (self.p)(&e.node);
         match e.node {
           // Skip inner loops, since a break in the inner loop isn't a
           // break inside the outer loop
-          ast::ExprLoop(*) | ast::ExprWhile(*) => {}
+          ast::ExprLoop(..) | ast::ExprWhile(..) => {}
           _ => visit::walk_expr(self, e, ())
         }
     }
@@ -79,7 +88,7 @@ impl<'self> Visitor<()> for LoopQueryVisitor<'self> {
 
 // Takes a predicate p, returns true iff p is true for any subexpressions
 // of b -- skipping any inner loops (loop, while, loop_body)
-pub fn loop_query(b: &ast::Block, p: &fn(&ast::Expr_) -> bool) -> bool {
+pub fn loop_query(b: ast::P<ast::Block>, p: |&ast::Expr_| -> bool) -> bool {
     let mut v = LoopQueryVisitor {
         p: p,
         flag: false,
@@ -88,12 +97,12 @@ pub fn loop_query(b: &ast::Block, p: &fn(&ast::Expr_) -> bool) -> bool {
     return v.flag;
 }
 
-struct BlockQueryVisitor<'self> {
-    p: &'self fn(@ast::Expr) -> bool,
+struct BlockQueryVisitor<'a> {
+    p: 'a |@ast::Expr| -> bool,
     flag: bool,
 }
 
-impl<'self> Visitor<()> for BlockQueryVisitor<'self> {
+impl<'a> Visitor<()> for BlockQueryVisitor<'a> {
     fn visit_expr(&mut self, e: @ast::Expr, _:()) {
         self.flag |= (self.p)(e);
         visit::walk_expr(self, e, ())
@@ -102,7 +111,7 @@ impl<'self> Visitor<()> for BlockQueryVisitor<'self> {
 
 // Takes a predicate p, returns true iff p is true for any subexpressions
 // of b -- skipping any inner loops (loop, while, loop_body)
-pub fn block_query(b: &ast::Block, p: &fn(@ast::Expr) -> bool) -> bool {
+pub fn block_query(b: ast::P<ast::Block>, p: |@ast::Expr| -> bool) -> bool {
     let mut v = BlockQueryVisitor {
         p: p,
         flag: false,

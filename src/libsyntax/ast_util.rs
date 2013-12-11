@@ -11,17 +11,16 @@
 use ast::*;
 use ast;
 use ast_util;
-use codemap::{Span, dummy_sp};
+use codemap::Span;
 use opt_vec;
 use parse::token;
 use visit::Visitor;
 use visit;
 
 use std::hashmap::HashMap;
-use std::int;
+use std::u32;
 use std::local_data;
 use std::num;
-use std::option;
 
 pub fn path_name_i(idents: &[Ident]) -> ~str {
     // FIXME: Bad copies (#2543 -- same for everything else that says "bad")
@@ -45,7 +44,7 @@ pub fn stmt_id(s: &Stmt) -> NodeId {
       StmtDecl(_, id) => id,
       StmtExpr(_, id) => id,
       StmtSemi(_, id) => id,
-      StmtMac(*) => fail2!("attempted to analyze unexpanded stmt")
+      StmtMac(..) => fail!("attempted to analyze unexpanded stmt")
     }
 }
 
@@ -66,13 +65,13 @@ pub fn def_id_of_def(d: Def) -> DefId {
       DefUse(id) | DefStruct(id) | DefTrait(id) | DefMethod(id, _) => {
         id
       }
-      DefArg(id, _) | DefLocal(id, _) | DefSelf(id) | DefSelfTy(id)
+      DefArg(id, _) | DefLocal(id, _) | DefSelf(id, _) | DefSelfTy(id)
       | DefUpvar(id, _, _, _) | DefBinding(id, _) | DefRegion(id)
       | DefTyParamBinder(id) | DefLabel(id) => {
         local_def(id)
       }
 
-      DefPrimTy(_) => fail2!()
+      DefPrimTy(_) => fail!()
     }
 }
 
@@ -194,28 +193,18 @@ pub fn float_ty_to_str(t: float_ty) -> ~str {
 }
 
 pub fn is_call_expr(e: @Expr) -> bool {
-    match e.node { ExprCall(*) => true, _ => false }
+    match e.node { ExprCall(..) => true, _ => false }
 }
 
-pub fn block_from_expr(e: @Expr) -> Block {
-    let mut blk = default_block(~[], option::Some::<@Expr>(e), e.id);
-    blk.span = e.span;
-    return blk;
-}
-
-pub fn default_block(
-    stmts1: ~[@Stmt],
-    expr1: Option<@Expr>,
-    id1: NodeId
-) -> Block {
-    ast::Block {
+pub fn block_from_expr(e: @Expr) -> P<Block> {
+    P(Block {
         view_items: ~[],
-        stmts: stmts1,
-        expr: expr1,
-        id: id1,
+        stmts: ~[],
+        expr: Some(e),
+        id: e.id,
         rules: DefaultBlock,
-        span: dummy_sp(),
-    }
+        span: e.span
+    })
 }
 
 pub fn ident_to_path(s: Span, identifier: Ident) -> Path {
@@ -225,7 +214,7 @@ pub fn ident_to_path(s: Span, identifier: Ident) -> Path {
         segments: ~[
             ast::PathSegment {
                 identifier: identifier,
-                lifetime: None,
+                lifetimes: opt_vec::Empty,
                 types: opt_vec::Empty,
             }
         ],
@@ -234,7 +223,7 @@ pub fn ident_to_path(s: Span, identifier: Ident) -> Path {
 
 pub fn ident_to_pat(id: NodeId, s: Span, i: Ident) -> @Pat {
     @ast::Pat { id: id,
-                node: PatIdent(BindInfer, ident_to_path(s, i), None),
+                node: PatIdent(BindByValue(MutImmutable), ident_to_path(s, i), None),
                 span: s }
 }
 
@@ -254,12 +243,12 @@ pub fn unguarded_pat(a: &Arm) -> Option<~[@Pat]> {
 }
 
 pub fn public_methods(ms: ~[@method]) -> ~[@method] {
-    do ms.move_iter().filter |m| {
+    ms.move_iter().filter(|m| {
         match m.vis {
             public => true,
             _   => false
         }
-    }.collect()
+    }).collect()
 }
 
 // extract a TypeMethod from a trait_method. if the trait_method is
@@ -272,7 +261,7 @@ pub fn trait_method_to_ty_method(method: &trait_method) -> TypeMethod {
                 ident: m.ident,
                 attrs: m.attrs.clone(),
                 purity: m.purity,
-                decl: m.decl.clone(),
+                decl: m.decl,
                 generics: m.generics.clone(),
                 explicit_self: m.explicit_self,
                 id: m.id,
@@ -338,7 +327,7 @@ impl inlined_item_utils for inlined_item {
  referring to a def_self */
 pub fn is_self(d: ast::Def) -> bool {
   match d {
-    DefSelf(*)           => true,
+    DefSelf(..)           => true,
     DefUpvar(_, d, _, _) => is_self(*d),
     _                     => false
   }
@@ -382,8 +371,8 @@ pub struct id_range {
 impl id_range {
     pub fn max() -> id_range {
         id_range {
-            min: int::max_value,
-            max: int::min_value,
+            min: u32::max_value,
+            max: u32::min_value,
         }
     }
 
@@ -401,13 +390,13 @@ pub trait IdVisitingOperation {
     fn visit_id(&self, node_id: NodeId);
 }
 
-pub struct IdVisitor<'self, O> {
-    operation: &'self O,
+pub struct IdVisitor<'a, O> {
+    operation: &'a O,
     pass_through_items: bool,
     visited_outermost: bool,
 }
 
-impl<'self, O: IdVisitingOperation> IdVisitor<'self, O> {
+impl<'a, O: IdVisitingOperation> IdVisitor<'a, O> {
     fn visit_generics_helper(&self, generics: &Generics) {
         for type_parameter in generics.ty_params.iter() {
             self.operation.visit_id(type_parameter.id)
@@ -418,7 +407,7 @@ impl<'self, O: IdVisitingOperation> IdVisitor<'self, O> {
     }
 }
 
-impl<'self, O: IdVisitingOperation> Visitor<()> for IdVisitor<'self, O> {
+impl<'a, O: IdVisitingOperation> Visitor<()> for IdVisitor<'a, O> {
     fn visit_mod(&mut self,
                  module: &_mod,
                  _: Span,
@@ -487,7 +476,7 @@ impl<'self, O: IdVisitingOperation> Visitor<()> for IdVisitor<'self, O> {
         visit::walk_local(self, local, env)
     }
 
-    fn visit_block(&mut self, block: &Block, env: ()) {
+    fn visit_block(&mut self, block: P<Block>, env: ()) {
         self.operation.visit_id(block.id);
         visit::walk_block(self, block, env)
     }
@@ -497,7 +486,7 @@ impl<'self, O: IdVisitingOperation> Visitor<()> for IdVisitor<'self, O> {
         visit::walk_stmt(self, statement, env)
     }
 
-    fn visit_pat(&mut self, pattern: @Pat, env: ()) {
+    fn visit_pat(&mut self, pattern: &Pat, env: ()) {
         self.operation.visit_id(pattern.id);
         visit::walk_pat(self, pattern, env)
     }
@@ -531,14 +520,14 @@ impl<'self, O: IdVisitingOperation> Visitor<()> for IdVisitor<'self, O> {
     fn visit_fn(&mut self,
                 function_kind: &visit::fn_kind,
                 function_declaration: &fn_decl,
-                block: &Block,
+                block: P<Block>,
                 span: Span,
                 node_id: NodeId,
                 env: ()) {
         if !self.pass_through_items {
             match *function_kind {
-                visit::fk_method(*) if self.visited_outermost => return,
-                visit::fk_method(*) => self.visited_outermost = true,
+                visit::fk_method(..) if self.visited_outermost => return,
+                visit::fk_method(..) => self.visited_outermost = true,
                 _ => {}
             }
         }
@@ -553,7 +542,7 @@ impl<'self, O: IdVisitingOperation> Visitor<()> for IdVisitor<'self, O> {
                 self.operation.visit_id(method.self_id);
                 self.visit_generics_helper(generics)
             }
-            visit::fk_anon(_) | visit::fk_fn_block => {}
+            visit::fk_fn_block => {}
         }
 
         for argument in function_declaration.inputs.iter() {
@@ -570,13 +559,13 @@ impl<'self, O: IdVisitingOperation> Visitor<()> for IdVisitor<'self, O> {
 
         if !self.pass_through_items {
             match *function_kind {
-                visit::fk_method(*) => self.visited_outermost = false,
+                visit::fk_method(..) => self.visited_outermost = false,
                 _ => {}
             }
         }
     }
 
-    fn visit_struct_field(&mut self, struct_field: @struct_field, env: ()) {
+    fn visit_struct_field(&mut self, struct_field: &struct_field, env: ()) {
         self.operation.visit_id(struct_field.node.id);
         visit::walk_struct_field(self, struct_field, env)
     }
@@ -631,12 +620,12 @@ pub fn compute_id_range_for_inlined_item(item: &inlined_item) -> id_range {
 
 pub fn is_item_impl(item: @ast::item) -> bool {
     match item.node {
-       item_impl(*) => true,
+       item_impl(..) => true,
        _            => false
     }
 }
 
-pub fn walk_pat(pat: @Pat, it: &fn(@Pat) -> bool) -> bool {
+pub fn walk_pat(pat: &Pat, it: |&Pat| -> bool) -> bool {
     if !it(pat) {
         return false;
     }
@@ -657,7 +646,7 @@ pub fn walk_pat(pat: @Pat, it: &fn(@Pat) -> bool) -> bool {
                 slice.iter().advance(|&p| walk_pat(p, |p| it(p))) &&
                 after.iter().advance(|&p| walk_pat(p, |p| it(p)))
         }
-        PatWild | PatLit(_) | PatRange(_, _) | PatIdent(_, _, _) |
+        PatWild | PatWildMulti | PatLit(_) | PatRange(_, _) | PatIdent(_, _, _) |
         PatEnum(_, _) => {
             true
         }
@@ -665,21 +654,21 @@ pub fn walk_pat(pat: @Pat, it: &fn(@Pat) -> bool) -> bool {
 }
 
 pub trait EachViewItem {
-    fn each_view_item(&self, f: &fn(&ast::view_item) -> bool) -> bool;
+    fn each_view_item(&self, f: |&ast::view_item| -> bool) -> bool;
 }
 
-struct EachViewItemData<'self> {
-    callback: &'self fn(&ast::view_item) -> bool,
+struct EachViewItemData<'a> {
+    callback: 'a |&ast::view_item| -> bool,
 }
 
-impl<'self> Visitor<()> for EachViewItemData<'self> {
+impl<'a> Visitor<()> for EachViewItemData<'a> {
     fn visit_view_item(&mut self, view_item: &ast::view_item, _: ()) {
         let _ = (self.callback)(view_item);
     }
 }
 
 impl EachViewItem for ast::Crate {
-    fn each_view_item(&self, f: &fn(&ast::view_item) -> bool) -> bool {
+    fn each_view_item(&self, f: |&ast::view_item| -> bool) -> bool {
         let mut visit = EachViewItemData {
             callback: f,
         };
@@ -706,7 +695,7 @@ pub fn struct_def_is_tuple_like(struct_def: &ast::struct_def) -> bool {
 /// and false otherwise.
 pub fn pat_is_ident(pat: @ast::Pat) -> bool {
     match pat.node {
-        ast::PatIdent(*) => true,
+        ast::PatIdent(..) => true,
         _ => false,
     }
 }
@@ -735,7 +724,7 @@ pub fn new_mark_internal(m:Mrk, tail:SyntaxContext,table:&mut SCTable)
         }
         true => {
             match table.mark_memo.find(&key) {
-                None => fail2!("internal error: key disappeared 2013042901"),
+                None => fail!("internal error: key disappeared 2013042901"),
                 Some(idxptr) => {*idxptr}
             }
         }
@@ -762,7 +751,7 @@ pub fn new_rename_internal(id:Ident, to:Name, tail:SyntaxContext, table: &mut SC
         }
         true => {
             match table.rename_memo.find(&key) {
-                None => fail2!("internal error: key disappeared 2013042902"),
+                None => fail!("internal error: key disappeared 2013042902"),
                 Some(idxptr) => {*idxptr}
             }
         }
@@ -795,17 +784,17 @@ pub fn get_sctable() -> @mut SCTable {
 
 /// print out an SCTable for debugging
 pub fn display_sctable(table : &SCTable) {
-    error2!("SC table:");
+    error!("SC table:");
     for (idx,val) in table.table.iter().enumerate() {
-        error2!("{:4u} : {:?}",idx,val);
+        error!("{:4u} : {:?}",idx,val);
     }
 }
 
 
 /// Add a value to the end of a vec, return its index
-fn idx_push<T>(vec: &mut ~[T], val: T) -> uint {
+fn idx_push<T>(vec: &mut ~[T], val: T) -> u32 {
     vec.push(val);
-    vec.len() - 1
+    (vec.len() - 1) as u32
 }
 
 /// Resolve a syntax object to a name, per MTWT.
@@ -859,7 +848,7 @@ pub fn resolve_internal(id : Ident,
                             resolvedthis
                         }
                     }
-                    IllegalCtxt() => fail2!("expected resolvable context, got IllegalCtxt")
+                    IllegalCtxt() => fail!("expected resolvable context, got IllegalCtxt")
                 }
             };
             resolve_table.insert(key,resolved);
@@ -900,7 +889,7 @@ pub fn marksof(ctxt: SyntaxContext, stopname: Name, table: &SCTable) -> ~[Mrk] {
                     loopvar = tl;
                 }
             }
-            IllegalCtxt => fail2!("expected resolvable context, got IllegalCtxt")
+            IllegalCtxt => fail!("expected resolvable context, got IllegalCtxt")
         }
     }
 }
@@ -911,13 +900,13 @@ pub fn mtwt_outer_mark(ctxt: SyntaxContext) -> Mrk {
     let sctable = get_sctable();
     match sctable.table[ctxt] {
         ast::Mark(mrk,_) => mrk,
-        _ => fail2!("can't retrieve outer mark when outside is not a mark")
+        _ => fail!("can't retrieve outer mark when outside is not a mark")
     }
 }
 
 /// Push a name... unless it matches the one on top, in which
 /// case pop and discard (so two of the same marks cancel)
-pub fn xorPush(marks: &mut ~[uint], mark: uint) {
+pub fn xorPush(marks: &mut ~[Mrk], mark: Mrk) {
     if ((marks.len() > 0) && (getLast(marks) == mark)) {
         marks.pop();
     } else {
@@ -927,7 +916,7 @@ pub fn xorPush(marks: &mut ~[uint], mark: uint) {
 
 // get the last element of a mutable array.
 // FIXME #4903: , must be a separate procedure for now.
-pub fn getLast(arr: &~[Mrk]) -> uint {
+pub fn getLast(arr: &~[Mrk]) -> Mrk {
     *arr.last()
 }
 
@@ -948,7 +937,7 @@ pub fn segments_name_eq(a : &[ast::PathSegment], b : &[ast::PathSegment]) -> boo
         for (idx,seg) in a.iter().enumerate() {
             if (seg.identifier.name != b[idx].identifier.name)
                 // FIXME #7743: ident -> name problems in lifetime comparison?
-                || (seg.lifetime != b[idx].lifetime)
+                || (seg.lifetimes != b[idx].lifetimes)
                 // can types contain idents?
                 || (seg.types != b[idx].types) {
                 return false;
@@ -962,12 +951,13 @@ pub fn segments_name_eq(a : &[ast::PathSegment], b : &[ast::PathSegment]) -> boo
 mod test {
     use ast::*;
     use super::*;
-    use std::io;
     use opt_vec;
     use std::hashmap::HashMap;
 
     fn ident_to_segment(id : &Ident) -> PathSegment {
-        PathSegment{identifier:id.clone(), lifetime: None, types: opt_vec::Empty}
+        PathSegment {identifier:id.clone(),
+                     lifetimes: opt_vec::Empty,
+                     types: opt_vec::Empty}
     }
 
     #[test] fn idents_name_eq_test() {
@@ -999,14 +989,8 @@ mod test {
         assert_eq!(s.clone(),~[14]);
     }
 
-    // convert a list of uints to an @[ident]
-    // (ignores the interner completely)
-    fn uints_to_idents (uints: &~[uint]) -> @~[Ident] {
-        @uints.map(|u| Ident {name:*u, ctxt: EMPTY_CTXT})
-    }
-
-    fn id (u : uint, s: SyntaxContext) -> Ident {
-        Ident{name:u, ctxt: s}
+    fn id(n: Name, s: SyntaxContext) -> Ident {
+        Ident {name: n, ctxt: s}
     }
 
     // because of the SCTable, I now need a tidy way of
@@ -1043,7 +1027,7 @@ mod test {
                     sc = tail;
                     continue;
                 }
-                IllegalCtxt => fail2!("expected resolvable context, got IllegalCtxt")
+                IllegalCtxt => fail!("expected resolvable context, got IllegalCtxt")
             }
         }
     }
@@ -1137,7 +1121,7 @@ mod test {
         // - two renames of the same var.. can only happen if you use
         // local-expand to prevent the inner binding from being renamed
         // during the rename-pass caused by the first:
-        io::println("about to run bad test");
+        println("about to run bad test");
         { let sc = unfold_test_sc(~[R(id(a,EMPTY_CTXT),50),
                                     R(id(a,EMPTY_CTXT),51)],
                                   EMPTY_CTXT,&mut t);

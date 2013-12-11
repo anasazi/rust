@@ -10,11 +10,13 @@
 
 // error-pattern:fail
 
-fn x(it: &fn(int)) {
+#[feature(managed_boxes)];
+
+fn x(it: |int|) {
     let _a = @0;
     it(1);
 }
 
 fn main() {
-    x(|_x| fail2!() );
+    x(|_x| fail!() );
 }

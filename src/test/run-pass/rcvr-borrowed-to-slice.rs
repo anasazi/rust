@@ -13,7 +13,7 @@ trait sum {
 }
 
 // Note: impl on a slice
-impl<'self> sum for &'self [int] {
+impl<'a> sum for &'a [int] {
     fn sum_(self) -> int {
         self.iter().fold(0, |a, &b| a + b)
     }
@@ -24,16 +24,16 @@ fn call_sum(x: &[int]) -> int { x.sum_() }
 pub fn main() {
     let x = ~[1, 2, 3];
     let y = call_sum(x);
-    info2!("y=={}", y);
+    info!("y=={}", y);
     assert_eq!(y, 6);
 
     let x = ~[1, 2, 3];
     let y = x.sum_();
-    info2!("y=={}", y);
+    info!("y=={}", y);
     assert_eq!(y, 6);
 
     let x = ~[1, 2, 3];
     let y = x.sum_();
-    info2!("y=={}", y);
+    info!("y=={}", y);
     assert_eq!(y, 6);
 }

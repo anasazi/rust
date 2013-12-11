@@ -11,37 +11,18 @@
 //! Unsafe casting functions
 
 use ptr::RawPtr;
-use sys;
+use mem;
 use unstable::intrinsics;
+use ptr::copy_nonoverlapping_memory;
 
 /// Casts the value at `src` to U. The two types must have the same length.
-#[cfg(target_word_size = "32")]
 #[inline]
 pub unsafe fn transmute_copy<T, U>(src: &T) -> U {
     let mut dest: U = intrinsics::uninit();
     let dest_ptr: *mut u8 = transmute(&mut dest);
     let src_ptr: *u8 = transmute(src);
-    intrinsics::memcpy32(dest_ptr, src_ptr, sys::size_of::<U>() as u32);
+    copy_nonoverlapping_memory(dest_ptr, src_ptr, mem::size_of::<U>());
     dest
-}
-
-/// Casts the value at `src` to U. The two types must have the same length.
-#[cfg(target_word_size = "64")]
-#[inline]
-pub unsafe fn transmute_copy<T, U>(src: &T) -> U {
-    let mut dest: U = intrinsics::uninit();
-    let dest_ptr: *mut u8 = transmute(&mut dest);
-    let src_ptr: *u8 = transmute(src);
-    intrinsics::memcpy64(dest_ptr, src_ptr, sys::size_of::<U>() as u64);
-    dest
-}
-
-/**
- * Forces a copy of a value, even if that value is considered noncopyable.
- */
-#[inline]
-pub unsafe fn unsafe_copy<T>(thing: &T) -> T {
-    transmute_copy(thing)
 }
 
 /**
@@ -80,12 +61,6 @@ pub unsafe fn transmute<L, G>(thing: L) -> G {
 /// Coerce an immutable reference to be mutable.
 #[inline]
 pub unsafe fn transmute_mut<'a,T>(ptr: &'a T) -> &'a mut T { transmute(ptr) }
-
-/// Coerce a mutable reference to be immutable.
-#[inline]
-pub unsafe fn transmute_immut<'a,T>(ptr: &'a mut T) -> &'a T {
-    transmute(ptr)
-}
 
 /// Coerce a borrowed pointer to have an arbitrary associated region.
 #[inline]
@@ -145,11 +120,11 @@ mod tests {
     }
 
     #[test]
-    fn test_bump_box_refcount() {
+    fn test_bump_managed_refcount() {
         unsafe {
-            let box = @~"box box box";       // refcount 1
-            bump_box_refcount(box);         // refcount 2
-            let ptr: *int = transmute(box); // refcount 2
+            let managed = @~"box box box";      // refcount 1
+            bump_box_refcount(managed);     // refcount 2
+            let ptr: *int = transmute(managed); // refcount 2
             let _box1: @~str = ::cast::transmute_copy(&ptr);
             let _box2: @~str = ::cast::transmute_copy(&ptr);
             assert!(*_box1 == ~"box box box");

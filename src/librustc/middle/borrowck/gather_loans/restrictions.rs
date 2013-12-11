@@ -8,8 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Computes the restrictions that result from a borrow.
-
+/*!
+ * Computes the restrictions that result from a borrow.
+ */
 
 use std::vec;
 use middle::borrowck::*;
@@ -26,11 +27,13 @@ pub enum RestrictionResult {
 pub fn compute_restrictions(bccx: &BorrowckCtxt,
                             span: Span,
                             cmt: mc::cmt,
+                            loan_region: ty::Region,
                             restr: RestrictionSet) -> RestrictionResult {
     let ctxt = RestrictionsContext {
         bccx: bccx,
         span: span,
-        cmt_original: cmt
+        cmt_original: cmt,
+        loan_region: loan_region,
     };
 
     ctxt.restrict(cmt, restr)
@@ -39,17 +42,14 @@ pub fn compute_restrictions(bccx: &BorrowckCtxt,
 ///////////////////////////////////////////////////////////////////////////
 // Private
 
-struct RestrictionsContext<'self> {
-    bccx: &'self BorrowckCtxt,
+struct RestrictionsContext<'a> {
+    bccx: &'a BorrowckCtxt,
     span: Span,
-    cmt_original: mc::cmt
+    cmt_original: mc::cmt,
+    loan_region: ty::Region,
 }
 
-impl<'self> RestrictionsContext<'self> {
-    fn tcx(&self) -> ty::ctxt {
-        self.bccx.tcx
-    }
-
+impl<'a> RestrictionsContext<'a> {
     fn restrict(&self,
                 cmt: mc::cmt,
                 restrictions: RestrictionSet) -> RestrictionResult {
@@ -64,7 +64,7 @@ impl<'self> RestrictionsContext<'self> {
         }
 
         match cmt.cat {
-            mc::cat_rvalue(*) => {
+            mc::cat_rvalue(..) => {
                 // Effectively, rvalues are stored into a
                 // non-aliasable temporary on the stack. Since they
                 // are inherently non-aliasable, they can only be
@@ -113,11 +113,27 @@ impl<'self> RestrictionsContext<'self> {
                 self.extend(result, cmt.mutbl, LpDeref(pk), restrictions)
             }
 
-            mc::cat_copied_upvar(*) | // FIXME(#2152) allow mutation of upvars
-            mc::cat_static_item(*) |
-            mc::cat_deref(_, _, mc::region_ptr(MutImmutable, _)) |
-            mc::cat_deref(_, _, mc::gc_ptr(MutImmutable)) => {
+            mc::cat_copied_upvar(..) | // FIXME(#2152) allow mutation of upvars
+            mc::cat_static_item(..) => {
+                Safe
+            }
+
+            mc::cat_deref(cmt_base, _, mc::region_ptr(MutImmutable, lt)) => {
                 // R-Deref-Imm-Borrowed
+                if !self.bccx.is_subregion_of(self.loan_region, lt) {
+                    self.bccx.report(
+                        BckError {
+                            span: self.span,
+                            cmt: cmt_base,
+                            code: err_borrowed_pointer_too_short(
+                                self.loan_region, lt, restrictions)});
+                    return Safe;
+                }
+                Safe
+            }
+
+            mc::cat_deref(_, _, mc::gc_ptr(MutImmutable)) => {
+                // R-Deref-Imm-Managed
                 Safe
             }
 
@@ -169,24 +185,23 @@ impl<'self> RestrictionsContext<'self> {
                 }
             }
 
-            mc::cat_deref(cmt_base, _, pk @ mc::region_ptr(MutMutable, _)) => {
-                // Because an `&mut` pointer does not inherit its
-                // mutability, we can only prevent mutation or prevent
-                // freezing if it is not aliased. Therefore, in such
-                // cases we restrict aliasing on `cmt_base`.
-                if restrictions != RESTR_EMPTY {
-                    // R-Deref-Mut-Borrowed-1
-                    let result = self.restrict(
-                        cmt_base,
-                        RESTR_ALIAS | RESTR_MUTATE | RESTR_CLAIM);
-                    self.extend(result, cmt.mutbl, LpDeref(pk), restrictions)
-                } else {
-                    // R-Deref-Mut-Borrowed-2
-                    Safe
+            mc::cat_deref(cmt_base, _, pk @ mc::region_ptr(MutMutable, lt)) => {
+                // R-Deref-Mut-Borrowed
+                if !self.bccx.is_subregion_of(self.loan_region, lt) {
+                    self.bccx.report(
+                        BckError {
+                            span: self.span,
+                            cmt: cmt_base,
+                            code: err_borrowed_pointer_too_short(
+                                self.loan_region, lt, restrictions)});
+                    return Safe;
                 }
+
+                let result = self.restrict(cmt_base, restrictions);
+                self.extend(result, cmt.mutbl, LpDeref(pk), restrictions)
             }
 
-            mc::cat_deref(_, _, mc::unsafe_ptr(*)) => {
+            mc::cat_deref(_, _, mc::unsafe_ptr(..)) => {
                 // We are very trusting when working with unsafe pointers.
                 Safe
             }
@@ -235,16 +250,6 @@ impl<'self> RestrictionsContext<'self> {
                 self.span,
                 BorrowViolation,
                 cause);
-        }
-    }
-
-    fn check_no_mutability_control(&self,
-                                   cmt: mc::cmt,
-                                   restrictions: RestrictionSet) {
-        if restrictions.intersects(RESTR_MUTATE | RESTR_FREEZE | RESTR_CLAIM) {
-            self.bccx.report(BckError {span: self.span,
-                                       cmt: cmt,
-                                       code: err_freeze_aliasable_const});
         }
     }
 }

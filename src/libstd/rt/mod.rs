@@ -57,7 +57,6 @@ Several modules in `core` are clients of `rt`:
 // XXX: this should not be here.
 #[allow(missing_doc)];
 
-use cell::Cell;
 use clone::Clone;
 use container::Container;
 use iter::Iterator;
@@ -66,15 +65,15 @@ use ptr::RawPtr;
 use rt::local::Local;
 use rt::sched::{Scheduler, Shutdown};
 use rt::sleeper_list::SleeperList;
+use task::TaskResult;
 use rt::task::{Task, SchedTask, GreenTask, Sched};
-use rt::uv::uvio::UvEventLoop;
+use send_str::SendStrStatic;
 use unstable::atomics::{AtomicInt, AtomicBool, SeqCst};
 use unstable::sync::UnsafeArc;
-use vec;
 use vec::{OwnedVector, MutableVector, ImmutableVector};
+use vec;
 
 use self::thread::Thread;
-use self::work_queue::WorkQueue;
 
 // the os module needs to reach into this helper, so allow general access
 // through this reexport.
@@ -86,21 +85,22 @@ pub use self::util::set_exit_status;
 // method...
 pub use self::util::default_sched_threads;
 
+// Re-export of the functionality in the kill module
+pub use self::kill::BlockedTask;
+
 // XXX: these probably shouldn't be public...
 #[doc(hidden)]
 pub mod shouldnt_be_public {
-    pub use super::sched::Scheduler;
-    pub use super::kill::KillHandle;
-    pub use super::thread::Thread;
-    pub use super::work_queue::WorkQueue;
-    pub use super::select::SelectInner;
-    pub use super::rtio::EventLoop;
-    pub use super::select::{SelectInner, SelectPortInner};
-    pub use super::local_ptr::maybe_tls_key;
+    pub use super::local_ptr::native::maybe_tls_key;
+    #[cfg(not(windows), not(target_os = "android"))]
+    pub use super::local_ptr::compiled::RT_TLS_PTR;
 }
 
 // Internal macros used by the runtime.
 mod macros;
+
+/// Basic implementation of an EventLoop, provides no I/O interfaces
+mod basic;
 
 /// The global (exchange) heap.
 pub mod global_heap;
@@ -112,29 +112,29 @@ pub mod task;
 mod kill;
 
 /// The coroutine task scheduler, built on the `io` event loop.
-mod sched;
-
-/// Synchronous I/O.
-pub mod io;
+pub mod sched;
 
 /// The EventLoop and internal synchronous I/O interface.
-mod rtio;
-
-/// libuv and default rtio implementation.
-pub mod uv;
+pub mod rtio;
 
 /// The Local trait for types that are accessible via thread-local
 /// or task-local storage.
 pub mod local;
 
-/// A parallel work-stealing deque.
-mod work_queue;
+/// A mostly lock-free multi-producer, single consumer queue.
+pub mod mpsc_queue;
 
-/// A parallel queue.
-mod message_queue;
+/// A lock-free single-producer, single consumer queue.
+pub mod spsc_queue;
+
+/// A lock-free multi-producer, multi-consumer bounded queue.
+mod mpmc_bounded_queue;
+
+/// A parallel work-stealing deque
+pub mod deque;
 
 /// A parallel data structure for tracking sleeping schedulers.
-mod sleeper_list;
+pub mod sleeper_list;
 
 /// Stack segments and caching.
 pub mod stack;
@@ -143,7 +143,7 @@ pub mod stack;
 mod context;
 
 /// Bindings to system threading libraries.
-mod thread;
+pub mod thread;
 
 /// The runtime configuration, read from environment variables.
 pub mod env;
@@ -166,11 +166,6 @@ pub mod rc;
 /// A simple single-threaded channel type for passing buffered data between
 /// scheduler and task context
 pub mod tube;
-
-/// Simple reimplementation of std::comm
-pub mod comm;
-
-mod select;
 
 /// The runtime needs to be able to put a pointer into thread-local storage.
 mod local_ptr;
@@ -200,11 +195,12 @@ pub mod borrowck;
 /// # Return value
 ///
 /// The return value is used as the process return code. 0 on success, 101 on error.
-pub fn start(argc: int, argv: **u8, main: ~fn()) -> int {
+pub fn start(argc: int, argv: **u8, main: proc()) -> int {
 
     init(argc, argv);
     let exit_code = run(main);
-    cleanup();
+    // unsafe is ok b/c we're sure that the runtime is gone
+    unsafe { cleanup(); }
 
     return exit_code;
 }
@@ -214,10 +210,11 @@ pub fn start(argc: int, argv: **u8, main: ~fn()) -> int {
 ///
 /// This is appropriate for running code that must execute on the main thread,
 /// such as the platform event loop and GUI.
-pub fn start_on_main_thread(argc: int, argv: **u8, main: ~fn()) -> int {
+pub fn start_on_main_thread(argc: int, argv: **u8, main: proc()) -> int {
     init(argc, argv);
     let exit_code = run_on_main_thread(main);
-    cleanup();
+    // unsafe is ok b/c we're sure that the runtime is gone
+    unsafe { cleanup(); }
 
     return exit_code;
 }
@@ -238,8 +235,17 @@ pub fn init(argc: int, argv: **u8) {
 }
 
 /// One-time runtime cleanup.
-pub fn cleanup() {
+///
+/// This function is unsafe because it performs no checks to ensure that the
+/// runtime has completely ceased running. It is the responsibility of the
+/// caller to ensure that the runtime is entirely shut down and nothing will be
+/// poking around at the internal components.
+///
+/// Invoking cleanup while portions of the runtime are still in use may cause
+/// undefined behavior.
+pub unsafe fn cleanup() {
     args::cleanup();
+    local_ptr::cleanup();
 }
 
 /// Execute the main function in a scheduler.
@@ -247,27 +253,29 @@ pub fn cleanup() {
 /// Configures the runtime according to the environment, by default
 /// using a task scheduler with the same number of threads as cores.
 /// Returns a process exit code.
-pub fn run(main: ~fn()) -> int {
+pub fn run(main: proc()) -> int {
     run_(main, false)
 }
 
-pub fn run_on_main_thread(main: ~fn()) -> int {
+pub fn run_on_main_thread(main: proc()) -> int {
     run_(main, true)
 }
 
-fn run_(main: ~fn(), use_main_sched: bool) -> int {
+fn run_(main: proc(), use_main_sched: bool) -> int {
     static DEFAULT_ERROR_CODE: int = 101;
 
     let nscheds = util::default_sched_threads();
 
-    let main = Cell::new(main);
+    let mut main = Some(main);
 
     // The shared list of sleeping schedulers.
     let sleepers = SleeperList::new();
 
     // Create a work queue for each scheduler, ntimes. Create an extra
     // for the main thread if that flag is set. We won't steal from it.
-    let work_queues: ~[WorkQueue<~Task>] = vec::from_fn(nscheds, |_| WorkQueue::new());
+    let mut pool = deque::BufferPool::new();
+    let arr = vec::from_fn(nscheds, |_| pool.deque());
+    let (workers, stealers) = vec::unzip(arr.move_iter());
 
     // The schedulers.
     let mut scheds = ~[];
@@ -275,14 +283,14 @@ fn run_(main: ~fn(), use_main_sched: bool) -> int {
     // sent the Shutdown message to terminate the schedulers.
     let mut handles = ~[];
 
-    for work_queue in work_queues.iter() {
+    for worker in workers.move_iter() {
         rtdebug!("inserting a regular scheduler");
 
         // Every scheduler is driven by an I/O event loop.
-        let loop_ = ~UvEventLoop::new();
+        let loop_ = new_event_loop();
         let mut sched = ~Scheduler::new(loop_,
-                                        work_queue.clone(),
-                                        work_queues.clone(),
+                                        worker,
+                                        stealers.clone(),
                                         sleepers.clone());
         let handle = sched.make_handle();
 
@@ -301,12 +309,12 @@ fn run_(main: ~fn(), use_main_sched: bool) -> int {
 
         // This scheduler needs a queue that isn't part of the stealee
         // set.
-        let work_queue = WorkQueue::new();
+        let (worker, _) = pool.deque();
 
-        let main_loop = ~UvEventLoop::new();
+        let main_loop = new_event_loop();
         let mut main_sched = ~Scheduler::new_special(main_loop,
-                                                     work_queue,
-                                                     work_queues.clone(),
+                                                     worker,
+                                                     stealers.clone(),
                                                      sleepers.clone(),
                                                      false,
                                                      Some(friend_handle));
@@ -317,7 +325,7 @@ fn run_(main: ~fn(), use_main_sched: bool) -> int {
         // waking up schedulers for work stealing; since this is a
         // non-work-stealing scheduler it should not be adding itself
         // to the list.
-        main_handle.send_shutdown();
+        main_handle.send(Shutdown);
         Some(main_sched)
     } else {
         None
@@ -333,20 +341,20 @@ fn run_(main: ~fn(), use_main_sched: bool) -> int {
 
     // When the main task exits, after all the tasks in the main
     // task tree, shut down the schedulers and set the exit code.
-    let handles = Cell::new(handles);
-    let on_exit: ~fn(bool) = |exit_success| {
+    let handles = handles;
+    let on_exit: proc(TaskResult) = proc(exit_success) {
         unsafe {
             assert!(!(*exited_already.get()).swap(true, SeqCst),
                     "the runtime already exited");
         }
 
-        let mut handles = handles.take();
+        let mut handles = handles;
         for handle in handles.mut_iter() {
             handle.send(Shutdown);
         }
 
         unsafe {
-            let exit_code = if exit_success {
+            let exit_code = if exit_success.is_ok() {
                 use rt::util;
 
                 // If we're exiting successfully, then return the global
@@ -360,23 +368,24 @@ fn run_(main: ~fn(), use_main_sched: bool) -> int {
     };
 
     let mut threads = ~[];
-
-    let on_exit = Cell::new(on_exit);
+    let mut on_exit = Some(on_exit);
 
     if !use_main_sched {
 
         // In the case where we do not use a main_thread scheduler we
         // run the main task in one of our threads.
 
-        let mut main_task = ~Task::new_root(&mut scheds[0].stack_pool, None, main.take());
-        main_task.death.on_exit = Some(on_exit.take());
-        let main_task_cell = Cell::new(main_task);
+        let mut main_task = ~Task::new_root(&mut scheds[0].stack_pool,
+                                            None,
+                                            ::util::replace(&mut main,
+                                                            None).unwrap());
+        main_task.name = Some(SendStrStatic("<main>"));
+        main_task.death.on_exit = ::util::replace(&mut on_exit, None);
 
         let sched = scheds.pop();
-        let sched_cell = Cell::new(sched);
+        let main_task = main_task;
         let thread = do Thread::start {
-            let sched = sched_cell.take();
-            sched.bootstrap(main_task_cell.take());
+            sched.bootstrap(main_task);
         };
         threads.push(thread);
     }
@@ -384,9 +393,8 @@ fn run_(main: ~fn(), use_main_sched: bool) -> int {
     // Run each remaining scheduler in a thread.
     for sched in scheds.move_rev_iter() {
         rtdebug!("creating regular schedulers");
-        let sched_cell = Cell::new(sched);
         let thread = do Thread::start {
-            let mut sched = sched_cell.take();
+            let mut sched = sched;
             let bootstrap_task = ~do Task::new_root(&mut sched.stack_pool, None) || {
                 rtdebug!("boostraping a non-primary scheduler");
             };
@@ -398,15 +406,19 @@ fn run_(main: ~fn(), use_main_sched: bool) -> int {
     // If we do have a main thread scheduler, run it now.
 
     if use_main_sched {
-
         rtdebug!("about to create the main scheduler task");
 
         let mut main_sched = main_sched.unwrap();
 
         let home = Sched(main_sched.make_handle());
-        let mut main_task = ~Task::new_root_homed(&mut main_sched.stack_pool, None,
-                                                  home, main.take());
-        main_task.death.on_exit = Some(on_exit.take());
+        let mut main_task = ~Task::new_root_homed(&mut main_sched.stack_pool,
+                                                  None,
+                                                  home,
+                                                  ::util::replace(&mut main,
+                                                                  None).
+                                                                  unwrap());
+        main_task.name = Some(SendStrStatic("<main>"));
+        main_task.death.on_exit = ::util::replace(&mut on_exit, None);
         rtdebug!("bootstrapping main_task");
 
         main_sched.bootstrap(main_task);
@@ -453,4 +465,21 @@ pub fn in_green_task_context() -> bool {
             None => false
         }
     }
+}
+
+pub fn new_event_loop() -> ~rtio::EventLoop {
+    match crate_map::get_crate_map() {
+        None => {}
+        Some(map) => {
+            match map.event_loop_factory {
+                None => {}
+                Some(factory) => return factory()
+            }
+        }
+    }
+
+    // If the crate map didn't specify a factory to create an event loop, then
+    // instead just use a basic event loop missing all I/O services to at least
+    // get the scheduler running.
+    return basic::event_loop();
 }

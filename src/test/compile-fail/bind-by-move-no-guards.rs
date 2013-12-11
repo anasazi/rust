@@ -8,15 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::comm;
-
 fn main() {
-    let (p,c) = comm::stream();
+    let (p,c) = Chan::new();
     let x = Some(p);
     c.send(false);
     match x {
-        Some(z) if z.recv() => { fail2!() }, //~ ERROR cannot bind by-move into a pattern guard
+        Some(z) if z.recv() => { fail!() }, //~ ERROR cannot bind by-move into a pattern guard
         Some(z) => { assert!(!z.recv()); },
-        None => fail2!()
+        None => fail!()
     }
 }

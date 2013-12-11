@@ -56,7 +56,7 @@ pub trait ToBase64 {
     fn to_base64(&self, config: Config) -> ~str;
 }
 
-impl<'self> ToBase64 for &'self [u8] {
+impl<'a> ToBase64 for &'a [u8] {
     /**
      * Turn a vector of `u8` bytes into a base64 string.
      *
@@ -141,7 +141,7 @@ impl<'self> ToBase64 for &'self [u8] {
                     v.push('=' as u8);
                 }
             }
-            _ => fail2!("Algebra is broken, please alert the math police")
+            _ => fail!("Algebra is broken, please alert the math police")
         }
 
         unsafe {
@@ -157,12 +157,12 @@ pub trait FromBase64 {
     fn from_base64(&self) -> Result<~[u8], ~str>;
 }
 
-impl<'self> FromBase64 for &'self str {
+impl<'a> FromBase64 for &'a str {
     /**
      * Convert any base64 encoded string (literal, `@`, `&`, or `~`)
      * to the byte values it encodes.
      *
-     * You can use the `from_utf8` function in `std::str`
+     * You can use the `from_utf8_owned` function in `std::str`
      * to turn a `[u8]` into a string with characters corresponding to those
      * values.
      *
@@ -180,7 +180,7 @@ impl<'self> FromBase64 for &'self str {
      *     println!("base64 output: {}", hello_str);
      *     let res = hello_str.from_base64();
      *     if res.is_ok() {
-     *       let optBytes = str::from_utf8_opt(res.unwrap());
+     *       let optBytes = str::from_utf8_owned_opt(res.unwrap());
      *       if optBytes.is_some() {
      *         println!("decoded from base64: {}", optBytes.unwrap());
      *       }
@@ -193,7 +193,7 @@ impl<'self> FromBase64 for &'self str {
         let mut buf: u32 = 0;
         let mut modulus = 0;
 
-        let mut it = self.byte_iter().enumerate();
+        let mut it = self.bytes().enumerate();
         for (idx, byte) in it {
             let val = byte as u32;
 
@@ -260,7 +260,7 @@ mod test {
 
     #[test]
     fn test_to_base64_line_break() {
-        assert!(![0u8, 1000].to_base64(Config {line_length: None, ..STANDARD})
+        assert!(![0u8, ..1000].to_base64(Config {line_length: None, ..STANDARD})
                 .contains("\r\n"));
         assert_eq!("foobar".as_bytes().to_base64(Config {line_length: Some(4),
                                                          ..STANDARD}),
@@ -317,20 +317,20 @@ mod test {
         use std::rand::{task_rng, random, Rng};
         use std::vec;
 
-        do 1000.times {
-            let times = task_rng().gen_integer_range(1u, 100);
+        1000.times(|| {
+            let times = task_rng().gen_range(1u, 100);
             let v = vec::from_fn(times, |_| random::<u8>());
             assert_eq!(v.to_base64(STANDARD).from_base64().unwrap(), v);
-        }
+        })
     }
 
     #[bench]
     pub fn bench_to_base64(bh: & mut BenchHarness) {
         let s = "イロハニホヘト チリヌルヲ ワカヨタレソ ツネナラム \
                  ウヰノオクヤマ ケフコエテ アサキユメミシ ヱヒモセスン";
-        do bh.iter {
+        bh.iter(|| {
             s.as_bytes().to_base64(STANDARD);
-        }
+        });
         bh.bytes = s.len() as u64;
     }
 
@@ -339,9 +339,9 @@ mod test {
         let s = "イロハニホヘト チリヌルヲ ワカヨタレソ ツネナラム \
                  ウヰノオクヤマ ケフコエテ アサキユメミシ ヱヒモセスン";
         let b = s.as_bytes().to_base64(STANDARD);
-        do bh.iter {
+        bh.iter(|| {
             b.from_base64();
-        }
+        });
         bh.bytes = b.len() as u64;
     }
 

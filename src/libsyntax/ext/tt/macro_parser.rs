@@ -122,17 +122,17 @@ pub struct MatcherPos {
 pub fn copy_up(mpu: &matcher_pos_up) -> ~MatcherPos {
     match *mpu {
       matcher_pos_up(Some(ref mp)) => (*mp).clone(),
-      _ => fail2!()
+      _ => fail!()
     }
 }
 
 pub fn count_names(ms: &[matcher]) -> uint {
-    do ms.iter().fold(0) |ct, m| {
+    ms.iter().fold(0, |ct, m| {
         ct + match m.node {
           match_tok(_) => 0u,
           match_seq(ref more_ms, _, _, _, _) => count_names((*more_ms)),
           match_nonterminal(_,_,_) => 1u
-        }}
+        }})
 }
 
 pub fn initial_matcher_pos(ms: ~[matcher], sep: Option<Token>, lo: BytePos)
@@ -193,8 +193,8 @@ pub fn nameize(p_s: @mut ParseSess, ms: &[matcher], res: &[@named_match])
     fn n_rec(p_s: @mut ParseSess, m: &matcher, res: &[@named_match],
              ret_val: &mut HashMap<Ident, @named_match>) {
         match *m {
-          codemap::Spanned {node: match_tok(_), _} => (),
-          codemap::Spanned {node: match_seq(ref more_ms, _, _, _, _), _} => {
+          codemap::Spanned {node: match_tok(_), .. } => (),
+          codemap::Spanned {node: match_seq(ref more_ms, _, _, _, _), .. } => {
             for next_m in more_ms.iter() {
                 n_rec(p_s, next_m, res, ret_val)
             };
@@ -387,7 +387,7 @@ pub fn parse(
                         format!("{} ('{}')", ident_to_str(name),
                              ident_to_str(bind))
                       }
-                      _ => fail2!()
+                      _ => fail!()
                     } }).connect(" or ");
                 return error(sp, format!(
                     "Local ambiguity: multiple parsing options: \
@@ -412,13 +412,13 @@ pub fn parse(
                         parse_nt(&rust_parser, ident_to_str(name))));
                     ei.idx += 1u;
                   }
-                  _ => fail2!()
+                  _ => fail!()
                 }
                 cur_eis.push(ei);
 
-                do rust_parser.tokens_consumed.times() || {
-                    rdr.next_token();
-                }
+                rust_parser.tokens_consumed.times(|| {
+                    let _ = rdr.next_token();
+                });
             }
         }
 
@@ -432,11 +432,11 @@ pub fn parse_nt(p: &Parser, name: &str) -> nonterminal {
         Some(i) => token::nt_item(i),
         None => p.fatal("expected an item keyword")
       },
-      "block" => token::nt_block(~p.parse_block()),
+      "block" => token::nt_block(p.parse_block()),
       "stmt" => token::nt_stmt(p.parse_stmt(~[])),
       "pat" => token::nt_pat(p.parse_pat()),
       "expr" => token::nt_expr(p.parse_expr()),
-      "ty" => token::nt_ty(~p.parse_ty(false /* no need to disambiguate*/)),
+      "ty" => token::nt_ty(p.parse_ty(false /* no need to disambiguate*/)),
       // this could be handled like a token, since it is one
       "ident" => match *p.token {
         token::IDENT(sn,b) => { p.bump(); token::nt_ident(~sn,b) }

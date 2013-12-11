@@ -8,8 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[allow(cstack)]; // each rendering task runs on a fixed stack segment.
-
 //! Markdown formatting for rustdoc
 //!
 //! This module implements markdown formatting through the sundown C-library
@@ -26,13 +24,13 @@
 
 use std::fmt;
 use std::libc;
-use std::rt::io;
+use std::io;
 use std::vec;
 
 /// A unit struct which has the `fmt::Default` trait implemented. When
 /// formatted, this struct will emit the HTML corresponding to the rendered
 /// version of the contained markdown string.
-pub struct Markdown<'self>(&'self str);
+pub struct Markdown<'a>(&'a str);
 
 static OUTPUT_UNIT: libc::size_t = 64;
 static MKDEXT_NO_INTRA_EMPHASIS: libc::c_uint = 1 << 0;
@@ -40,9 +38,6 @@ static MKDEXT_TABLES: libc::c_uint = 1 << 1;
 static MKDEXT_FENCED_CODE: libc::c_uint = 1 << 2;
 static MKDEXT_AUTOLINK: libc::c_uint = 1 << 3;
 static MKDEXT_STRIKETHROUGH: libc::c_uint = 1 << 4;
-static MKDEXT_SPACE_HEADERS: libc::c_uint = 1 << 6;
-static MKDEXT_SUPERSCRIPT: libc::c_uint = 1 << 7;
-static MKDEXT_LAX_SPACING: libc::c_uint = 1 << 8;
 
 type sd_markdown = libc::c_void;  // this is opaque to us
 
@@ -69,6 +64,7 @@ struct buf {
 }
 
 // sundown FFI
+#[link(name = "sundown", kind = "static")]
 extern {
     fn sdhtml_renderer(callbacks: *sd_callbacks,
                        options_ptr: *html_renderopt,
@@ -110,21 +106,20 @@ fn render(w: &mut io::Writer, s: &str) {
         let markdown = sd_markdown_new(extensions, 16, &callbacks,
                                        &options as *html_renderopt as *libc::c_void);
 
-        do s.as_imm_buf |data, len| {
-            sd_markdown_render(ob, data, len as libc::size_t, markdown);
-        }
+
+        sd_markdown_render(ob, s.as_ptr(), s.len() as libc::size_t, markdown);
         sd_markdown_free(markdown);
 
-        do vec::raw::buf_as_slice((*ob).data, (*ob).size as uint) |buf| {
+        vec::raw::buf_as_slice((*ob).data, (*ob).size as uint, |buf| {
             w.write(buf);
-        }
+        });
 
         bufrelease(ob);
     }
 }
 
-impl<'self> fmt::Default for Markdown<'self> {
-    fn fmt(md: &Markdown<'self>, fmt: &mut fmt::Formatter) {
+impl<'a> fmt::Default for Markdown<'a> {
+    fn fmt(md: &Markdown<'a>, fmt: &mut fmt::Formatter) {
         // This is actually common enough to special-case
         if md.len() == 0 { return; }
         render(fmt.buf, md.as_slice());

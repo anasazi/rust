@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// xfail-android: FIXME(#10381)
+
 // compile-flags:-Z extra-debug-info
 // debugger:rbreak zzz
 // debugger:run
@@ -43,6 +45,7 @@
 // debugger:print *unique_val_interior_ref_2
 // check:$10 = 26.5
 
+#[feature(managed_boxes)];
 #[allow(unused_variable)];
 
 struct SomeStruct {

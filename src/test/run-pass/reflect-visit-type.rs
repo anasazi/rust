@@ -8,7 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::unstable::intrinsics::{TyDesc, get_tydesc, visit_tydesc, TyVisitor, Opaque};
+#[feature(managed_boxes)];
+
+use std::unstable::intrinsics::{TyDesc, get_tydesc, visit_tydesc, TyVisitor, Disr, Opaque};
 
 struct MyVisitor {
     types: @mut ~[~str],
@@ -17,32 +19,32 @@ struct MyVisitor {
 impl TyVisitor for MyVisitor {
     fn visit_bot(&mut self) -> bool {
         self.types.push(~"bot");
-        error2!("visited bot type");
+        error!("visited bot type");
         true
     }
     fn visit_nil(&mut self) -> bool {
         self.types.push(~"nil");
-        error2!("visited nil type");
+        error!("visited nil type");
         true
     }
     fn visit_bool(&mut self) -> bool {
         self.types.push(~"bool");
-        error2!("visited bool type");
+        error!("visited bool type");
         true
     }
     fn visit_int(&mut self) -> bool {
         self.types.push(~"int");
-        error2!("visited int type");
+        error!("visited int type");
         true
     }
     fn visit_i8(&mut self) -> bool {
         self.types.push(~"i8");
-        error2!("visited i8 type");
+        error!("visited i8 type");
         true
     }
     fn visit_i16(&mut self) -> bool {
         self.types.push(~"i16");
-        error2!("visited i16 type");
+        error!("visited i16 type");
         true
     }
     fn visit_i32(&mut self) -> bool { true }
@@ -112,28 +114,28 @@ impl TyVisitor for MyVisitor {
                        _sz: uint, _align: uint) -> bool { true }
 
     fn visit_enter_enum(&mut self, _n_variants: uint,
-                        _get_disr: extern unsafe fn(ptr: *Opaque) -> int,
+                        _get_disr: extern unsafe fn(ptr: *Opaque) -> Disr,
                         _sz: uint, _align: uint) -> bool { true }
     fn visit_enter_enum_variant(&mut self,
                                 _variant: uint,
-                                _disr_val: int,
+                                _disr_val: Disr,
                                 _n_fields: uint,
                                 _name: &str) -> bool { true }
     fn visit_enum_variant_field(&mut self, _i: uint, _offset: uint, _inner: *TyDesc) -> bool { true }
     fn visit_leave_enum_variant(&mut self,
                                 _variant: uint,
-                                _disr_val: int,
+                                _disr_val: Disr,
                                 _n_fields: uint,
                                 _name: &str) -> bool { true }
     fn visit_leave_enum(&mut self,
                         _n_variants: uint,
-                        _get_disr: extern unsafe fn(ptr: *Opaque) -> int,
+                        _get_disr: extern unsafe fn(ptr: *Opaque) -> Disr,
                         _sz: uint, _align: uint) -> bool { true }
 
     fn visit_enter_fn(&mut self, _purity: uint, _proto: uint,
                       _n_inputs: uint, _retstyle: uint) -> bool { true }
     fn visit_fn_input(&mut self, _i: uint, _mode: uint, _inner: *TyDesc) -> bool { true }
-    fn visit_fn_output(&mut self, _retstyle: uint, _inner: *TyDesc) -> bool { true }
+    fn visit_fn_output(&mut self, _retstyle: uint, _variadic: bool, _inner: *TyDesc) -> bool { true }
     fn visit_leave_fn(&mut self, _purity: uint, _proto: uint,
                       _n_inputs: uint, _retstyle: uint) -> bool { true }
 

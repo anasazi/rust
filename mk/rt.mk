@@ -23,16 +23,6 @@
 # fit the experimental data (i.e., I was able to get the system
 # working under these assumptions).
 
-# Hack for passing flags into LIBUV, see below.
-LIBUV_FLAGS_i386 = -m32 -fPIC -I$(S)src/etc/mingw-fix-include
-LIBUV_FLAGS_x86_64 = -m64 -fPIC
-ifeq ($(OSTYPE_$(1)), linux-androideabi)
-LIBUV_FLAGS_arm = -fPIC -DANDROID -std=gnu99
-else
-LIBUV_FLAGS_arm = -fPIC -std=gnu99
-endif
-LIBUV_FLAGS_mips = -fPIC -mips32r2 -msoft-float -mabi=32
-
 # when we're doing a snapshot build, we intentionally degrade as many
 # features in libuv and the runtime as possible, to ease portability.
 
@@ -44,7 +34,7 @@ endif
 define DEF_LIBUV_ARCH_VAR
   LIBUV_ARCH_$(1) = $$(subst i386,ia32,$$(subst x86_64,x64,$$(HOST_$(1))))
 endef
-$(foreach t,$(CFG_TARGET_TRIPLES),$(eval $(call DEF_LIBUV_ARCH_VAR,$(t))))
+$(foreach t,$(CFG_TARGET),$(eval $(call DEF_LIBUV_ARCH_VAR,$(t))))
 
 ifdef CFG_ENABLE_FAST_MAKE
 LIBUV_DEPS := $(S)/.gitmodules
@@ -76,59 +66,43 @@ RUNTIME_CXXFLAGS_$(1)_$(2) = -D_RUST_STAGE$(2)
 # XXX: Like with --cfg stage0, pass the defines for stage1 to the stage0
 # build of non-build-triple host compilers
 ifeq ($(2),0)
-ifneq ($(strip $(CFG_BUILD_TRIPLE)),$(strip $(1)))
+ifneq ($(strip $(CFG_BUILD)),$(strip $(1)))
 RUNTIME_CFLAGS_$(1)_$(2) = -D_RUST_STAGE1
 RUNTIME_CXXFLAGS_$(1)_$(2) = -D_RUST_STAGE1
 endif
 endif
 
 RUNTIME_CXXS_$(1)_$(2) := \
-              rt/sync/lock_and_signal.cpp \
-              rt/sync/rust_thread.cpp \
-              rt/rust_builtin.cpp \
-              rt/rust_upcall.cpp \
-              rt/rust_uv.cpp \
-              rt/miniz.cpp \
-              rt/memory_region.cpp \
-              rt/boxed_region.cpp \
-              rt/arch/$$(HOST_$(1))/context.cpp \
-              rt/arch/$$(HOST_$(1))/gpr.cpp \
-              rt/rust_android_dummy.cpp \
-              rt/rust_test_helpers.cpp
+	      rt/rust_cxx_glue.cpp
 
-RUNTIME_CS_$(1)_$(2) := rt/linenoise/linenoise.c \
-			rt/linenoise/utf8.c \
-			rt/sundown/src/autolink.c \
-			rt/sundown/src/buffer.c \
-			rt/sundown/src/stack.c \
-			rt/sundown/src/markdown.c \
-			rt/sundown/html/houdini_href_e.c \
-			rt/sundown/html/houdini_html_e.c \
-			rt/sundown/html/html_smartypants.c \
-			rt/sundown/html/html.c
+RUNTIME_CS_$(1)_$(2) := \
+              rt/rust_builtin.c \
+              rt/rust_upcall.c \
+              rt/miniz.c \
+              rt/rust_android_dummy.c \
+              rt/rust_test_helpers.c
+
+# stage0 remove this after the next snapshot
+%.cpp:
+	@touch tmp/foo.o
 
 RUNTIME_S_$(1)_$(2) := rt/arch/$$(HOST_$(1))/_context.S \
-			rt/arch/$$(HOST_$(1))/ccall.S \
 			rt/arch/$$(HOST_$(1))/record_sp.S
 
 RT_BUILD_DIR_$(1)_$(2) := $$(RT_OUTPUT_DIR_$(1))/stage$(2)
 
 RUNTIME_DEF_$(1)_$(2) := $$(RT_OUTPUT_DIR_$(1))/rustrt$$(CFG_DEF_SUFFIX_$(1))
 RUNTIME_INCS_$(1)_$(2) := -I $$(S)src/rt -I $$(S)src/rt/isaac -I $$(S)src/rt/uthash \
-                     -I $$(S)src/rt/arch/$$(HOST_$(1)) \
-                     -I $$(S)src/rt/linenoise \
-                     -I $$(S)src/rt/sundown/src \
-                     -I $$(S)src/rt/sundown/html \
-                     -I $$(S)src/libuv/include
+                     -I $$(S)src/rt/arch/$$(HOST_$(1))
 RUNTIME_OBJS_$(1)_$(2) := $$(RUNTIME_CXXS_$(1)_$(2):rt/%.cpp=$$(RT_BUILD_DIR_$(1)_$(2))/%.o) \
                      $$(RUNTIME_CS_$(1)_$(2):rt/%.c=$$(RT_BUILD_DIR_$(1)_$(2))/%.o) \
                      $$(RUNTIME_S_$(1)_$(2):rt/%.S=$$(RT_BUILD_DIR_$(1)_$(2))/%.o)
 ALL_OBJ_FILES += $$(RUNTIME_OBJS_$(1)_$(2))
 
-MORESTACK_OBJ_$(1)_$(2) := $$(RT_BUILD_DIR_$(1)_$(2))/arch/$$(HOST_$(1))/morestack.o
+MORESTACK_OBJS_$(1)_$(2) := $$(RT_BUILD_DIR_$(1)_$(2))/arch/$$(HOST_$(1))/morestack.o
 ALL_OBJ_FILES += $$(MORESTACK_OBJS_$(1)_$(2))
 
-$$(RT_BUILD_DIR_$(1)_$(2))/%.o: rt/%.cpp $$(MKFILE_DEPS)
+$$(RT_BUILD_DIR_$(1)_$(2))/rust_cxx_glue.o: rt/rust_cxx_glue.cpp $$(MKFILE_DEPS)
 	@$$(call E, compile: $$@)
 	$$(Q)$$(call CFG_COMPILE_CXX_$(1), $$@, $$(RUNTIME_INCS_$(1)_$(2)) \
                  $$(SNAP_DEFINES) $$(RUNTIME_CXXFLAGS_$(1)_$(2))) $$<
@@ -139,24 +113,21 @@ $$(RT_BUILD_DIR_$(1)_$(2))/%.o: rt/%.c $$(MKFILE_DEPS)
                  $$(SNAP_DEFINES) $$(RUNTIME_CFLAGS_$(1)_$(2))) $$<
 
 $$(RT_BUILD_DIR_$(1)_$(2))/%.o: rt/%.S  $$(MKFILE_DEPS) \
-                     $$(LLVM_CONFIG_$$(CFG_BUILD_TRIPLE))
+                     $$(LLVM_CONFIG_$$(CFG_BUILD))
 	@$$(call E, compile: $$@)
 	$$(Q)$$(call CFG_ASSEMBLE_$(1),$$@,$$<)
 
-$$(RT_BUILD_DIR_$(1)_$(2))/arch/$$(HOST_$(1))/libmorestack.a: $$(MORESTACK_OBJ_$(1)_$(2))
+$$(RT_BUILD_DIR_$(1)_$(2))/arch/$$(HOST_$(1))/libmorestack.a: $$(MORESTACK_OBJS_$(1)_$(2))
 	@$$(call E, link: $$@)
-	$$(Q)$(AR_$(1)) rcs $$@ $$<
+	$$(Q)$(AR_$(1)) rcs $$@ $$^
 
-$$(RT_BUILD_DIR_$(1)_$(2))/$(CFG_RUNTIME_$(1)): $$(RUNTIME_OBJS_$(1)_$(2)) $$(MKFILE_DEPS) \
-                        $$(RUNTIME_DEF_$(1)_$(2)) $$(LIBUV_LIB_$(1)) $$(JEMALLOC_LIB_$(1))
+$$(RT_BUILD_DIR_$(1)_$(2))/$(CFG_RUNTIME_$(1)): $$(RUNTIME_OBJS_$(1)_$(2)) $$(MKFILE_DEPS)
 	@$$(call E, link: $$@)
-	$$(Q)$$(call CFG_LINK_CXX_$(1),$$@, $$(RUNTIME_OBJS_$(1)_$(2)) \
-	    $$(JEMALLOC_LIB_$(1)) $$(CFG_GCCISH_POST_LIB_FLAGS_$(1)) $$(LIBUV_LIB_$(1)) \
-	    $$(CFG_LIBUV_LINK_FLAGS_$(1)),$$(RUNTIME_DEF_$(1)_$(2)),$$(CFG_RUNTIME_$(1)))
+	$$(Q)$(AR_$(1)) rcs $$@ $$(RUNTIME_OBJS_$(1)_$(2))
 
 # These could go in rt.mk or rustllvm.mk, they're needed for both.
 
-# This regexp has a single $, escaped twice
+# This regexp has a single $$ escaped twice
 $(1)/%.bsd.def:    %.def.in $$(MKFILE_DEPS)
 	@$$(call E, def: $$@)
 	$$(Q)echo "{" > $$@
@@ -200,18 +171,15 @@ define DEF_THIRD_PARTY_TARGETS
 # $(1) is the target triple
 
 RT_OUTPUT_DIR_$(1) := $(1)/rt
-JEMALLOC_TARGET_$(1) := jemalloc_pic
 
 ifeq ($$(CFG_WINDOWSY_$(1)), 1)
   LIBUV_OSTYPE_$(1) := win
-  JEMALLOC_TARGET_$(1) := jemalloc
 else ifeq ($(OSTYPE_$(1)), apple-darwin)
   LIBUV_OSTYPE_$(1) := mac
 else ifeq ($(OSTYPE_$(1)), unknown-freebsd)
   LIBUV_OSTYPE_$(1) := freebsd
 else ifeq ($(OSTYPE_$(1)), linux-androideabi)
   LIBUV_OSTYPE_$(1) := android
-  JEMALLOC_ARGS_$(1) := --disable-tls
   LIBUV_ARGS_$(1) := PLATFORM=android host=android OS=linux
 else
   LIBUV_OSTYPE_$(1) := linux
@@ -219,14 +187,15 @@ endif
 
 LIBUV_NAME_$(1) := $$(call CFG_STATIC_LIB_NAME_$(1),uv)
 LIBUV_LIB_$(1) := $$(RT_OUTPUT_DIR_$(1))/libuv/$$(LIBUV_NAME_$(1))
-JEMALLOC_NAME_$(1) := $$(call CFG_STATIC_LIB_NAME_$(1),$$(JEMALLOC_TARGET_$(1)))
-JEMALLOC_LIB_$(1) := $$(RT_OUTPUT_DIR_$(1))/jemalloc/lib/$$(JEMALLOC_NAME_$(1))
 
 LIBUV_MAKEFILE_$(1) := $$(CFG_BUILD_DIR)$$(RT_OUTPUT_DIR_$(1))/libuv/Makefile
 
+# libuv triggers a few warnings on some platforms
+LIBUV_CFLAGS_$(1) := $(subst -Werror,,$(CFG_GCCISH_CFLAGS_$(1)))
+
 $$(LIBUV_MAKEFILE_$(1)): $$(LIBUV_DEPS)
 	(cd $(S)src/libuv/ && \
-	 $$(CFG_PYTHON) ./gyp_uv -f make -Dtarget_arch=$$(LIBUV_ARCH_$(1)) \
+	 $$(CFG_PYTHON) ./gyp_uv.py -f make -Dtarget_arch=$$(LIBUV_ARCH_$(1)) \
 	   -D ninja \
 	   -DOS=$$(LIBUV_OSTYPE_$(1)) \
 	   -Goutput_dir=$$(@D) --generator-output $$(@D))
@@ -237,15 +206,17 @@ $$(LIBUV_MAKEFILE_$(1)): $$(LIBUV_DEPS)
 ifdef CFG_WINDOWSY_$(1)
 $$(LIBUV_LIB_$(1)): $$(LIBUV_DEPS)
 	$$(Q)$$(MAKE) -C $$(S)src/libuv -f Makefile.mingw \
-		CFLAGS="$$(CFG_GCCISH_CFLAGS) $$(LIBUV_FLAGS_$$(HOST_$(1))) $$(SNAP_DEFINES)" \
+		LDFLAGS="$$(CFG_GCCISH_LINK_FLAGS_$(1))" \
+		CC="$$(CC_$(1)) $$(LIBUV_CFLAGS_$(1)) $$(SNAP_DEFINES)" \
+		CXX="$$(CXX_$(1))" \
 		AR="$$(AR_$(1))" \
 		V=$$(VERBOSE)
 	$$(Q)cp $$(S)src/libuv/libuv.a $$@
 else
 $$(LIBUV_LIB_$(1)): $$(LIBUV_DEPS) $$(LIBUV_MAKEFILE_$(1))
 	$$(Q)$$(MAKE) -C $$(@D) \
-		CFLAGS="$$(CFG_GCCISH_CFLAGS) $$(LIBUV_FLAGS_$$(HOST_$(1))) $$(SNAP_DEFINES)" \
-		LDFLAGS="$$(CFG_GCCISH_LINK_FLAGS) $$(LIBUV_FLAGS_$$(HOST_$(1)))" \
+		CFLAGS="$$(LIBUV_CFLAGS_$(1)) $$(SNAP_DEFINES)" \
+		LDFLAGS="$$(CFG_GCCISH_LINK_FLAGS_$(1))" \
 		CC="$$(CC_$(1))" \
 		CXX="$$(CXX_$(1))" \
 		AR="$$(AR_$(1))" \
@@ -256,21 +227,58 @@ $$(LIBUV_LIB_$(1)): $$(LIBUV_DEPS) $$(LIBUV_MAKEFILE_$(1))
 		V=$$(VERBOSE)
 endif
 
-$$(JEMALLOC_LIB_$(1)):
-	cd $$(RT_OUTPUT_DIR_$(1))/jemalloc; $(S)src/rt/jemalloc/configure \
-		$$(JEMALLOC_ARGS_$(1)) \
-		--disable-experimental --build=$(CFG_BUILD_TRIPLE) --host=$(1) \
-		EXTRA_CFLAGS="$$(CFG_GCCISH_CFLAGS) $$(LIBUV_FLAGS_$$(HOST_$(1)))" \
-		CC="$$(CC_$(1))" \
-		CXX="$$(CXX_$(1))" \
-		AR="$$(AR_$(1))"
-	$$(Q)$$(MAKE) -C $$(RT_OUTPUT_DIR_$(1))/jemalloc build_lib_static
+# libuv support functionality (extra C/C++ that we need to use libuv)
+
+UV_SUPPORT_NAME_$(1) := $$(call CFG_STATIC_LIB_NAME_$(1),uv_support)
+UV_SUPPORT_DIR_$(1) := $$(RT_OUTPUT_DIR_$(1))/uv_support
+UV_SUPPORT_LIB_$(1) := $$(UV_SUPPORT_DIR_$(1))/$$(UV_SUPPORT_NAME_$(1))
+UV_SUPPORT_CS_$(1) := rt/rust_uv.c
+UV_SUPPORT_OBJS_$(1) := $$(UV_SUPPORT_CS_$(1):rt/%.c=$$(UV_SUPPORT_DIR_$(1))/%.o)
+
+$$(UV_SUPPORT_DIR_$(1))/%.o: rt/%.c
+	@$$(call E, compile: $$@)
+	@mkdir -p $$(@D)
+	$$(Q)$$(call CFG_COMPILE_C_$(1), $$@, \
+		-I $$(S)src/libuv/include \
+                 $$(RUNTIME_CFLAGS_$(1))) $$<
+
+$$(UV_SUPPORT_LIB_$(1)): $$(UV_SUPPORT_OBJS_$(1))
+	@$$(call E, link: $$@)
+	$$(Q)$$(AR_$(1)) rcs $$@ $$^
+
+# sundown markdown library (used by librustdoc)
+
+SUNDOWN_NAME_$(1) := $$(call CFG_STATIC_LIB_NAME_$(1),sundown)
+SUNDOWN_DIR_$(1) := $$(RT_OUTPUT_DIR_$(1))/sundown
+SUNDOWN_LIB_$(1) := $$(SUNDOWN_DIR_$(1))/$$(SUNDOWN_NAME_$(1))
+
+SUNDOWN_CS_$(1) := rt/sundown/src/autolink.c \
+			rt/sundown/src/buffer.c \
+			rt/sundown/src/stack.c \
+			rt/sundown/src/markdown.c \
+			rt/sundown/html/houdini_href_e.c \
+			rt/sundown/html/houdini_html_e.c \
+			rt/sundown/html/html_smartypants.c \
+			rt/sundown/html/html.c
+
+SUNDOWN_OBJS_$(1) := $$(SUNDOWN_CS_$(1):rt/%.c=$$(SUNDOWN_DIR_$(1))/%.o)
+
+$$(SUNDOWN_DIR_$(1))/%.o: rt/%.c
+	@$$(call E, compile: $$@)
+	@mkdir -p $$(@D)
+	$$(Q)$$(call CFG_COMPILE_C_$(1), $$@, \
+		-I $$(S)src/rt/sundown/src -I $$(S)src/rt/sundown/html \
+                 $$(RUNTIME_CFLAGS_$(1))) $$<
+
+$$(SUNDOWN_LIB_$(1)): $$(SUNDOWN_OBJS_$(1))
+	@$$(call E, link: $$@)
+	$$(Q)$$(AR_$(1)) rcs $$@ $$^
 
 endef
 
 # Instantiate template for all stages/targets
-$(foreach target,$(CFG_TARGET_TRIPLES), \
+$(foreach target,$(CFG_TARGET), \
      $(eval $(call DEF_THIRD_PARTY_TARGETS,$(target))))
 $(foreach stage,$(STAGES), \
-    $(foreach target,$(CFG_TARGET_TRIPLES), \
+    $(foreach target,$(CFG_TARGET), \
 	 $(eval $(call DEF_RUNTIME_TARGETS,$(target),$(stage)))))

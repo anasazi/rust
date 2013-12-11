@@ -133,7 +133,7 @@ impl reader for TtReader {
     fn is_eof(@mut self) -> bool { self.cur_tok == token::EOF }
     fn next_token(@mut self) -> TokenAndSpan {
         let r = tt_next_token(self);
-        debug2!("TtReader: r={:?}", r);
+        debug!("TtReader: r={:?}", r);
         return r;
     }
     fn fatal(@mut self, m: ~str) -> ! {
@@ -216,16 +216,22 @@ fn byte_offset(rdr: &StringReader, pos: BytePos) -> BytePos {
 /// Calls `f` with a string slice of the source text spanning from `start`
 /// up to but excluding `rdr.last_pos`, meaning the slice does not include
 /// the character `rdr.curr`.
-pub fn with_str_from<T>(rdr: @mut StringReader, start: BytePos, f: &fn(s: &str) -> T) -> T {
+pub fn with_str_from<T>(
+                     rdr: @mut StringReader,
+                     start: BytePos,
+                     f: |s: &str| -> T)
+                     -> T {
     with_str_from_to(rdr, start, rdr.last_pos, f)
 }
 
 /// Calls `f` with astring slice of the source text spanning from `start`
 /// up to but excluding `end`.
-fn with_str_from_to<T>(rdr: @mut StringReader,
-                       start: BytePos,
-                       end: BytePos,
-                       f: &fn(s: &str) -> T) -> T {
+fn with_str_from_to<T>(
+                    rdr: @mut StringReader,
+                    start: BytePos,
+                    end: BytePos,
+                    f: |s: &str| -> T)
+                    -> T {
     f(rdr.src.slice(
             byte_offset(rdr, start).to_uint(),
             byte_offset(rdr, end).to_uint()))
@@ -241,7 +247,7 @@ pub fn bump(rdr: &mut StringReader) {
         let last_char = rdr.curr;
         let next = rdr.src.char_range_at(current_byte_offset);
         let byte_offset_diff = next.next - current_byte_offset;
-        rdr.pos = rdr.pos + BytePos(byte_offset_diff);
+        rdr.pos = rdr.pos + Pos::from_uint(byte_offset_diff);
         rdr.curr = next.ch;
         rdr.col = rdr.col + CharPos(1u);
         if last_char == '\n' {
@@ -251,7 +257,7 @@ pub fn bump(rdr: &mut StringReader) {
 
         if byte_offset_diff > 1 {
             rdr.filemap.record_multibyte_char(
-                BytePos(current_byte_offset), byte_offset_diff);
+                Pos::from_uint(current_byte_offset), byte_offset_diff);
         }
     } else {
         rdr.curr = unsafe { transmute(-1u32) }; // FIXME: #8971: unsound
@@ -267,16 +273,12 @@ pub fn nextch(rdr: @mut StringReader) -> char {
     } else { return unsafe { transmute(-1u32) }; } // FIXME: #8971: unsound
 }
 
-fn dec_digit_val(c: char) -> int { return (c as int) - ('0' as int); }
-
 fn hex_digit_val(c: char) -> int {
     if in_range(c, '0', '9') { return (c as int) - ('0' as int); }
     if in_range(c, 'a', 'f') { return (c as int) - ('a' as int) + 10; }
     if in_range(c, 'A', 'F') { return (c as int) - ('A' as int) + 10; }
-    fail2!();
+    fail!();
 }
-
-fn bin_digit_value(c: char) -> int { if c == '0' { return 0; } return 1; }
 
 pub fn is_whitespace(c: char) -> bool {
     return c == ' ' || c == '\t' || c == '\r' || c == '\n';
@@ -293,8 +295,6 @@ fn is_hex_digit(c: char) -> bool {
             in_range(c, 'A', 'F');
 }
 
-fn is_bin_digit(c: char) -> bool { return c == '0' || c == '1'; }
-
 // EFFECT: eats whitespace and comments.
 // returns a Some(sugared-doc-attr) if one exists, None otherwise.
 fn consume_whitespace_and_comments(rdr: @mut StringReader)
@@ -304,8 +304,7 @@ fn consume_whitespace_and_comments(rdr: @mut StringReader)
 }
 
 pub fn is_line_non_doc_comment(s: &str) -> bool {
-    let s = s.trim_right();
-    s.len() > 3 && s.iter().all(|ch| ch == '/')
+    s.starts_with("////")
 }
 
 // PRECONDITION: rdr.curr is not whitespace
@@ -320,11 +319,11 @@ fn consume_any_line_comment(rdr: @mut StringReader)
             bump(rdr);
             // line comments starting with "///" or "//!" are doc-comments
             if rdr.curr == '/' || rdr.curr == '!' {
-                let start_bpos = rdr.pos - BytePos(3u);
+                let start_bpos = rdr.pos - BytePos(3);
                 while rdr.curr != '\n' && !is_eof(rdr) {
                     bump(rdr);
                 }
-                let ret = do with_str_from(rdr, start_bpos) |string| {
+                let ret = with_str_from(rdr, start_bpos, |string| {
                     // but comments with only more "/"s are not
                     if !is_line_non_doc_comment(string) {
                         Some(TokenAndSpan{
@@ -334,7 +333,7 @@ fn consume_any_line_comment(rdr: @mut StringReader)
                     } else {
                         None
                     }
-                };
+                });
 
                 if ret.is_some() {
                     return ret;
@@ -365,57 +364,56 @@ fn consume_any_line_comment(rdr: @mut StringReader)
 }
 
 pub fn is_block_non_doc_comment(s: &str) -> bool {
-    assert!(s.len() >= 1u);
-    s.slice(1u, s.len() - 1u).iter().all(|ch| ch == '*')
+    s.starts_with("/***")
 }
 
 // might return a sugared-doc-attr
 fn consume_block_comment(rdr: @mut StringReader)
                       -> Option<TokenAndSpan> {
     // block comments starting with "/**" or "/*!" are doc-comments
-    let res = if rdr.curr == '*' || rdr.curr == '!' {
-        let start_bpos = rdr.pos - BytePos(3u);
-        while !(rdr.curr == '*' && nextch(rdr) == '/') && !is_eof(rdr) {
-            bump(rdr);
-        }
+    let is_doc_comment = rdr.curr == '*' || rdr.curr == '!';
+    let start_bpos = rdr.pos - BytePos(if is_doc_comment {3} else {2});
+
+    let mut level: int = 1;
+    while level > 0 {
         if is_eof(rdr) {
-            fatal_span(rdr, start_bpos, rdr.last_pos,
-                       ~"unterminated block doc-comment");
+            let msg = if is_doc_comment {
+                ~"unterminated block doc-comment"
+            } else {
+                ~"unterminated block comment"
+            };
+            fatal_span(rdr, start_bpos, rdr.last_pos, msg);
+        } else if rdr.curr == '/' && nextch(rdr) == '*' {
+            level += 1;
+            bump(rdr);
+            bump(rdr);
+        } else if rdr.curr == '*' && nextch(rdr) == '/' {
+            level -= 1;
+            bump(rdr);
+            bump(rdr);
         } else {
             bump(rdr);
-            bump(rdr);
-            do with_str_from(rdr, start_bpos) |string| {
-                // but comments with only "*"s between two "/"s are not
-                if !is_block_non_doc_comment(string) {
-                    Some(TokenAndSpan{
-                         tok: token::DOC_COMMENT(str_to_ident(string)),
-                         sp: codemap::mk_sp(start_bpos, rdr.pos)
-                         })
-                } else {
-                    None
-                }
-            }
         }
-    } else {
-        let start_bpos = rdr.last_pos - BytePos(2u);
-        loop {
-            if is_eof(rdr) {
-                fatal_span(rdr, start_bpos, rdr.last_pos,
-                           ~"unterminated block comment");
-            }
-            if rdr.curr == '*' && nextch(rdr) == '/' {
-                bump(rdr);
-                bump(rdr);
-                break;
+    }
+
+    let res = if is_doc_comment {
+        with_str_from(rdr, start_bpos, |string| {
+            // but comments with only "*"s between two "/"s are not
+            if !is_block_non_doc_comment(string) {
+                Some(TokenAndSpan{
+                        tok: token::DOC_COMMENT(str_to_ident(string)),
+                        sp: codemap::mk_sp(start_bpos, rdr.pos)
+                    })
             } else {
-                bump(rdr);
+                None
             }
-        }
+        })
+    } else {
         None
     };
-    // restart whitespace munch.
 
-   if res.is_some() { res } else { consume_whitespace_and_comments(rdr) }
+    // restart whitespace munch.
+    if res.is_some() { res } else { consume_whitespace_and_comments(rdr) }
 }
 
 fn scan_exponent(rdr: @mut StringReader, start_bpos: BytePos) -> Option<~str> {
@@ -464,6 +462,10 @@ fn scan_number(c: char, rdr: @mut StringReader) -> token::Token {
         bump(rdr);
         bump(rdr);
         base = 16u;
+    } else if c == '0' && n == 'o' {
+        bump(rdr);
+        bump(rdr);
+        base = 8u;
     } else if c == '0' && n == 'b' {
         bump(rdr);
         bump(rdr);
@@ -529,6 +531,8 @@ fn scan_number(c: char, rdr: @mut StringReader) -> token::Token {
         match base {
           16u => fatal_span(rdr, start_bpos, rdr.last_pos,
                             ~"hexadecimal float literal is not supported"),
+          8u => fatal_span(rdr, start_bpos, rdr.last_pos,
+                           ~"octal float literal is not supported"),
           2u => fatal_span(rdr, start_bpos, rdr.last_pos,
                            ~"binary float literal is not supported"),
           _ => ()
@@ -576,7 +580,7 @@ fn scan_number(c: char, rdr: @mut StringReader) -> token::Token {
                                ~"int literal is too large")
         };
 
-        debug2!("lexing {} as an unsuffixed integer literal", num_str);
+        debug!("lexing {} as an unsuffixed integer literal", num_str);
         return token::LIT_INT_UNSUFFIXED(parsed as i64);
     }
 }
@@ -633,7 +637,7 @@ fn next_token_inner(rdr: @mut StringReader) -> token::Token {
             bump(rdr);
         }
 
-        return do with_str_from(rdr, start) |string| {
+        return with_str_from(rdr, start, |string| {
             if string == "_" {
                 token::UNDERSCORE
             } else {
@@ -642,7 +646,7 @@ fn next_token_inner(rdr: @mut StringReader) -> token::Token {
                 // FIXME: perform NFKC normalization here. (Issue #2253)
                 token::IDENT(str_to_ident(string), is_mod_name)
             }
-        }
+        })
     }
     if is_dec_digit(c) {
         return scan_number(c, rdr);
@@ -664,12 +668,18 @@ fn next_token_inner(rdr: @mut StringReader) -> token::Token {
       ';' => { bump(rdr); return token::SEMI; }
       ',' => { bump(rdr); return token::COMMA; }
       '.' => {
-        bump(rdr);
-        if rdr.curr == '.' && nextch(rdr) != '.' {
-            bump(rdr);
-            return token::DOTDOT;
-        }
-        return token::DOT;
+          bump(rdr);
+          return if rdr.curr == '.' {
+              bump(rdr);
+              if rdr.curr == '.' {
+                  bump(rdr);
+                  token::DOTDOTDOT
+              } else {
+                  token::DOTDOT
+              }
+          } else {
+              token::DOT
+          };
       }
       '(' => { bump(rdr); return token::LPAREN; }
       ')' => { bump(rdr); return token::RPAREN; }
@@ -750,9 +760,20 @@ fn next_token_inner(rdr: @mut StringReader) -> token::Token {
             while ident_continue(rdr.curr) {
                 bump(rdr);
             }
-            return do with_str_from(rdr, start) |lifetime_name| {
-                token::LIFETIME(str_to_ident(lifetime_name))
-            }
+            return with_str_from(rdr, start, |lifetime_name| {
+                let ident = str_to_ident(lifetime_name);
+                let tok = &token::IDENT(ident, false);
+
+                if token::is_keyword(token::keywords::Self, tok) {
+                    fatal_span(rdr, start, rdr.last_pos,
+                               ~"invalid lifetime name: 'self is no longer a special lifetime");
+                } else if token::is_any_keyword(tok) &&
+                    !token::is_keyword(token::keywords::Static, tok) {
+                    fatal_span(rdr, start, rdr.last_pos, ~"invalid lifetime name");
+                } else {
+                    token::LIFETIME(ident)
+                }
+            })
         }
 
         // Otherwise it is a character constant:
@@ -790,7 +811,7 @@ fn next_token_inner(rdr: @mut StringReader) -> token::Token {
                                // Byte offsetting here is okay because the
                                // character before position `start` is an
                                // ascii single quote.
-                               start - BytePos(1u),
+                               start - BytePos(1),
                                rdr.last_pos,
                                ~"unterminated character constant");
         }
@@ -1056,4 +1077,12 @@ mod test {
         assert!(!is_line_non_doc_comment("/// blah"));
         assert!(is_line_non_doc_comment("////"));
     }
+
+    #[test] fn nested_block_comments() {
+        let env = setup(@"/* /* */ */'a'");
+        let TokenAndSpan {tok, sp: _} =
+            env.string_reader.next_token();
+        assert_eq!(tok,token::LIT_CHAR('a' as u32));
+    }
+
 }

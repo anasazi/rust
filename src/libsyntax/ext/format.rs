@@ -9,13 +9,14 @@
 // except according to those terms.
 
 use ast;
+use ast::P;
 use codemap::{Span, respan};
 use ext::base::*;
 use ext::base;
 use ext::build::AstBuilder;
 use rsparse = parse;
 use parse::token;
-
+use opt_vec;
 use std::fmt::parse;
 use std::hashmap::{HashMap, HashSet};
 use std::vec;
@@ -125,7 +126,7 @@ impl Context {
     /// format strings.
     fn verify_piece(&mut self, p: &parse::Piece) {
         match *p {
-            parse::String(*) => {}
+            parse::String(..) => {}
             parse::CurrentArgument => {
                 if self.nest_level == 0 {
                     self.ecx.span_err(self.fmtsp,
@@ -173,9 +174,12 @@ impl Context {
 
     fn verify_count(&mut self, c: parse::Count) {
         match c {
-            parse::CountImplied | parse::CountIs(*) => {}
+            parse::CountImplied | parse::CountIs(..) => {}
             parse::CountIsParam(i) => {
                 self.verify_arg_type(Left(i), Unsigned);
+            }
+            parse::CountIsName(s) => {
+                self.verify_arg_type(Right(s.to_managed()), Unsigned);
             }
             parse::CountIsNextParam => {
                 if self.check_positional_ok() {
@@ -327,7 +331,12 @@ impl Context {
         let unnamed = self.ecx.meta_word(self.fmtsp, @"address_insignificant");
         let unnamed = self.ecx.attribute(self.fmtsp, unnamed);
 
-        return ~[unnamed];
+        // Do not warn format string as dead code
+        let dead_code = self.ecx.meta_word(self.fmtsp, @"dead_code");
+        let allow_dead_code = self.ecx.meta_list(self.fmtsp,
+                                                 @"allow", ~[dead_code]);
+        let allow_dead_code = self.ecx.attribute(self.fmtsp, allow_dead_code);
+        return ~[unnamed, allow_dead_code];
     }
 
     /// Translate a `parse::Piece` to a static `rt::Piece`
@@ -361,20 +370,30 @@ impl Context {
         let trans_count = |c: parse::Count| {
             match c {
                 parse::CountIs(i) => {
-                    self.ecx.expr_call_global(sp, ctpath("CountIs"),
+                    self.ecx.expr_call_global(sp, rtpath("CountIs"),
                                               ~[self.ecx.expr_uint(sp, i)])
                 }
                 parse::CountIsParam(i) => {
-                    self.ecx.expr_call_global(sp, ctpath("CountIsParam"),
+                    self.ecx.expr_call_global(sp, rtpath("CountIsParam"),
                                               ~[self.ecx.expr_uint(sp, i)])
                 }
                 parse::CountImplied => {
-                    let path = self.ecx.path_global(sp, ctpath("CountImplied"));
+                    let path = self.ecx.path_global(sp, rtpath("CountImplied"));
                     self.ecx.expr_path(path)
                 }
                 parse::CountIsNextParam => {
-                    let path = self.ecx.path_global(sp, ctpath("CountIsNextParam"));
+                    let path = self.ecx.path_global(sp, rtpath("CountIsNextParam"));
                     self.ecx.expr_path(path)
+                }
+                parse::CountIsName(n) => {
+                    let n = n.to_managed();
+                    let i = match self.name_positions.find_copy(&n) {
+                        Some(i) => i,
+                        None => 0, // error already emitted elsewhere
+                    };
+                    let i = i + self.args.len();
+                    self.ecx.expr_call_global(sp, rtpath("CountIsParam"),
+                                              ~[self.ecx.expr_uint(sp, i)])
                 }
             }
         };
@@ -451,7 +470,7 @@ impl Context {
                 sp,
                 true,
                 rtpath("Method"),
-                Some(life),
+                opt_vec::with(life),
                 ~[]
             ), None);
             let st = ast::item_static(ty, ast::MutImmutable, method);
@@ -569,11 +588,12 @@ impl Context {
                     self.ecx.ident_of("rt"),
                     self.ecx.ident_of("Piece"),
                 ],
-                Some(self.ecx.lifetime(self.fmtsp, self.ecx.ident_of("static"))),
+                opt_vec::with(
+                    self.ecx.lifetime(self.fmtsp, self.ecx.ident_of("static"))),
                 ~[]
             ), None);
         let ty = ast::ty_fixed_length_vec(
-            self.ecx.ty_mt(piece_ty.clone(), ast::MutImmutable),
+            piece_ty,
             self.ecx.expr_uint(self.fmtsp, self.pieces.len())
         );
         let ty = self.ecx.ty(self.fmtsp, ty);
@@ -625,14 +645,14 @@ impl Context {
 
         // We did all the work of making sure that the arguments
         // structure is safe, so we can safely have an unsafe block.
-        let result = self.ecx.expr_block(ast::Block {
+        let result = self.ecx.expr_block(P(ast::Block {
            view_items: ~[],
            stmts: ~[],
            expr: Some(result),
            id: ast::DUMMY_NODE_ID,
            rules: ast::UnsafeBlock(ast::CompilerGenerated),
            span: self.fmtsp,
-        });
+        }));
         let resname = self.ecx.ident_of("__args");
         lets.push(self.ecx.stmt_let(self.fmtsp, false, resname, result));
         let res = self.ecx.expr_ident(self.fmtsp, resname);
@@ -722,16 +742,18 @@ pub fn expand_args(ecx: @ExtCtxt, sp: Span,
         (_, None) => { return MRExpr(ecx.expr_uint(sp, 2)); }
     };
     cx.fmtsp = efmt.span;
-    let (fmt, _fmt_str_style) = expr_to_str(ecx, efmt,
-                                            "format argument must be a string literal.");
+    // Be sure to recursively expand macros just in case the format string uses
+    // a macro to build the format expression.
+    let (fmt, _) = expr_to_str(ecx, ecx.expand_expr(efmt),
+                               "format argument must be a string literal.");
 
     let mut err = false;
-    do parse::parse_error::cond.trap(|m| {
+    parse::parse_error::cond.trap(|m| {
         if !err {
             err = true;
             ecx.span_err(efmt.span, m);
         }
-    }).inside {
+    }).inside(|| {
         for piece in parse::Parser::new(fmt) {
             if !err {
                 cx.verify_piece(&piece);
@@ -739,7 +761,7 @@ pub fn expand_args(ecx: @ExtCtxt, sp: Span,
                 cx.pieces.push(piece);
             }
         }
-    }
+    });
     if err { return MRExpr(efmt) }
 
     // Make sure that all arguments were used and all arguments have types.

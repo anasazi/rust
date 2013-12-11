@@ -132,9 +132,19 @@ static NAN_BUF:          [u8, ..3] = ['N' as u8, 'a' as u8, 'N' as u8];
  * # Failure
  * - Fails if `radix` < 2 or `radix` > 36.
  */
-pub fn int_to_str_bytes_common<T:NumCast+Zero+Eq+Ord+Integer+
-                                 Div<T,T>+Neg<T>+Rem<T,T>+Mul<T,T>>(
-        num: T, radix: uint, sign: SignFormat, f: &fn(u8)) {
+pub fn int_to_str_bytes_common<T:NumCast
+                                +Zero
+                                +Eq
+                                +Ord
+                                +Integer
+                                +Div<T,T>
+                                +Neg<T>
+                                +Rem<T,T>
+                                +Mul<T,T>>(
+                                num: T,
+                                radix: uint,
+                                sign: SignFormat,
+                                f: |u8|) {
     assert!(2 <= radix && radix <= 36);
 
     let _0: T = Zero::zero();
@@ -416,7 +426,7 @@ pub fn float_to_str_common<T:NumCast+Zero+One+Eq+Ord+NumStrConv+Float+Round+
         sign: SignFormat, digits: SignificantDigits) -> (~str, bool) {
     let (bytes, special) = float_to_str_bytes_common(num, radix,
                                negative_zero, sign, digits);
-    (str::from_utf8(bytes), special)
+    (str::from_utf8_owned(bytes), special)
 }
 
 // Some constants for from_str_bytes_common's input validation,
@@ -473,19 +483,19 @@ pub fn from_str_bytes_common<T:NumCast+Zero+One+Eq+Ord+Div<T,T>+
         ) -> Option<T> {
     match exponent {
         ExpDec if radix >= DIGIT_E_RADIX       // decimal exponent 'e'
-          => fail2!("from_str_bytes_common: radix {:?} incompatible with \
+          => fail!("from_str_bytes_common: radix {:?} incompatible with \
                     use of 'e' as decimal exponent", radix),
         ExpBin if radix >= DIGIT_P_RADIX       // binary exponent 'p'
-          => fail2!("from_str_bytes_common: radix {:?} incompatible with \
+          => fail!("from_str_bytes_common: radix {:?} incompatible with \
                     use of 'p' as binary exponent", radix),
         _ if special && radix >= DIGIT_I_RADIX // first digit of 'inf'
-          => fail2!("from_str_bytes_common: radix {:?} incompatible with \
+          => fail!("from_str_bytes_common: radix {:?} incompatible with \
                     special values 'inf' and 'NaN'", radix),
         _ if (radix as int) < 2
-          => fail2!("from_str_bytes_common: radix {:?} to low, \
+          => fail!("from_str_bytes_common: radix {:?} to low, \
                     must lie in the range [2, 36]", radix),
         _ if (radix as int) > 36
-          => fail2!("from_str_bytes_common: radix {:?} to high, \
+          => fail!("from_str_bytes_common: radix {:?} to high, \
                     must lie in the range [2, 36]", radix),
         _ => ()
     }
@@ -740,16 +750,16 @@ mod bench {
     #[bench]
     fn uint_to_str_rand(bh: &mut BenchHarness) {
         let mut rng = XorShiftRng::new();
-        do bh.iter {
+        bh.iter(|| {
             rng.gen::<uint>().to_str();
-        }
+        })
     }
 
     #[bench]
     fn float_to_str_rand(bh: &mut BenchHarness) {
         let mut rng = XorShiftRng::new();
-        do bh.iter {
+        bh.iter(|| {
             f64::to_str(rng.gen());
-        }
+        })
     }
 }

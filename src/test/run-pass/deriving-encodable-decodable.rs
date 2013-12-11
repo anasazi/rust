@@ -12,12 +12,14 @@
 // job done at least
 
 // xfail-fast
+// xfail-test FIXME(#5121)
 
-#[feature(struct_variant)];
+#[feature(struct_variant, managed_boxes)];
 
 extern mod extra;
 
-use std::io;
+use std::io::mem::MemWriter;
+use std::io::Decorator;
 use std::rand::{random, Rand};
 use extra::serialize::{Encodable, Decodable};
 use extra::ebml;
@@ -53,13 +55,13 @@ struct G<T> {
     t: T
 }
 
-fn roundtrip<T: Rand + Eq + Encodable<Encoder> + Decodable<Decoder>>() {
+fn roundtrip<'a, T: Rand + Eq + Encodable<Encoder> +
+                    Decodable<Decoder<'a>>>() {
     let obj: T = random();
-    let bytes = do io::with_bytes_writer |w| {
-        let mut e = Encoder(w);
-        obj.encode(&mut e);
-    };
-    let doc = ebml::reader::Doc(@bytes);
+    let w = @mut MemWriter::new();
+    let mut e = Encoder(w);
+    obj.encode(&mut e);
+    let doc = ebml::reader::Doc(@w.inner_ref().to_owned());
     let mut dec = Decoder(doc);
     let obj2 = Decodable::decode(&mut dec);
     assert!(obj == obj2);
@@ -71,9 +73,9 @@ pub fn main() {
     roundtrip::<C>();
     roundtrip::<D>();
 
-    do 20.times {
+    20.times(|| {
         roundtrip::<E>();
         roundtrip::<F>();
         roundtrip::<G<int>>();
-    }
+    })
 }

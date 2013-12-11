@@ -89,6 +89,10 @@ as well as `foo/src/bar/extras/baz/lib.rs`,
 then both `bar` and `bar/extras/baz` are valid package identifiers
 in the workspace `foo`.
 
+Because rustpkg uses generic source file names as the main inputs, you will
+need to specify the package identifier in them using the `pkgid` attribute
+on the crate.
+
 ## Source files
 
 rustpkg searches for four different fixed filenames in order to determine the crates to build:
@@ -108,9 +112,6 @@ When building a package that is not under version control,
 or that has no tags, `rustpkg` assumes the intended version is 0.1.
 
 > **Note:** A future version of rustpkg will support semantic versions.
-> Also, a future version will add the option to specify a version with a metadata
-> attribute like `#[link(vers = "3.1415")]` inside the crate module,
-> though this attribute will never be mandatory.
 
 # Dependencies
 
@@ -120,7 +121,7 @@ Thus, there should be no need to pass a `-L` flag to rustpkg to tell it where to
 
 # Custom build scripts
 
-A file called `pkg.rs` at the root level in a workspace is called a *package script*.
+A file called `pkg.rs` at the root level in a package directory is called a *package script*.
 If a package script exists, rustpkg executes it to build the package
 rather than inferring crates as described previously.
 

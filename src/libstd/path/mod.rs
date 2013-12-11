@@ -20,7 +20,7 @@ appropriate platform-specific path variant.
 Both `PosixPath` and `WindowsPath` implement a trait `GenericPath`, which
 contains the set of methods that behave the same for both paths. They each also
 implement some methods that could not be expressed in `GenericPath`, yet behave
-identically for both path flavors, such as `.component_iter()`.
+identically for both path flavors, such as `.components()`.
 
 The three main design goals of this module are 1) to avoid unnecessary
 allocation, 2) to behave the same regardless of which flavor of path is being
@@ -54,12 +54,12 @@ actually operates on the path; it is only intended for display.
 
 ```rust
 let mut path = Path::new("/tmp/path");
-debug2!("path: {}", path.display());
+debug!("path: {}", path.display());
 path.set_filename("foo");
 path.push("bar");
-debug2!("new path: {}", path.display());
+debug!("new path: {}", path.display());
 let b = std::os::path_exists(&path);
-debug2!("path exists: {}", b);
+debug!("path exists: {}", b);
 ```
 
 */
@@ -176,7 +176,7 @@ pub trait GenericPath: Clone + GenericPathUnsafe {
     /// If the path is not representable in utf-8, this returns None.
     #[inline]
     fn as_str<'a>(&'a self) -> Option<&'a str> {
-        str::from_utf8_slice_opt(self.as_vec())
+        str::from_utf8_opt(self.as_vec())
     }
 
     /// Returns the path as a byte vector
@@ -207,7 +207,7 @@ pub trait GenericPath: Clone + GenericPathUnsafe {
     /// See `dirname` for details.
     #[inline]
     fn dirname_str<'a>(&'a self) -> Option<&'a str> {
-        str::from_utf8_slice_opt(self.dirname())
+        str::from_utf8_opt(self.dirname())
     }
     /// Returns the file component of `self`, as a byte vector.
     /// If `self` represents the root of the file hierarchy, returns None.
@@ -217,7 +217,7 @@ pub trait GenericPath: Clone + GenericPathUnsafe {
     /// See `filename` for details.
     #[inline]
     fn filename_str<'a>(&'a self) -> Option<&'a str> {
-        self.filename().and_then(str::from_utf8_slice_opt)
+        self.filename().and_then(str::from_utf8_opt)
     }
     /// Returns the stem of the filename of `self`, as a byte vector.
     /// The stem is the portion of the filename just before the last '.'.
@@ -239,7 +239,7 @@ pub trait GenericPath: Clone + GenericPathUnsafe {
     /// See `filestem` for details.
     #[inline]
     fn filestem_str<'a>(&'a self) -> Option<&'a str> {
-        self.filestem().and_then(str::from_utf8_slice_opt)
+        self.filestem().and_then(str::from_utf8_opt)
     }
     /// Returns the extension of the filename of `self`, as an optional byte vector.
     /// The extension is the portion of the filename just after the last '.'.
@@ -262,7 +262,7 @@ pub trait GenericPath: Clone + GenericPathUnsafe {
     /// See `extension` for details.
     #[inline]
     fn extension_str<'a>(&'a self) -> Option<&'a str> {
-        self.extension().and_then(str::from_utf8_slice_opt)
+        self.extension().and_then(str::from_utf8_opt)
     }
 
     /// Replaces the filename portion of the path with the given byte vector or string.
@@ -493,12 +493,12 @@ pub trait BytesContainer {
     /// Raises `str::null_byte` if not utf-8
     #[inline]
     fn container_as_str<'a>(&'a self) -> &'a str {
-        str::from_utf8_slice(self.container_as_bytes())
+        str::from_utf8(self.container_as_bytes())
     }
     /// Returns the receiver interpreted as a utf-8 string, if possible
     #[inline]
     fn container_as_str_opt<'a>(&'a self) -> Option<&'a str> {
-        str::from_utf8_slice_opt(self.container_as_bytes())
+        str::from_utf8_opt(self.container_as_bytes())
     }
     /// Returns whether .container_as_str() is guaranteed to not fail
     // FIXME (#8888): Remove unused arg once ::<for T> works
@@ -523,20 +523,18 @@ pub trait GenericPathUnsafe {
 }
 
 /// Helper struct for printing paths with format!()
-pub struct Display<'self, P> {
-    priv path: &'self P,
+pub struct Display<'a, P> {
+    priv path: &'a P,
     priv filename: bool
 }
 
-impl<'self, P: GenericPath> fmt::Default for Display<'self, P> {
+impl<'a, P: GenericPath> fmt::Default for Display<'a, P> {
     fn fmt(d: &Display<P>, f: &mut fmt::Formatter) {
-        do d.with_str |s| {
-            f.pad(s)
-        }
+        d.with_str(|s| f.pad(s))
     }
 }
 
-impl<'self, P: GenericPath> ToStr for Display<'self, P> {
+impl<'a, P: GenericPath> ToStr for Display<'a, P> {
     /// Returns the path as a string
     ///
     /// If the path is not UTF-8, invalid sequences with be replaced with the
@@ -553,13 +551,13 @@ impl<'self, P: GenericPath> ToStr for Display<'self, P> {
     }
 }
 
-impl<'self, P: GenericPath> Display<'self, P> {
+impl<'a, P: GenericPath> Display<'a, P> {
     /// Provides the path as a string to a closure
     ///
     /// If the path is not UTF-8, invalid sequences will be replaced with the
     /// unicode replacement char. This involves allocation.
     #[inline]
-    pub fn with_str<T>(&self, f: &fn(&str) -> T) -> T {
+    pub fn with_str<T>(&self, f: |&str| -> T) -> T {
         let opt = if self.filename { self.path.filename_str() }
                   else { self.path.as_str() };
         match opt {
@@ -572,7 +570,7 @@ impl<'self, P: GenericPath> Display<'self, P> {
     }
 }
 
-impl<'self> BytesContainer for &'self str {
+impl<'a> BytesContainer for &'a str {
     #[inline]
     fn container_as_bytes<'a>(&'a self) -> &'a [u8] {
         self.as_bytes()
@@ -586,7 +584,7 @@ impl<'self> BytesContainer for &'self str {
         Some(*self)
     }
     #[inline]
-    fn is_str(_: Option<&'self str>) -> bool { true }
+    fn is_str(_: Option<&'a str>) -> bool { true }
 }
 
 impl BytesContainer for ~str {
@@ -627,7 +625,7 @@ impl BytesContainer for @str {
     fn is_str(_: Option<@str>) -> bool { true }
 }
 
-impl<'self> BytesContainer for &'self [u8] {
+impl<'a> BytesContainer for &'a [u8] {
     #[inline]
     fn container_as_bytes<'a>(&'a self) -> &'a [u8] {
         *self
@@ -688,228 +686,6 @@ fn from_utf8_with_replacement(mut v: &[u8]) -> ~str {
     }
     s
 }
-
-// FIXME (#9537): libc::stat should derive Default
-#[cfg(target_os = "linux")]
-#[cfg(target_os = "android")]
-mod stat {
-    #[allow(missing_doc)];
-
-    #[cfg(target_arch = "x86")]
-    pub mod arch {
-        use libc;
-
-        pub fn default_stat() -> libc::stat {
-            libc::stat {
-                st_dev: 0,
-                __pad1: 0,
-                st_ino: 0,
-                st_mode: 0,
-                st_nlink: 0,
-                st_uid: 0,
-                st_gid: 0,
-                st_rdev: 0,
-                __pad2: 0,
-                st_size: 0,
-                st_blksize: 0,
-                st_blocks: 0,
-                st_atime: 0,
-                st_atime_nsec: 0,
-                st_mtime: 0,
-                st_mtime_nsec: 0,
-                st_ctime: 0,
-                st_ctime_nsec: 0,
-                __unused4: 0,
-                __unused5: 0,
-            }
-        }
-    }
-
-    #[cfg(target_arch = "arm")]
-    pub mod arch {
-        use libc;
-
-        pub fn default_stat() -> libc::stat {
-            libc::stat {
-                st_dev: 0,
-                __pad0: [0, ..4],
-                __st_ino: 0,
-                st_mode: 0,
-                st_nlink: 0,
-                st_uid: 0,
-                st_gid: 0,
-                st_rdev: 0,
-                __pad3: [0, ..4],
-                st_size: 0,
-                st_blksize: 0,
-                st_blocks: 0,
-                st_atime: 0,
-                st_atime_nsec: 0,
-                st_mtime: 0,
-                st_mtime_nsec: 0,
-                st_ctime: 0,
-                st_ctime_nsec: 0,
-                st_ino: 0
-            }
-        }
-    }
-
-    #[cfg(target_arch = "mips")]
-    pub mod arch {
-        use libc;
-
-        pub fn default_stat() -> libc::stat {
-            libc::stat {
-                st_dev: 0,
-                st_pad1: [0, ..3],
-                st_ino: 0,
-                st_mode: 0,
-                st_nlink: 0,
-                st_uid: 0,
-                st_gid: 0,
-                st_rdev: 0,
-                st_pad2: [0, ..2],
-                st_size: 0,
-                st_pad3: 0,
-                st_atime: 0,
-                st_atime_nsec: 0,
-                st_mtime: 0,
-                st_mtime_nsec: 0,
-                st_ctime: 0,
-                st_ctime_nsec: 0,
-                st_blksize: 0,
-                st_blocks: 0,
-                st_pad5: [0, ..14],
-            }
-        }
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    pub mod arch {
-        use libc;
-
-        pub fn default_stat() -> libc::stat {
-            libc::stat {
-                st_dev: 0,
-                st_ino: 0,
-                st_nlink: 0,
-                st_mode: 0,
-                st_uid: 0,
-                st_gid: 0,
-                __pad0: 0,
-                st_rdev: 0,
-                st_size: 0,
-                st_blksize: 0,
-                st_blocks: 0,
-                st_atime: 0,
-                st_atime_nsec: 0,
-                st_mtime: 0,
-                st_mtime_nsec: 0,
-                st_ctime: 0,
-                st_ctime_nsec: 0,
-                __unused: [0, 0, 0],
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "freebsd")]
-mod stat {
-    #[allow(missing_doc)];
-
-    #[cfg(target_arch = "x86_64")]
-    pub mod arch {
-        use libc;
-
-        pub fn default_stat() -> libc::stat {
-            libc::stat {
-                st_dev: 0,
-                st_ino: 0,
-                st_mode: 0,
-                st_nlink: 0,
-                st_uid: 0,
-                st_gid: 0,
-                st_rdev: 0,
-                st_atime: 0,
-                st_atime_nsec: 0,
-                st_mtime: 0,
-                st_mtime_nsec: 0,
-                st_ctime: 0,
-                st_ctime_nsec: 0,
-                st_size: 0,
-                st_blocks: 0,
-                st_blksize: 0,
-                st_flags: 0,
-                st_gen: 0,
-                st_lspare: 0,
-                st_birthtime: 0,
-                st_birthtime_nsec: 0,
-                __unused: [0, 0],
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-mod stat {
-    #[allow(missing_doc)];
-
-    pub mod arch {
-        use libc;
-
-        pub fn default_stat() -> libc::stat {
-            libc::stat {
-                st_dev: 0,
-                st_mode: 0,
-                st_nlink: 0,
-                st_ino: 0,
-                st_uid: 0,
-                st_gid: 0,
-                st_rdev: 0,
-                st_atime: 0,
-                st_atime_nsec: 0,
-                st_mtime: 0,
-                st_mtime_nsec: 0,
-                st_ctime: 0,
-                st_ctime_nsec: 0,
-                st_birthtime: 0,
-                st_birthtime_nsec: 0,
-                st_size: 0,
-                st_blocks: 0,
-                st_blksize: 0,
-                st_flags: 0,
-                st_gen: 0,
-                st_lspare: 0,
-                st_qspare: [0, 0],
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "win32")]
-mod stat {
-    #[allow(missing_doc)];
-
-    pub mod arch {
-        use libc;
-        pub fn default_stat() -> libc::stat {
-            libc::stat {
-                st_dev: 0,
-                st_ino: 0,
-                st_mode: 0,
-                st_nlink: 0,
-                st_uid: 0,
-                st_gid: 0,
-                st_rdev: 0,
-                st_size: 0,
-                st_atime: 0,
-                st_mtime: 0,
-                st_ctime: 0,
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{GenericPath, PosixPath, WindowsPath};
@@ -921,7 +697,7 @@ mod tests {
         let path: PosixPath = PosixPath::new(input.to_c_str());
         assert_eq!(path.as_vec(), input.as_bytes());
 
-        let input = "\\foo\\bar\\baz";
+        let input = r"\foo\bar\baz";
         let path: WindowsPath = WindowsPath::new(input.to_c_str());
         assert_eq!(path.as_str().unwrap(), input.as_slice());
     }

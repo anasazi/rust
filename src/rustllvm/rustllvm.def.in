@@ -3,9 +3,6 @@ LLVMRustWriteOutputFile
 LLVMRustGetLastError
 LLVMRustConstSmallInt
 LLVMRustConstInt
-LLVMRustLoadCrate
-LLVMRustPrepareJIT
-LLVMRustBuildJIT
 LLVMRustPrintPassTimings
 LLVMRustStartMultithreading
 LLVMCreateObjectFile
@@ -629,3 +626,9 @@ LLVMRustAddAlwaysInlinePass
 LLVMAddReturnAttribute
 LLVMRemoveReturnAttribute
 LLVMTypeToString
+LLVMAddColdAttribute
+LLVMCreateMemoryBufferWithMemoryRange
+LLVMCreateMemoryBufferWithMemoryRangeCopy
+LLVMPassManagerBuilderPopulateLTOPassManager
+LLVMRustLinkInExternalBitcode
+LLVMRustRunRestrictionPass

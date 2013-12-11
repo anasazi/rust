@@ -1,4 +1,3 @@
-// -*- rust -*-
 // Copyright 2012 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
@@ -14,7 +13,7 @@ extern mod extra;
 use std::task;
 
 pub fn main() {
-    task::spawn(|| child(10) );
+    task::spawn(proc() child(10) );
 }
 
-fn child(i: int) { error2!("{}", i); assert!((i == 10)); }
+fn child(i: int) { error!("{}", i); assert!((i == 10)); }

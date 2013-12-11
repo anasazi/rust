@@ -10,17 +10,19 @@
 
 // xfail-fast
 
+#[feature(managed_boxes)];
+
 use std::libc::c_void;
 use std::ptr;
-use std::sys;
-use std::unstable::intrinsics::{TyDesc, get_tydesc, visit_tydesc, TyVisitor, Opaque};
+use std::mem;
+use std::unstable::intrinsics::{TyDesc, get_tydesc, visit_tydesc, TyVisitor, Disr, Opaque};
 use std::unstable::raw::Vec;
 
 #[doc = "High-level interfaces to `std::unstable::intrinsics::visit_ty` reflection system."]
 
 /// Trait for visitor that wishes to reflect on data.
 trait movable_ptr {
-    fn move_ptr(&mut self, adjustment: &fn(*c_void) -> *c_void);
+    fn move_ptr(&mut self, adjustment: |*c_void| -> *c_void);
 }
 
 /// Helper function for alignment calculation.
@@ -35,26 +37,22 @@ impl<V:TyVisitor + movable_ptr> ptr_visit_adaptor<V> {
 
     #[inline(always)]
     pub fn bump(&mut self, sz: uint) {
-      do self.inner.move_ptr() |p| {
-            ((p as uint) + sz) as *c_void
-      };
+      self.inner.move_ptr(|p| ((p as uint) + sz) as *c_void)
     }
 
     #[inline(always)]
     pub fn align(&mut self, a: uint) {
-      do self.inner.move_ptr() |p| {
-            align(p as uint, a) as *c_void
-      };
+      self.inner.move_ptr(|p| align(p as uint, a) as *c_void)
     }
 
     #[inline(always)]
     pub fn align_to<T>(&mut self) {
-        self.align(sys::min_align_of::<T>());
+        self.align(mem::min_align_of::<T>());
     }
 
     #[inline(always)]
     pub fn bump_past<T>(&mut self) {
-        self.bump(sys::size_of::<T>());
+        self.bump(mem::size_of::<T>());
     }
 
 }
@@ -364,8 +362,8 @@ impl<V:TyVisitor + movable_ptr> TyVisitor for ptr_visit_adaptor<V> {
         true
     }
 
-    fn visit_fn_output(&mut self, retstyle: uint, inner: *TyDesc) -> bool {
-        if ! self.inner.visit_fn_output(retstyle, inner) { return false; }
+    fn visit_fn_output(&mut self, retstyle: uint, variadic: bool, inner: *TyDesc) -> bool {
+        if ! self.inner.visit_fn_output(retstyle, variadic, inner) { return false; }
         true
     }
 
@@ -378,7 +376,7 @@ impl<V:TyVisitor + movable_ptr> TyVisitor for ptr_visit_adaptor<V> {
     }
 
     fn visit_enter_enum(&mut self, n_variants: uint,
-                        get_disr: extern unsafe fn(ptr: *Opaque) -> int,
+                        get_disr: extern unsafe fn(ptr: *Opaque) -> Disr,
                         sz: uint, align: uint)
                      -> bool {
         self.align(align);
@@ -387,7 +385,7 @@ impl<V:TyVisitor + movable_ptr> TyVisitor for ptr_visit_adaptor<V> {
     }
 
     fn visit_enter_enum_variant(&mut self, variant: uint,
-                                disr_val: int,
+                                disr_val: Disr,
                                 n_fields: uint,
                                 name: &str) -> bool {
         if ! self.inner.visit_enter_enum_variant(variant, disr_val,
@@ -403,7 +401,7 @@ impl<V:TyVisitor + movable_ptr> TyVisitor for ptr_visit_adaptor<V> {
     }
 
     fn visit_leave_enum_variant(&mut self, variant: uint,
-                                disr_val: int,
+                                disr_val: Disr,
                                 n_fields: uint,
                                 name: &str) -> bool {
         if ! self.inner.visit_leave_enum_variant(variant, disr_val,
@@ -414,7 +412,7 @@ impl<V:TyVisitor + movable_ptr> TyVisitor for ptr_visit_adaptor<V> {
     }
 
     fn visit_leave_enum(&mut self, n_variants: uint,
-                        get_disr: extern unsafe fn(ptr: *Opaque) -> int,
+                        get_disr: extern unsafe fn(ptr: *Opaque) -> Disr,
                         sz: uint, align: uint)
                      -> bool {
         if ! self.inner.visit_leave_enum(n_variants, get_disr, sz, align) { return false; }
@@ -469,7 +467,7 @@ struct Stuff {
 }
 
 impl my_visitor {
-    pub fn get<T:Clone>(&mut self, f: &fn(T)) {
+    pub fn get<T:Clone>(&mut self, f: |T|) {
         unsafe {
             f((*(self.ptr1 as *T)).clone());
         }
@@ -488,7 +486,7 @@ impl my_visitor {
 struct Inner<V> { inner: V }
 
 impl movable_ptr for my_visitor {
-    fn move_ptr(&mut self, adjustment: &fn(*c_void) -> *c_void) {
+    fn move_ptr(&mut self, adjustment: |*c_void| -> *c_void) {
         self.ptr1 = adjustment(self.ptr1);
         self.ptr2 = adjustment(self.ptr2);
     }
@@ -499,15 +497,11 @@ impl TyVisitor for my_visitor {
     fn visit_bot(&mut self) -> bool { true }
     fn visit_nil(&mut self) -> bool { true }
     fn visit_bool(&mut self) -> bool {
-        do self.get::<bool>() |b| {
-            self.vals.push(b.to_str());
-        };
+        self.get::<bool>(|b| self.vals.push(b.to_str()));
         true
     }
     fn visit_int(&mut self) -> bool {
-        do self.get::<int>() |i| {
-            self.vals.push(i.to_str());
-        };
+        self.get::<int>(|i| self.vals.push(i.to_str()));
         true
     }
     fn visit_i8(&mut self) -> bool { true }
@@ -551,7 +545,7 @@ impl TyVisitor for my_visitor {
                        _sz: uint, _align: uint) -> bool { true }
     fn visit_rec_field(&mut self, _i: uint, _name: &str,
                        _mtbl: uint, inner: *TyDesc) -> bool {
-        error2!("rec field!");
+        error!("rec field!");
         self.visit_inner(inner)
     }
     fn visit_leave_rec(&mut self, _n_fields: uint,
@@ -569,31 +563,31 @@ impl TyVisitor for my_visitor {
     fn visit_enter_tup(&mut self, _n_fields: uint,
                        _sz: uint, _align: uint) -> bool { true }
     fn visit_tup_field(&mut self, _i: uint, inner: *TyDesc) -> bool {
-        error2!("tup field!");
+        error!("tup field!");
         self.visit_inner(inner)
     }
     fn visit_leave_tup(&mut self, _n_fields: uint,
                        _sz: uint, _align: uint) -> bool { true }
 
     fn visit_enter_enum(&mut self, _n_variants: uint,
-                        _get_disr: extern unsafe fn(ptr: *Opaque) -> int,
+                        _get_disr: extern unsafe fn(ptr: *Opaque) -> Disr,
                         _sz: uint, _align: uint) -> bool {
         // FIXME (#3732): this needs to rewind between enum variants, or something.
         true
     }
     fn visit_enter_enum_variant(&mut self, _variant: uint,
-                                _disr_val: int,
+                                _disr_val: Disr,
                                 _n_fields: uint,
                                 _name: &str) -> bool { true }
     fn visit_enum_variant_field(&mut self, _i: uint, _offset: uint, inner: *TyDesc) -> bool {
         self.visit_inner(inner)
     }
     fn visit_leave_enum_variant(&mut self, _variant: uint,
-                                _disr_val: int,
+                                _disr_val: Disr,
                                 _n_fields: uint,
                                 _name: &str) -> bool { true }
     fn visit_leave_enum(&mut self, _n_variants: uint,
-                        _get_disr: extern unsafe fn(ptr: *Opaque) -> int,
+                        _get_disr: extern unsafe fn(ptr: *Opaque) -> Disr,
                         _sz: uint, _align: uint) -> bool { true }
 
     fn visit_enter_fn(&mut self, _purity: uint, _proto: uint,
@@ -601,7 +595,7 @@ impl TyVisitor for my_visitor {
     fn visit_fn_input(&mut self, _i: uint, _mode: uint, _inner: *TyDesc) -> bool {
         true
     }
-    fn visit_fn_output(&mut self, _retstyle: uint, _inner: *TyDesc) -> bool {
+    fn visit_fn_output(&mut self, _retstyle: uint, _variadic: bool, _inner: *TyDesc) -> bool {
         true
     }
     fn visit_leave_fn(&mut self, _purity: uint, _proto: uint,
@@ -633,7 +627,7 @@ pub fn main() {
                                        vals: ~[]});
         let mut v = ptr_visit_adaptor(Inner {inner: u});
         let td = get_tydesc_for(r);
-        error2!("tydesc sz: {}, align: {}",
+        error!("tydesc sz: {}, align: {}",
                (*td).size, (*td).align);
         visit_tydesc(td, &mut v as &mut TyVisitor);
 
@@ -641,7 +635,7 @@ pub fn main() {
         for s in r.iter() {
             println!("val: {}", *s);
         }
-        error2!("{:?}", u.vals.clone());
+        error!("{:?}", u.vals.clone());
         assert_eq!(u.vals.clone(),
                    ~[ ~"1", ~"2", ~"3", ~"true", ~"false", ~"5", ~"4", ~"3", ~"12"]);
     }

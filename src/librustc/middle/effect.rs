@@ -55,7 +55,7 @@ impl EffectCheckVisitor {
             }
             UnsafeBlock(block_id) => {
                 // OK, but record this.
-                debug2!("effect: recording unsafe block as used: {:?}", block_id);
+                debug!("effect: recording unsafe block as used: {:?}", block_id);
                 let _ = self.tcx.used_unsafe.insert(block_id);
             }
             UnsafeFn => {}
@@ -67,10 +67,10 @@ impl EffectCheckVisitor {
             ast::ExprIndex(_, base, _) => ty::node_id_to_type(self.tcx, base.id),
             _ => return
         };
-        debug2!("effect: checking index with base type {}",
+        debug!("effect: checking index with base type {}",
                 ppaux::ty_to_str(self.tcx, base_type));
         match ty::get(base_type).sty {
-            ty::ty_estr(*) => {
+            ty::ty_estr(..) => {
                 self.tcx.sess.span_err(e.span,
                     "modification of string types is not allowed");
             }
@@ -81,7 +81,7 @@ impl EffectCheckVisitor {
 
 impl Visitor<()> for EffectCheckVisitor {
     fn visit_fn(&mut self, fn_kind: &visit::fn_kind, fn_decl: &ast::fn_decl,
-                block: &ast::Block, span: Span, node_id: ast::NodeId, _:()) {
+                block: ast::P<ast::Block>, span: Span, node_id: ast::NodeId, _:()) {
 
         let (is_item_fn, is_unsafe_fn) = match *fn_kind {
             visit::fk_item_fn(_, _, purity, _) =>
@@ -103,10 +103,10 @@ impl Visitor<()> for EffectCheckVisitor {
         self.unsafe_context = old_unsafe_context
     }
 
-    fn visit_block(&mut self, block: &ast::Block, _:()) {
+    fn visit_block(&mut self, block: ast::P<ast::Block>, _:()) {
         let old_unsafe_context = self.unsafe_context;
         let is_unsafe = match block.rules {
-            ast::UnsafeBlock(*) => true, ast::DefaultBlock => false
+            ast::UnsafeBlock(..) => true, ast::DefaultBlock => false
         };
         if is_unsafe && self.unsafe_context == SafeContext {
             self.unsafe_context = UnsafeBlock(block.id)
@@ -121,7 +121,7 @@ impl Visitor<()> for EffectCheckVisitor {
         match expr.node {
             ast::ExprMethodCall(callee_id, _, _, _, _, _) => {
                 let base_type = ty::node_id_to_type(self.tcx, callee_id);
-                debug2!("effect: method call case, base type is {}",
+                debug!("effect: method call case, base type is {}",
                        ppaux::ty_to_str(self.tcx, base_type));
                 if type_is_unsafe_function(base_type) {
                     self.require_unsafe(expr.span,
@@ -130,7 +130,7 @@ impl Visitor<()> for EffectCheckVisitor {
             }
             ast::ExprCall(base, _, _) => {
                 let base_type = ty::node_id_to_type(self.tcx, base.id);
-                debug2!("effect: call case, base type is {}",
+                debug!("effect: call case, base type is {}",
                        ppaux::ty_to_str(self.tcx, base_type));
                 if type_is_unsafe_function(base_type) {
                     self.require_unsafe(expr.span, "call to unsafe function")
@@ -138,7 +138,7 @@ impl Visitor<()> for EffectCheckVisitor {
             }
             ast::ExprUnary(_, ast::UnDeref, base) => {
                 let base_type = ty::node_id_to_type(self.tcx, base.id);
-                debug2!("effect: unary case, base type is {}",
+                debug!("effect: unary case, base type is {}",
                         ppaux::ty_to_str(self.tcx, base_type));
                 match ty::get(base_type).sty {
                     ty::ty_ptr(_) => {
@@ -154,10 +154,10 @@ impl Visitor<()> for EffectCheckVisitor {
             ast::ExprAddrOf(ast::MutMutable, base) => {
                 self.check_str_index(base);
             }
-            ast::ExprInlineAsm(*) => {
+            ast::ExprInlineAsm(..) => {
                 self.require_unsafe(expr.span, "use of inline assembly")
             }
-            ast::ExprPath(*) => {
+            ast::ExprPath(..) => {
                 match ty::resolve_expr(self.tcx, expr) {
                     ast::DefStatic(_, true) => {
                         self.require_unsafe(expr.span, "use of mutable static")

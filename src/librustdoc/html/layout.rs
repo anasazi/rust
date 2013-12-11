@@ -9,7 +9,7 @@
 // except according to those terms.
 
 use std::fmt;
-use std::rt::io;
+use std::io;
 
 #[deriving(Clone)]
 pub struct Layout {
@@ -18,17 +18,17 @@ pub struct Layout {
     crate: ~str,
 }
 
-pub struct Page<'self> {
-    title: &'self str,
-    ty: &'self str,
-    root_path: &'self str,
+pub struct Page<'a> {
+    title: &'a str,
+    ty: &'a str,
+    root_path: &'a str,
 }
 
 pub fn render<T: fmt::Default, S: fmt::Default>(
     dst: &mut io::Writer, layout: &Layout, page: &Page, sidebar: &S, t: &T)
 {
-    write!(dst, "
-<!DOCTYPE html>
+    write!(dst,
+"<!DOCTYPE html>
 <html lang=\"en\">
 <head>
     <meta charset=\"utf-8\" />
@@ -38,15 +38,13 @@ pub fn render<T: fmt::Default, S: fmt::Default>(
           rel='stylesheet' type='text/css'>
     <link rel=\"stylesheet\" type=\"text/css\" href=\"{root_path}{crate}/main.css\">
 
-    {favicon, select, none{} other{
-        <link rel=\"icon\" href=\"#\" sizes=\"16x16\"
-              type=\"image/vnd.microsoft.icon\" />}}
+    {favicon, select, none{} other{<link rel=\"shortcut icon\" href=\"#\" />}}
 </head>
 <body>
     <!--[if lte IE 8]>
     <div class=\"warning\">
         This old browser is unsupported and will most likely display funky
-        things
+        things.
     </div>
     <![endif]-->
 
@@ -60,9 +58,13 @@ pub fn render<T: fmt::Default, S: fmt::Default>(
 
     <nav class=\"sub\">
         <form class=\"search-form js-only\">
-            <input class=\"search-input\" name=\"search\"
-                   autocomplete=\"off\" />
             <button class=\"do-search\">Search</button>
+            <div class=\"search-container\">
+                <input class=\"search-input\" name=\"search\"
+                       autocomplete=\"off\"
+                       placeholder=\"Search documentation...\"
+                       type=\"search\" />
+            </div>
         </form>
     </nav>
 
@@ -120,10 +122,6 @@ pub fn render<T: fmt::Default, S: fmt::Default>(
     sidebar   = *sidebar,
     crate     = layout.crate,
     );
-}
-
-fn boolstr(b: bool) -> &'static str {
-    if b { "true" } else { "false" }
 }
 
 fn nonestr<'a>(s: &'a str) -> &'a str {

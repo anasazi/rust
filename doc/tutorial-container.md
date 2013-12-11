@@ -69,7 +69,7 @@ heapsort.
 ## Iteration protocol
 
 The iteration protocol is defined by the `Iterator` trait in the
-`std::iterator` module. The minimal implementation of the trait is a `next`
+`std::iter` module. The minimal implementation of the trait is a `next`
 method, yielding the next element from an iterator object:
 
 ~~~
@@ -87,6 +87,7 @@ Reaching the end of the iterator is signalled by returning `None` instead of
 `Some(item)`:
 
 ~~~
+# fn main() {}
 /// A stream of N zeroes
 struct ZeroStream {
     priv remaining: uint
@@ -301,6 +302,7 @@ the iterator can provide better information.
 The `ZeroStream` from earlier can provide an exact lower and upper bound:
 
 ~~~
+# fn main() {}
 /// A stream of N zeroes
 struct ZeroStream {
     priv remaining: uint

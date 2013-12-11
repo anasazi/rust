@@ -27,7 +27,6 @@ $ rustc main.rs
 main.rs:1:0: 1:17 error: can't find crate for `hello`
 main.rs:1 extern mod hello;
           ^~~~~~~~~~~~~~~~~
-
 ~~~~
 
 This makes sense, as we haven't gotten it from anywhere yet!  Luckily for us,
@@ -199,7 +198,7 @@ Now you can install and use it! Go anywhere else in your filesystem:
 
 ~~~ {.notrust}
 $ cd ~/src/foo
-$ rustpkg install github/YOUR_USERNAME/hello
+$ rustpkg install github.com/YOUR_USERNAME/hello
 WARNING: The Rust package manager is experimental and may be unstable
 note: Installed package github.com/YOUR_USERNAME/hello-0.1 to /home/yourusername/src/hello/.rust
 ~~~
@@ -216,7 +215,7 @@ a function that can be sensibly tested:
 #[license = "MIT"];
 
 pub fn is_even(i: uint) -> bool {
-	i % 2 == 0
+    i % 2 == 0
 }
 ~~~
 
@@ -230,9 +229,9 @@ use hello::is_even;
 
 #[test]
 fn test_is_even() {
-   assert!(is_even(0));
-   assert!(!is_even(1));
-   assert!(is_even(2));	
+    assert!(is_even(0));
+    assert!(!is_even(1));
+    assert!(is_even(2));
 }
 ~~~
 

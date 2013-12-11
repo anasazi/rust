@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[crate_id="externcallback#0.1"];
+// NOTE: remove after the next snapshot
 #[link(name = "externcallback",
        vers = "0.1")];
 
@@ -18,6 +20,7 @@ use std::libc;
 pub mod rustrt {
     use std::libc;
 
+    #[link(name = "rustrt")]
     extern {
         pub fn rust_dbg_call(cb: extern "C" fn(libc::uintptr_t) -> libc::uintptr_t,
                              data: libc::uintptr_t)
@@ -25,10 +28,9 @@ pub mod rustrt {
     }
 }
 
-#[fixed_stack_segment] #[inline(never)]
 pub fn fact(n: uint) -> uint {
     unsafe {
-        info2!("n = {}", n);
+        info!("n = {}", n);
         rustrt::rust_dbg_call(cb, n)
     }
 }

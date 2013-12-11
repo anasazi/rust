@@ -50,14 +50,14 @@ impl<T> OptVec<T> {
         *self = Vec(~[t]);
     }
 
-    pub fn map<U>(&self, op: &fn(&T) -> U) -> OptVec<U> {
+    pub fn map<U>(&self, op: |&T| -> U) -> OptVec<U> {
         match *self {
             Empty => Empty,
             Vec(ref v) => Vec(v.map(op))
         }
     }
 
-    pub fn map_move<U>(self, op: &fn(T) -> U) -> OptVec<U> {
+    pub fn map_move<U>(self, op: |T| -> U) -> OptVec<U> {
         match self {
             Empty => Empty,
             Vec(v) => Vec(v.move_iter().map(op).collect())
@@ -66,7 +66,7 @@ impl<T> OptVec<T> {
 
     pub fn get<'a>(&'a self, i: uint) -> &'a T {
         match *self {
-            Empty => fail2!("Invalid index {}", i),
+            Empty => fail!("Invalid index {}", i),
             Vec(ref v) => &v[i]
         }
     }
@@ -91,11 +91,11 @@ impl<T> OptVec<T> {
     }
 
     #[inline]
-    pub fn map_to_vec<B>(&self, op: &fn(&T) -> B) -> ~[B] {
+    pub fn map_to_vec<B>(&self, op: |&T| -> B) -> ~[B] {
         self.iter().map(op).collect()
     }
 
-    pub fn mapi_to_vec<B>(&self, op: &fn(uint, &T) -> B) -> ~[B] {
+    pub fn mapi_to_vec<B>(&self, op: |uint, &T| -> B) -> ~[B] {
         let mut index = 0;
         self.map_to_vec(|a| {
             let i = index;
@@ -144,13 +144,13 @@ impl<T> Default for OptVec<T> {
     fn default() -> OptVec<T> { Empty }
 }
 
-pub struct OptVecIterator<'self, T> {
-    priv iter: Option<VecIterator<'self, T>>
+pub struct OptVecIterator<'a, T> {
+    priv iter: Option<VecIterator<'a, T>>
 }
 
-impl<'self, T> Iterator<&'self T> for OptVecIterator<'self, T> {
+impl<'a, T> Iterator<&'a T> for OptVecIterator<'a, T> {
     #[inline]
-    fn next(&mut self) -> Option<&'self T> {
+    fn next(&mut self) -> Option<&'a T> {
         match self.iter {
             Some(ref mut x) => x.next(),
             None => None
@@ -163,5 +163,15 @@ impl<'self, T> Iterator<&'self T> for OptVecIterator<'self, T> {
             Some(ref x) => x.size_hint(),
             None => (0, Some(0))
         }
+    }
+}
+
+impl<A> FromIterator<A> for OptVec<A> {
+    fn from_iterator<T: Iterator<A>>(iterator: &mut T) -> OptVec<A> {
+        let mut r = Empty;
+        for x in *iterator {
+            r.push(x);
+        }
+        r
     }
 }

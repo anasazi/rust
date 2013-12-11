@@ -90,7 +90,7 @@ pub fn lookup_variant_by_id(tcx: ty::ctxt,
                             enum_def: ast::DefId,
                             variant_def: ast::DefId)
                        -> Option<@Expr> {
-    fn variant_expr(variants: &[ast::variant], id: ast::NodeId) -> Option<@Expr> {
+    fn variant_expr(variants: &[ast::P<ast::variant>], id: ast::NodeId) -> Option<@Expr> {
         for variant in variants.iter() {
             if variant.node.id == id {
                 return variant.node.disr_expr;
@@ -193,7 +193,7 @@ impl ConstEvalVisitor {
         let cn = match e.node {
             ast::ExprLit(lit) => {
                 match lit.node {
-                    ast::lit_str(*) | ast::lit_float(*) => general_const,
+                    ast::lit_str(..) | ast::lit_float(..) => general_const,
                     _ => integral_const
                 }
             }
@@ -219,9 +219,7 @@ impl ConstEvalVisitor {
             }
 
             ast::ExprStruct(_, ref fs, None) => {
-                let cs = do fs.iter().map |f| {
-                    self.classify(f.expr)
-                };
+                let cs = fs.iter().map(|f| self.classify(f.expr));
                 join_all(cs)
             }
 
@@ -248,7 +246,7 @@ impl ConstEvalVisitor {
             // surrounding nonlocal constants. But we don't yet.
             ast::ExprPath(_) => self.lookup_constness(e),
 
-            ast::ExprRepeat(*) => general_const,
+            ast::ExprRepeat(..) => general_const,
 
             _ => non_const
         };
@@ -297,6 +295,7 @@ pub enum const_val {
     const_int(i64),
     const_uint(u64),
     const_str(@str),
+    const_binary(@[u8]),
     const_bool(bool)
 }
 
@@ -476,6 +475,7 @@ pub fn eval_const_expr_partial<T: ty::ExprTyProvider>(tcx: &T, e: &Expr)
 pub fn lit_to_const(lit: &lit) -> const_val {
     match lit.node {
       lit_str(s, _) => const_str(s),
+      lit_binary(data) => const_binary(data),
       lit_char(n) => const_uint(n as u64),
       lit_int(n, _) => const_int(n),
       lit_uint(n, _) => const_uint(n),

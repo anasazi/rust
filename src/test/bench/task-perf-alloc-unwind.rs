@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[feature(managed_boxes)];
+
 extern mod extra;
 
 use extra::list::{List, Cons, Nil};
@@ -31,11 +33,11 @@ fn main() {
 
 fn run(repeat: int, depth: int) {
     for _ in range(0, repeat) {
-        info2!("starting {:.4f}", precise_time_s());
+        info!("starting {:.4f}", precise_time_s());
         do task::try {
             recurse_or_fail(depth, None)
         };
-        info2!("stopping {:.4f}", precise_time_s());
+        info!("stopping {:.4f}", precise_time_s());
     }
 }
 
@@ -44,7 +46,7 @@ type nillist = List<()>;
 // Filled with things that have to be unwound
 
 struct State {
-    box: @nillist,
+    managed: @nillist,
     unique: ~nillist,
     tuple: (@nillist, ~nillist),
     vec: ~[@nillist],
@@ -68,15 +70,15 @@ fn r(l: @nillist) -> r {
 
 fn recurse_or_fail(depth: int, st: Option<State>) {
     if depth == 0 {
-        info2!("unwinding {:.4f}", precise_time_s());
-        fail2!();
+        info!("unwinding {:.4f}", precise_time_s());
+        fail!();
     } else {
         let depth = depth - 1;
 
         let st = match st {
           None => {
             State {
-                box: @Nil,
+                managed: @Nil,
                 unique: ~Nil,
                 tuple: (@Nil, ~Nil),
                 vec: ~[@Nil],
@@ -85,7 +87,7 @@ fn recurse_or_fail(depth: int, st: Option<State>) {
           }
           Some(st) => {
             State {
-                box: @Cons((), st.box),
+                managed: @Cons((), st.managed),
                 unique: ~Cons((), @*st.unique),
                 tuple: (@Cons((), st.tuple.first()),
                         ~Cons((), @*st.tuple.second())),

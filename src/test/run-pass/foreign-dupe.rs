@@ -14,7 +14,7 @@
 mod rustrt1 {
     use std::libc;
 
-    #[link_name = "rustrt"]
+    #[link(name = "rustrt")]
     extern {
         pub fn rust_get_test_int() -> libc::intptr_t;
     }
@@ -23,13 +23,12 @@ mod rustrt1 {
 mod rustrt2 {
     use std::libc;
 
-    #[link_name = "rustrt"]
+    #[link(name = "rustrt")]
     extern {
         pub fn rust_get_test_int() -> libc::intptr_t;
     }
 }
 
-#[fixed_stack_segment] #[inline(never)]
 pub fn main() {
     unsafe {
         rustrt1::rust_get_test_int();

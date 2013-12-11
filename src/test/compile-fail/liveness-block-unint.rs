@@ -8,10 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn force(f: &fn()) { f(); }
+fn force(f: ||) { f(); }
 fn main() {
     let x: int;
     force(|| {
-        info2!("{}", x); //~ ERROR capture of possibly uninitialized variable: `x`
+        info!("{}", x); //~ ERROR capture of possibly uninitialized variable: `x`
     });
 }

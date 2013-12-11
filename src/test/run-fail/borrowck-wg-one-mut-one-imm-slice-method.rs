@@ -3,12 +3,14 @@
 // Test that write guards trigger when there is a coercion to
 // a slice on the receiver of a method.
 
+#[feature(managed_boxes)];
+
 trait MyMutSlice {
     fn my_mut_slice(self) -> Self;
 }
 
-impl<'self, T> MyMutSlice for &'self mut [T] {
-    fn my_mut_slice(self) -> &'self mut [T] {
+impl<'a, T> MyMutSlice for &'a mut [T] {
+    fn my_mut_slice(self) -> &'a mut [T] {
         self
     }
 }
@@ -17,8 +19,8 @@ trait MySlice {
     fn my_slice(self) -> Self;
 }
 
-impl<'self, T> MySlice for &'self [T] {
-    fn my_slice(self) -> &'self [T] {
+impl<'a, T> MySlice for &'a [T] {
+    fn my_slice(self) -> &'a [T] {
         self
     }
 }

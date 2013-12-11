@@ -21,7 +21,6 @@ use util::common::stmt_set;
 use util::ppaux::{note_and_explain_region, Repr, UserString};
 
 use std::hashmap::{HashSet, HashMap};
-use std::io;
 use std::ops::{BitOr, BitAnd};
 use std::result::{Result};
 use syntax::ast;
@@ -30,7 +29,7 @@ use syntax::codemap::Span;
 use syntax::parse::token;
 use syntax::visit;
 use syntax::visit::{Visitor,fn_kind};
-use syntax::ast::{fn_decl,Block,NodeId};
+use syntax::ast::{P,fn_decl,Block,NodeId};
 
 macro_rules! if_ok(
     ($inp: expr) => (
@@ -63,7 +62,7 @@ pub type LoanDataFlow = DataFlowContext<LoanDataFlowOperator>;
 
 impl Visitor<()> for BorrowckCtxt {
     fn visit_fn(&mut self, fk:&fn_kind, fd:&fn_decl,
-                b:&Block, s:Span, n:NodeId, _:()) {
+                b:P<Block>, s:Span, n:NodeId, _:()) {
         borrowck_fn(self, fk, fd, b, s, n);
     }
 }
@@ -99,7 +98,7 @@ pub fn check_crate(
     visit::walk_crate(bccx, crate, ());
 
     if tcx.sess.borrowck_stats() {
-        io::println("--- borrowck stats ---");
+        println("--- borrowck stats ---");
         println!("paths requiring guarantees: {}",
                  bccx.stats.guaranteed_paths);
         println!("paths requiring loans     : {}",
@@ -124,18 +123,17 @@ pub fn check_crate(
 fn borrowck_fn(this: &mut BorrowckCtxt,
                fk: &visit::fn_kind,
                decl: &ast::fn_decl,
-               body: &ast::Block,
+               body: ast::P<ast::Block>,
                sp: Span,
                id: ast::NodeId) {
     match fk {
-        &visit::fk_anon(*) |
-        &visit::fk_fn_block(*) => {
+        &visit::fk_fn_block(..) => {
             // Closures are checked as part of their containing fn item.
         }
 
-        &visit::fk_item_fn(*) |
-        &visit::fk_method(*) => {
-            debug2!("borrowck_fn(id={:?})", id);
+        &visit::fk_item_fn(..) |
+        &visit::fk_method(..) => {
+            debug!("borrowck_fn(id={:?})", id);
 
             // Check the body of fn items.
             let (id_range, all_loans, move_data) =
@@ -306,7 +304,7 @@ pub fn opt_loan_path(cmt: mc::cmt) -> Option<@LoanPath> {
     //! traverses the CMT.
 
     match cmt.cat {
-        mc::cat_rvalue(*) |
+        mc::cat_rvalue(..) |
         mc::cat_static_item |
         mc::cat_copied_upvar(_) => {
             None
@@ -319,15 +317,15 @@ pub fn opt_loan_path(cmt: mc::cmt) -> Option<@LoanPath> {
         }
 
         mc::cat_deref(cmt_base, _, pk) => {
-            do opt_loan_path(cmt_base).map |lp| {
+            opt_loan_path(cmt_base).map(|lp| {
                 @LpExtend(lp, cmt.mutbl, LpDeref(pk))
-            }
+            })
         }
 
         mc::cat_interior(cmt_base, ik) => {
-            do opt_loan_path(cmt_base).map |lp| {
+            opt_loan_path(cmt_base).map(|lp| {
                 @LpExtend(lp, cmt.mutbl, LpInterior(ik))
-            }
+            })
         }
 
         mc::cat_downcast(cmt_base) |
@@ -444,7 +442,9 @@ pub enum bckerr_code {
     err_mutbl(LoanMutability),
     err_out_of_root_scope(ty::Region, ty::Region), // superscope, subscope
     err_out_of_scope(ty::Region, ty::Region), // superscope, subscope
-    err_freeze_aliasable_const
+    err_freeze_aliasable_const,
+    err_borrowed_pointer_too_short(
+        ty::Region, ty::Region, RestrictionSet), // loan, ptr
 }
 
 // Combination of an error code and the categorization of the expression
@@ -497,14 +497,14 @@ impl BorrowckCtxt {
                                adj: @ty::AutoAdjustment)
                                -> mc::cmt {
         match *adj {
-            ty::AutoAddEnv(*) => {
+            ty::AutoAddEnv(..) => {
                 // no autoderefs
                 mc::cat_expr_unadjusted(self.tcx, self.method_map, expr)
             }
 
             ty::AutoDerefRef(
                 ty::AutoDerefRef {
-                    autoderefs: autoderefs, _}) => {
+                    autoderefs: autoderefs, ..}) => {
                 mc::cat_expr_autoderefd(self.tcx, self.method_map, expr,
                                         autoderefs)
             }
@@ -534,7 +534,7 @@ impl BorrowckCtxt {
     pub fn cat_pattern(&self,
                        cmt: mc::cmt,
                        pat: @ast::Pat,
-                       op: &fn(mc::cmt, @ast::Pat)) {
+                       op: |mc::cmt, @ast::Pat|) {
         let mc = self.mc_ctxt();
         mc.cat_pattern(cmt, pat, op);
     }
@@ -657,10 +657,10 @@ impl BorrowckCtxt {
                      self.cmt_to_str(err.cmt),
                      self.mut_to_str(lk))
             }
-            err_out_of_root_scope(*) => {
+            err_out_of_root_scope(..) => {
                 format!("cannot root managed value long enough")
             }
-            err_out_of_scope(*) => {
+            err_out_of_scope(..) => {
                 format!("borrowed value does not live long enough")
             }
             err_freeze_aliasable_const => {
@@ -669,6 +669,16 @@ impl BorrowckCtxt {
                 // error message, but then &const and @const are
                 // supposed to be going away.
                 format!("unsafe borrow of aliasable, const value")
+            }
+            err_borrowed_pointer_too_short(..) => {
+                let descr = match opt_loan_path(err.cmt) {
+                    Some(lp) => format!("`{}`", self.loan_path_to_str(lp)),
+                    None => self.cmt_to_str(err.cmt),
+                };
+
+                format!("lifetime of {} is too short to guarantee \
+                        its contents can be safely reborrowed",
+                        descr)
             }
         }
     }
@@ -717,7 +727,7 @@ impl BorrowckCtxt {
     pub fn note_and_explain_bckerr(&self, err: BckError) {
         let code = err.code;
         match code {
-            err_mutbl(*) | err_freeze_aliasable_const(*) => {}
+            err_mutbl(..) | err_freeze_aliasable_const(..) => {}
 
             err_out_of_root_scope(super_scope, sub_scope) => {
                 note_and_explain_region(
@@ -743,7 +753,24 @@ impl BorrowckCtxt {
                     "...but borrowed value is only valid for ",
                     super_scope,
                     "");
-          }
+            }
+
+            err_borrowed_pointer_too_short(loan_scope, ptr_scope, _) => {
+                let descr = match opt_loan_path(err.cmt) {
+                    Some(lp) => format!("`{}`", self.loan_path_to_str(lp)),
+                    None => self.cmt_to_str(err.cmt),
+                };
+                note_and_explain_region(
+                    self.tcx,
+                    format!("{} would have to be valid for ", descr),
+                    loan_scope,
+                    "...");
+                note_and_explain_region(
+                    self.tcx,
+                    format!("...but {} is only valid for ", descr),
+                    ptr_scope,
+                    "");
+            }
         }
     }
 

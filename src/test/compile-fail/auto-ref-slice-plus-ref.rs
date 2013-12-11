@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[feature(managed_boxes)];
+
 fn main() {
 
     // Testing that method lookup does not automatically borrow
@@ -23,6 +25,6 @@ trait MyIter {
     fn test_mut(&mut self);
 }
 
-impl<'self> MyIter for &'self [int] {
+impl<'a> MyIter for &'a [int] {
     fn test_mut(&mut self) { }
 }

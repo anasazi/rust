@@ -20,6 +20,13 @@ use std::option::Option;
 use std::to_str::ToStr;
 use extra::serialize::{Encodable, Decodable, Encoder, Decoder};
 
+/// A pointer abstraction. FIXME(eddyb) #10676 use Rc<T> in the future.
+pub type P<T> = @T;
+
+/// Construct a P<T> from a T value.
+pub fn P<T: 'static>(value: T) -> P<T> {
+    @value
+}
 
 // FIXME #6993: in librustc, uses of "ident" should be replaced
 // by just "Name".
@@ -28,7 +35,7 @@ use extra::serialize::{Encodable, Decodable, Encoder, Decoder};
 // table) and a SyntaxContext to track renaming and
 // macro expansion per Flatt et al., "Macros
 // That Work Together"
-#[deriving(Clone, IterBytes, ToStr)]
+#[deriving(Clone, IterBytes, ToStr, TotalEq, TotalOrd)]
 pub struct Ident { name: Name, ctxt: SyntaxContext }
 
 impl Ident {
@@ -47,7 +54,7 @@ impl Eq for Ident {
             // if it should be non-hygienic (most things are), just compare the
             // 'name' fields of the idents. Or, even better, replace the idents
             // with Name's.
-            fail2!("not allowed to compare these idents: {:?}, {:?}.
+            fail!("not allowed to compare these idents: {:?}, {:?}.
                     Probably related to issue \\#6993", self, other);
         }
     }
@@ -69,7 +76,7 @@ impl Eq for Ident {
 
 // this uint is a reference to a table stored in thread-local
 // storage.
-pub type SyntaxContext = uint;
+pub type SyntaxContext = u32;
 
 // the SCTable contains a table of SyntaxContext_'s. It
 // represents a flattened tree structure, to avoid having
@@ -87,8 +94,8 @@ pub struct SCTable {
 }
 
 // NB: these must be placed in any SCTable...
-pub static EMPTY_CTXT : uint = 0;
-pub static ILLEGAL_CTXT : uint = 1;
+pub static EMPTY_CTXT : SyntaxContext = 0;
+pub static ILLEGAL_CTXT : SyntaxContext = 1;
 
 #[deriving(Eq, Encodable, Decodable,IterBytes)]
 pub enum SyntaxContext_ {
@@ -109,9 +116,10 @@ pub enum SyntaxContext_ {
 
 /// A name is a part of an identifier, representing a string or gensym. It's
 /// the result of interning.
-pub type Name = uint;
+pub type Name = u32;
+
 /// A mark represents a unique id associated with a macro expansion
-pub type Mrk = uint;
+pub type Mrk = u32;
 
 impl<S:Encoder> Encodable<S> for Ident {
     fn encode(&self, s: &mut S) {
@@ -119,7 +127,6 @@ impl<S:Encoder> Encodable<S> for Ident {
     }
 }
 
-#[deriving(IterBytes)]
 impl<D:Decoder> Decodable<D> for Ident {
     fn decode(d: &mut D) -> Ident {
         str_to_ident(d.read_str())
@@ -157,23 +164,24 @@ pub struct Path {
 pub struct PathSegment {
     /// The identifier portion of this path segment.
     identifier: Ident,
-    /// The lifetime parameter for this path segment. Currently only one
-    /// lifetime parameter is allowed.
-    lifetime: Option<Lifetime>,
+    /// The lifetime parameters for this path segment.
+    lifetimes: OptVec<Lifetime>,
     /// The type parameters for this path segment, if present.
-    types: OptVec<Ty>,
+    types: OptVec<P<Ty>>,
 }
 
-pub type CrateNum = int;
+pub type CrateNum = u32;
 
-pub type NodeId = int;
+pub type NodeId = u32;
 
-#[deriving(Clone, Eq, Encodable, Decodable, IterBytes, ToStr)]
+#[deriving(Clone, TotalEq, TotalOrd, Eq, Encodable, Decodable, IterBytes, ToStr)]
 pub struct DefId {
     crate: CrateNum,
     node: NodeId,
 }
 
+/// Item definitions in the currently-compiled crate would have the CrateNum
+/// LOCAL_CRATE in their DefId.
 pub static LOCAL_CRATE: CrateNum = 0;
 pub static CRATE_NODE_ID: NodeId = 0;
 
@@ -227,13 +235,13 @@ pub enum MethodProvenance {
 pub enum Def {
     DefFn(DefId, purity),
     DefStaticMethod(/* method */ DefId, MethodProvenance, purity),
-    DefSelf(NodeId),
+    DefSelf(NodeId, bool /* is_mutbl */),
     DefSelfTy(/* trait id */ NodeId),
     DefMod(DefId),
     DefForeignMod(DefId),
     DefStatic(DefId, bool /* is_mutbl */),
-    DefArg(NodeId, bool /* is_mutbl */),
-    DefLocal(NodeId, bool /* is_mutbl */),
+    DefArg(NodeId, BindingMode),
+    DefLocal(NodeId, BindingMode),
     DefVariant(DefId /* enum */, DefId /* variant */, bool /* is_structure */),
     DefTy(DefId),
     DefTrait(DefId),
@@ -245,11 +253,28 @@ pub enum Def {
               @Def,     // closed over def
               NodeId,  // expr node that creates the closure
               NodeId), // id for the block/body of the closure expr
+
+    /// Note that if it's a tuple struct's definition, the node id of the DefId
+    /// may either refer to the item definition's id or the struct_def.ctor_id.
+    ///
+    /// The cases that I have encountered so far are (this is not exhaustive):
+    /// - If it's a ty_path referring to some tuple struct, then DefMap maps
+    ///   it to a def whose id is the item definition's id.
+    /// - If it's an ExprPath referring to some tuple struct, then DefMap maps
+    ///   it to a def whose id is the struct_def.ctor_id.
     DefStruct(DefId),
     DefTyParamBinder(NodeId), /* struct, impl or trait with ty params */
     DefRegion(NodeId),
     DefLabel(NodeId),
     DefMethod(DefId /* method */, Option<DefId> /* trait */),
+}
+
+#[deriving(Clone, Eq, IterBytes, Encodable, Decodable, ToStr)]
+pub enum DefRegion {
+    DefStaticRegion,
+    DefEarlyBoundRegion(/* index */ uint, /* lifetime decl */ NodeId),
+    DefLateBoundRegion(/* binder_id */ NodeId, /* depth */ uint, /* lifetime decl */ NodeId),
+    DefFreeRegion(/* block scope */ NodeId, /* lifetime decl */ NodeId),
 }
 
 // The set of MetaItems that define the compilation environment of the crate,
@@ -324,12 +349,13 @@ pub struct FieldPat {
 #[deriving(Clone, Eq, Encodable, Decodable, IterBytes)]
 pub enum BindingMode {
     BindByRef(Mutability),
-    BindInfer
+    BindByValue(Mutability),
 }
 
 #[deriving(Clone, Eq, Encodable, Decodable, IterBytes)]
 pub enum Pat_ {
     PatWild,
+    PatWildMulti,
     // A pat_ident may either be a new bound variable,
     // or a nullary enum (in which case the second field
     // is None).
@@ -443,10 +469,10 @@ pub enum Stmt_ {
 
 // FIXME (pending discussion of #1697, #2178...): local should really be
 // a refinement on pat.
+/// Local represents a `let` statement, e.g., `let <pat>:<ty> = <expr>;`
 #[deriving(Eq, Encodable, Decodable,IterBytes)]
 pub struct Local {
-    is_mutbl: bool,
-    ty: Ty,
+    ty: P<Ty>,
     pat: @Pat,
     init: Option<@Expr>,
     id: NodeId,
@@ -467,15 +493,17 @@ pub enum Decl_ {
 pub struct Arm {
     pats: ~[@Pat],
     guard: Option<@Expr>,
-    body: Block,
+    body: P<Block>,
 }
 
 #[deriving(Clone, Eq, Encodable, Decodable, IterBytes)]
 pub struct Field {
-    ident: Ident,
+    ident: SpannedIdent,
     expr: @Expr,
     span: Span,
 }
+
+pub type SpannedIdent = Spanned<Ident>;
 
 #[deriving(Clone, Eq, Encodable, Decodable, IterBytes)]
 pub enum BlockCheckMode {
@@ -521,28 +549,33 @@ pub enum Expr_ {
     ExprVstore(@Expr, ExprVstore),
     ExprVec(~[@Expr], Mutability),
     ExprCall(@Expr, ~[@Expr], CallSugar),
-    ExprMethodCall(NodeId, @Expr, Ident, ~[Ty], ~[@Expr], CallSugar),
+    ExprMethodCall(NodeId, @Expr, Ident, ~[P<Ty>], ~[@Expr], CallSugar),
     ExprTup(~[@Expr]),
     ExprBinary(NodeId, BinOp, @Expr, @Expr),
     ExprUnary(NodeId, UnOp, @Expr),
     ExprLit(@lit),
-    ExprCast(@Expr, Ty),
-    ExprIf(@Expr, Block, Option<@Expr>),
-    ExprWhile(@Expr, Block),
+    ExprCast(@Expr, P<Ty>),
+    ExprIf(@Expr, P<Block>, Option<@Expr>),
+    ExprWhile(@Expr, P<Block>),
     // FIXME #6993: change to Option<Name>
-    ExprForLoop(@Pat, @Expr, Block, Option<Ident>),
+    ExprForLoop(@Pat, @Expr, P<Block>, Option<Ident>),
     // Conditionless loop (can be exited with break, cont, or ret)
     // FIXME #6993: change to Option<Name>
-    ExprLoop(Block, Option<Ident>),
+    ExprLoop(P<Block>, Option<Ident>),
     ExprMatch(@Expr, ~[Arm]),
-    ExprFnBlock(fn_decl, Block),
+    ExprFnBlock(P<fn_decl>, P<Block>),
+    ExprProc(P<fn_decl>, P<Block>),
     ExprDoBody(@Expr),
-    ExprBlock(Block),
+    ExprBlock(P<Block>),
 
     ExprAssign(@Expr, @Expr),
     ExprAssignOp(NodeId, BinOp, @Expr, @Expr),
-    ExprField(@Expr, Ident, ~[Ty]),
+    ExprField(@Expr, Ident, ~[P<Ty>]),
     ExprIndex(NodeId, @Expr, @Expr),
+
+    /// Expression that looks like a "name". For example,
+    /// `std::vec::from_elem::<uint>` is an ExprPath that's the "name" part
+    /// of a function call.
     ExprPath(Path),
 
     /// The special identifier `self`.
@@ -591,14 +624,14 @@ pub enum token_tree {
     tt_tok(Span, ::parse::token::Token),
     // a delimited sequence (the delimiters appear as the first
     // and last elements of the vector)
-    tt_delim(@mut ~[token_tree]),
+    tt_delim(@~[token_tree]),
 
     // These only make sense for right-hand-sides of MBE macros:
 
     // a kleene-style repetition sequence with a span, a tt_forest,
     // an optional separator, and a boolean where true indicates
-    // zero or more (*), and false indicates one or more (+).
-    tt_seq(Span, @mut ~[token_tree], Option<::parse::token::Token>, bool),
+    // zero or more (..), and false indicates one or more (+).
+    tt_seq(Span, @~[token_tree], Option<::parse::token::Token>, bool),
 
     // a syntactic variable that will be filled in by macro expansion.
     tt_nonterminal(Span, Ident)
@@ -691,6 +724,7 @@ pub type lit = Spanned<lit_>;
 #[deriving(Clone, Eq, Encodable, Decodable, IterBytes)]
 pub enum lit_ {
     lit_str(@str, StrStyle),
+    lit_binary(@[u8]),
     lit_char(u32),
     lit_int(i64, int_ty),
     lit_uint(u64, uint_ty),
@@ -705,7 +739,7 @@ pub enum lit_ {
 // type structure in middle/ty.rs as well.
 #[deriving(Clone, Eq, Encodable, Decodable, IterBytes)]
 pub struct mt {
-    ty: ~Ty,
+    ty: P<Ty>,
     mutbl: Mutability,
 }
 
@@ -721,7 +755,7 @@ pub struct TypeMethod {
     ident: Ident,
     attrs: ~[Attribute],
     purity: purity,
-    decl: fn_decl,
+    decl: P<fn_decl>,
     generics: Generics,
     explicit_self: explicit_self,
     id: NodeId,
@@ -804,7 +838,6 @@ pub enum Onceness {
     Many
 }
 
-#[deriving(IterBytes)]
 impl ToStr for Onceness {
     fn to_str(&self) -> ~str {
         match *self {
@@ -821,7 +854,7 @@ pub struct TyClosure {
     lifetimes: OptVec<Lifetime>,
     purity: purity,
     onceness: Onceness,
-    decl: fn_decl,
+    decl: P<fn_decl>,
     // Optional optvec distinguishes between "fn()" and "fn:()" so we can
     // implement issue #7264. None means "fn()", which means infer a default
     // bound based on pointer sigil during typeck. Some(Empty) means "fn:()",
@@ -834,7 +867,7 @@ pub struct TyBareFn {
     purity: purity,
     abis: AbiSet,
     lifetimes: OptVec<Lifetime>,
-    decl: fn_decl
+    decl: P<fn_decl>
 }
 
 #[deriving(Clone, Eq, Encodable, Decodable, IterBytes)]
@@ -842,16 +875,15 @@ pub enum ty_ {
     ty_nil,
     ty_bot, /* bottom type */
     ty_box(mt),
-    ty_uniq(mt),
-    ty_vec(mt),
-    ty_fixed_length_vec(mt, @Expr),
+    ty_uniq(P<Ty>),
+    ty_vec(P<Ty>),
+    ty_fixed_length_vec(P<Ty>, @Expr),
     ty_ptr(mt),
     ty_rptr(Option<Lifetime>, mt),
     ty_closure(@TyClosure),
     ty_bare_fn(@TyBareFn),
-    ty_tup(~[Ty]),
+    ty_tup(~[P<Ty>]),
     ty_path(Path, Option<OptVec<TyParamBound>>, NodeId), // for #7264; see above
-    ty_mac(mac),
     ty_typeof(@Expr),
     // ty_infer means the type should be inferred instead of it having been
     // specified. This should only appear at the "top level" of a type and not
@@ -879,8 +911,7 @@ pub struct inline_asm {
 
 #[deriving(Clone, Eq, Encodable, Decodable, IterBytes)]
 pub struct arg {
-    is_mutbl: bool,
-    ty: Ty,
+    ty: P<Ty>,
     pat: @Pat,
     id: NodeId,
 }
@@ -888,8 +919,9 @@ pub struct arg {
 #[deriving(Clone, Eq, Encodable, Decodable, IterBytes)]
 pub struct fn_decl {
     inputs: ~[arg],
-    output: Ty,
+    output: P<Ty>,
     cf: ret_style,
+    variadic: bool
 }
 
 #[deriving(Clone, Eq, Encodable, Decodable, IterBytes)]
@@ -899,7 +931,6 @@ pub enum purity {
     extern_fn, // declared with "extern fn"
 }
 
-#[deriving(IterBytes)]
 impl ToStr for purity {
     fn to_str(&self) -> ~str {
         match *self {
@@ -920,10 +951,10 @@ pub enum ret_style {
 #[deriving(Clone, Eq, Encodable, Decodable, IterBytes)]
 pub enum explicit_self_ {
     sty_static,                                // no self
-    sty_value,                                 // `self`
-    sty_region(Option<Lifetime>, Mutability), // `&'lt self`
+    sty_value(Mutability),                     // `self`
+    sty_region(Option<Lifetime>, Mutability),  // `&'lt self`
     sty_box(Mutability),                       // `@self`
-    sty_uniq                                   // `~self`
+    sty_uniq(Mutability)                       // `~self`
 }
 
 pub type explicit_self = Spanned<explicit_self_>;
@@ -935,8 +966,8 @@ pub struct method {
     generics: Generics,
     explicit_self: explicit_self,
     purity: purity,
-    decl: fn_decl,
-    body: Block,
+    decl: P<fn_decl>,
+    body: P<Block>,
     id: NodeId,
     span: Span,
     self_id: NodeId,
@@ -958,7 +989,7 @@ pub struct foreign_mod {
 
 #[deriving(Clone, Eq, Encodable, Decodable, IterBytes)]
 pub struct variant_arg {
-    ty: Ty,
+    ty: P<Ty>,
     id: NodeId,
 }
 
@@ -970,7 +1001,7 @@ pub enum variant_kind {
 
 #[deriving(Clone, Eq, Encodable, Decodable, IterBytes)]
 pub struct enum_def {
-    variants: ~[variant],
+    variants: ~[P<variant>],
 }
 
 #[deriving(Clone, Eq, Encodable, Decodable, IterBytes)]
@@ -1079,17 +1110,17 @@ impl visibility {
     }
 }
 
-#[deriving(Eq, Encodable, Decodable,IterBytes)]
+#[deriving(Clone, Eq, Encodable, Decodable,IterBytes)]
 pub struct struct_field_ {
     kind: struct_field_kind,
     id: NodeId,
-    ty: Ty,
+    ty: P<Ty>,
     attrs: ~[Attribute],
 }
 
 pub type struct_field = Spanned<struct_field_>;
 
-#[deriving(Eq, Encodable, Decodable,IterBytes)]
+#[deriving(Clone, Eq, Encodable, Decodable,IterBytes)]
 pub enum struct_field_kind {
     named_field(Ident, visibility),
     unnamed_field   // element of a tuple-like struct
@@ -1097,7 +1128,7 @@ pub enum struct_field_kind {
 
 #[deriving(Eq, Encodable, Decodable,IterBytes)]
 pub struct struct_def {
-    fields: ~[@struct_field], /* fields, not including ctor */
+    fields: ~[struct_field], /* fields, not including ctor */
     /* ID of the constructor. This is only used for tuple- or enum-like
      * structs. */
     ctor_id: Option<NodeId>
@@ -1119,17 +1150,17 @@ pub struct item {
 
 #[deriving(Clone, Eq, Encodable, Decodable, IterBytes)]
 pub enum item_ {
-    item_static(Ty, Mutability, @Expr),
-    item_fn(fn_decl, purity, AbiSet, Generics, Block),
+    item_static(P<Ty>, Mutability, @Expr),
+    item_fn(P<fn_decl>, purity, AbiSet, Generics, P<Block>),
     item_mod(_mod),
     item_foreign_mod(foreign_mod),
-    item_ty(Ty, Generics),
+    item_ty(P<Ty>, Generics),
     item_enum(enum_def, Generics),
     item_struct(@struct_def, Generics),
     item_trait(Generics, ~[trait_ref], ~[trait_method]),
     item_impl(Generics,
               Option<trait_ref>, // (optional) trait this impl implements
-              Ty, // self
+              P<Ty>, // self
               ~[@method]),
     // a macro invocation (which includes macro definition)
     item_mac(mac),
@@ -1147,8 +1178,8 @@ pub struct foreign_item {
 
 #[deriving(Eq, Encodable, Decodable,IterBytes)]
 pub enum foreign_item_ {
-    foreign_item_fn(fn_decl, Generics),
-    foreign_item_static(Ty, /* is_mutbl */ bool),
+    foreign_item_fn(P<fn_decl>, Generics),
+    foreign_item_static(P<Ty>, /* is_mutbl */ bool),
 }
 
 // The data we save and restore about an inlined item or method.  This is not
@@ -1159,6 +1190,18 @@ pub enum inlined_item {
     ii_item(@item),
     ii_method(DefId /* impl id */, bool /* is provided */, @method),
     ii_foreign(@foreign_item),
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn is_freeze<T: Freeze>() {}
+
+    // Assert that the AST remains Freeze (#10693).
+    #[test] fn ast_is_freeze() {
+        is_freeze::<item>();
+    }
 }
 
 /* hold off on tests ... they appear in a later merge.

@@ -1,8 +1,10 @@
 // Tests that references to move-by-default values trigger moves when
 // they occur as part of various kinds of expressions.
 
+#[feature(managed_boxes)];
+
 struct Foo<A> { f: A }
-fn guard(_s: ~str) -> bool {fail2!()}
+fn guard(_s: ~str) -> bool {fail!()}
 fn touch<A>(_a: &A) {}
 
 fn f10() {

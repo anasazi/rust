@@ -127,7 +127,7 @@ impl<T> RingBuf<T> {
     pub fn get<'a>(&'a self, i: uint) -> &'a T {
         let idx = self.raw_index(i);
         match self.elts[idx] {
-            None => fail2!(),
+            None => fail!(),
             Some(ref v) => v
         }
     }
@@ -138,7 +138,7 @@ impl<T> RingBuf<T> {
     pub fn get_mut<'a>(&'a mut self, i: uint) -> &'a mut T {
         let idx = self.raw_index(i);
         match self.elts[idx] {
-            None => fail2!(),
+            None => fail!(),
             Some(ref mut v) => v
         }
     }
@@ -198,7 +198,28 @@ impl<T> RingBuf<T> {
 
     /// Front-to-back iterator which returns mutable values.
     pub fn mut_iter<'a>(&'a mut self) -> RingBufMutIterator<'a, T> {
-        RingBufMutIterator{index: 0, rindex: self.nelts, lo: self.lo, elts: self.elts}
+        let start_index = raw_index(self.lo, self.elts.len(), 0);
+        let end_index = raw_index(self.lo, self.elts.len(), self.nelts);
+
+        // Divide up the array
+        if end_index <= start_index {
+            // Items to iterate goes from:
+            //    start_index to self.elts.len()
+            // and then
+            //    0 to end_index
+            let (temp, remaining1) = self.elts.mut_split_at(start_index);
+            let (remaining2, _) = temp.mut_split_at(end_index);
+            RingBufMutIterator { remaining1: remaining1,
+                                 remaining2: remaining2,
+                                 nelts: self.nelts }
+        } else {
+            // Items to iterate goes from start_index to end_index:
+            let (empty, elts) = self.elts.mut_split_at(0);
+            let remaining1 = elts.mut_slice(start_index, end_index);
+            RingBufMutIterator { remaining1: remaining1,
+                                 remaining2: empty,
+                                 nelts: self.nelts }
+        }
     }
 
     /// Back-to-front iterator which returns mutable values.
@@ -207,63 +228,52 @@ impl<T> RingBuf<T> {
     }
 }
 
-macro_rules! iterator {
-    (impl $name:ident -> $elem:ty, $getter:ident) => {
-        impl<'self, T> Iterator<$elem> for $name<'self, T> {
-            #[inline]
-            fn next(&mut self) -> Option<$elem> {
-                if self.index == self.rindex {
-                    return None;
-                }
-                let raw_index = raw_index(self.lo, self.elts.len(), self.index);
-                self.index += 1;
-                Some(self.elts[raw_index] . $getter ())
-            }
-
-            #[inline]
-            fn size_hint(&self) -> (uint, Option<uint>) {
-                let len = self.rindex - self.index;
-                (len, Some(len))
-            }
-        }
-    }
-}
-
-macro_rules! iterator_rev {
-    (impl $name:ident -> $elem:ty, $getter:ident) => {
-        impl<'self, T> DoubleEndedIterator<$elem> for $name<'self, T> {
-            #[inline]
-            fn next_back(&mut self) -> Option<$elem> {
-                if self.index == self.rindex {
-                    return None;
-                }
-                self.rindex -= 1;
-                let raw_index = raw_index(self.lo, self.elts.len(), self.rindex);
-                Some(self.elts[raw_index] . $getter ())
-            }
-        }
-    }
-}
-
-
 /// RingBuf iterator
-pub struct RingBufIterator<'self, T> {
+pub struct RingBufIterator<'a, T> {
     priv lo: uint,
     priv index: uint,
     priv rindex: uint,
-    priv elts: &'self [Option<T>],
+    priv elts: &'a [Option<T>],
 }
-iterator!{impl RingBufIterator -> &'self T, get_ref}
-iterator_rev!{impl RingBufIterator -> &'self T, get_ref}
 
-impl<'self, T> ExactSize<&'self T> for RingBufIterator<'self, T> {}
+impl<'a, T> Iterator<&'a T> for RingBufIterator<'a, T> {
+    #[inline]
+    fn next(&mut self) -> Option<&'a T> {
+        if self.index == self.rindex {
+            return None;
+        }
+        let raw_index = raw_index(self.lo, self.elts.len(), self.index);
+        self.index += 1;
+        Some(self.elts[raw_index].get_ref())
+    }
 
-impl<'self, T> RandomAccessIterator<&'self T> for RingBufIterator<'self, T> {
+    #[inline]
+    fn size_hint(&self) -> (uint, Option<uint>) {
+        let len = self.rindex - self.index;
+        (len, Some(len))
+    }
+}
+
+impl<'a, T> DoubleEndedIterator<&'a T> for RingBufIterator<'a, T> {
+    #[inline]
+    fn next_back(&mut self) -> Option<&'a T> {
+        if self.index == self.rindex {
+            return None;
+        }
+        self.rindex -= 1;
+        let raw_index = raw_index(self.lo, self.elts.len(), self.rindex);
+        Some(self.elts[raw_index].get_ref())
+    }
+}
+
+impl<'a, T> ExactSize<&'a T> for RingBufIterator<'a, T> {}
+
+impl<'a, T> RandomAccessIterator<&'a T> for RingBufIterator<'a, T> {
     #[inline]
     fn indexable(&self) -> uint { self.rindex - self.index }
 
     #[inline]
-    fn idx(&self, j: uint) -> Option<&'self T> {
+    fn idx(&self, j: uint) -> Option<&'a T> {
         if j >= self.indexable() {
             None
         } else {
@@ -274,16 +284,52 @@ impl<'self, T> RandomAccessIterator<&'self T> for RingBufIterator<'self, T> {
 }
 
 /// RingBuf mutable iterator
-pub struct RingBufMutIterator<'self, T> {
-    priv lo: uint,
-    priv index: uint,
-    priv rindex: uint,
-    priv elts: &'self mut [Option<T>],
+pub struct RingBufMutIterator<'a, T> {
+    priv remaining1: &'a mut [Option<T>],
+    priv remaining2: &'a mut [Option<T>],
+    priv nelts: uint,
 }
-iterator!{impl RingBufMutIterator -> &'self mut T, get_mut_ref}
-iterator_rev!{impl RingBufMutIterator -> &'self mut T, get_mut_ref}
 
-impl<'self, T> ExactSize<&'self mut T> for RingBufMutIterator<'self, T> {}
+impl<'a, T> Iterator<&'a mut T> for RingBufMutIterator<'a, T> {
+    #[inline]
+    fn next(&mut self) -> Option<&'a mut T> {
+        if self.nelts == 0 {
+            return None;
+        }
+        let r = if self.remaining1.len() > 0 {
+            &mut self.remaining1
+        } else {
+            assert!(self.remaining2.len() > 0);
+            &mut self.remaining2
+        };
+        self.nelts -= 1;
+        Some(r.mut_shift_ref().get_mut_ref())
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (uint, Option<uint>) {
+        (self.nelts, Some(self.nelts))
+    }
+}
+
+impl<'a, T> DoubleEndedIterator<&'a mut T> for RingBufMutIterator<'a, T> {
+    #[inline]
+    fn next_back(&mut self) -> Option<&'a mut T> {
+        if self.nelts == 0 {
+            return None;
+        }
+        let r = if self.remaining2.len() > 0 {
+            &mut self.remaining2
+        } else {
+            assert!(self.remaining1.len() > 0);
+            &mut self.remaining1
+        };
+        self.nelts -= 1;
+        Some(r.mut_pop_ref().get_mut_ref())
+    }
+}
+
+impl<'a, T> ExactSize<&'a mut T> for RingBufMutIterator<'a, T> {}
 
 /// Grow is only called on full elts, so nelts is also len(elts), unlike
 /// elsewhere.
@@ -373,21 +419,21 @@ mod tests {
         assert_eq!(d.len(), 3u);
         d.push_back(137);
         assert_eq!(d.len(), 4u);
-        debug2!("{:?}", d.front());
+        debug!("{:?}", d.front());
         assert_eq!(*d.front().unwrap(), 42);
-        debug2!("{:?}", d.back());
+        debug!("{:?}", d.back());
         assert_eq!(*d.back().unwrap(), 137);
         let mut i = d.pop_front();
-        debug2!("{:?}", i);
+        debug!("{:?}", i);
         assert_eq!(i, Some(42));
         i = d.pop_back();
-        debug2!("{:?}", i);
+        debug!("{:?}", i);
         assert_eq!(i, Some(137));
         i = d.pop_back();
-        debug2!("{:?}", i);
+        debug!("{:?}", i);
         assert_eq!(i, Some(137));
         i = d.pop_back();
-        debug2!("{:?}", i);
+        debug!("{:?}", i);
         assert_eq!(i, Some(17));
         assert_eq!(d.len(), 0u);
         d.push_back(3);
@@ -398,10 +444,10 @@ mod tests {
         assert_eq!(d.len(), 3u);
         d.push_front(1);
         assert_eq!(d.len(), 4u);
-        debug2!("{:?}", d.get(0));
-        debug2!("{:?}", d.get(1));
-        debug2!("{:?}", d.get(2));
-        debug2!("{:?}", d.get(3));
+        debug!("{:?}", d.get(0));
+        debug!("{:?}", d.get(1));
+        debug!("{:?}", d.get(2));
+        debug!("{:?}", d.get(3));
         assert_eq!(*d.get(0), 1);
         assert_eq!(*d.get(1), 2);
         assert_eq!(*d.get(2), 3);
@@ -499,35 +545,35 @@ mod tests {
 
     #[bench]
     fn bench_new(b: &mut test::BenchHarness) {
-        do b.iter {
+        b.iter(|| {
             let _: RingBuf<u64> = RingBuf::new();
-        }
+        })
     }
 
     #[bench]
     fn bench_push_back(b: &mut test::BenchHarness) {
         let mut deq = RingBuf::new();
-        do b.iter {
+        b.iter(|| {
             deq.push_back(0);
-        }
+        })
     }
 
     #[bench]
     fn bench_push_front(b: &mut test::BenchHarness) {
         let mut deq = RingBuf::new();
-        do b.iter {
+        b.iter(|| {
             deq.push_front(0);
-        }
+        })
     }
 
     #[bench]
     fn bench_grow(b: &mut test::BenchHarness) {
         let mut deq = RingBuf::new();
-        do b.iter {
-            do 65.times {
+        b.iter(|| {
+            65.times(|| {
                 deq.push_front(1);
-            }
-        }
+            })
+        })
     }
 
     #[deriving(Clone, Eq)]
@@ -665,6 +711,21 @@ mod tests {
             d.push_front(i);
         }
         assert_eq!(d.rev_iter().collect::<~[&int]>(), ~[&4,&3,&2,&1,&0,&6,&7,&8]);
+    }
+
+    #[test]
+    fn test_mut_rev_iter_wrap() {
+        let mut d = RingBuf::with_capacity(3);
+        assert!(d.mut_rev_iter().next().is_none());
+
+        d.push_back(1);
+        d.push_back(2);
+        d.push_back(3);
+        assert_eq!(d.pop_front(), Some(1));
+        d.push_back(4);
+
+        assert_eq!(d.mut_rev_iter().map(|x| *x).collect::<~[int]>(),
+                   ~[4, 3, 2]);
     }
 
     #[test]

@@ -15,7 +15,7 @@ use std::cmp::{Eq, Ord};
 use std::util::swap;
 use std::vec;
 
-type Le<'self, T> = &'self fn(v1: &T, v2: &T) -> bool;
+type Le<'a, T> = 'a |v1: &T, v2: &T| -> bool;
 
 /**
  * Merge sort. Returns a new vector containing the sorted list.
@@ -173,13 +173,12 @@ pub trait Sort {
     fn qsort(self);
 }
 
-impl<'self, T:Clone + Ord + Eq> Sort for &'self mut [T] {
+impl<'a, T:Clone + Ord + Eq> Sort for &'a mut [T] {
     fn qsort(self) { quick_sort3(self); }
 }
 
 static MIN_MERGE: uint = 64;
 static MIN_GALLOP: uint = 7;
-static INITIAL_TMP_STORAGE: uint = 128;
 
 #[allow(missing_doc)]
 pub fn tim_sort<T:Clone + Ord>(array: &mut [T]) {
@@ -564,7 +563,7 @@ impl<T:Clone + Ord> MergeState<T> {
             shift_vec(array, dest, c2, len2);
             swap(&mut array[dest+len2], &mut tmp[c1]);
         } else if len1 == 0 {
-            fail2!("Comparison violates its contract!");
+            fail!("Comparison violates its contract!");
         } else {
             assert_eq!(len2, 0);
             assert!(len1 > 1);
@@ -683,7 +682,7 @@ impl<T:Clone + Ord> MergeState<T> {
             shift_vec(array, dest+1, c1+1, len1);
             swap(&mut array[dest], &mut tmp[c2]);
         } else if len2 == 0 {
-            fail2!("Comparison violates its contract!");
+            fail!("Comparison violates its contract!");
         } else {
             assert_eq!(len1, 0);
             assert!(len2 != 0);
@@ -790,7 +789,7 @@ mod test_qsort {
         quick_sort::<int>(v1, leual);
         let mut i = 0u;
         while i < len {
-            // debug2!(v2[i]);
+            // debug!(v2[i]);
             assert_eq!(v2[i], v1[i]);
             i += 1;
         }
@@ -828,12 +827,12 @@ mod test_qsort {
 
         let expected = ~[1, 2, 3];
 
-        do quick_sort(names) |x, y| { *x < *y };
+        quick_sort(names, |x, y| *x < *y);
 
         let immut_names = names;
 
         for (&a, &b) in expected.iter().zip(immut_names.iter()) {
-            debug2!("{} {}", a, b);
+            debug!("{} {}", a, b);
             assert_eq!(a, b);
         }
     }
@@ -846,12 +845,12 @@ mod tests {
 
     fn check_sort(v1: &[int], v2: &[int]) {
         let len = v1.len();
-        pub fn le(a: &int, b: &int) -> bool { *a <= *b }
+        fn le(a: &int, b: &int) -> bool { *a <= *b }
         let f = le;
         let v3 = merge_sort::<int>(v1, f);
         let mut i = 0u;
         while i < len {
-            debug2!("{:?}", v3[i]);
+            debug!("{:?}", v3[i]);
             assert_eq!(v3[i], v2[i]);
             i += 1;
         }
@@ -876,7 +875,7 @@ mod tests {
 
     #[test]
     fn test_merge_sort_mutable() {
-        pub fn le(a: &int, b: &int) -> bool { *a <= *b }
+        fn le(a: &int, b: &int) -> bool { *a <= *b }
         let v1 = ~[3, 2, 1];
         let v2 = merge_sort(v1, le);
         assert_eq!(v2, ~[1, 2, 3]);
@@ -887,12 +886,8 @@ mod tests {
         // tjc: funny that we have to use parens
         fn ile(x: &(&'static str), y: &(&'static str)) -> bool
         {
-            // FIXME: #4318 Instead of to_ascii and to_str_ascii, could use
-            // to_ascii_move and to_str_move to not do a unnecessary clone.
-            // (Actually, could just remove the to_str_* call, but needs an deriving(Ord) on
-            // Ascii)
-            let x = x.to_ascii().to_lower().to_str_ascii();
-            let y = y.to_ascii().to_lower().to_str_ascii();
+            let x = x.to_ascii().to_lower().into_str();
+            let y = y.to_ascii().to_lower().into_str();
             x <= y
         }
 
@@ -922,7 +917,7 @@ mod test_tim_sort {
         fn lt(&self, other: &CVal) -> bool {
             let mut rng = rand::rng();
             if rng.gen::<f64>() > 0.995 {
-                fail2!("It's happening!!!");
+                fail!("It's happening!!!");
             }
             (*self).val < other.val
         }
@@ -936,7 +931,7 @@ mod test_tim_sort {
         tim_sort::<int>(v1);
         let mut i = 0u;
         while i < len {
-            // debug2!(v2[i]);
+            // debug!(v2[i]);
             assert_eq!(v2[i], v1[i]);
             i += 1u;
         }
@@ -972,12 +967,12 @@ mod test_tim_sort {
     #[cfg(unix)]
     fn crash_test() {
         let mut rng = rand::rng();
-        let mut arr = do vec::from_fn(1000) |_i| {
+        let mut arr = vec::from_fn(1000, |_i| {
             CVal { val: rng.gen() }
-        };
+        });
 
         tim_sort(arr);
-        fail2!("Guarantee the fail");
+        fail!("Guarantee the fail");
     }
 
     #[deriving(Clone)]
@@ -995,9 +990,9 @@ mod test_tim_sort {
     #[test]
     fn test_bad_Ord_impl() {
         let mut rng = rand::rng();
-        let mut arr = do vec::from_fn(500) |_i| {
+        let mut arr = vec::from_fn(500, |_i| {
             DVal { val: rng.gen() }
-        };
+        });
 
         tim_sort(arr);
     }
@@ -1028,14 +1023,14 @@ mod big_tests {
 
     fn multiplyVec<T:Clone>(arr: &[T], num: uint) -> ~[T] {
         let size = arr.len();
-        let res = do vec::from_fn(num) |i| {
+        let res = vec::from_fn(num, |i| {
             arr[i % size].clone()
-        };
+        });
         res
     }
 
     fn makeRange(n: uint) -> ~[uint] {
-        let one = do vec::from_fn(n) |i| { i };
+        let one = vec::from_fn(n, |i| i);
         let mut two = one.clone();
         two.reverse();
         vec::append(two, one)
@@ -1045,7 +1040,7 @@ mod big_tests {
         fn isSorted<T:Ord>(arr: &[T]) {
             for i in range(0u, arr.len() - 1) {
                 if arr[i] > arr[i+1] {
-                    fail2!("Array not sorted");
+                    fail!("Array not sorted");
                 }
             }
         }
@@ -1054,9 +1049,9 @@ mod big_tests {
 
         for i in range(lo, hi) {
             let n = 1 << i;
-            let mut arr: ~[f64] = do vec::from_fn(n) |_i| {
+            let mut arr: ~[f64] = vec::from_fn(n, |_i| {
                 rng.gen()
-            };
+            });
 
             tim_sort(arr); // *sort
             isSorted(arr);
@@ -1068,11 +1063,11 @@ mod big_tests {
             tim_sort(arr); // /sort
             isSorted(arr);
 
-            do 3.times {
-                let i1 = rng.gen_integer_range(0u, n);
-                let i2 = rng.gen_integer_range(0u, n);
+            3.times(|| {
+                let i1 = rng.gen_range(0u, n);
+                let i2 = rng.gen_range(0u, n);
                 arr.swap(i1, i2);
-            }
+            });
             tim_sort(arr); // 3sort
             isSorted(arr);
 
@@ -1087,10 +1082,10 @@ mod big_tests {
             tim_sort(arr); // +sort
             isSorted(arr);
 
-            do (n/100).times {
-                let idx = rng.gen_integer_range(0u, n);
+            (n/100).times(|| {
+                let idx = rng.gen_range(0u, n);
                 arr[idx] = rng.gen();
-            }
+            });
             tim_sort(arr);
             isSorted(arr);
 
@@ -1116,7 +1111,7 @@ mod big_tests {
         fn isSorted<T:Ord>(arr: &[@T]) {
             for i in range(0u, arr.len() - 1) {
                 if arr[i] > arr[i+1] {
-                    fail2!("Array not sorted");
+                    fail!("Array not sorted");
                 }
             }
         }
@@ -1125,9 +1120,9 @@ mod big_tests {
 
         for i in range(lo, hi) {
             let n = 1 << i;
-            let arr: ~[@f64] = do vec::from_fn(n) |_i| {
+            let arr: ~[@f64] = vec::from_fn(n, |_i| {
                 @rng.gen()
-            };
+            });
             let mut arr = arr;
 
             tim_sort(arr); // *sort
@@ -1140,11 +1135,11 @@ mod big_tests {
             tim_sort(arr); // /sort
             isSorted(arr);
 
-            do 3.times {
-                let i1 = rng.gen_integer_range(0u, n);
-                let i2 = rng.gen_integer_range(0u, n);
+            3.times(|| {
+                let i1 = rng.gen_range(0u, n);
+                let i2 = rng.gen_range(0u, n);
                 arr.swap(i1, i2);
-            }
+            });
             tim_sort(arr); // 3sort
             isSorted(arr);
 
@@ -1159,10 +1154,10 @@ mod big_tests {
             tim_sort(arr); // +sort
             isSorted(arr);
 
-            do (n/100).times {
-                let idx = rng.gen_integer_range(0u, n);
+            (n/100).times(|| {
+                let idx = rng.gen_range(0u, n);
                 arr[idx] = @rng.gen();
-            }
+            });
             tim_sort(arr);
             isSorted(arr);
 

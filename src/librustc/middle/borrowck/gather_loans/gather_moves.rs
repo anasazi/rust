@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -100,9 +100,11 @@ fn check_is_legal_to_move_from(bccx: &BorrowckCtxt,
                                cmt0: mc::cmt,
                                cmt: mc::cmt) -> bool {
     match cmt.cat {
-        mc::cat_deref(_, _, mc::region_ptr(*)) |
-        mc::cat_deref(_, _, mc::gc_ptr(*)) |
-        mc::cat_deref(_, _, mc::unsafe_ptr(*)) => {
+        mc::cat_deref(_, _, mc::region_ptr(..)) |
+        mc::cat_deref(_, _, mc::gc_ptr(..)) |
+        mc::cat_deref(_, _, mc::unsafe_ptr(..)) |
+        mc::cat_stack_upvar(..) |
+        mc::cat_copied_upvar(mc::CopiedUpvar { onceness: ast::Many, .. }) => {
             bccx.span_err(
                 cmt0.span,
                 format!("cannot move out of {}",
@@ -110,24 +112,10 @@ fn check_is_legal_to_move_from(bccx: &BorrowckCtxt,
             false
         }
 
-        // These are separate from the above cases for a better error message.
-        mc::cat_stack_upvar(*) |
-        mc::cat_copied_upvar(mc::CopiedUpvar { onceness: ast::Many, _ }) => {
-            let once_hint = if bccx.tcx.sess.once_fns() {
-                " (unless the destination closure type is `once fn')"
-            } else {
-                ""
-            };
-            bccx.span_err(
-                cmt0.span,
-                format!("cannot move out of {}{}", bccx.cmt_to_str(cmt), once_hint));
-            false
-        }
-
         // Can move out of captured upvars only if the destination closure
         // type is 'once'. 1-shot stack closures emit the copied_upvar form
         // (see mem_categorization.rs).
-        mc::cat_copied_upvar(mc::CopiedUpvar { onceness: ast::Once, _ }) => {
+        mc::cat_copied_upvar(mc::CopiedUpvar { onceness: ast::Once, .. }) => {
             true
         }
 
@@ -144,10 +132,10 @@ fn check_is_legal_to_move_from(bccx: &BorrowckCtxt,
             true
         }
 
-        mc::cat_rvalue(*) |
-        mc::cat_local(*) |
-        mc::cat_arg(*) |
-        mc::cat_self(*) => {
+        mc::cat_rvalue(..) |
+        mc::cat_local(..) |
+        mc::cat_arg(..) |
+        mc::cat_self(..) => {
             true
         }
 

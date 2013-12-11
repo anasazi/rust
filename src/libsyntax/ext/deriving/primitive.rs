@@ -20,6 +20,8 @@ pub fn expand_deriving_from_primitive(cx: @ExtCtxt,
                                       mitem: @MetaItem,
                                       in_items: ~[@item]) -> ~[@item] {
     let trait_def = TraitDef {
+        cx: cx, span: span,
+
         path: Path::new(~["std", "num", "FromPrimitive"]),
         additional_bounds: ~[],
         generics: LifetimeBounds::empty(),
@@ -35,6 +37,8 @@ pub fn expand_deriving_from_primitive(cx: @ExtCtxt,
                                            None,
                                            ~[~Self],
                                            true)),
+                // liable to cause code-bloat
+                inline: true,
                 const_nonmatching: false,
                 combine_substructure: |c, s, sub| cs_from("i64", c, s, sub),
             },
@@ -49,13 +53,15 @@ pub fn expand_deriving_from_primitive(cx: @ExtCtxt,
                                            None,
                                            ~[~Self],
                                            true)),
+                // liable to cause code-bloat
+                inline: true,
                 const_nonmatching: false,
                 combine_substructure: |c, s, sub| cs_from("u64", c, s, sub),
             },
         ]
     };
 
-    trait_def.expand(cx, span, mitem, in_items)
+    trait_def.expand(mitem, in_items)
 }
 
 fn cs_from(name: &str, cx: @ExtCtxt, span: Span, substr: &Substructure) -> @Expr {
@@ -65,7 +71,7 @@ fn cs_from(name: &str, cx: @ExtCtxt, span: Span, substr: &Substructure) -> @Expr
     };
 
     match *substr.fields {
-        StaticStruct(*) => {
+        StaticStruct(..) => {
             cx.span_err(span, "`FromPrimitive` cannot be derived for structs");
             return cx.expr_fail(span, @"");
         }

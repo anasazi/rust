@@ -71,7 +71,8 @@ pub fn const_lit(cx: &mut CrateContext, e: &ast::Expr, lit: ast::lit)
       }
       ast::lit_bool(b) => C_bool(b),
       ast::lit_nil => C_nil(),
-      ast::lit_str(s, _) => C_estr_slice(cx, s)
+      ast::lit_str(s, _) => C_estr_slice(cx, s),
+      ast::lit_binary(data) => C_binary_slice(cx, data),
     }
 }
 
@@ -83,30 +84,25 @@ pub fn const_ptrcast(cx: &mut CrateContext, a: ValueRef, t: Type) -> ValueRef {
     }
 }
 
-pub fn const_vec(cx: @mut CrateContext, e: &ast::Expr, es: &[@ast::Expr])
-    -> (ValueRef, ValueRef, Type, bool) {
-    unsafe {
-        let vec_ty = ty::expr_ty(cx.tcx, e);
-        let unit_ty = ty::sequence_element_type(cx.tcx, vec_ty);
-        let llunitty = type_of::type_of(cx, unit_ty);
-        let unit_sz = machine::llsize_of(cx, llunitty);
-        let sz = llvm::LLVMConstMul(C_uint(cx, es.len()), unit_sz);
-        let (vs, inlineable) = vec::unzip(es.iter().map(|e| const_expr(cx, *e)));
-        // If the vector contains enums, an LLVM array won't work.
-        let v = if vs.iter().any(|vi| val_ty(*vi) != llunitty) {
-            C_struct(vs, false)
-        } else {
-            C_array(llunitty, vs)
-        };
-        return (v, sz, llunitty, inlineable.iter().fold(true, |a, &b| a && b));
-    }
+fn const_vec(cx: @mut CrateContext, e: &ast::Expr, es: &[@ast::Expr]) -> (ValueRef, Type, bool) {
+    let vec_ty = ty::expr_ty(cx.tcx, e);
+    let unit_ty = ty::sequence_element_type(cx.tcx, vec_ty);
+    let llunitty = type_of::type_of(cx, unit_ty);
+    let (vs, inlineable) = vec::unzip(es.iter().map(|e| const_expr(cx, *e)));
+    // If the vector contains enums, an LLVM array won't work.
+    let v = if vs.iter().any(|vi| val_ty(*vi) != llunitty) {
+        C_struct(vs, false)
+    } else {
+        C_array(llunitty, vs)
+    };
+    (v, llunitty, inlineable.iter().fold(true, |a, &b| a && b))
 }
 
 fn const_addr_of(cx: &mut CrateContext, cv: ValueRef) -> ValueRef {
     unsafe {
-        let gv = do "const".with_c_str |name| {
+        let gv = "const".with_c_str(|name| {
             llvm::LLVMAddGlobal(cx.llmod, val_ty(cv).to_ref(), name)
-        };
+        });
         llvm::LLVMSetInitializer(gv, cv);
         llvm::LLVMSetGlobalConstant(gv, True);
         SetLinkage(gv, PrivateLinkage);
@@ -137,10 +133,10 @@ fn const_deref(cx: &mut CrateContext, v: ValueRef, t: ty::t, explicit: bool)
         Some(ref mt) => {
             assert!(mt.mutbl != ast::MutMutable);
             let dv = match ty::get(t).sty {
-                ty::ty_ptr(*) | ty::ty_rptr(*) => {
+                ty::ty_ptr(..) | ty::ty_rptr(..) => {
                      const_deref_ptr(cx, v)
                 }
-                ty::ty_enum(*) | ty::ty_struct(*) => {
+                ty::ty_enum(..) | ty::ty_struct(..) => {
                     const_deref_newtype(cx, v, t)
                 }
                 _ => {
@@ -166,7 +162,7 @@ pub fn get_const_val(cx: @mut CrateContext,
         }
         match cx.tcx.items.get_copy(&def_id.node) {
             ast_map::node_item(@ast::item {
-                node: ast::item_static(_, ast::MutImmutable, _), _
+                node: ast::item_static(_, ast::MutImmutable, _), ..
             }, _) => {
                 trans_const(cx, ast::MutImmutable, def_id.node);
             }
@@ -185,7 +181,7 @@ pub fn const_expr(cx: @mut CrateContext, e: &ast::Expr) -> (ValueRef, bool) {
     let adjustment = cx.tcx.adjustments.find_copy(&e.id);
     match adjustment {
         None => { }
-        Some(@ty::AutoAddEnv(ty::re_static, ast::BorrowedSigil)) => {
+        Some(@ty::AutoAddEnv(ty::ReStatic, ast::BorrowedSigil)) => {
             llconst = C_struct([llconst, C_null(Type::opaque_box(cx).ptr_to())], false)
         }
         Some(@ty::AutoAddEnv(ref r, ref s)) => {
@@ -195,12 +191,12 @@ pub fn const_expr(cx: @mut CrateContext, e: &ast::Expr) -> (ValueRef, bool) {
         Some(@ty::AutoDerefRef(ref adj)) => {
             let mut ty = ety;
             let mut maybe_ptr = None;
-            do adj.autoderefs.times {
+            adj.autoderefs.times(|| {
                 let (dv, dt) = const_deref(cx, llconst, ty, false);
                 maybe_ptr = Some(llconst);
                 llconst = dv;
                 ty = dt;
-            }
+            });
 
             match adj.autoref {
                 None => { }
@@ -215,19 +211,18 @@ pub fn const_expr(cx: @mut CrateContext, e: &ast::Expr) -> (ValueRef, bool) {
                     };
                     match *autoref {
                         ty::AutoUnsafe(m) |
-                        ty::AutoPtr(ty::re_static, m) => {
+                        ty::AutoPtr(ty::ReStatic, m) => {
                             assert!(m != ast::MutMutable);
                             llconst = llptr;
                         }
-                        ty::AutoBorrowVec(ty::re_static, m) => {
+                        ty::AutoBorrowVec(ty::ReStatic, m) => {
                             assert!(m != ast::MutMutable);
                             assert_eq!(abi::slice_elt_base, 0);
                             assert_eq!(abi::slice_elt_len, 1);
 
                             match ty::get(ty).sty {
-                                ty::ty_evec(_, ty::vstore_fixed(*)) => {
-                                    let size = machine::llsize_of(cx, val_ty(llconst));
-                                    llconst = C_struct([llptr, size], false);
+                                ty::ty_evec(_, ty::vstore_fixed(len)) => {
+                                    llconst = C_struct([llptr, C_uint(cx, len)], false);
                                 }
                                 _ => {}
                             }
@@ -390,10 +385,10 @@ fn const_expr_unadjusted(cx: @mut CrateContext,
               let bt = ty::expr_ty_adjusted(cx.tcx, base);
               let brepr = adt::represent_type(cx, bt);
               let (bv, inlineable) = const_expr(cx, base);
-              do expr::with_field_tys(cx.tcx, bt, None) |discr, field_tys| {
+              expr::with_field_tys(cx.tcx, bt, None, |discr, field_tys| {
                   let ix = ty::field_idx_strict(cx.tcx, field.name, field_tys);
                   (adt::const_get_field(cx, brepr, bv, discr, ix), inlineable)
-              }
+              })
           }
 
           ast::ExprIndex(_, base, index) => {
@@ -412,14 +407,8 @@ fn const_expr_unadjusted(cx: @mut CrateContext,
                           (bv, C_uint(cx, u)),
 
                       ty::vstore_slice(_) => {
-                          let unit_ty = ty::sequence_element_type(cx.tcx, bt);
-                          let llunitty = type_of::type_of(cx, unit_ty);
-                          let unit_sz = machine::llsize_of(cx, llunitty);
-
                           let e1 = const_get_elt(cx, bv, [0]);
-                          (const_deref_ptr(cx, e1),
-                           llvm::LLVMConstUDiv(const_get_elt(cx, bv, [1]),
-                                               unit_sz))
+                          (const_deref_ptr(cx, e1), const_get_elt(cx, bv, [1]))
                       },
                       _ => cx.sess.span_bug(base.span,
                                             "index-expr base must be fixed-size or slice")
@@ -430,7 +419,7 @@ fn const_expr_unadjusted(cx: @mut CrateContext,
 
               let len = llvm::LLVMConstIntGetZExtValue(len) as u64;
               let len = match ty::get(bt).sty {
-                  ty::ty_estr(*) => {assert!(len > 0); len - 1},
+                  ty::ty_estr(..) => {assert!(len > 0); len - 1},
                   _ => len
               };
               if iv >= len {
@@ -515,11 +504,10 @@ fn const_expr_unadjusted(cx: @mut CrateContext,
                 None => None
               };
 
-              do expr::with_field_tys(tcx, ety, Some(e.id))
-                  |discr, field_tys| {
+              expr::with_field_tys(tcx, ety, Some(e.id), |discr, field_tys| {
                   let cs = field_tys.iter().enumerate()
                       .map(|(ix, &field_ty)| {
-                      match fs.iter().find(|f| field_ty.ident.name == f.ident.name) {
+                      match fs.iter().find(|f| field_ty.ident.name == f.ident.node.name) {
                           Some(f) => const_expr(cx, (*f).expr),
                           None => {
                               match base_val {
@@ -535,31 +523,31 @@ fn const_expr_unadjusted(cx: @mut CrateContext,
                   let (cs, inlineable) = vec::unzip(cs.move_iter());
                   (adt::trans_const(cx, repr, discr, cs),
                    inlineable.iter().fold(true, |a, &b| a && b))
-              }
+              })
           }
           ast::ExprVec(ref es, ast::MutImmutable) => {
-            let (v, _, _, inlineable) = const_vec(cx, e, *es);
+            let (v, _, inlineable) = const_vec(cx, e, *es);
             (v, inlineable)
           }
           ast::ExprVstore(sub, ast::ExprVstoreSlice) => {
             match sub.node {
               ast::ExprLit(ref lit) => {
                 match lit.node {
-                  ast::lit_str(*) => { const_expr(cx, sub) }
+                  ast::lit_str(..) => { const_expr(cx, sub) }
                   _ => { cx.sess.span_bug(e.span, "bad const-slice lit") }
                 }
               }
               ast::ExprVec(ref es, ast::MutImmutable) => {
-                let (cv, sz, llunitty, _) = const_vec(cx, e, *es);
+                let (cv, llunitty, _) = const_vec(cx, e, *es);
                 let llty = val_ty(cv);
-                let gv = do "const".with_c_str |name| {
+                let gv = "const".with_c_str(|name| {
                     llvm::LLVMAddGlobal(cx.llmod, llty.to_ref(), name)
-                };
+                });
                 llvm::LLVMSetInitializer(gv, cv);
                 llvm::LLVMSetGlobalConstant(gv, True);
                 SetLinkage(gv, PrivateLinkage);
                 let p = const_ptrcast(cx, gv, llunitty);
-                (C_struct([p, sz], false), false)
+                (C_struct([p, C_uint(cx, es.len())], false), false)
               }
               _ => cx.sess.span_bug(e.span, "bad const-slice expr")
             }

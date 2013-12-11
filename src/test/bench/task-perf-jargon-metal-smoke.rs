@@ -17,7 +17,6 @@
 //
 // The filename is a song reference; google it in quotes.
 
-use std::cell::Cell;
 use std::comm;
 use std::os;
 use std::task;
@@ -27,9 +26,7 @@ fn child_generation(gens_left: uint, c: comm::Chan<()>) {
     // This used to be O(n^2) in the number of generations that ever existed.
     // With this code, only as many generations are alive at a time as tasks
     // alive at a time,
-    let c = Cell::new(c);
-    do task::spawn_supervised {
-        let c = c.take();
+    do spawn {
         if gens_left & 1 == 1 {
             task::deschedule(); // shake things up a bit
         }
@@ -51,9 +48,9 @@ fn main() {
         args.clone()
     };
 
-    let (p,c) = comm::stream();
+    let (p,c) = Chan::new();
     child_generation(from_str::<uint>(args[1]).unwrap(), c);
-    if p.try_recv().is_none() {
-        fail2!("it happened when we slumbered");
+    if p.recv_opt().is_none() {
+        fail!("it happened when we slumbered");
     }
 }

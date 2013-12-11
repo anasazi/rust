@@ -19,10 +19,6 @@ use unstable::intrinsics;
 #[inline]
 pub fn id<T>(x: T) -> T { x }
 
-/// Ignores a value.
-#[inline]
-pub fn ignore<T>(_x: T) { }
-
 /**
  * Swap the values at two mutable locations of the same type, without
  * deinitialising or copying either one.
@@ -62,12 +58,6 @@ pub fn replace<T>(dest: &mut T, mut src: T) -> T {
 #[unsafe_no_drop_flag]
 pub struct NonCopyable;
 
-impl NonCopyable {
-    // FIXME(#8233) should not be necessary
-    /// Create a new noncopyable token.
-    pub fn new() -> NonCopyable { NonCopyable }
-}
-
 impl Drop for NonCopyable {
     fn drop(&mut self) { }
 }
@@ -93,7 +83,7 @@ mod tests {
     use ops::Drop;
     use option::{None, Some};
     use either::{Either, Left, Right};
-    use sys::size_of;
+    use mem::size_of;
 
     #[test]
     fn identity_crisis() {
@@ -184,17 +174,17 @@ mod bench {
     fn trait_vtable_method_call(bh: &mut BenchHarness) {
         let s = Struct { field: 10 };
         let t = &s as &Trait;
-        do bh.iter {
+        bh.iter(|| {
             t.method();
-        }
+        });
     }
 
     #[bench]
     fn trait_static_method_call(bh: &mut BenchHarness) {
         let s = Struct { field: 10 };
-        do bh.iter {
+        bh.iter(|| {
             s.method();
-        }
+        });
     }
 
     // Overhead of various match forms
@@ -202,22 +192,22 @@ mod bench {
     #[bench]
     fn match_option_some(bh: &mut BenchHarness) {
         let x = Some(10);
-        do bh.iter {
+        bh.iter(|| {
             let _q = match x {
                 Some(y) => y,
                 None => 11
             };
-        }
+        });
     }
 
     #[bench]
     fn match_vec_pattern(bh: &mut BenchHarness) {
         let x = [1,2,3,4,5,6];
-        do bh.iter {
+        bh.iter(|| {
             let _q = match x {
-                [1,2,3,.._] => 10,
+                [1,2,3,..] => 10,
                 _ => 11
             };
-        }
+        });
     }
 }

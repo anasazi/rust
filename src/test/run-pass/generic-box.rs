@@ -8,13 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[feature(managed_boxes)];
 
-
-fn box<T:'static>(x: Box<T>) -> @Box<T> { return @x; }
+fn box_it<T:'static>(x: Box<T>) -> @Box<T> { return @x; }
 
 struct Box<T> {x: T, y: T, z: T}
 
 pub fn main() {
-    let x: @Box<int> = box::<int>(Box{x: 1, y: 2, z: 3});
+    let x: @Box<int> = box_it::<int>(Box{x: 1, y: 2, z: 3});
     assert_eq!(x.y, 2);
 }

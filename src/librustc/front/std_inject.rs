@@ -19,6 +19,7 @@ use syntax::codemap;
 use syntax::fold::ast_fold;
 use syntax::fold;
 use syntax::opt_vec;
+use syntax::util::small_vector::SmallVector;
 
 static STD_VERSION: &'static str = "0.9-pre";
 
@@ -33,6 +34,10 @@ pub fn maybe_inject_libstd_ref(sess: Session, crate: ast::Crate)
 
 fn use_std(crate: &ast::Crate) -> bool {
     !attr::contains_name(crate.attrs, "no_std")
+}
+
+fn use_uv(crate: &ast::Crate) -> bool {
+    !attr::contains_name(crate.attrs, "no_uv")
 }
 
 fn no_prelude(attrs: &[ast::Attribute]) -> bool {
@@ -53,19 +58,30 @@ struct StandardLibraryInjector {
 impl fold::ast_fold for StandardLibraryInjector {
     fn fold_crate(&self, crate: ast::Crate) -> ast::Crate {
         let version = STD_VERSION.to_managed();
-        let vi1 = ast::view_item {
+        let vers_item = attr::mk_name_value_item_str(@"vers", version);
+        let mut vis = ~[ast::view_item {
             node: ast::view_item_extern_mod(self.sess.ident_of("std"),
                                             None,
-                                            ~[],
+                                            ~[vers_item.clone()],
                                             ast::DUMMY_NODE_ID),
-            attrs: ~[
-                attr::mk_attr(attr::mk_name_value_item_str(@"vers", version))
-            ],
+            attrs: ~[],
             vis: ast::private,
             span: dummy_sp()
-        };
+        }];
 
-        let vis = vec::append(~[vi1], crate.module.view_items);
+        if use_uv(&crate) && !*self.sess.building_library {
+            vis.push(ast::view_item {
+                node: ast::view_item_extern_mod(self.sess.ident_of("rustuv"),
+                                                None,
+                                                ~[vers_item],
+                                                ast::DUMMY_NODE_ID),
+                attrs: ~[],
+                vis: ast::private,
+                span: dummy_sp()
+            });
+        }
+
+        vis.push_all(crate.module.view_items);
         let mut new_module = ast::_mod {
             view_items: vis,
             ..crate.module.clone()
@@ -83,14 +99,14 @@ impl fold::ast_fold for StandardLibraryInjector {
         }
     }
 
-    fn fold_item(&self, item: @ast::item) -> Option<@ast::item> {
+    fn fold_item(&self, item: @ast::item) -> SmallVector<@ast::item> {
         if !no_prelude(item.attrs) {
             // only recur if there wasn't `#[no_implicit_prelude];`
             // on this item, i.e. this means that the prelude is not
             // implicitly imported though the whole subtree
             fold::noop_fold_item(item, self)
         } else {
-            Some(item)
+            SmallVector::one(item)
         }
     }
 
@@ -101,12 +117,12 @@ impl fold::ast_fold for StandardLibraryInjector {
             segments: ~[
                 ast::PathSegment {
                     identifier: self.sess.ident_of("std"),
-                    lifetime: None,
+                    lifetimes: opt_vec::Empty,
                     types: opt_vec::Empty,
                 },
                 ast::PathSegment {
                     identifier: self.sess.ident_of("prelude"),
-                    lifetime: None,
+                    lifetimes: opt_vec::Empty,
                     types: opt_vec::Empty,
                 },
             ],

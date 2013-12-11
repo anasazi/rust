@@ -50,6 +50,7 @@
 use middle::ty::{FloatVar, FloatVid, IntVar, IntVid, RegionVid, TyVar, TyVid};
 use middle::ty::{type_is_bot, IntType, UintType};
 use middle::ty;
+use middle::ty_fold;
 use middle::typeck::infer::{Bounds, cyclic_ty, fixup_err, fres, InferCtxt};
 use middle::typeck::infer::{region_var_bound_by_region_var, unresolved_ty};
 use middle::typeck::infer::to_str::InferStr;
@@ -96,6 +97,20 @@ pub fn resolver(infcx: @mut InferCtxt, modes: uint) -> ResolveState {
     }
 }
 
+impl ty_fold::TypeFolder for ResolveState {
+    fn tcx(&self) -> ty::ctxt {
+        self.infcx.tcx
+    }
+
+    fn fold_ty(&mut self, t: ty::t) -> ty::t {
+        self.resolve_type(t)
+    }
+
+    fn fold_region(&mut self, r: ty::Region) -> ty::Region {
+        self.resolve_region(r)
+    }
+}
+
 impl ResolveState {
     pub fn should(&mut self, mode: uint) -> bool {
         (self.modes & mode) == mode
@@ -104,7 +119,7 @@ impl ResolveState {
     pub fn resolve_type_chk(&mut self, typ: ty::t) -> fres<ty::t> {
         self.err = None;
 
-        debug2!("Resolving {} (modes={:x})",
+        debug!("Resolving {} (modes={:x})",
                ty_to_str(self.infcx.tcx, typ),
                self.modes);
 
@@ -116,7 +131,7 @@ impl ResolveState {
         assert!(self.v_seen.is_empty());
         match self.err {
           None => {
-            debug2!("Resolved to {} + {} (modes={:x})",
+            debug!("Resolved to {} + {} (modes={:x})",
                    ty_to_str(self.infcx.tcx, rty),
                    ty_to_str(self.infcx.tcx, rty),
                    self.modes);
@@ -137,7 +152,7 @@ impl ResolveState {
     }
 
     pub fn resolve_type(&mut self, typ: ty::t) -> ty::t {
-        debug2!("resolve_type({})", typ.inf_str(self.infcx));
+        debug!("resolve_type({})", typ.inf_str(self.infcx));
         let _i = indenter();
 
         if !ty::type_needs_infer(typ) {
@@ -166,11 +181,7 @@ impl ResolveState {
                     typ
                 } else {
                     self.type_depth += 1;
-                    let result = ty::fold_regions_and_ty(
-                        self.infcx.tcx, typ,
-                        |r| self.resolve_region(r),
-                        |t| self.resolve_type(t),
-                        |t| self.resolve_type(t));
+                    let result = ty_fold::super_fold_ty(self, typ);
                     self.type_depth -= 1;
                     result
                 }
@@ -179,23 +190,23 @@ impl ResolveState {
     }
 
     pub fn resolve_region(&mut self, orig: ty::Region) -> ty::Region {
-        debug2!("Resolve_region({})", orig.inf_str(self.infcx));
+        debug!("Resolve_region({})", orig.inf_str(self.infcx));
         match orig {
-          ty::re_infer(ty::ReVar(rid)) => self.resolve_region_var(rid),
+          ty::ReInfer(ty::ReVar(rid)) => self.resolve_region_var(rid),
           _ => orig
         }
     }
 
     pub fn resolve_region_var(&mut self, rid: RegionVid) -> ty::Region {
         if !self.should(resolve_rvar) {
-            return ty::re_infer(ty::ReVar(rid));
+            return ty::ReInfer(ty::ReVar(rid));
         }
         self.infcx.region_vars.resolve_var(rid)
     }
 
     pub fn assert_not_rvar(&mut self, rid: RegionVid, r: ty::Region) {
         match r {
-          ty::re_infer(ty::ReVar(rid2)) => {
+          ty::ReInfer(ty::ReVar(rid2)) => {
             self.err = Some(region_var_bound_by_region_var(rid, rid2));
           }
           _ => { }

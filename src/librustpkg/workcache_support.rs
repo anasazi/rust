@@ -8,55 +8,43 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use extra::sha1::Sha1;
-use extra::digest::Digest;
-use extra::workcache;
 use std::io;
+use std::io::File;
+use extra::workcache;
+use sha2::{Digest, Sha256};
 
 /// Hashes the file contents along with the last-modified time
 pub fn digest_file_with_date(path: &Path) -> ~str {
     use conditions::bad_path::cond;
-    use cond1 = conditions::bad_stat::cond;
 
-    let mut sha = ~Sha1::new();
-    let s = io::read_whole_file_str(path);
-    match s {
-        Ok(s) => {
-            (*sha).input_str(s);
-            let st = match path.stat() {
-                Some(st) => st,
-                None => cond1.raise((path.clone(), format!("Couldn't get file access time")))
-            };
-            (*sha).input_str(st.st_mtime.to_str());
-            (*sha).result_str()
+    match io::result(|| File::open(path).read_to_end()) {
+        Ok(bytes) => {
+            let mut sha = Sha256::new();
+            sha.input(bytes);
+            let st = path.stat();
+            sha.input_str(st.modified.to_str());
+            sha.result_str()
         }
         Err(e) => {
-            let path = cond.raise((path.clone(), format!("Couldn't read file: {}", e)));
-            // FIXME (#9639): This needs to handle non-utf8 paths
-            // XXX: I'm pretty sure this is the wrong return value
-            path.as_str().unwrap().to_owned()
+            cond.raise((path.clone(), format!("Couldn't read file: {}", e.desc)));
+            ~""
         }
     }
 }
 
 /// Hashes only the last-modified time
 pub fn digest_only_date(path: &Path) -> ~str {
-    use cond = conditions::bad_stat::cond;
-
-    let mut sha = ~Sha1::new();
-    let st = match path.stat() {
-                Some(st) => st,
-                None => cond.raise((path.clone(), format!("Couldn't get file access time")))
-    };
-    (*sha).input_str(st.st_mtime.to_str());
-    (*sha).result_str()
+    let mut sha = Sha256::new();
+    let st = path.stat();
+    sha.input_str(st.modified.to_str());
+    sha.result_str()
 }
 
 /// Adds multiple discovered outputs
 pub fn discover_outputs(e: &mut workcache::Exec, outputs: ~[Path]) {
-    debug2!("Discovering {:?} outputs", outputs.len());
+    debug!("Discovering {:?} outputs", outputs.len());
     for p in outputs.iter() {
-        debug2!("Discovering output! {}", p.display());
+        debug!("Discovering output! {}", p.display());
         // For now, assume that all discovered outputs are binaries
         // FIXME (#9639): This needs to handle non-utf8 paths
         e.discover_output("binary", p.as_str().unwrap(), digest_only_date(p));

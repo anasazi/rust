@@ -11,11 +11,11 @@
 // Testing guarantees provided by once functions.
 // This program would segfault if it were legal.
 
+#[feature(once_fns)];
 extern mod extra;
 use extra::arc;
-use std::util;
 
-fn foo(blk: ~once fn()) {
+fn foo(blk: proc()) {
     blk();
     blk(); //~ ERROR use of moved value
 }
@@ -24,6 +24,6 @@ fn main() {
     let x = arc::Arc::new(true);
     do foo {
         assert!(*x.get());
-        util::ignore(x);
+        drop(x);
     }
 }

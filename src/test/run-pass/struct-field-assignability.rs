@@ -1,5 +1,7 @@
-struct Foo<'self> {
-    x: &'self int
+#[feature(managed_boxes)];
+
+struct Foo<'a> {
+    x: &'a int
 }
 
 pub fn main() {

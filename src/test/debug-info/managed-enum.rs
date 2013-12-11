@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// xfail-android: FIXME(#10381)
+
 // compile-flags:-Z extra-debug-info
 // debugger:rbreak zzz
 // debugger:run
@@ -23,7 +25,7 @@
 // check:$3 = {-9747455}
 
 #[allow(unused_variable)];
-#[feature(struct_variant)];
+#[feature(struct_variant, managed_boxes)];
 
 // The first element is to ensure proper alignment, irrespective of the machines word size. Since
 // the size of the discriminant value is machine dependent, this has be taken into account when

@@ -22,7 +22,7 @@ use std::option;
 
 ///an unzipping of `token_tree`s
 struct TtFrame {
-    forest: @mut ~[ast::token_tree],
+    forest: @~[ast::token_tree],
     idx: uint,
     dotdotdoted: bool,
     sep: Option<Token>,
@@ -52,7 +52,7 @@ pub fn new_tt_reader(sp_diag: @mut span_handler,
     let r = @mut TtReader {
         sp_diag: sp_diag,
         stack: @mut TtFrame {
-            forest: @mut src,
+            forest: @src,
             idx: 0u,
             dotdotdoted: false,
             sep: None,
@@ -74,7 +74,7 @@ pub fn new_tt_reader(sp_diag: @mut span_handler,
 
 fn dup_tt_frame(f: @mut TtFrame) -> @mut TtFrame {
     @mut TtFrame {
-        forest: @mut (*f.forest).clone(),
+        forest: @(*f.forest).clone(),
         idx: f.idx,
         dotdotdoted: f.dotdotdoted,
         sep: f.sep.clone(),
@@ -151,12 +151,12 @@ fn lockstep_iter_size(t: &token_tree, r: &mut TtReader) -> lis {
     }
     match *t {
       tt_delim(ref tts) | tt_seq(_, ref tts, _, _) => {
-        do tts.iter().fold(lis_unconstrained) |lis, tt| {
+        tts.iter().fold(lis_unconstrained, |lis, tt| {
             let lis2 = lockstep_iter_size(tt, r);
             lis_merge(lis, lis2)
-        }
+        })
       }
-      tt_tok(*) => lis_unconstrained,
+      tt_tok(..) => lis_unconstrained,
       tt_nonterminal(_, name) => match *lookup_cur_matched(r, name) {
         matched_nonterminal(_) => lis_unconstrained,
         matched_seq(ref ads, _) => lis_constraint(ads.len(), name)
@@ -175,8 +175,7 @@ pub fn tt_next_token(r: &mut TtReader) -> TokenAndSpan {
     loop {
         {
             let stack = &mut *r.stack;
-            let forest = &mut *stack.forest;
-            if stack.idx < forest.len() {
+            if stack.idx < stack.forest.len() {
                 break;
             }
         }
@@ -291,7 +290,7 @@ pub fn tt_next_token(r: &mut TtReader) -> TokenAndSpan {
                 r.stack.idx += 1u;
                 return ret_val;
               }
-              matched_seq(*) => {
+              matched_seq(..) => {
                 r.sp_diag.span_fatal(
                     r.cur_span, /* blame the macro writer */
                     format!("variable '{}' is still repeating at this depth",

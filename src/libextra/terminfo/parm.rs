@@ -48,9 +48,9 @@ pub enum Param {
 /// Container for static and dynamic variable arrays
 pub struct Variables {
     /// Static variables A-Z
-    sta: [Param, ..26],
+    priv sta: [Param, ..26],
     /// Dynamic variables a-z
-    dyn: [Param, ..26]
+    priv dyn: [Param, ..26]
 }
 
 impl Variables {
@@ -462,7 +462,7 @@ impl FormatOp {
             'x' => FormatHex,
             'X' => FormatHEX,
             's' => FormatString,
-            _ => fail2!("bad FormatOp char")
+            _ => fail!("bad FormatOp char")
         }
     }
     fn to_char(self) -> char {
@@ -494,14 +494,14 @@ fn format(val: Param, op: FormatOp, flags: Flags) -> Result<~[u8],~str> {
                     match op {
                         FormatDigit => {
                             let sign = if flags.sign { SignAll } else { SignNeg };
-                            do int_to_str_bytes_common(d, radix, sign) |c| {
+                            int_to_str_bytes_common(d, radix, sign, |c| {
                                 s.push(c);
-                            }
+                            })
                         }
                         _ => {
-                            do int_to_str_bytes_common(d as uint, radix, SignNone) |c| {
+                            int_to_str_bytes_common(d as uint, radix, SignNone, |c| {
                                 s.push(c);
-                            }
+                            })
                         }
                     };
                     if flags.precision > s.len() {

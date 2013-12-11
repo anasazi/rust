@@ -30,7 +30,7 @@ pub trait ToStr {
 }
 
 /// Trait for converting a type to a string, consuming it in the process.
-pub trait ToStrConsume {
+pub trait IntoStr {
     /// Consume and convert to a string.
     fn into_str(self) -> ~str;
 }
@@ -121,7 +121,7 @@ impl<A:ToStr,B:ToStr,C:ToStr> ToStr for (A, B, C) {
     }
 }
 
-impl<'self,A:ToStr> ToStr for &'self [A] {
+impl<'a,A:ToStr> ToStr for &'a [A] {
     #[inline]
     fn to_str(&self) -> ~str {
         let mut acc = ~"[";

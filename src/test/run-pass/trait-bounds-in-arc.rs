@@ -16,13 +16,12 @@
 // xfail-fast
 
 extern mod extra;
+
 use extra::arc;
-use std::comm;
 use std::task;
-use std::cell;
 
 trait Pet {
-    fn name(&self, blk: &fn(&str));
+    fn name(&self, blk: |&str|);
     fn num_legs(&self) -> uint;
     fn of_good_pedigree(&self) -> bool;
 }
@@ -44,19 +43,19 @@ struct Goldfyshe {
 }
 
 impl Pet for Catte {
-    fn name(&self, blk: &fn(&str)) { blk(self.name) }
+    fn name(&self, blk: |&str|) { blk(self.name) }
     fn num_legs(&self) -> uint { 4 }
     fn of_good_pedigree(&self) -> bool { self.num_whiskers >= 4 }
 }
 impl Pet for Dogge {
-    fn name(&self, blk: &fn(&str)) { blk(self.name) }
+    fn name(&self, blk: |&str|) { blk(self.name) }
     fn num_legs(&self) -> uint { 4 }
     fn of_good_pedigree(&self) -> bool {
         self.bark_decibels < 70 || self.tricks_known > 20
     }
 }
 impl Pet for Goldfyshe {
-    fn name(&self, blk: &fn(&str)) { blk(self.name) }
+    fn name(&self, blk: |&str|) { blk(self.name) }
     fn num_legs(&self) -> uint { 0 }
     fn of_good_pedigree(&self) -> bool { self.swim_speed >= 500 }
 }
@@ -70,15 +69,15 @@ fn main() {
                          ~dogge1 as ~Pet:Freeze+Send,
                          ~fishe  as ~Pet:Freeze+Send,
                          ~dogge2 as ~Pet:Freeze+Send]);
-    let (p1,c1) = comm::stream();
-    let arc1 = cell::Cell::new(arc.clone());
-    do task::spawn { check_legs(arc1.take()); c1.send(()); }
-    let (p2,c2) = comm::stream();
-    let arc2 = cell::Cell::new(arc.clone());
-    do task::spawn { check_names(arc2.take()); c2.send(()); }
-    let (p3,c3) = comm::stream();
-    let arc3 = cell::Cell::new(arc.clone());
-    do task::spawn { check_pedigree(arc3.take()); c3.send(()); }
+    let (p1,c1) = Chan::new();
+    let arc1 = arc.clone();
+    do task::spawn { check_legs(arc1); c1.send(()); }
+    let (p2,c2) = Chan::new();
+    let arc2 = arc.clone();
+    do task::spawn { check_names(arc2); c2.send(()); }
+    let (p3,c3) = Chan::new();
+    let arc3 = arc.clone();
+    do task::spawn { check_pedigree(arc3); c3.send(()); }
     p1.recv();
     p2.recv();
     p3.recv();
@@ -93,9 +92,9 @@ fn check_legs(arc: arc::Arc<~[~Pet:Freeze+Send]>) {
 }
 fn check_names(arc: arc::Arc<~[~Pet:Freeze+Send]>) {
     for pet in arc.get().iter() {
-        do pet.name |name| {
+        pet.name(|name| {
             assert!(name[0] == 'a' as u8 && name[1] == 'l' as u8);
-        }
+        })
     }
 }
 fn check_pedigree(arc: arc::Arc<~[~Pet:Freeze+Send]>) {

@@ -12,28 +12,27 @@
 
 extern mod extra;
 
-use std::comm;
 use std::task;
 
-fn start(c: &comm::Chan<comm::Chan<~str>>) {
-    let (p, ch) = comm::stream();
+fn start(c: &Chan<Chan<~str>>) {
+    let (p, ch) = Chan::new();
     c.send(ch);
 
     let mut a;
     let mut b;
     a = p.recv();
     assert!(a == ~"A");
-    error2!("{:?}", a);
+    error!("{:?}", a);
     b = p.recv();
     assert!(b == ~"B");
-    error2!("{:?}", b);
+    error!("{:?}", b);
 }
 
 pub fn main() {
-    let (p, ch) = comm::stream();
-    let _child = task::spawn(|| start(&ch) );
+    let (p, ch) = Chan::new();
+    let _child = task::spawn(proc() { start(&ch) });
 
-    let c = p.recv();
+    let mut c = p.recv();
     c.send(~"A");
     c.send(~"B");
     task::deschedule();

@@ -20,6 +20,8 @@ pub fn expand_deriving_clone(cx: @ExtCtxt,
                              in_items: ~[@item])
                           -> ~[@item] {
     let trait_def = TraitDef {
+        cx: cx, span: span,
+
         path: Path::new(~["std", "clone", "Clone"]),
         additional_bounds: ~[],
         generics: LifetimeBounds::empty(),
@@ -30,13 +32,14 @@ pub fn expand_deriving_clone(cx: @ExtCtxt,
                 explicit_self: borrowed_explicit_self(),
                 args: ~[],
                 ret_ty: Self,
+                inline: true,
                 const_nonmatching: false,
                 combine_substructure: |c, s, sub| cs_clone("Clone", c, s, sub)
             }
         ]
     };
 
-    trait_def.expand(cx, span, mitem, in_items)
+    trait_def.expand(mitem, in_items)
 }
 
 pub fn expand_deriving_deep_clone(cx: @ExtCtxt,
@@ -45,6 +48,8 @@ pub fn expand_deriving_deep_clone(cx: @ExtCtxt,
                                   in_items: ~[@item])
     -> ~[@item] {
     let trait_def = TraitDef {
+        cx: cx, span: span,
+
         path: Path::new(~["std", "clone", "DeepClone"]),
         additional_bounds: ~[],
         generics: LifetimeBounds::empty(),
@@ -55,6 +60,7 @@ pub fn expand_deriving_deep_clone(cx: @ExtCtxt,
                 explicit_self: borrowed_explicit_self(),
                 args: ~[],
                 ret_ty: Self,
+                inline: true,
                 const_nonmatching: false,
                 // cs_clone uses the ident passed to it, i.e. it will
                 // call deep_clone (not clone) here.
@@ -63,7 +69,7 @@ pub fn expand_deriving_deep_clone(cx: @ExtCtxt,
         ]
     };
 
-    trait_def.expand(cx, span, mitem, in_items)
+    trait_def.expand(mitem, in_items)
 }
 
 fn cs_clone(
@@ -85,31 +91,31 @@ fn cs_clone(
             ctor_ident = variant.node.name;
             all_fields = af;
         },
-        EnumNonMatching(*) => cx.span_bug(span,
+        EnumNonMatching(..) => cx.span_bug(span,
                                           format!("Non-matching enum variants in `deriving({})`",
                                                name)),
-        StaticEnum(*) | StaticStruct(*) => cx.span_bug(span,
+        StaticEnum(..) | StaticStruct(..) => cx.span_bug(span,
                                                        format!("Static method in `deriving({})`",
                                                             name))
     }
 
     match *all_fields {
-        [(None, _, _), .. _] => {
+        [FieldInfo { name: None, .. }, ..] => {
             // enum-like
-            let subcalls = all_fields.map(|&(_, self_f, _)| subcall(self_f));
+            let subcalls = all_fields.map(|field| subcall(field.self_));
             cx.expr_call_ident(span, ctor_ident, subcalls)
         },
         _ => {
             // struct-like
-            let fields = do all_fields.map |&(o_id, self_f, _)| {
-                let ident = match o_id {
+            let fields = all_fields.map(|field| {
+                let ident = match field.name {
                     Some(i) => i,
                     None => cx.span_bug(span,
                                         format!("unnamed field in normal struct in `deriving({})`",
                                              name))
                 };
-                cx.field_imm(span, ident, subcall(self_f))
-            };
+                cx.field_imm(span, ident, subcall(field.self_))
+            });
 
             if fields.is_empty() {
                 // no fields, so construct like `None`

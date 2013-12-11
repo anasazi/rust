@@ -15,8 +15,13 @@
  *
  * Consider this as a main "general-purpose" hash for all hashtables: it
  * runs at good speed (competitive with spooky and city) and permits
- * cryptographically strong _keyed_ hashing. Key your hashtables from a
- * CPRNG like rand::rng.
+ * strong _keyed_ hashing. Key your hashtables from a strong RNG,
+ * such as rand::rng.
+ *
+ * Although the SipHash algorithm is considered to be cryptographically
+ * strong, this implementation has not been reviewed for such purposes.
+ * As such, all cryptographic uses of this implementation are strongly
+ * discouraged.
  */
 
 #[allow(missing_doc)];
@@ -24,7 +29,7 @@
 use container::Container;
 use iter::Iterator;
 use option::{Some, None};
-use rt::io::Writer;
+use io::Writer;
 use str::OwnedStr;
 use to_bytes::IterBytes;
 use vec::ImmutableVector;
@@ -78,113 +83,12 @@ impl<A:IterBytes> Hash for A {
     #[inline]
     fn hash_keyed(&self, k0: u64, k1: u64) -> u64 {
         let mut s = State::new(k0, k1);
-        do self.iter_bytes(true) |bytes| {
+        self.iter_bytes(true, |bytes| {
             s.input(bytes);
             true
-        };
+        });
         s.result_u64()
     }
-}
-
-fn hash_keyed_2<A: IterBytes,
-                B: IterBytes>(a: &A, b: &B, k0: u64, k1: u64) -> u64 {
-    let mut s = State::new(k0, k1);
-    do a.iter_bytes(true) |bytes| {
-        s.input(bytes);
-        true
-    };
-    do b.iter_bytes(true) |bytes| {
-        s.input(bytes);
-        true
-    };
-    s.result_u64()
-}
-
-fn hash_keyed_3<A: IterBytes,
-                B: IterBytes,
-                C: IterBytes>(a: &A, b: &B, c: &C, k0: u64, k1: u64) -> u64 {
-    let mut s = State::new(k0, k1);
-    do a.iter_bytes(true) |bytes| {
-        s.input(bytes);
-        true
-    };
-    do b.iter_bytes(true) |bytes| {
-        s.input(bytes);
-        true
-    };
-    do c.iter_bytes(true) |bytes| {
-        s.input(bytes);
-        true
-    };
-    s.result_u64()
-}
-
-fn hash_keyed_4<A: IterBytes,
-                B: IterBytes,
-                C: IterBytes,
-                D: IterBytes>(
-                a: &A,
-                b: &B,
-                c: &C,
-                d: &D,
-                k0: u64,
-                k1: u64)
-                -> u64 {
-    let mut s = State::new(k0, k1);
-    do a.iter_bytes(true) |bytes| {
-        s.input(bytes);
-        true
-    };
-    do b.iter_bytes(true) |bytes| {
-        s.input(bytes);
-        true
-    };
-    do c.iter_bytes(true) |bytes| {
-        s.input(bytes);
-        true
-    };
-    do d.iter_bytes(true) |bytes| {
-        s.input(bytes);
-        true
-    };
-    s.result_u64()
-}
-
-fn hash_keyed_5<A: IterBytes,
-                B: IterBytes,
-                C: IterBytes,
-                D: IterBytes,
-                E: IterBytes>(
-                a: &A,
-                b: &B,
-                c: &C,
-                d: &D,
-                e: &E,
-                k0: u64,
-                k1: u64)
-                -> u64 {
-    let mut s = State::new(k0, k1);
-    do a.iter_bytes(true) |bytes| {
-        s.input(bytes);
-        true
-    };
-    do b.iter_bytes(true) |bytes| {
-        s.input(bytes);
-        true
-    };
-    do c.iter_bytes(true) |bytes| {
-        s.input(bytes);
-        true
-    };
-    do d.iter_bytes(true) |bytes| {
-        s.input(bytes);
-        true
-    };
-    do e.iter_bytes(true) |bytes| {
-        s.input(bytes);
-        true
-    };
-    s.result_u64()
 }
 
 #[inline]
@@ -399,11 +303,12 @@ impl Streaming for SipState {
 mod tests {
     use super::*;
     use prelude::*;
+    use super::SipState;
 
     // Hash just the bytes of the slice, without length prefix
-    struct Bytes<'self>(&'self [u8]);
-    impl<'self> IterBytes for Bytes<'self> {
-        fn iter_bytes(&self, _lsb0: bool, f: &fn(&[u8]) -> bool) -> bool {
+    struct Bytes<'a>(&'a [u8]);
+    impl<'a> IterBytes for Bytes<'a> {
+        fn iter_bytes(&self, _lsb0: bool, f: |&[u8]| -> bool) -> bool {
             f(**self)
         }
     }
@@ -493,10 +398,10 @@ mod tests {
         }
 
         while t < 64 {
-            debug2!("siphash test {}", t);
+            debug!("siphash test {}", t);
             let vec = u8to64_le!(vecs[t], 0);
             let out = Bytes(buf.as_slice()).hash_keyed(k0, k1);
-            debug2!("got {:?}, expected {:?}", out, vec);
+            debug!("got {:?}, expected {:?}", out, vec);
             assert_eq!(vec, out);
 
             stream_full.reset();
@@ -504,7 +409,7 @@ mod tests {
             let f = stream_full.result_str();
             let i = stream_inc.result_str();
             let v = to_hex_str(&vecs[t]);
-            debug2!("{}: ({}) => inc={} full={}", t, v, i, f);
+            debug!("{}: ({}) => inc={} full={}", t, v, i, f);
 
             assert!(f == i && f == v);
 

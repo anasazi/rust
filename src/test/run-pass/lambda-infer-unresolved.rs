@@ -9,13 +9,14 @@
 // except according to those terms.
 
 // This should typecheck even though the type of e is not fully
-// resolved when we finish typechecking the &fn.
+// resolved when we finish typechecking the ||.
 
+#[feature(managed_boxes)];
 
 struct Refs { refs: ~[int], n: int }
 
 pub fn main() {
     let e = @mut Refs{refs: ~[], n: 0};
-    let _f: &fn() = || error2!("{}", e.n);
+    let _f: || = || error!("{}", e.n);
     e.refs.push(1);
 }

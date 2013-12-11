@@ -8,21 +8,23 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[feature(managed_boxes)];
+
 // error-pattern:fail
 
 fn main() {
     let cheese = ~"roquefort";
     let carrots = @~"crunchy";
 
-    let result: &'static fn(@~str, &fn(~str)) = (|tasties, macerate| {
+    let result: 'static |@~str, |~str|| = (|tasties, macerate| {
         macerate((*tasties).clone());
     });
     result(carrots, |food| {
         let mush = food + cheese;
         let cheese = cheese.clone();
-        let f: &fn() = || {
+        let f: || = || {
             let _chew = mush + cheese;
-            fail2!("so yummy")
+            fail!("so yummy")
         };
         f();
     });

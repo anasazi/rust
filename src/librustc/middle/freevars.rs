@@ -47,13 +47,13 @@ impl Visitor<int> for CollectFreevarsVisitor {
     fn visit_expr(&mut self, expr:@ast::Expr, depth:int) {
 
             match expr.node {
-              ast::ExprFnBlock(*) => {
+              ast::ExprFnBlock(..) | ast::ExprProc(..) => {
                 visit::walk_expr(self, expr, depth + 1)
               }
-              ast::ExprPath(*) | ast::ExprSelf => {
+              ast::ExprPath(..) | ast::ExprSelf => {
                   let mut i = 0;
                   match self.def_map.find(&expr.id) {
-                    None => fail2!("path not found"),
+                    None => fail!("path not found"),
                     Some(&df) => {
                       let mut def = df;
                       while i < depth {
@@ -88,7 +88,7 @@ impl Visitor<int> for CollectFreevarsVisitor {
 // Since we want to be able to collect upvars in some arbitrary piece
 // of the AST, we take a walker function that we invoke with a visitor
 // in order to start the search.
-fn collect_freevars(def_map: resolve::DefMap, blk: &ast::Block)
+fn collect_freevars(def_map: resolve::DefMap, blk: ast::P<ast::Block>)
     -> freevar_info {
     let seen = @mut HashMap::new();
     let refs = @mut ~[];
@@ -110,7 +110,7 @@ struct AnnotateFreevarsVisitor {
 
 impl Visitor<()> for AnnotateFreevarsVisitor {
     fn visit_fn(&mut self, fk:&visit::fn_kind, fd:&ast::fn_decl,
-                blk:&ast::Block, s:Span, nid:ast::NodeId, _:()) {
+                blk:ast::P<ast::Block>, s:Span, nid:ast::NodeId, _:()) {
         let vars = collect_freevars(self.def_map, blk);
         self.freevars.insert(nid, vars);
         visit::walk_fn(self, fk, fd, blk, s, nid, ());
@@ -137,7 +137,7 @@ pub fn annotate_freevars(def_map: resolve::DefMap, crate: &ast::Crate) ->
 
 pub fn get_freevars(tcx: ty::ctxt, fid: ast::NodeId) -> freevar_info {
     match tcx.freevars.find(&fid) {
-      None => fail2!("get_freevars: {} has no freevars", fid),
+      None => fail!("get_freevars: {} has no freevars", fid),
       Some(&d) => return d
     }
 }

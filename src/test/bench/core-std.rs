@@ -21,6 +21,7 @@ use std::rand;
 use std::str;
 use std::util;
 use std::vec;
+use std::io::File;
 
 macro_rules! bench (
     ($argv:expr, $id:ident) => (maybe_run_test($argv, stringify!($id).to_owned(), $id))
@@ -39,7 +40,7 @@ fn main() {
     bench!(argv, is_utf8_multibyte);
 }
 
-fn maybe_run_test(argv: &[~str], name: ~str, test: &fn()) {
+fn maybe_run_test(argv: &[~str], name: ~str, test: ||) {
     let mut run_test = false;
 
     if os::getenv("RUST_BENCH").is_some() {
@@ -69,17 +70,14 @@ fn shift_push() {
 }
 
 fn read_line() {
-    use std::rt::io::{Reader, Open};
-    use std::rt::io::file::FileInfo;
-    use std::rt::io::buffered::BufferedReader;
+    use std::io::buffered::BufferedReader;
 
     let mut path = Path::new(env!("CFG_SRC_DIR"));
     path.push("src/test/bench/shootout-k-nucleotide.data");
 
     for _ in range(0, 3) {
-        let mut reader = BufferedReader::new(path.open_reader(Open).unwrap());
-        while !reader.eof() {
-            reader.read_line();
+        let mut reader = BufferedReader::new(File::open(&path).unwrap());
+        for _line in reader.lines() {
         }
     }
 }
@@ -90,7 +88,7 @@ fn vec_plus() {
     let mut v = ~[];
     let mut i = 0;
     while i < 1500 {
-        let rv = vec::from_elem(r.gen_integer_range(0u, i + 1), i);
+        let rv = vec::from_elem(r.gen_range(0u, i + 1), i);
         if r.gen() {
             v.push_all_move(rv);
         } else {
@@ -106,7 +104,7 @@ fn vec_append() {
     let mut v = ~[];
     let mut i = 0;
     while i < 1500 {
-        let rv = vec::from_elem(r.gen_integer_range(0u, i + 1), i);
+        let rv = vec::from_elem(r.gen_range(0u, i + 1), i);
         if r.gen() {
             v = vec::append(v, rv);
         }
@@ -122,7 +120,7 @@ fn vec_push_all() {
 
     let mut v = ~[];
     for i in range(0u, 1500) {
-        let mut rv = vec::from_elem(r.gen_integer_range(0u, i + 1), i);
+        let mut rv = vec::from_elem(r.gen_range(0u, i + 1), i);
         if r.gen() {
             v.push_all(rv);
         }
@@ -138,7 +136,7 @@ fn is_utf8_ascii() {
     for _ in range(0u, 20000) {
         v.push('b' as u8);
         if !str::is_utf8(v) {
-            fail2!("is_utf8 failed");
+            fail!("is_utf8 failed");
         }
     }
 }
@@ -149,7 +147,7 @@ fn is_utf8_multibyte() {
     for _ in range(0u, 5000) {
         v.push_all(s.as_bytes());
         if !str::is_utf8(v) {
-            fail2!("is_utf8 failed");
+            fail!("is_utf8 failed");
         }
     }
 }

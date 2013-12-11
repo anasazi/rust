@@ -13,9 +13,8 @@
     foo(bar),
     foo = "baz"
 )];
-//~^^^^ ERROR: unknown feature
-//~^^^^ ERROR: malformed feature
-//~^^^^ ERROR: malformed feature
+//~^^^ ERROR: malformed feature
+//~^^^ ERROR: malformed feature
 
 #[feature]; //~ ERROR: malformed feature
 #[feature = "foo"]; //~ ERROR: malformed feature

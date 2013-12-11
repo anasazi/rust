@@ -14,6 +14,7 @@ use middle::trans::common::*;
 use middle::trans::foreign;
 use middle::ty;
 use util::ppaux;
+use util::ppaux::Repr;
 
 use middle::trans::type_::Type;
 
@@ -117,21 +118,21 @@ pub fn sizing_type_of(cx: &mut CrateContext, t: ty::t) -> Type {
         ty::ty_estr(ty::vstore_box) |
         ty::ty_evec(_, ty::vstore_uniq) |
         ty::ty_evec(_, ty::vstore_box) |
-        ty::ty_box(*) |
+        ty::ty_box(..) |
         ty::ty_opaque_box |
-        ty::ty_uniq(*) |
-        ty::ty_ptr(*) |
-        ty::ty_rptr(*) |
+        ty::ty_uniq(..) |
+        ty::ty_ptr(..) |
+        ty::ty_rptr(..) |
         ty::ty_type |
-        ty::ty_opaque_closure_ptr(*) => Type::i8p(),
+        ty::ty_opaque_closure_ptr(..) => Type::i8p(),
 
-        ty::ty_estr(ty::vstore_slice(*)) |
-        ty::ty_evec(_, ty::vstore_slice(*)) => {
+        ty::ty_estr(ty::vstore_slice(..)) |
+        ty::ty_evec(_, ty::vstore_slice(..)) => {
             Type::struct_([Type::i8p(), Type::i8p()], false)
         }
 
-        ty::ty_bare_fn(*) => Type::i8p(),
-        ty::ty_closure(*) => Type::struct_([Type::i8p(), Type::i8p()], false),
+        ty::ty_bare_fn(..) => Type::i8p(),
+        ty::ty_closure(..) => Type::struct_([Type::i8p(), Type::i8p()], false),
         ty::ty_trait(_, _, store, _, _) => Type::opaque_trait(cx, store),
 
         ty::ty_estr(ty::vstore_fixed(size)) => Type::array(&Type::i8(), size as u64),
@@ -144,24 +145,23 @@ pub fn sizing_type_of(cx: &mut CrateContext, t: ty::t) -> Type {
             Type::vec(cx.sess.targ_cfg.arch, &sz_ty)
         }
 
-        ty::ty_tup(*) | ty::ty_enum(*) => {
+        ty::ty_tup(..) | ty::ty_enum(..) => {
             let repr = adt::represent_type(cx, t);
-            Type::struct_(adt::sizing_fields_of(cx, repr), false)
+            adt::sizing_type_of(cx, repr)
         }
 
-        ty::ty_struct(did, _) => {
+        ty::ty_struct(..) => {
             if ty::type_is_simd(cx.tcx, t) {
                 let et = ty::simd_type(cx.tcx, t);
                 let n = ty::simd_size(cx.tcx, t);
                 Type::vector(&type_of(cx, et), n as u64)
             } else {
                 let repr = adt::represent_type(cx, t);
-                let packed = ty::lookup_packed(cx.tcx, did);
-                Type::struct_(adt::sizing_fields_of(cx, repr), packed)
+                adt::sizing_type_of(cx, repr)
             }
         }
 
-        ty::ty_self(_) | ty::ty_infer(*) | ty::ty_param(*) | ty::ty_err(*) => {
+        ty::ty_self(_) | ty::ty_infer(..) | ty::ty_param(..) | ty::ty_err(..) => {
             cx.tcx.sess.bug(format!("fictitious type {:?} in sizing_type_of()", ty::get(t).sty))
         }
     };
@@ -172,13 +172,15 @@ pub fn sizing_type_of(cx: &mut CrateContext, t: ty::t) -> Type {
 
 // NB: If you update this, be sure to update `sizing_type_of()` as well.
 pub fn type_of(cx: &mut CrateContext, t: ty::t) -> Type {
-    debug2!("type_of {:?}: {:?}", t, ty::get(t));
-
     // Check the cache.
     match cx.lltypes.find(&t) {
-        Some(&t) => return t,
+        Some(&llty) => {
+            return llty;
+        }
         None => ()
     }
+
+    debug!("type_of {} {:?}", t.repr(cx.tcx), t);
 
     // Replace any typedef'd types with their equivalent non-typedef
     // type. This ensures that all LLVM nominal types that contain
@@ -189,6 +191,12 @@ pub fn type_of(cx: &mut CrateContext, t: ty::t) -> Type {
 
     if t != t_norm {
         let llty = type_of(cx, t_norm);
+        debug!("--> normalized {} {:?} to {} {:?} llty={}",
+                t.repr(cx.tcx),
+                t,
+                t_norm.repr(cx.tcx),
+                t_norm,
+                cx.tn.type_to_str(llty));
         cx.lltypes.insert(t, llty);
         return llty;
     }
@@ -208,25 +216,28 @@ pub fn type_of(cx: &mut CrateContext, t: ty::t) -> Type {
         // fill it in *after* placing it into the type cache. This
         // avoids creating more than one copy of the enum when one
         // of the enum's variants refers to the enum itself.
-
-        Type::named_struct(llvm_type_name(cx, an_enum, did, substs.tps))
+        let repr = adt::represent_type(cx, t);
+        let name = llvm_type_name(cx, an_enum, did, substs.tps);
+        adt::incomplete_type_of(cx, repr, name)
       }
       ty::ty_estr(ty::vstore_box) => {
-        Type::box(cx, &Type::vec(cx.sess.targ_cfg.arch, &Type::i8())).ptr_to()
+        Type::smart_ptr(cx,
+                        &Type::vec(cx.sess.targ_cfg.arch,
+                                   &Type::i8())).ptr_to()
       }
       ty::ty_evec(ref mt, ty::vstore_box) => {
           let e_ty = type_of(cx, mt.ty);
           let v_ty = Type::vec(cx.sess.targ_cfg.arch, &e_ty);
-          Type::box(cx, &v_ty).ptr_to()
+          Type::smart_ptr(cx, &v_ty).ptr_to()
       }
       ty::ty_box(ref mt) => {
           let ty = type_of(cx, mt.ty);
-          Type::box(cx, &ty).ptr_to()
+          Type::smart_ptr(cx, &ty).ptr_to()
       }
       ty::ty_opaque_box => Type::opaque_box(cx).ptr_to(),
       ty::ty_uniq(ref mt) => {
           let ty = type_of(cx, mt.ty);
-          if ty::type_contents(cx.tcx, mt.ty).contains_managed() {
+          if ty::type_contents(cx.tcx, mt.ty).owns_managed() {
               Type::unique(cx, &ty).ptr_to()
           } else {
               ty.ptr_to()
@@ -235,7 +246,7 @@ pub fn type_of(cx: &mut CrateContext, t: ty::t) -> Type {
       ty::ty_evec(ref mt, ty::vstore_uniq) => {
           let ty = type_of(cx, mt.ty);
           let ty = Type::vec(cx.sess.targ_cfg.arch, &ty);
-          if ty::type_contents(cx.tcx, mt.ty).contains_managed() {
+          if ty::type_contents(cx.tcx, mt.ty).owns_managed() {
               Type::unique(cx, &ty).ptr_to()
           } else {
               ty.ptr_to()
@@ -276,9 +287,9 @@ pub fn type_of(cx: &mut CrateContext, t: ty::t) -> Type {
       }
       ty::ty_trait(_, _, store, _, _) => Type::opaque_trait(cx, store),
       ty::ty_type => cx.tydesc_type.ptr_to(),
-      ty::ty_tup(*) => {
+      ty::ty_tup(..) => {
           let repr = adt::represent_type(cx, t);
-          Type::struct_(adt::fields_of(cx, repr), false)
+          adt::type_of(cx, repr)
       }
       ty::ty_opaque_closure_ptr(_) => Type::opaque_box(cx).ptr_to(),
       ty::ty_struct(did, ref substs) => {
@@ -290,32 +301,30 @@ pub fn type_of(cx: &mut CrateContext, t: ty::t) -> Type {
               // Only create the named struct, but don't fill it in. We fill it
               // in *after* placing it into the type cache. This prevents
               // infinite recursion with recursive struct types.
-              Type::named_struct(llvm_type_name(cx, a_struct, did, substs.tps))
+              let repr = adt::represent_type(cx, t);
+              let name = llvm_type_name(cx, a_struct, did, substs.tps);
+              adt::incomplete_type_of(cx, repr, name)
           }
       }
-      ty::ty_self(*) => cx.tcx.sess.unimpl("type_of: ty_self"),
-      ty::ty_infer(*) => cx.tcx.sess.bug("type_of with ty_infer"),
-      ty::ty_param(*) => cx.tcx.sess.bug("type_of with ty_param"),
-      ty::ty_err(*) => cx.tcx.sess.bug("type_of with ty_err")
+      ty::ty_self(..) => cx.tcx.sess.unimpl("type_of: ty_self"),
+      ty::ty_infer(..) => cx.tcx.sess.bug("type_of with ty_infer"),
+      ty::ty_param(..) => cx.tcx.sess.bug("type_of with ty_param"),
+      ty::ty_err(..) => cx.tcx.sess.bug("type_of with ty_err")
     };
 
+    debug!("--> mapped t={} {:?} to llty={}",
+            t.repr(cx.tcx),
+            t,
+            cx.tn.type_to_str(llty));
     cx.lltypes.insert(t, llty);
 
     // If this was an enum or struct, fill in the type now.
     match ty::get(t).sty {
-      ty::ty_enum(*) => {
-          let repr = adt::represent_type(cx, t);
-          llty.set_struct_body(adt::fields_of(cx, repr), false);
-      }
-
-      ty::ty_struct(did, _) => {
-        if !ty::type_is_simd(cx.tcx, t) {
-          let repr = adt::represent_type(cx, t);
-          let packed = ty::lookup_packed(cx.tcx, did);
-          llty.set_struct_body(adt::fields_of(cx, repr), packed);
+        ty::ty_enum(..) | ty::ty_struct(..) if !ty::type_is_simd(cx.tcx, t) => {
+            let repr = adt::represent_type(cx, t);
+            adt::finish_type_of(cx, repr, &mut llty);
         }
-      }
-      _ => ()
+        _ => ()
     }
 
     return llty;

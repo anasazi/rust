@@ -242,7 +242,7 @@ impl Datum {
                           action: CopyAction,
                           datum: Datum)
                           -> @mut Block {
-        debug2!("store_to_datum(self={}, action={:?}, datum={})",
+        debug!("store_to_datum(self={}, action={:?}, datum={})",
                self.to_str(bcx.ccx()), action, datum.to_str(bcx.ccx()));
         assert!(datum.mode.is_by_ref());
         self.store_to(bcx, action, datum.val)
@@ -275,7 +275,7 @@ impl Datum {
             return bcx;
         }
 
-        debug2!("copy_to(self={}, action={:?}, dst={})",
+        debug!("copy_to(self={}, action={:?}, dst={})",
                self.to_str(bcx.ccx()), action, bcx.val_to_str(dst));
 
         // Watch out for the case where we are writing the copying the
@@ -290,9 +290,9 @@ impl Datum {
                 ByRef(_) => {
                     let cast = PointerCast(bcx, dst, val_ty(self.val));
                     let cmp = ICmp(bcx, lib::llvm::IntNE, cast, self.val);
-                    do with_cond(bcx, cmp) |bcx| {
+                    with_cond(bcx, cmp, |bcx| {
                         self.copy_to_no_check(bcx, action, dst)
-                    }
+                    })
                 }
                 ByValue => {
                     self.copy_to_no_check(bcx, action, dst)
@@ -340,7 +340,7 @@ impl Datum {
         let _icx = push_ctxt("move_to");
         let mut bcx = bcx;
 
-        debug2!("move_to(self={}, action={:?}, dst={})",
+        debug!("move_to(self={}, action={:?}, dst={})",
                self.to_str(bcx.ccx()), action, bcx.val_to_str(dst));
 
         if ty::type_is_voidish(bcx.tcx(), self.ty) {
@@ -473,34 +473,21 @@ impl Datum {
                     C_null(type_of::type_of(bcx.ccx(), self.ty).ptr_to())
                 } else {
                     let slot = alloc_ty(bcx, self.ty, "");
+                    // The store created here can be modified through a reference, for example:
+                    //
+                    //     // free the old allocation, and change the pointer to a new allocation
+                    //     fn foo(x: &mut ~u8) {
+                    //         *x = ~5;
+                    //     }
+                    //
+                    //     foo(&mut ~5);
                     Store(bcx, self.val, slot);
+                    // The old cleanup needs to be cancelled, in order for the destructor to observe
+                    // any changes made through the reference.
+                    self.cancel_clean(bcx);
+                    add_clean_temp_mem(bcx, slot, self.ty);
                     slot
                 }
-            }
-        }
-    }
-
-    pub fn to_zeroable_ref_llval(&self, bcx: @mut Block) -> ValueRef {
-        /*!
-         * Returns a by-ref llvalue that can be zeroed in order to
-         * cancel cleanup. This is a kind of hokey bridge used
-         * to adapt to the match code. Please don't use it for new code.
-         */
-
-        match self.mode {
-            // All by-ref datums are zeroable, even if we *could* just
-            // cancel the cleanup.
-            ByRef(_) => self.val,
-
-            // By value datums can't be zeroed (where would you store
-            // the zero?) so we have to spill them. Add a temp cleanup
-            // for this spilled value and cancel the cleanup on this
-            // current value.
-            ByValue => {
-                let slot = self.to_ref_llval(bcx);
-                self.cancel_clean(bcx);
-                add_clean_temp_mem(bcx, slot, self.ty);
-                slot
             }
         }
     }
@@ -537,7 +524,7 @@ impl Datum {
                        bcx: @mut Block,
                        ty: ty::t,
                        source: DatumCleanup,
-                       gep: &fn(ValueRef) -> ValueRef)
+                       gep: |ValueRef| -> ValueRef)
                        -> Datum {
         let base_val = self.to_ref_llval(bcx);
         Datum {
@@ -579,7 +566,7 @@ impl Datum {
             }
         };
 
-        if !header && !ty::type_contents(bcx.tcx(), content_ty).contains_managed() {
+        if !header && !ty::type_contents(bcx.tcx(), content_ty).owns_managed() {
             let ptr = self.to_value_llval(bcx);
             let ty = type_of::type_of(bcx.ccx(), content_ty);
             let body = PointerCast(bcx, ptr, ty.ptr_to());
@@ -601,7 +588,7 @@ impl Datum {
         // result (which will be by-value).  Note that it is not
         // significant *which* region we pick here.
         let llval = self.to_ref_llval(bcx);
-        let rptr_ty = ty::mk_imm_rptr(bcx.tcx(), ty::re_static,
+        let rptr_ty = ty::mk_imm_rptr(bcx.tcx(), ty::ReStatic,
                                       self.ty);
         Datum {val: llval, ty: rptr_ty, mode: ByValue}
     }
@@ -620,7 +607,7 @@ impl Datum {
                      -> (Option<Datum>, @mut Block) {
         let ccx = bcx.ccx();
 
-        debug2!("try_deref(expr_id={:?}, derefs={:?}, is_auto={}, self={:?})",
+        debug!("try_deref(expr_id={:?}, derefs={:?}, is_auto={}, self={:?})",
                expr_id, derefs, is_auto, self.to_str(bcx.ccx()));
 
         let bcx =
@@ -745,7 +732,7 @@ impl Datum {
                      -> DatumBlock {
         let _icx = push_ctxt("autoderef");
 
-        debug2!("autoderef(expr_id={}, max={:?}, self={:?})",
+        debug!("autoderef(expr_id={}, max={:?}, self={:?})",
                expr_id, max, self.to_str(bcx.ccx()));
         let _indenter = indenter();
 
@@ -770,12 +757,36 @@ impl Datum {
         DatumBlock { bcx: bcx, datum: datum }
     }
 
+    pub fn get_vec_base_and_byte_len(&self,
+                                     mut bcx: @mut Block,
+                                     span: Span,
+                                     expr_id: ast::NodeId,
+                                     derefs: uint)
+                                     -> (@mut Block, ValueRef, ValueRef) {
+        //! Converts a vector into the slice pair. Performs rooting
+        //! and write guards checks.
+
+        // only imp't for @[] and @str, but harmless
+        bcx = write_guard::root_and_write_guard(self, bcx, span, expr_id, derefs);
+        let (base, len) = self.get_vec_base_and_byte_len_no_root(bcx);
+        (bcx, base, len)
+    }
+
+    pub fn get_vec_base_and_byte_len_no_root(&self, bcx: @mut Block)
+                                             -> (ValueRef, ValueRef) {
+        //! Converts a vector into the slice pair. Des not root
+        //! nor perform write guard checks.
+
+        let llval = self.to_appropriate_llval(bcx);
+        tvec::get_base_and_byte_len(bcx, llval, self.ty)
+    }
+
     pub fn get_vec_base_and_len(&self,
-                                mut bcx: @mut Block,
-                                span: Span,
-                                expr_id: ast::NodeId,
-                                derefs: uint)
-                                -> (@mut Block, ValueRef, ValueRef) {
+                                     mut bcx: @mut Block,
+                                     span: Span,
+                                     expr_id: ast::NodeId,
+                                     derefs: uint)
+                                     -> (@mut Block, ValueRef, ValueRef) {
         //! Converts a vector into the slice pair. Performs rooting
         //! and write guards checks.
 
@@ -786,7 +797,7 @@ impl Datum {
     }
 
     pub fn get_vec_base_and_len_no_root(&self, bcx: @mut Block)
-                                        -> (ValueRef, ValueRef) {
+                                             -> (ValueRef, ValueRef) {
         //! Converts a vector into the slice pair. Des not root
         //! nor perform write guard checks.
 

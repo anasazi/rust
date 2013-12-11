@@ -11,12 +11,14 @@
 // xfail-fast - check-fast doesn't understand aux-build
 // aux-build:cci_borrow_lib.rs
 
+#[feature(managed_boxes)];
+
 extern mod cci_borrow_lib;
 use cci_borrow_lib::foo;
 
 pub fn main() {
     let p = @22u;
     let r = foo(p);
-    info2!("r={}", r);
+    info!("r={}", r);
     assert_eq!(r, 22u);
 }

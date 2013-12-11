@@ -14,9 +14,11 @@ use codemap;
 use codemap::{CodeMap, Span, ExpnInfo};
 use diagnostic::span_handler;
 use ext;
+use ext::expand;
 use parse;
 use parse::token;
 use parse::token::{ident_to_str, intern, str_to_ident};
+use util::small_vector::SmallVector;
 
 use std::hashmap::HashMap;
 
@@ -130,7 +132,7 @@ pub type SyntaxExpanderTTItemFunNoCtxt =
 
 pub trait AnyMacro {
     fn make_expr(&self) -> @ast::Expr;
-    fn make_item(&self) -> Option<@ast::item>;
+    fn make_items(&self) -> SmallVector<@ast::item>;
     fn make_stmt(&self) -> @ast::Stmt;
 }
 
@@ -142,7 +144,7 @@ pub enum MacResult {
 }
 
 pub enum SyntaxExtension {
-    // #[auto_encode] and such
+    // #[deriving] and such
     ItemDecorator(ItemDecorator),
 
     // Token-tree expanders
@@ -199,15 +201,7 @@ pub fn syntax_expander_table() -> SyntaxEnv {
         } as @SyntaxExpanderTTTrait,
         None))
     }
-    // utility function to simplify creating IdentTT syntax extensions
-    // that ignore their contexts
-    fn builtin_item_tt_no_ctxt(f: SyntaxExpanderTTItemFunNoCtxt) -> @Transformer {
-        @SE(IdentTT(@SyntaxExpanderTTItem {
-            expander: SyntaxExpanderTTItemExpanderWithoutContext(f),
-            span: None,
-        } as @SyntaxExpanderTTItemTrait,
-        None))
-    }
+
     let mut syntax_expanders = HashMap::new();
     // NB identifier starts with space, and can't conflict with legal idents
     syntax_expanders.insert(intern(&" block"),
@@ -222,18 +216,12 @@ pub fn syntax_expander_table() -> SyntaxEnv {
                                 span: None,
                             } as @SyntaxExpanderTTItemTrait,
                             None)));
-    syntax_expanders.insert(intern(&"oldfmt"),
+    syntax_expanders.insert(intern(&"fmt"),
                             builtin_normal_tt_no_ctxt(
                                 ext::fmt::expand_syntax_ext));
     syntax_expanders.insert(intern(&"format_args"),
                             builtin_normal_tt_no_ctxt(
                                 ext::format::expand_args));
-    syntax_expanders.insert(
-        intern(&"auto_encode"),
-        @SE(ItemDecorator(ext::auto_encode::expand_auto_encode)));
-    syntax_expanders.insert(
-        intern(&"auto_decode"),
-        @SE(ItemDecorator(ext::auto_encode::expand_auto_decode)));
     syntax_expanders.insert(intern(&"env"),
                             builtin_normal_tt_no_ctxt(
                                     ext::env::expand_env));
@@ -246,6 +234,9 @@ pub fn syntax_expander_table() -> SyntaxEnv {
     syntax_expanders.insert(intern("concat_idents"),
                             builtin_normal_tt_no_ctxt(
                                     ext::concat_idents::expand_syntax_ext));
+    syntax_expanders.insert(intern("concat"),
+                            builtin_normal_tt_no_ctxt(
+                                    ext::concat::expand_syntax_ext));
     syntax_expanders.insert(intern(&"log_syntax"),
                             builtin_normal_tt_no_ctxt(
                                     ext::log_syntax::expand_syntax_ext));
@@ -338,12 +329,28 @@ impl ExtCtxt {
         }
     }
 
+    pub fn expand_expr(@self, mut e: @ast::Expr) -> @ast::Expr {
+        loop {
+            match e.node {
+                ast::ExprMac(..) => {
+                    let extsbox = @mut syntax_expander_table();
+                    let expander = expand::MacroExpander {
+                        extsbox: extsbox,
+                        cx: self,
+                    };
+                    e = expand::expand_expr(extsbox, self, e, &expander);
+                }
+                _ => return e
+            }
+        }
+    }
+
     pub fn codemap(&self) -> @CodeMap { self.parse_sess.cm }
     pub fn parse_sess(&self) -> @mut parse::ParseSess { self.parse_sess }
     pub fn cfg(&self) -> ast::CrateConfig { self.cfg.clone() }
     pub fn call_site(&self) -> Span {
         match *self.backtrace {
-            Some(@ExpnInfo {call_site: cs, _}) => cs,
+            Some(@ExpnInfo {call_site: cs, ..}) => cs,
             None => self.bug("missing top span")
         }
     }
@@ -366,7 +373,7 @@ impl ExtCtxt {
     pub fn bt_pop(&self) {
         match *self.backtrace {
             Some(@ExpnInfo {
-                call_site: Span {expn_info: prev, _}, _}) => {
+                call_site: Span {expn_info: prev, ..}, ..}) => {
                 *self.backtrace = prev
             }
             _ => self.bug("tried to pop without a push")
@@ -486,7 +493,7 @@ pub fn get_exprs_from_tts(cx: @ExtCtxt,
 // use a top-level managed pointer by some difficulties
 // with pushing and popping functionally, and the ownership
 // issues.  As a result, the values returned by the table
-// also need to be managed; the &'self ... type that Maps
+// also need to be managed; the &'a ... type that Maps
 // return won't work for things that need to get outside
 // of that managed pointer.  The easiest way to do this
 // is just to insist that the values in the tables are
@@ -539,12 +546,12 @@ impl <K: Eq + Hash + IterBytes + 'static, V: 'static> MapChain<K,V>{
     // should each_key and each_value operate on shadowed
     // names? I think not.
     // delaying implementing this....
-    pub fn each_key (&self, _f: &fn (&K)->bool) {
-        fail2!("unimplemented 2013-02-15T10:01");
+    pub fn each_key (&self, _f: |&K| -> bool) {
+        fail!("unimplemented 2013-02-15T10:01");
     }
 
-    pub fn each_value (&self, _f: &fn (&V) -> bool) {
-        fail2!("unimplemented 2013-02-15T10:02");
+    pub fn each_value (&self, _f: |&V| -> bool) {
+        fail!("unimplemented 2013-02-15T10:02");
     }
 
     // Returns a copy of the value that the name maps to.
@@ -581,13 +588,17 @@ impl <K: Eq + Hash + IterBytes + 'static, V: 'static> MapChain<K,V>{
     // ... there are definitely some opportunities for abstraction
     // here that I'm ignoring. (e.g., manufacturing a predicate on
     // the maps in the chain, and using an abstract "find".
-    pub fn insert_into_frame(&mut self, key: K, ext: @V, n: K, pred: &fn(&@V)->bool) {
+    pub fn insert_into_frame(&mut self,
+                             key: K,
+                             ext: @V,
+                             n: K,
+                             pred: |&@V| -> bool) {
         match *self {
             BaseMapChain (~ref mut map) => {
                 if satisfies_pred(map,&n,pred) {
                     map.insert(key,ext);
                 } else {
-                    fail2!("expected map chain containing satisfying frame")
+                    fail!("expected map chain containing satisfying frame")
                 }
             },
             ConsMapChain (~ref mut map, rest) => {
@@ -602,10 +613,12 @@ impl <K: Eq + Hash + IterBytes + 'static, V: 'static> MapChain<K,V>{
 }
 
 // returns true if the binding for 'n' satisfies 'pred' in 'map'
-fn satisfies_pred<K : Eq + Hash + IterBytes,V>(map : &mut HashMap<K,V>,
-                                               n: &K,
-                                               pred: &fn(&V)->bool)
-    -> bool {
+fn satisfies_pred<K:Eq + Hash + IterBytes,
+                  V>(
+                  map: &mut HashMap<K,V>,
+                  n: &K,
+                  pred: |&V| -> bool)
+                  -> bool {
     match map.find(n) {
         Some(ref v) => (pred(*v)),
         None => false
@@ -617,7 +630,8 @@ mod test {
     use super::MapChain;
     use std::hashmap::HashMap;
 
-    #[test] fn testenv () {
+    #[test]
+    fn testenv() {
         let mut a = HashMap::new();
         a.insert (@"abc",@15);
         let m = MapChain::new(~a);

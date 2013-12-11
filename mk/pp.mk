@@ -1,4 +1,4 @@
-# Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+# Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
 # file at the top-level directory of this distribution and at
 # http://rust-lang.org/COPYRIGHT.
 #
@@ -18,17 +18,16 @@ else
               $(wildcard $(S)src/test/*/*.rs    \
                          $(S)src/test/*/*/*.rs) \
               $(wildcard $(S)src/rustpkg/*.rs) \
-              $(wildcard $(S)src/rusti/*.rs) \
               $(wildcard $(S)src/rust/*.rs)
 
   PP_INPUTS_FILTERED = $(shell echo $(PP_INPUTS) | xargs grep -L \
                        "no-reformat\|xfail-pretty\|xfail-test")
 endif
 
-reformat: $(SREQ1$(CFG_BUILD_TRIPLE))
+reformat: $(SREQ1$(CFG_BUILD))
 	@$(call E, reformat [stage1]: $@)
 	for i in $(PP_INPUTS_FILTERED);  \
-    do $(call CFG_RUN_TARG_$(CFG_BUILD_TRIPLE),1,$(CFG_BUILD_TRIPLE)/stage1/rustc$(X_$(CFG_BUILD_TRIPLE))) \
+    do $(call CFG_RUN_TARG_$(CFG_BUILD),1,$(CFG_BUILD)/stage1/rustc$(X_$(CFG_BUILD))) \
        --pretty normal $$i >$$i.tmp; \
     if [ $$? -ne 0 ]; \
         then echo failed to print $$i; rm $$i.tmp; \

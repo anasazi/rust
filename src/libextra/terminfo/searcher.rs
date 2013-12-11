@@ -13,7 +13,8 @@
 
 use std::{os, str};
 use std::os::getenv;
-use std::io::{file_reader, Reader};
+use std::io;
+use std::io::File;
 
 /// Return path to database entry for `term`
 pub fn get_dbpath_for_term(term: &str) -> Option<~Path> {
@@ -35,7 +36,7 @@ pub fn get_dbpath_for_term(term: &str) -> Option<~Path> {
                 dirs_to_search.push(homedir.unwrap().join(".terminfo"))
             }
             match getenv("TERMINFO_DIRS") {
-                Some(dirs) => for i in dirs.split_iter(':') {
+                Some(dirs) => for i in dirs.split(':') {
                     if i == "" {
                         dirs_to_search.push(Path::new("/usr/share/terminfo"));
                     } else {
@@ -55,16 +56,16 @@ pub fn get_dbpath_for_term(term: &str) -> Option<~Path> {
 
     // Look for the terminal in all of the search directories
     for p in dirs_to_search.iter() {
-        if os::path_exists(p) {
+        if p.exists() {
             let f = str::from_char(first_char);
             let newp = p.join_many([f.as_slice(), term]);
-            if os::path_exists(&newp) {
+            if newp.exists() {
                 return Some(~newp);
             }
             // on some installations the dir is named after the hex of the char (e.g. OS X)
             let f = format!("{:x}", first_char as uint);
             let newp = p.join_many([f.as_slice(), term]);
-            if os::path_exists(&newp) {
+            if newp.exists() {
                 return Some(~newp);
             }
         }
@@ -73,9 +74,9 @@ pub fn get_dbpath_for_term(term: &str) -> Option<~Path> {
 }
 
 /// Return open file for `term`
-pub fn open(term: &str) -> Result<@Reader, ~str> {
+pub fn open(term: &str) -> Result<@mut io::Reader, ~str> {
     match get_dbpath_for_term(term) {
-        Some(x) => file_reader(x),
+        Some(x) => Ok(@mut File::open(x) as @mut io::Reader),
         None => Err(format!("could not find terminfo entry for {}", term))
     }
 }

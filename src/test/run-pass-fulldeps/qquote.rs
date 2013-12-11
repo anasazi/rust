@@ -9,6 +9,7 @@
 // except according to those terms.
 
 // xfail-pretty
+// xfail-test
 
 extern mod extra;
 extern mod syntax;
@@ -73,7 +74,7 @@ fn main() {
 }
 
 fn check_pp<T>(cx: fake_ext_ctxt,
-               expr: T, f: &fn(pprust::ps, T), expect: ~str) {
+               expr: T, f: |pprust::ps, T|, expect: ~str) {
     let s = do io::with_str_writer |wr| {
         let pp = pprust::rust_printer(wr, cx.parse_sess().interner);
         f(pp, expr);

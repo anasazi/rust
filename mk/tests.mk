@@ -14,8 +14,8 @@
 ######################################################################
 
 # The names of crates that must be tested
-TEST_TARGET_CRATES = std extra
-TEST_HOST_CRATES = rusti rustpkg rustc rustdoc syntax
+TEST_TARGET_CRATES = std extra rustuv
+TEST_HOST_CRATES = rustpkg rustc rustdoc syntax
 TEST_CRATES = $(TEST_TARGET_CRATES) $(TEST_HOST_CRATES)
 
 # Markdown files under doc/ that should have their code extracted and run
@@ -98,7 +98,7 @@ ifdef CFG_UNIXY_$(1)
 endif
 
 ifdef CFG_WINDOWSY_$(1)
-  CFG_TESTLIB_$(1)=$$(CFG_BUILD_DIR)/$$(2)/$$(strip \
+  CFG_TESTLIB_$(1)=$$(CFG_BUILD_DIR)$$(2)/$$(strip \
    $$(if $$(findstring stage0,$$(1)), \
        stage0/$$(CFG_LIBDIR), \
       $$(if $$(findstring stage1,$$(1)), \
@@ -107,20 +107,20 @@ ifdef CFG_WINDOWSY_$(1)
                stage2/$$(CFG_LIBDIR), \
                $$(if $$(findstring stage3,$$(1)), \
                     stage3/$$(CFG_LIBDIR), \
-               )))))/rustc/$$(CFG_BUILD_TRIPLE)/$$(CFG_LIBDIR)
+               )))))/rustc/$$(CFG_BUILD)/$$(CFG_LIBDIR)
   CFG_RUN_TEST_$(1)=$$(call CFG_RUN_$(1),$$(call CFG_TESTLIB_$(1),$$(1),$$(3)),$$(1))
 endif
 
 # Run the compiletest runner itself under valgrind
 ifdef CTEST_VALGRIND
-CFG_RUN_CTEST_$(1)=$$(call CFG_RUN_TEST_$$(CFG_BUILD_TRIPLE),$$(2),$$(3))
+CFG_RUN_CTEST_$(1)=$$(call CFG_RUN_TEST_$$(CFG_BUILD),$$(2),$$(3))
 else
-CFG_RUN_CTEST_$(1)=$$(call CFG_RUN_$$(CFG_BUILD_TRIPLE),$$(TLIB$$(1)_T_$$(3)_H_$$(3)),$$(2))
+CFG_RUN_CTEST_$(1)=$$(call CFG_RUN_$$(CFG_BUILD),$$(TLIB$$(1)_T_$$(3)_H_$$(3)),$$(2))
 endif
 
 endef
 
-$(foreach target,$(CFG_TARGET_TRIPLES), \
+$(foreach target,$(CFG_TARGET), \
   $(eval $(call DEF_TARGET_COMMANDS,$(target))))
 
 # Target platform specific variables
@@ -129,20 +129,17 @@ define DEF_ADB_DEVICE_STATUS
 CFG_ADB_DEVICE_STATUS=$(1)
 endef
 
-$(foreach target,$(CFG_TARGET_TRIPLES), \
+$(foreach target,$(CFG_TARGET), \
   $(if $(findstring $(target),"arm-linux-androideabi"), \
     $(if $(findstring adb,$(CFG_ADB)), \
       $(if $(findstring device,$(shell $(CFG_ADB) devices 2>/dev/null | grep -E '^[_A-Za-z0-9-]+[[:blank:]]+device')), \
-        $(info check: $(target) test enabled \
-          $(info check: android device attached) \
-          $(eval $(call DEF_ADB_DEVICE_STATUS, true))), \
-        $(info check: $(target) test disabled \
-          $(info check: android device not attached) \
-          $(eval $(call DEF_ADB_DEVICE_STATUS, false))) \
+        $(info check: android device attached) \
+        $(eval $(call DEF_ADB_DEVICE_STATUS, true)), \
+        $(info check: android device not attached) \
+        $(eval $(call DEF_ADB_DEVICE_STATUS, false)) \
       ), \
-      $(info check: $(target) test disabled \
-        $(info check: adb not found) \
-        $(eval $(call DEF_ADB_DEVICE_STATUS, false))) \
+      $(info check: adb not found) \
+      $(eval $(call DEF_ADB_DEVICE_STATUS, false)) \
     ), \
   ) \
 )
@@ -156,13 +153,13 @@ $(info check: android device test dir $(CFG_ADB_TEST_DIR) ready \
  $(shell adb shell mkdir $(CFG_ADB_TEST_DIR)) \
  $(shell adb shell mkdir $(CFG_ADB_TEST_DIR)/tmp) \
  $(shell adb push $(S)src/etc/adb_run_wrapper.sh $(CFG_ADB_TEST_DIR) 1>/dev/null) \
- $(shell adb push $(CFG_ANDROID_CROSS_PATH)/arm-linux-androideabi/lib/armv7-a/libgnustl_shared.so \
-                  $(CFG_ADB_TEST_DIR) 1>/dev/null) \
- $(shell adb push $(TLIB2_T_arm-linux-androideabi_H_$(CFG_BUILD_TRIPLE))/$(CFG_RUNTIME_arm-linux-androideabi) \
+ $(shell adb push $(TLIB2_T_arm-linux-androideabi_H_$(CFG_BUILD))/$(CFG_RUNTIME_arm-linux-androideabi) \
                   $(CFG_ADB_TEST_DIR)) \
- $(shell adb push $(TLIB2_T_arm-linux-androideabi_H_$(CFG_BUILD_TRIPLE))/$(STDLIB_GLOB_arm-linux-androideabi) \
+ $(shell adb push $(TLIB2_T_arm-linux-androideabi_H_$(CFG_BUILD))/$(STDLIB_GLOB_arm-linux-androideabi) \
                   $(CFG_ADB_TEST_DIR)) \
- $(shell adb push $(TLIB2_T_arm-linux-androideabi_H_$(CFG_BUILD_TRIPLE))/$(EXTRALIB_GLOB_arm-linux-androideabi) \
+ $(shell adb push $(TLIB2_T_arm-linux-androideabi_H_$(CFG_BUILD))/$(EXTRALIB_GLOB_arm-linux-androideabi) \
+                  $(CFG_ADB_TEST_DIR)) \
+ $(shell adb push $(TLIB2_T_arm-linux-androideabi_H_$(CFG_BUILD))/$(LIBRUSTUV_GLOB_arm-linux-androideabi) \
                   $(CFG_ADB_TEST_DIR)) \
  )
 else
@@ -189,8 +186,9 @@ check-test: cleantestlibs cleantmptestlogs all check-stage2-rfail
 
 check-lite: cleantestlibs cleantmptestlogs \
 	check-stage2-std check-stage2-extra check-stage2-rpass \
-	check-stage2-rustpkg check-stage2-rusti \
-	check-stage2-rfail check-stage2-cfail
+	check-stage2-rustuv \
+	check-stage2-rustpkg \
+	check-stage2-rfail check-stage2-cfail check-stage2-rmake
 	$(Q)$(CFG_PYTHON) $(S)src/etc/check-summary.py tmp/*.log
 
 .PHONY: cleantmptestlogs cleantestlibs
@@ -199,7 +197,7 @@ cleantmptestlogs:
 	$(Q)rm -f tmp/*.log
 
 cleantestlibs:
-	$(Q)find $(CFG_BUILD_TRIPLE)/test \
+	$(Q)find $(CFG_BUILD)/test \
          -name '*.[odasS]' -o \
          -name '*.so' -o      \
          -name '*.dylib' -o   \
@@ -227,7 +225,6 @@ ALL_CS := $(wildcard $(S)src/rt/*.cpp \
                      $(S)src/rt/*/*/*.cpp \
                      $(S)src/rustllvm/*.cpp)
 ALL_CS := $(filter-out $(S)src/rt/miniz.cpp \
-		       $(wildcard $(S)src/rt/linenoise/*.c) \
 		       $(wildcard $(S)src/rt/sundown/src/*.c) \
 		       $(wildcard $(S)src/rt/sundown/html/*.c) \
 	,$(ALL_CS))
@@ -240,8 +237,6 @@ ALL_HS := $(filter-out $(S)src/rt/vg/valgrind.h \
                        $(S)src/rt/msvc/typeof.h \
                        $(S)src/rt/msvc/stdint.h \
                        $(S)src/rt/msvc/inttypes.h \
-                       $(S)src/rt/linenoise/linenoise.h \
-                       $(S)src/rt/linenoise/utf8.h \
 		       $(wildcard $(S)src/rt/sundown/src/*.h) \
 		       $(wildcard $(S)src/rt/sundown/html/*.h) \
 	,$(ALL_HS))
@@ -268,7 +263,6 @@ tidy:
 		| grep '^$(S)src/libuv' -v \
 		| grep '^$(S)src/gyp' -v \
 		| grep '^$(S)src/etc' -v \
-		| grep '^$(S)src/rt/jemalloc' -v \
 		| xargs $(CFG_PYTHON) $(S)src/etc/check-binaries.py
 
 endif
@@ -285,7 +279,8 @@ check-stage$(1)-T-$(2)-H-$(3)-exec:     				\
 	check-stage$(1)-T-$(2)-H-$(3)-rfail-exec			\
 	check-stage$(1)-T-$(2)-H-$(3)-cfail-exec			\
 	check-stage$(1)-T-$(2)-H-$(3)-rpass-full-exec			\
-        check-stage$(1)-T-$(2)-H-$(3)-crates-exec                      \
+	check-stage$(1)-T-$(2)-H-$(3)-rmake-exec			\
+        check-stage$(1)-T-$(2)-H-$(3)-crates-exec                       \
 	check-stage$(1)-T-$(2)-H-$(3)-bench-exec			\
 	check-stage$(1)-T-$(2)-H-$(3)-debuginfo-exec \
 	check-stage$(1)-T-$(2)-H-$(3)-codegen-exec \
@@ -294,7 +289,7 @@ check-stage$(1)-T-$(2)-H-$(3)-exec:     				\
 
 # Only test the compiler-dependent crates when the target is
 # able to build a compiler (when the target triple is in the set of host triples)
-ifneq ($$(findstring $(2),$$(CFG_HOST_TRIPLES)),)
+ifneq ($$(findstring $(2),$$(CFG_HOST)),)
 
 check-stage$(1)-T-$(2)-H-$(3)-crates-exec: \
 	$$(foreach crate,$$(TEST_CRATES), \
@@ -321,8 +316,8 @@ check-stage$(1)-T-$(2)-H-$(3)-pretty-exec: \
 
 endef
 
-$(foreach host,$(CFG_HOST_TRIPLES), \
- $(foreach target,$(CFG_TARGET_TRIPLES), \
+$(foreach host,$(CFG_HOST), \
+ $(foreach target,$(CFG_TARGET), \
   $(foreach stage,$(STAGES), \
     $(eval $(call DEF_TEST_SETS,$(stage),$(target),$(host))))))
 
@@ -337,7 +332,8 @@ define TEST_RUNNER
 # test crates without rebuilding std and extra first
 ifeq ($(NO_REBUILD),)
 STDTESTDEP_$(1)_$(2)_$(3) = $$(SREQ$(1)_T_$(2)_H_$(3)) \
-                            $$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_EXTRALIB_$(2))
+                            $$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_EXTRALIB_$(2)) \
+                            $$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_LIBRUSTUV_$(2))
 else
 STDTESTDEP_$(1)_$(2)_$(3) =
 endif
@@ -354,36 +350,38 @@ $(3)/stage$(1)/test/extratest-$(2)$$(X_$(2)):			\
 	@$$(call E, compile_and_link: $$@)
 	$$(STAGE$(1)_T_$(2)_H_$(3)) -o $$@ $$< --test
 
+$(3)/stage$(1)/test/rustuvtest-$(2)$$(X_$(2)):			\
+		$$(LIBRUSTUV_CRATE) $$(LIBRUSTUV_INPUTS)	\
+		$$(STDTESTDEP_$(1)_$(2)_$(3))
+	@$$(call E, compile_and_link: $$@)
+	$$(STAGE$(1)_T_$(2)_H_$(3)) -o $$@ $$< --test \
+		-L $$(UV_SUPPORT_DIR_$(2)) \
+		-L $$(dir $$(LIBUV_LIB_$(2)))
+
 $(3)/stage$(1)/test/syntaxtest-$(2)$$(X_$(2)):			\
 		$$(LIBSYNTAX_CRATE) $$(LIBSYNTAX_INPUTS)	\
 		$$(STDTESTDEP_$(1)_$(2)_$(3))
 	@$$(call E, compile_and_link: $$@)
 	$$(STAGE$(1)_T_$(2)_H_$(3)) -o $$@ $$< --test
 
-$(3)/stage$(1)/test/rustctest-$(2)$$(X_$(2)): CFG_COMPILER_TRIPLE = $(2)
+$(3)/stage$(1)/test/rustctest-$(2)$$(X_$(2)): CFG_COMPILER = $(2)
 $(3)/stage$(1)/test/rustctest-$(2)$$(X_$(2)):					\
 		$$(COMPILER_CRATE) $$(COMPILER_INPUTS) \
 		$$(SREQ$(1)_T_$(2)_H_$(3)) \
 		$$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_RUSTLLVM_$(2)) \
                 $$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_LIBSYNTAX_$(2))
 	@$$(call E, compile_and_link: $$@)
-	$$(STAGE$(1)_T_$(2)_H_$(3)) -o $$@ $$< --test
+	$$(STAGE$(1)_T_$(2)_H_$(3)) -o $$@ $$< --test \
+	    -L "$$(LLVM_LIBDIR_$(2))"
 
 $(3)/stage$(1)/test/rustpkgtest-$(2)$$(X_$(2)):					\
 		$$(RUSTPKG_LIB) $$(RUSTPKG_INPUTS)		\
 		$$(SREQ$(1)_T_$(2)_H_$(3)) \
 		$$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_LIBSYNTAX_$(2)) \
 		$$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_LIBRUSTC_$(2)) \
+		$$(HBIN$(1)_H_$(3))/rustpkg$$(X_$(2)) \
 		$$(TBIN$(1)_T_$(2)_H_$(3))/rustpkg$$(X_$(2)) \
 		$$(TBIN$(1)_T_$(2)_H_$(3))/rustc$$(X_$(2))
-	@$$(call E, compile_and_link: $$@)
-	$$(STAGE$(1)_T_$(2)_H_$(3)) -o $$@ $$< --test
-
-$(3)/stage$(1)/test/rustitest-$(2)$$(X_$(2)):					\
-		$$(RUSTI_LIB) $$(RUSTI_INPUTS)		\
-		$$(SREQ$(1)_T_$(2)_H_$(3)) \
-		$$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_LIBSYNTAX_$(2)) \
-		$$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_LIBRUSTC_$(2))
 	@$$(call E, compile_and_link: $$@)
 	$$(STAGE$(1)_T_$(2)_H_$(3)) -o $$@ $$< --test
 
@@ -391,14 +389,16 @@ $(3)/stage$(1)/test/rustdoctest-$(2)$$(X_$(2)):					\
 		$$(RUSTDOC_LIB) $$(RUSTDOC_INPUTS)		\
 		$$(SREQ$(1)_T_$(2)_H_$(3)) \
 		$$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_LIBSYNTAX_$(2)) \
-		$$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_LIBRUSTC_$(2))
+		$$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_LIBRUSTC_$(2)) \
+		$$(SUNDOWN_LIB_$(2))
 	@$$(call E, compile_and_link: $$@)
-	$$(STAGE$(1)_T_$(2)_H_$(3)) -o $$@ $$< --test
+	$$(STAGE$(1)_T_$(2)_H_$(3)) -o $$@ $$< --test \
+		-L $$(SUNDOWN_DIR_$(2))
 
 endef
 
-$(foreach host,$(CFG_HOST_TRIPLES), \
- $(eval $(foreach target,$(CFG_TARGET_TRIPLES), \
+$(foreach host,$(CFG_HOST), \
+ $(eval $(foreach target,$(CFG_TARGET), \
   $(eval $(foreach stage,$(STAGES), \
    $(eval $(call TEST_RUNNER,$(stage),$(target),$(host))))))))
 
@@ -448,15 +448,15 @@ check-stage$(1)-T-$(2)-H-$(3)-$(4)-exec: $$(call TEST_OK_FILE,$(1),$(2),$(3),$(4
 
 $$(call TEST_OK_FILE,$(1),$(2),$(3),$(4)): \
 		$(3)/stage$(1)/test/$(4)test-$(2)$$(X_$(2))
-	@$$(call E, run: skipped $$< )
-	@touch $$@
+	@$$(call E, failing: no device for $$< )
+	false
 endef
 
-$(foreach host,$(CFG_HOST_TRIPLES), \
- $(foreach target,$(CFG_TARGET_TRIPLES), \
+$(foreach host,$(CFG_HOST), \
+ $(foreach target,$(CFG_TARGET), \
   $(foreach stage,$(STAGES), \
    $(foreach crate, $(TEST_CRATES), \
-    $(if $(findstring $(target),$(CFG_BUILD_TRIPLE)), \
+    $(if $(findstring $(target),$(CFG_BUILD)), \
      $(eval $(call DEF_TEST_CRATE_RULES,$(stage),$(target),$(host),$(crate))), \
      $(if $(findstring $(target),"arm-linux-androideabi"), \
       $(if $(findstring $(CFG_ADB_DEVICE_STATUS),"true"), \
@@ -465,6 +465,17 @@ $(foreach host,$(CFG_HOST_TRIPLES), \
       ), \
       $(eval $(call DEF_TEST_CRATE_RULES,$(stage),$(target),$(host),$(crate))) \
      ))))))
+
+# FIXME (#10104): Raise the stack size to work around rustpkg bypassing
+# the code in rustc that would take care of it.
+define DEF_RUSTPKG_STACK_FIX
+$$(call TEST_OK_FILE,$(1),$(2),$(3),rustpkg): export RUST_MIN_STACK=8000000
+endef
+
+$(foreach host,$(CFG_HOST), \
+ $(foreach target,$(CFG_TARGET), \
+  $(foreach stage,$(STAGES), \
+   $(eval $(call DEF_RUSTPKG_STACK_FIX,$(stage),$(target),$(host))))))
 
 
 ######################################################################
@@ -504,8 +515,8 @@ CTEST_BUILD_BASE_rpass = run-pass
 CTEST_MODE_rpass = run-pass
 CTEST_RUNTOOL_rpass = $(CTEST_RUNTOOL)
 
-CTEST_SRC_BASE_rpass-full = run-pass-full
-CTEST_BUILD_BASE_rpass-full = run-pass-full
+CTEST_SRC_BASE_rpass-full = run-pass-fulldeps
+CTEST_BUILD_BASE_rpass-full = run-pass-fulldeps
 CTEST_MODE_rpass-full = run-pass
 CTEST_RUNTOOL_rpass-full = $(CTEST_RUNTOOL)
 
@@ -571,6 +582,10 @@ TEST_SREQ$(1)_T_$(2)_H_$(3) = \
 # remove directive, if present, from CFG_RUSTC_FLAGS (issue #7898).
 CTEST_RUSTC_FLAGS := $$(subst --cfg ndebug,,$$(CFG_RUSTC_FLAGS))
 
+# There's no need our entire test suite to take up gigabytes of space on disk
+# including copies of libstd/libextra all over the place
+CTEST_RUSTC_FLAGS := $$(CTEST_RUSTC_FLAGS) -Z prefer-dynamic
+
 # The tests can not be optimized while the rest of the compiler is optimized, so
 # filter out the optimization (if any) from rustc and then figure out if we need
 # to be optimized
@@ -584,7 +599,7 @@ CTEST_COMMON_ARGS$(1)-T-$(2)-H-$(3) :=						\
         --run-lib-path $$(TLIB$(1)_T_$(2)_H_$(3))			\
         --rustc-path $$(HBIN$(1)_H_$(3))/rustc$$(X_$(3))			\
         --clang-path $(if $(CFG_CLANG),$(CFG_CLANG),clang) \
-        --llvm-bin-path $(CFG_LLVM_INST_DIR_$(CFG_BUILD_TRIPLE))/bin \
+        --llvm-bin-path $(CFG_LLVM_INST_DIR_$(CFG_BUILD))/bin \
         --aux-base $$(S)src/test/auxiliary/                 \
         --stage-id stage$(1)-$(2)							\
         --target $(2)                                       \
@@ -604,8 +619,8 @@ CTEST_DEPS_codegen_$(1)-T-$(2)-H-$(3) = $$(CODEGEN_TESTS)
 
 endef
 
-$(foreach host,$(CFG_HOST_TRIPLES), \
- $(eval $(foreach target,$(CFG_TARGET_TRIPLES), \
+$(foreach host,$(CFG_HOST), \
+ $(eval $(foreach target,$(CFG_TARGET), \
   $(eval $(foreach stage,$(STAGES), \
    $(eval $(call DEF_CTEST_VARS,$(stage),$(target),$(host))))))))
 
@@ -647,8 +662,8 @@ endef
 
 CTEST_NAMES = rpass rpass-full rfail cfail bench perf debuginfo codegen
 
-$(foreach host,$(CFG_HOST_TRIPLES), \
- $(eval $(foreach target,$(CFG_TARGET_TRIPLES), \
+$(foreach host,$(CFG_HOST), \
+ $(eval $(foreach target,$(CFG_TARGET), \
   $(eval $(foreach stage,$(STAGES), \
    $(eval $(foreach name,$(CTEST_NAMES), \
    $(eval $(call DEF_RUN_COMPILETEST,$(stage),$(target),$(host),$(name))))))))))
@@ -660,7 +675,7 @@ PRETTY_DEPS_pretty-rfail = $(RFAIL_TESTS)
 PRETTY_DEPS_pretty-bench = $(BENCH_TESTS)
 PRETTY_DEPS_pretty-pretty = $(PRETTY_TESTS)
 PRETTY_DIRNAME_pretty-rpass = run-pass
-PRETTY_DIRNAME_pretty-rpass-full = run-pass-full
+PRETTY_DIRNAME_pretty-rpass-full = run-pass-fulldeps
 PRETTY_DIRNAME_pretty-rfail = run-fail
 PRETTY_DIRNAME_pretty-bench = bench
 PRETTY_DIRNAME_pretty-pretty = pretty
@@ -686,8 +701,8 @@ $$(call TEST_OK_FILE,$(1),$(2),$(3),$(4)): \
 
 endef
 
-$(foreach host,$(CFG_HOST_TRIPLES), \
- $(foreach target,$(CFG_TARGET_TRIPLES), \
+$(foreach host,$(CFG_HOST), \
+ $(foreach target,$(CFG_TARGET), \
   $(foreach stage,$(STAGES), \
    $(foreach pretty-name,$(PRETTY_NAMES), \
     $(eval $(call DEF_RUN_PRETTY_TEST,$(stage),$(target),$(host),$(pretty-name)))))))
@@ -713,8 +728,8 @@ $$(call TEST_OK_FILE,$(1),$(2),$(3),doc-$(4)): \
 
 endef
 
-$(foreach host,$(CFG_HOST_TRIPLES), \
- $(foreach target,$(CFG_TARGET_TRIPLES), \
+$(foreach host,$(CFG_HOST), \
+ $(foreach target,$(CFG_TARGET), \
   $(foreach stage,$(STAGES), \
    $(foreach docname,$(DOC_TEST_NAMES), \
     $(eval $(call DEF_RUN_DOC_TEST,$(stage),$(target),$(host),$(docname)))))))
@@ -735,7 +750,7 @@ doc-$(2)-extract$(1):
 
 endef
 
-$(foreach host,$(CFG_HOST_TRIPLES), \
+$(foreach host,$(CFG_HOST), \
  $(foreach docname,$(DOC_TEST_NAMES), \
   $(eval $(call DEF_DOC_TEST_HOST,$(host),$(docname)))))
 
@@ -753,6 +768,7 @@ TEST_GROUPS = \
 	cfail \
 	bench \
 	perf \
+	rmake \
 	debuginfo \
 	codegen \
 	doc \
@@ -770,8 +786,8 @@ check-stage$(1)-T-$(2)-H-$(3): check-stage$(1)-T-$(2)-H-$(3)-exec
 endef
 
 $(foreach stage,$(STAGES), \
- $(foreach target,$(CFG_TARGET_TRIPLES), \
-  $(foreach host,$(CFG_HOST_TRIPLES), \
+ $(foreach target,$(CFG_TARGET), \
+  $(foreach host,$(CFG_HOST), \
    $(eval $(call DEF_CHECK_FOR_STAGE_AND_TARGET_AND_HOST,$(stage),$(target),$(host))))))
 
 define DEF_CHECK_FOR_STAGE_AND_TARGET_AND_HOST_AND_GROUP
@@ -779,14 +795,14 @@ check-stage$(1)-T-$(2)-H-$(3)-$(4): check-stage$(1)-T-$(2)-H-$(3)-$(4)-exec
 endef
 
 $(foreach stage,$(STAGES), \
- $(foreach target,$(CFG_TARGET_TRIPLES), \
-  $(foreach host,$(CFG_HOST_TRIPLES), \
+ $(foreach target,$(CFG_TARGET), \
+  $(foreach host,$(CFG_HOST), \
    $(foreach group,$(TEST_GROUPS), \
     $(eval $(call DEF_CHECK_FOR_STAGE_AND_TARGET_AND_HOST_AND_GROUP,$(stage),$(target),$(host),$(group)))))))
 
 define DEF_CHECK_FOR_STAGE
-check-stage$(1): check-stage$(1)-H-$$(CFG_BUILD_TRIPLE)
-check-stage$(1)-H-all: $$(foreach target,$$(CFG_TARGET_TRIPLES), \
+check-stage$(1): check-stage$(1)-H-$$(CFG_BUILD)
+check-stage$(1)-H-all: $$(foreach target,$$(CFG_TARGET), \
                            check-stage$(1)-H-$$(target))
 endef
 
@@ -794,8 +810,8 @@ $(foreach stage,$(STAGES), \
  $(eval $(call DEF_CHECK_FOR_STAGE,$(stage))))
 
 define DEF_CHECK_FOR_STAGE_AND_GROUP
-check-stage$(1)-$(2): check-stage$(1)-H-$$(CFG_BUILD_TRIPLE)-$(2)
-check-stage$(1)-H-all-$(2): $$(foreach target,$$(CFG_TARGET_TRIPLES), \
+check-stage$(1)-$(2): check-stage$(1)-H-$$(CFG_BUILD)-$(2)
+check-stage$(1)-H-all-$(2): $$(foreach target,$$(CFG_TARGET), \
                                check-stage$(1)-H-$$(target)-$(2))
 endef
 
@@ -805,21 +821,21 @@ $(foreach stage,$(STAGES), \
 
 
 define DEF_CHECK_FOR_STAGE_AND_HOSTS
-check-stage$(1)-H-$(2): $$(foreach target,$$(CFG_TARGET_TRIPLES), \
+check-stage$(1)-H-$(2): $$(foreach target,$$(CFG_TARGET), \
                            check-stage$(1)-T-$$(target)-H-$(2))
 endef
 
 $(foreach stage,$(STAGES), \
- $(foreach host,$(CFG_HOST_TRIPLES), \
+ $(foreach host,$(CFG_HOST), \
   $(eval $(call DEF_CHECK_FOR_STAGE_AND_HOSTS,$(stage),$(host)))))
 
 define DEF_CHECK_FOR_STAGE_AND_HOSTS_AND_GROUP
-check-stage$(1)-H-$(2)-$(3): $$(foreach target,$$(CFG_TARGET_TRIPLES), \
+check-stage$(1)-H-$(2)-$(3): $$(foreach target,$$(CFG_TARGET), \
                                 check-stage$(1)-T-$$(target)-H-$(2)-$(3))
 endef
 
 $(foreach stage,$(STAGES), \
- $(foreach host,$(CFG_HOST_TRIPLES), \
+ $(foreach host,$(CFG_HOST), \
   $(foreach group,$(TEST_GROUPS), \
    $(eval $(call DEF_CHECK_FOR_STAGE_AND_HOSTS_AND_GROUP,$(stage),$(host),$(group))))))
 
@@ -828,7 +844,7 @@ $(foreach stage,$(STAGES), \
 ######################################################################
 
 FT := run_pass_stage2
-FT_LIB := $(call CFG_LIB_NAME_$(CFG_BUILD_TRIPLE),$(FT))
+FT_LIB := $(call CFG_LIB_NAME_$(CFG_BUILD),$(FT))
 FT_DRIVER := $(FT)_driver
 
 GENERATED += tmp/$(FT).rc tmp/$(FT_DRIVER).rs
@@ -868,11 +884,11 @@ check-fast-T-$(2)-H-$(3):     			\
 
 endef
 
-$(foreach host,$(CFG_HOST_TRIPLES), \
- $(eval $(foreach target,$(CFG_TARGET_TRIPLES), \
+$(foreach host,$(CFG_HOST), \
+ $(eval $(foreach target,$(CFG_TARGET), \
    $(eval $(call DEF_CHECK_FAST_FOR_T_H,,$(target),$(host))))))
 
-check-fast: tidy check-fast-H-$(CFG_BUILD_TRIPLE) check-stage2-std check-stage2-extra
+check-fast: tidy check-fast-H-$(CFG_BUILD) check-stage2-std check-stage2-extra
 	$(Q)$(CFG_PYTHON) $(S)src/etc/check-summary.py tmp/*.log
 
 define DEF_CHECK_FAST_FOR_H
@@ -881,5 +897,40 @@ check-fast-H-$(1): 		check-fast-T-$(1)-H-$(1)
 
 endef
 
-$(foreach host,$(CFG_HOST_TRIPLES),			\
+$(foreach host,$(CFG_HOST),			\
  $(eval $(call DEF_CHECK_FAST_FOR_H,$(host))))
+
+RMAKE_TESTS := $(shell ls -d $(S)src/test/run-make/*/)
+RMAKE_TESTS := $(RMAKE_TESTS:$(S)src/test/run-make/%/=%)
+
+define DEF_RMAKE_FOR_T_H
+# $(1) the stage
+# $(2) target triple
+# $(3) host triple
+
+check-stage$(1)-T-$(2)-H-$(3)-rmake-exec: \
+		$$(call TEST_OK_FILE,$(1),$(2),$(3),rmake)
+
+$$(call TEST_OK_FILE,$(1),$(2),$(3),rmake): \
+		$$(RMAKE_TESTS:%=$(3)/test/run-make/%-$(1)-T-$(2)-H-$(3).ok)
+	@touch $$@
+
+$(3)/test/run-make/%-$(1)-T-$(2)-H-$(3).ok: \
+		$(S)src/test/run-make/%/Makefile \
+		$$(CSREQ$(1)_T_$(2)_H_$(3))
+	@rm -rf $(3)/test/run-make/$$*
+	@mkdir -p $(3)/test/run-make/$$*
+	@echo maketest: $$*
+	$$(Q)$$(CFG_PYTHON) $(S)src/etc/maketest.py $$(dir $$<) \
+	    $$(HBIN$(1)_H_$(3))/rustc$$(X_$(3)) \
+	    $(3)/test/run-make/$$* \
+	    "$$(CC_$(3)) $$(CFG_GCCISH_CFLAGS_$(3))" \
+	    $$(HBIN$(1)_H_$(3))/rustdoc$$(X_$(3))
+	@touch $$@
+
+endef
+
+$(foreach stage,$(STAGES), \
+ $(foreach target,$(CFG_TARGET), \
+  $(foreach host,$(CFG_HOST), \
+   $(eval $(call DEF_RMAKE_FOR_T_H,$(stage),$(target),$(host))))))

@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[feature(managed_boxes)];
+
 struct ctxt { v: uint }
 
 trait get_ctxt {
@@ -15,13 +17,13 @@ trait get_ctxt {
     fn get_ctxt(&self) -> &ctxt;
 }
 
-struct has_ctxt<'self> { c: &'self ctxt }
+struct has_ctxt<'a> { c: &'a ctxt }
 
-impl<'self> get_ctxt for has_ctxt<'self> {
+impl<'a> get_ctxt for has_ctxt<'a> {
 
     // Here an error occurs because we used `&self` but
     // the definition used `&`:
-    fn get_ctxt(&self) -> &'self ctxt { //~ ERROR method `get_ctxt` has an incompatible type
+    fn get_ctxt(&self) -> &'a ctxt { //~ ERROR method `get_ctxt` has an incompatible type
         self.c
     }
 

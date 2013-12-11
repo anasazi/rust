@@ -10,9 +10,10 @@
 
 // compile-flags:--test
 // xfail-fast
+// xfail-win32 #10872
 
 extern mod extra;
 
 // Building as a test runner means that a synthetic main will be run,
 // not ours
-pub fn main() { fail2!(); }
+pub fn main() { fail!(); }

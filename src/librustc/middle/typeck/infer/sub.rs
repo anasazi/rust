@@ -24,8 +24,6 @@ use middle::typeck::infer::{TypeTrace, Subtype};
 use util::common::{indenter};
 use util::ppaux::bound_region_to_str;
 
-use extra::list::Nil;
-use extra::list;
 use syntax::ast::{Onceness, purity};
 
 pub struct Sub(CombineFields);  // "subtype", "subregion" etc
@@ -56,7 +54,7 @@ impl Combine for Sub {
     }
 
     fn regions(&self, a: ty::Region, b: ty::Region) -> cres<ty::Region> {
-        debug2!("{}.regions({}, {})",
+        debug!("{}.regions({}, {})",
                self.tag(),
                a.inf_str(self.infcx),
                b.inf_str(self.infcx));
@@ -65,7 +63,7 @@ impl Combine for Sub {
     }
 
     fn mts(&self, a: &ty::mt, b: &ty::mt) -> cres<ty::mt> {
-        debug2!("mts({} <: {})", a.inf_str(self.infcx), b.inf_str(self.infcx));
+        debug!("mts({} <: {})", a.inf_str(self.infcx), b.inf_str(self.infcx));
 
         if a.mutbl != b.mutbl {
             return Err(ty::terr_mutability);
@@ -110,7 +108,7 @@ impl Combine for Sub {
     }
 
     fn tys(&self, a: ty::t, b: ty::t) -> cres<ty::t> {
-        debug2!("{}.tys({}, {})", self.tag(),
+        debug!("{}.tys({}, {})", self.tag(),
                a.inf_str(self.infcx), b.inf_str(self.infcx));
         if a == b { return Ok(a); }
         let _indenter = indenter();
@@ -143,7 +141,7 @@ impl Combine for Sub {
     }
 
     fn fn_sigs(&self, a: &ty::FnSig, b: &ty::FnSig) -> cres<ty::FnSig> {
-        debug2!("fn_sigs(a={}, b={})",
+        debug!("fn_sigs(a={}, b={})",
                a.inf_str(self.infcx), b.inf_str(self.infcx));
         let _indenter = indenter();
 
@@ -168,19 +166,18 @@ impl Combine for Sub {
 
         // Second, we instantiate each bound region in the supertype with a
         // fresh concrete region.
-        let (skol_isr, _, b_sig) = {
-            do replace_bound_regions_in_fn_sig(self.infcx.tcx, @Nil,
-                                              None, b) |br| {
+        let (skol_map, _, b_sig) = {
+            replace_bound_regions_in_fn_sig(self.infcx.tcx, None, b, |br| {
                 let skol = self.infcx.region_vars.new_skolemized(br);
-                debug2!("Bound region {} skolemized to {:?}",
+                debug!("Bound region {} skolemized to {:?}",
                        bound_region_to_str(self.infcx.tcx, "", false, br),
                        skol);
                 skol
-            }
+            })
         };
 
-        debug2!("a_sig={}", a_sig.inf_str(self.infcx));
-        debug2!("b_sig={}", b_sig.inf_str(self.infcx));
+        debug!("a_sig={}", a_sig.inf_str(self.infcx));
+        debug!("b_sig={}", b_sig.inf_str(self.infcx));
 
         // Compare types now that bound regions have been replaced.
         let sig = if_ok!(super_fn_sigs(self, &a_sig, &b_sig));
@@ -189,16 +186,13 @@ impl Combine for Sub {
         // that the skolemized regions do not "leak".
         let new_vars =
             self.infcx.region_vars.vars_created_since_snapshot(snapshot);
-
-        let mut ret = Ok(sig);
-        do list::each(skol_isr) |pair| {
-            let (skol_br, skol) = *pair;
+        for (&skol_br, &skol) in skol_map.iter() {
             let tainted = self.infcx.region_vars.tainted(snapshot, skol);
             for tainted_region in tainted.iter() {
                 // Each skolemized should only be relatable to itself
                 // or new variables:
                 match *tainted_region {
-                    ty::re_infer(ty::ReVar(ref vid)) => {
+                    ty::ReInfer(ty::ReVar(ref vid)) => {
                         if new_vars.iter().any(|x| x == vid) { continue; }
                     }
                     _ => {
@@ -208,19 +202,16 @@ impl Combine for Sub {
 
                 // A is not as polymorphic as B:
                 if self.a_is_expected {
-                    ret = Err(ty::terr_regions_insufficiently_polymorphic(
-                        skol_br, *tainted_region));
-                    break
+                    return Err(ty::terr_regions_insufficiently_polymorphic(
+                            skol_br, *tainted_region));
                 } else {
-                    ret = Err(ty::terr_regions_overly_polymorphic(
-                        skol_br, *tainted_region));
-                    break
+                    return Err(ty::terr_regions_overly_polymorphic(
+                            skol_br, *tainted_region));
                 }
             }
-            ret.is_ok()
-        };
+        }
 
-        ret
+        return Ok(sig);
     }
 
 }

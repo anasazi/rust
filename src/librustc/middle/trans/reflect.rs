@@ -25,7 +25,7 @@ use middle::ty;
 use util::ppaux::ty_to_str;
 
 use std::libc::c_uint;
-use std::option::None;
+use std::option::{Some,None};
 use std::vec;
 use syntax::ast::DefId;
 use syntax::ast;
@@ -59,7 +59,7 @@ impl Reflector {
         // We're careful to not use first class aggregates here because that
         // will kick us off fast isel. (Issue #4352.)
         let bcx = self.bcx;
-        let str_vstore = ty::vstore_slice(ty::re_static);
+        let str_vstore = ty::vstore_slice(ty::ReStatic);
         let str_ty = ty::mk_estr(bcx.tcx(), str_vstore);
         let scratch = scratch_datum(bcx, str_ty, "", false);
         let len = C_uint(bcx.ccx(), s.len());
@@ -98,10 +98,10 @@ impl Reflector {
         let mth_ty =
             ty::mk_bare_fn(tcx, self.visitor_methods[mth_idx].fty.clone());
         let v = self.visitor_val;
-        debug2!("passing {} args:", args.len());
+        debug!("passing {} args:", args.len());
         let mut bcx = self.bcx;
         for (i, a) in args.iter().enumerate() {
-            debug2!("arg {}: {}", i, bcx.val_to_str(*a));
+            debug!("arg {}: {}", i, bcx.val_to_str(*a));
         }
         let bool_ty = ty::mk_bool();
         let result = unpack_result!(bcx, callee::trans_call_inner(
@@ -121,7 +121,7 @@ impl Reflector {
     pub fn bracketed(&mut self,
                      bracket_name: &str,
                      extra: &[ValueRef],
-                     inner: &fn(&mut Reflector)) {
+                     inner: |&mut Reflector|) {
         self.visit("enter_" + bracket_name, extra);
         inner(self);
         self.visit("leave_" + bracket_name, extra);
@@ -151,7 +151,7 @@ impl Reflector {
     pub fn visit_ty(&mut self, t: ty::t) {
         let bcx = self.bcx;
         let tcx = bcx.ccx().tcx;
-        debug2!("reflect::visit_ty {}", ty_to_str(bcx.ccx().tcx, t));
+        debug!("reflect::visit_ty {}", ty_to_str(bcx.ccx().tcx, t));
 
         match ty::get(t).sty {
           ty::ty_bot => self.leaf("bot"),
@@ -183,7 +183,7 @@ impl Reflector {
           ty::ty_evec(ref mt, vst) => {
               let (name, extra) = self.vstore_name_and_extra(t, vst);
               let extra = extra + self.c_mt(mt);
-              if "uniq" == name && ty::type_contents(bcx.tcx(), t).contains_managed() {
+              if "uniq" == name && ty::type_contents(bcx.tcx(), t).owns_managed() {
                   self.visit("evec_uniq_managed", extra)
               } else {
                   self.visit(~"evec_" + name, extra)
@@ -195,7 +195,7 @@ impl Reflector {
           }
           ty::ty_uniq(ref mt) => {
               let extra = self.c_mt(mt);
-              if ty::type_contents(bcx.tcx(), t).contains_managed() {
+              if ty::type_contents(bcx.tcx(), t).owns_managed() {
                   self.visit("uniq_managed", extra)
               } else {
                   self.visit("uniq", extra)
@@ -213,12 +213,12 @@ impl Reflector {
           ty::ty_tup(ref tys) => {
               let extra = ~[self.c_uint(tys.len())]
                   + self.c_size_and_align(t);
-              do self.bracketed("tup", extra) |this| {
+              self.bracketed("tup", extra, |this| {
                   for (i, t) in tys.iter().enumerate() {
                       let extra = ~[this.c_uint(i), this.c_tydesc(*t)];
                       this.visit("tup_field", extra);
                   }
-              }
+              })
           }
 
           // FIXME (#2594): fetch constants out of intrinsic
@@ -262,7 +262,7 @@ impl Reflector {
               let extra = ~[self.c_slice(ty_to_str(tcx, t).to_managed()),
                             self.c_bool(named_fields),
                             self.c_uint(fields.len())] + self.c_size_and_align(t);
-              do self.bracketed("class", extra) |this| {
+              self.bracketed("class", extra, |this| {
                   for (i, field) in fields.iter().enumerate() {
                       let extra = ~[this.c_uint(i),
                                     this.c_slice(bcx.ccx().sess.str_of(field.ident)),
@@ -270,7 +270,7 @@ impl Reflector {
                           + this.c_mt(&field.mt);
                       this.visit("class_field", extra);
                   }
-              }
+              })
           }
 
           // FIXME (#2595): visiting all the variants in turn is probably
@@ -292,11 +292,11 @@ impl Reflector {
                                                                sub_path,
                                                                "get_disr");
 
-                let llfdecl = decl_internal_rust_fn(ccx, [opaqueptrty], ty::mk_int(), sym);
+                let llfdecl = decl_internal_rust_fn(ccx, [opaqueptrty], ty::mk_u64(), sym);
                 let fcx = new_fn_ctxt(ccx,
                                       ~[],
                                       llfdecl,
-                                      ty::mk_uint(),
+                                      ty::mk_u64(),
                                       None);
                 let arg = unsafe {
                     //
@@ -308,7 +308,7 @@ impl Reflector {
                 };
                 let mut bcx = fcx.entry_bcx.unwrap();
                 let arg = BitCast(bcx, arg, llptrty);
-                let ret = adt::trans_get_discr(bcx, repr, arg);
+                let ret = adt::trans_get_discr(bcx, repr, arg, Some(Type::i64()));
                 Store(bcx, ret, fcx.llretptr.unwrap());
                 match fcx.llreturn {
                     Some(llreturn) => cleanup_and_Br(bcx, bcx, llreturn),
@@ -320,14 +320,14 @@ impl Reflector {
 
             let enum_args = ~[self.c_uint(variants.len()), make_get_disr()]
                 + self.c_size_and_align(t);
-            do self.bracketed("enum", enum_args) |this| {
+            self.bracketed("enum", enum_args, |this| {
                 for (i, v) in variants.iter().enumerate() {
                     let name = ccx.sess.str_of(v.name);
                     let variant_args = ~[this.c_uint(i),
-                                         C_integral(self.bcx.ccx().int_type, v.disr_val, false),
+                                         C_u64(v.disr_val),
                                          this.c_uint(v.args.len()),
                                          this.c_slice(name)];
-                    do this.bracketed("enum_variant", variant_args) |this| {
+                    this.bracketed("enum_variant", variant_args, |this| {
                         for (j, a) in v.args.iter().enumerate() {
                             let bcx = this.bcx;
                             let null = C_null(llptrty);
@@ -338,9 +338,9 @@ impl Reflector {
                                                this.c_tydesc(*a)];
                             this.visit("enum_variant_field", field_args);
                         }
-                    }
+                    })
                 }
-            }
+            })
           }
 
           ty::ty_trait(_, _, _, _, _) => {
@@ -355,7 +355,7 @@ impl Reflector {
               let extra = ~[self.c_uint(p.idx)];
               self.visit("param", extra)
           }
-          ty::ty_self(*) => self.leaf("self"),
+          ty::ty_self(..) => self.leaf("self"),
           ty::ty_type => self.leaf("type"),
           ty::ty_opaque_box => self.leaf("opaque_box"),
           ty::ty_opaque_closure_ptr(ck) => {
@@ -375,6 +375,7 @@ impl Reflector {
             self.visit("fn_input", extra);
         }
         let extra = ~[self.c_uint(retval),
+                      self.c_bool(sig.variadic),
                       self.c_tydesc(sig.output)];
         self.visit("fn_output", extra);
     }

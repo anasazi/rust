@@ -8,10 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-fast windows doesn't like aux-build
+// xfail-fast check-fast doesn't like aux-build
 // aux-build:issue-8044.rs
 
-extern mod minimal(name= "issue-8044");
+extern mod minimal = "issue-8044";
 use minimal::{BTree, leaf};
 
 fn main() {

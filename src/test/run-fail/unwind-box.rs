@@ -10,8 +10,10 @@
 
 // error-pattern:fail
 
+#[feature(managed_boxes)];
+
 fn failfn() {
-    fail2!();
+    fail!();
 }
 
 fn main() {

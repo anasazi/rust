@@ -8,7 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::cell::Cell;
+#[feature(managed_boxes)];
+
 use std::task;
 
 struct Port<T>(@T);
@@ -29,10 +30,10 @@ fn main() {
         }
     }
 
-    let x = Cell::new(foo(Port(@())));
+    let x = foo(Port(@()));
 
     do task::spawn {
-        let y = x.take();   //~ ERROR does not fulfill `Send`
-        error2!("{:?}", y);
+        let y = x;   //~ ERROR does not fulfill `Send`
+        error!("{:?}", y);
     }
 }

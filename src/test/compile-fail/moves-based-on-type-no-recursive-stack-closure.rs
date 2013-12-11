@@ -12,16 +12,16 @@
 // bound must be noncopyable. For details see
 // http://smallcultfollowing.com/babysteps/blog/2013/04/30/the-case-of-the-recurring-closure/
 
-struct R<'self> {
+struct R<'a> {
     // This struct is needed to create the
     // otherwise infinite type of a fn that
     // accepts itself as argument:
-    c: &'self fn(&R, bool)
+    c: 'a |&R, bool|
 }
 
 fn innocent_looking_victim() {
     let mut x = Some(~"hello");
-    do conspirator |f, writer| {
+    conspirator(|f, writer| {
         if writer {
             x = None;
         } else {
@@ -30,13 +30,13 @@ fn innocent_looking_victim() {
                     (f.c)(f, true);
                     println!("{:?}", msg);
                 },
-                None => fail2!("oops"),
+                None => fail!("oops"),
             }
         }
-    }
+    })
 }
 
-fn conspirator(f: &fn(&R, bool)) {
+fn conspirator(f: |&R, bool|) {
     let r = R {c: f};
     f(&r, false) //~ ERROR use of moved value
 }

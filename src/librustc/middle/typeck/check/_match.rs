@@ -72,7 +72,7 @@ pub fn check_match(fcx: @mut FnCtxt,
           },
           None => ()
         }
-        check_block(fcx, &arm.body);
+        check_block(fcx, arm.body);
         let bty = fcx.node_ty(arm.body.id);
         saw_err = saw_err || ty::type_is_error(bty);
         if guard_err {
@@ -294,17 +294,24 @@ pub fn check_struct_pat_fields(pcx: &pat_ctxt,
                                etc: bool) {
     let tcx = pcx.fcx.ccx.tcx;
 
-    // Index the class fields.
+    // Index the class fields. The second argument in the tuple is whether the
+    // field has been bound yet or not.
     let mut field_map = HashMap::new();
     for (i, class_field) in class_fields.iter().enumerate() {
-        field_map.insert(class_field.name, i);
+        field_map.insert(class_field.name, (i, false));
     }
 
     // Typecheck each field.
     let mut found_fields = HashSet::new();
     for field in fields.iter() {
-        match field_map.find(&field.ident.name) {
-            Some(&index) => {
+        match field_map.find_mut(&field.ident.name) {
+            Some(&(_, true)) => {
+                tcx.sess.span_err(span,
+                    format!("field `{}` bound twice in pattern",
+                            tcx.sess.str_of(field.ident)));
+            }
+            Some(&(index, ref mut used)) => {
+                *used = true;
                 let class_field = class_fields[index];
                 let field_type = ty::lookup_field_type(tcx,
                                                        class_id,
@@ -355,7 +362,7 @@ pub fn check_struct_pat(pcx: &pat_ctxt, pat_id: ast::NodeId, span: Span,
                 if supplied_def_id == struct_id => {
             // OK.
         }
-        Some(&ast::DefStruct(*)) | Some(&ast::DefVariant(*)) => {
+        Some(&ast::DefStruct(..)) | Some(&ast::DefVariant(..)) => {
             let name = pprust::path_to_str(path, tcx.sess.intr());
             tcx.sess.span_err(span,
                               format!("mismatched types: expected `{}` but found `{}`",
@@ -393,7 +400,7 @@ pub fn check_struct_like_enum_variant_pat(pcx: &pat_ctxt,
             check_struct_pat_fields(pcx, span, path, fields, class_fields,
                                     variant_id, substitutions, etc);
         }
-        Some(&ast::DefStruct(*)) | Some(&ast::DefVariant(*)) => {
+        Some(&ast::DefStruct(..)) | Some(&ast::DefVariant(..)) => {
             let name = pprust::path_to_str(path, tcx.sess.intr());
             tcx.sess.span_err(span,
                               format!("mismatched types: expected `{}` but \
@@ -414,7 +421,7 @@ pub fn check_pat(pcx: &pat_ctxt, pat: @ast::Pat, expected: ty::t) {
     let tcx = pcx.fcx.ccx.tcx;
 
     match pat.node {
-      ast::PatWild => {
+      ast::PatWild | ast::PatWildMulti => {
         fcx.write_ty(pat.id, expected);
       }
       ast::PatLit(lt) => {
@@ -428,8 +435,8 @@ pub fn check_pat(pcx: &pat_ctxt, pat: @ast::Pat, expected: ty::t) {
             fcx.infcx().resolve_type_vars_if_possible(fcx.expr_ty(begin));
         let e_ty =
             fcx.infcx().resolve_type_vars_if_possible(fcx.expr_ty(end));
-        debug2!("pat_range beginning type: {:?}", b_ty);
-        debug2!("pat_range ending type: {:?}", e_ty);
+        debug!("pat_range beginning type: {:?}", b_ty);
+        debug!("pat_range ending type: {:?}", e_ty);
         if !require_same_types(
             tcx, Some(fcx.infcx()), false, pat.span, b_ty, e_ty,
             || ~"mismatched types in range")
@@ -452,8 +459,8 @@ pub fn check_pat(pcx: &pat_ctxt, pat: @ast::Pat, expected: ty::t) {
         }
         fcx.write_ty(pat.id, b_ty);
       }
-      ast::PatEnum(*) |
-      ast::PatIdent(*) if pat_is_const(tcx.def_map, pat) => {
+      ast::PatEnum(..) |
+      ast::PatIdent(..) if pat_is_const(tcx.def_map, pat) => {
         let const_did = ast_util::def_id_of_def(tcx.def_map.get_copy(&pat.id));
         let const_tpt = ty::lookup_item_type(tcx, const_did);
         demand::suptype(fcx, pat.span, expected, const_tpt.ty);
@@ -476,7 +483,7 @@ pub fn check_pat(pcx: &pat_ctxt, pat: @ast::Pat, expected: ty::t) {
             demand::eqtype(fcx, pat.span, region_ty, typ);
           }
           // otherwise the type of x is the expected type T
-          ast::BindInfer => {
+          ast::BindByValue(_) => {
             demand::eqtype(fcx, pat.span, expected, typ);
           }
         }
@@ -488,7 +495,7 @@ pub fn check_pat(pcx: &pat_ctxt, pat: @ast::Pat, expected: ty::t) {
         }
         fcx.write_ty(pat.id, typ);
 
-        debug2!("(checking match) writing type for pat id {}", pat.id);
+        debug!("(checking match) writing type for pat id {}", pat.id);
 
         match sub {
           Some(p) => check_pat(pcx, p, expected),
@@ -655,7 +662,7 @@ pub fn check_pointer_pat(pcx: &pat_ctxt,
                          span: Span,
                          expected: ty::t) {
     let fcx = pcx.fcx;
-    let check_inner: &fn(ty::mt) = |e_inner| {
+    let check_inner: |ty::mt| = |e_inner| {
         check_pat(pcx, inner, e_inner.ty);
         fcx.write_ty(pat_id, expected);
     };

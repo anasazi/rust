@@ -20,7 +20,8 @@ use parse::token::{get_ident_interner};
 use print::pprust;
 
 use std::io;
-use std::result;
+use std::io::File;
+use std::str;
 
 // These macros all relate to the file system; they either return
 // the column/row/filename of the expression, or they include
@@ -79,6 +80,7 @@ pub fn expand_mod(cx: @ExtCtxt, sp: Span, tts: &[ast::token_tree])
 pub fn expand_include(cx: @ExtCtxt, sp: Span, tts: &[ast::token_tree])
     -> base::MacResult {
     let file = get_single_str_from_tts(cx, sp, tts, "include!");
+    // The file will be added to the code map by the parser
     let p = parse::new_sub_parser_from_file(
         cx.parse_sess(), cx.cfg(),
         &res_rel_file(cx, sp, &Path::new(file)), sp);
@@ -89,41 +91,64 @@ pub fn expand_include(cx: @ExtCtxt, sp: Span, tts: &[ast::token_tree])
 pub fn expand_include_str(cx: @ExtCtxt, sp: Span, tts: &[ast::token_tree])
     -> base::MacResult {
     let file = get_single_str_from_tts(cx, sp, tts, "include_str!");
-    let res = io::read_whole_file_str(&res_rel_file(cx, sp, &Path::new(file)));
-    match res {
-      result::Ok(res) => {
-          base::MRExpr(cx.expr_str(sp, res.to_managed()))
-      }
-      result::Err(e) => {
-        cx.span_fatal(sp, e);
-      }
+    let file = res_rel_file(cx, sp, &Path::new(file));
+    let bytes = match io::result(|| File::open(&file).read_to_end()) {
+        Err(e) => {
+            cx.span_fatal(sp, format!("couldn't read {}: {}",
+                                      file.display(), e.desc));
+        }
+        Ok(bytes) => bytes,
+    };
+    match str::from_utf8_owned_opt(bytes) {
+        Some(s) => {
+            let s = s.to_managed();
+            // Add this input file to the code map to make it available as
+            // dependency information
+            cx.parse_sess.cm.files.push(@codemap::FileMap {
+                name: file.display().to_str().to_managed(),
+                substr: codemap::FssNone,
+                src: s,
+                start_pos: codemap::BytePos(0),
+                lines: @mut ~[],
+                multibyte_chars: @mut ~[],
+            });
+            base::MRExpr(cx.expr_str(sp, s))
+        }
+        None => {
+            cx.span_fatal(sp, format!("{} wasn't a utf-8 file", file.display()));
+        }
     }
 }
 
 pub fn expand_include_bin(cx: @ExtCtxt, sp: Span, tts: &[ast::token_tree])
-    -> base::MacResult {
+        -> base::MacResult
+{
+    use std::at_vec;
+
     let file = get_single_str_from_tts(cx, sp, tts, "include_bin!");
-    match io::read_whole_file(&res_rel_file(cx, sp, &Path::new(file))) {
-      result::Ok(src) => {
-        let u8_exprs: ~[@ast::Expr] = src.iter().map(|char| cx.expr_u8(sp, *char)).collect();
-        base::MRExpr(cx.expr_vec(sp, u8_exprs))
-      }
-      result::Err(ref e) => {
-        cx.parse_sess().span_diagnostic.handler().fatal((*e))
-      }
+    let file = res_rel_file(cx, sp, &Path::new(file));
+    match io::result(|| File::open(&file).read_to_end()) {
+        Err(e) => {
+            cx.span_fatal(sp, format!("couldn't read {}: {}",
+                                      file.display(), e.desc));
+        }
+        Ok(bytes) => {
+            let bytes = at_vec::to_managed_move(bytes);
+            base::MRExpr(cx.expr_lit(sp, ast::lit_binary(bytes)))
+        }
     }
 }
 
 // recur along an ExpnInfo chain to find the original expression
 fn topmost_expn_info(expn_info: @codemap::ExpnInfo) -> @codemap::ExpnInfo {
     match *expn_info {
-        ExpnInfo { call_site: ref call_site, _ } => {
+        ExpnInfo { call_site: ref call_site, .. } => {
             match call_site.expn_info {
                 Some(next_expn_info) => {
                     match *next_expn_info {
                         ExpnInfo {
-                            callee: NameAndSpan { name: ref name, _ },
-                            _
+                            callee: NameAndSpan { name: ref name, .. },
+                            ..
                         } => {
                             // Don't recurse into file using "include!"
                             if "include" == *name  {

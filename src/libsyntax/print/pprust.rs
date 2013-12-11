@@ -9,7 +9,7 @@
 // except according to those terms.
 
 use abi::AbiSet;
-use ast::{RegionTyParamBound, TraitTyParamBound, required, provided};
+use ast::{P, RegionTyParamBound, TraitTyParamBound, required, provided};
 use ast;
 use ast_util;
 use opt_vec::OptVec;
@@ -28,14 +28,17 @@ use print::pp;
 use print::pprust;
 
 use std::char;
+use std::str;
 use std::io;
+use std::io::Decorator;
+use std::io::mem::MemWriter;
 
 // The @ps is stored here to prevent recursive type.
-pub enum ann_node<'self> {
-    node_block(@ps, &'self ast::Block),
-    node_item(@ps, &'self ast::item),
-    node_expr(@ps, &'self ast::Expr),
-    node_pat(@ps, &'self ast::Pat),
+pub enum ann_node<'a> {
+    node_block(@ps, &'a ast::Block),
+    node_item(@ps, &'a ast::item),
+    node_expr(@ps, &'a ast::Expr),
+    node_pat(@ps, &'a ast::Pat),
 }
 
 pub trait pp_ann {
@@ -83,11 +86,11 @@ pub fn end(s: @ps) {
     pp::end(s.s);
 }
 
-pub fn rust_printer(writer: @io::Writer, intr: @ident_interner) -> @ps {
+pub fn rust_printer(writer: @mut io::Writer, intr: @ident_interner) -> @ps {
     return rust_printer_annotated(writer, intr, @no_ann::new() as @pp_ann);
 }
 
-pub fn rust_printer_annotated(writer: @io::Writer,
+pub fn rust_printer_annotated(writer: @mut io::Writer,
                               intr: @ident_interner,
                               ann: @pp_ann)
                               -> @ps {
@@ -118,8 +121,8 @@ pub fn print_crate(cm: @CodeMap,
                    span_diagnostic: @mut diagnostic::span_handler,
                    crate: &ast::Crate,
                    filename: @str,
-                   input: @io::Reader,
-                   out: @io::Writer,
+                   input: @mut io::Reader,
+                   out: @mut io::Writer,
                    ann: @pp_ann,
                    is_expanded: bool) {
     let (cmnts, lits) = comments::gather_comments_and_literals(
@@ -200,26 +203,26 @@ pub fn path_to_str(p: &ast::Path, intr: @ident_interner) -> ~str {
 pub fn fun_to_str(decl: &ast::fn_decl, purity: ast::purity, name: ast::Ident,
                   opt_explicit_self: Option<ast::explicit_self_>,
                   generics: &ast::Generics, intr: @ident_interner) -> ~str {
-    do io::with_str_writer |wr| {
-        let s = rust_printer(wr, intr);
-        print_fn(s, decl, Some(purity), AbiSet::Rust(),
-                 name, generics, opt_explicit_self, ast::inherited);
-        end(s); // Close the head box
-        end(s); // Close the outer box
-        eof(s.s);
-    }
+    let wr = @mut MemWriter::new();
+    let s = rust_printer(wr as @mut io::Writer, intr);
+    print_fn(s, decl, Some(purity), AbiSet::Rust(),
+             name, generics, opt_explicit_self, ast::inherited);
+    end(s); // Close the head box
+    end(s); // Close the outer box
+    eof(s.s);
+    str::from_utf8_owned(wr.inner_ref().to_owned())
 }
 
 pub fn block_to_str(blk: &ast::Block, intr: @ident_interner) -> ~str {
-    do io::with_str_writer |wr| {
-        let s = rust_printer(wr, intr);
-        // containing cbox, will be closed by print-block at }
-        cbox(s, indent_unit);
-        // head-ibox, will be closed by print-block after {
-        ibox(s, 0u);
-        print_block(s, blk);
-        eof(s.s);
-    }
+    let wr = @mut MemWriter::new();
+    let s = rust_printer(wr as @mut io::Writer, intr);
+    // containing cbox, will be closed by print-block at }
+    cbox(s, indent_unit);
+    // head-ibox, will be closed by print-block after {
+    ibox(s, 0u);
+    print_block(s, blk);
+    eof(s.s);
+    str::from_utf8_owned(wr.inner_ref().to_owned())
 }
 
 pub fn meta_item_to_str(mi: &ast::MetaItem, intr: @ident_interner) -> ~str {
@@ -239,9 +242,10 @@ pub fn cbox(s: @ps, u: uint) {
     pp::cbox(s.s, u);
 }
 
-pub fn box(s: @ps, u: uint, b: pp::breaks) {
+// "raw box"
+pub fn rbox(s: @ps, u: uint, b: pp::breaks) {
     s.boxes.push(b);
-    pp::box(s.s, u, b);
+    pp::rbox(s.s, u, b);
 }
 
 pub fn nbsp(s: @ps) { word(s.s, " "); }
@@ -328,8 +332,8 @@ pub fn synth_comment(s: @ps, text: ~str) {
     word(s.s, "*/");
 }
 
-pub fn commasep<T>(s: @ps, b: breaks, elts: &[T], op: &fn(@ps, &T)) {
-    box(s, 0u, b);
+pub fn commasep<T>(s: @ps, b: breaks, elts: &[T], op: |@ps, &T|) {
+    rbox(s, 0u, b);
     let mut first = true;
     for elt in elts.iter() {
         if first { first = false; } else { word_space(s, ","); }
@@ -339,9 +343,13 @@ pub fn commasep<T>(s: @ps, b: breaks, elts: &[T], op: &fn(@ps, &T)) {
 }
 
 
-pub fn commasep_cmnt<T>(s: @ps, b: breaks, elts: &[T], op: &fn(@ps, &T),
-                               get_span: &fn(&T) -> codemap::Span) {
-    box(s, 0u, b);
+pub fn commasep_cmnt<T>(
+                     s: @ps,
+                     b: breaks,
+                     elts: &[T],
+                     op: |@ps, &T|,
+                     get_span: |&T| -> codemap::Span) {
+    rbox(s, 0u, b);
     let len = elts.len();
     let mut i = 0u;
     for elt in elts.iter() {
@@ -393,14 +401,10 @@ pub fn print_type(s: @ps, ty: &ast::Ty) {
       ast::ty_nil => word(s.s, "()"),
       ast::ty_bot => word(s.s, "!"),
       ast::ty_box(ref mt) => { word(s.s, "@"); print_mt(s, mt); }
-      ast::ty_uniq(ref mt) => { word(s.s, "~"); print_mt(s, mt); }
-      ast::ty_vec(ref mt) => {
+      ast::ty_uniq(ty) => { word(s.s, "~"); print_type(s, ty); }
+      ast::ty_vec(ty) => {
         word(s.s, "[");
-        match mt.mutbl {
-          ast::MutMutable => word_space(s, "mut"),
-          ast::MutImmutable => ()
-        }
-        print_type(s, mt.ty);
+        print_type(s, ty);
         word(s.s, "]");
       }
       ast::ty_ptr(ref mt) => { word(s.s, "*"); print_mt(s, mt); }
@@ -411,7 +415,7 @@ pub fn print_type(s: @ps, ty: &ast::Ty) {
       }
       ast::ty_tup(ref elts) => {
         popen(s);
-        commasep(s, inconsistent, *elts, print_type);
+        commasep(s, inconsistent, *elts, print_type_ref);
         if elts.len() == 1 {
             word(s.s, ",");
         }
@@ -423,7 +427,7 @@ pub fn print_type(s: @ps, ty: &ast::Ty) {
             ty_params: opt_vec::Empty
           };
           print_ty_fn(s, Some(f.abis), None, &None,
-                      f.purity, ast::Many, &f.decl, None, &None,
+                      f.purity, ast::Many, f.decl, None, &None,
                       Some(&generics), None);
       }
       ast::ty_closure(f) => {
@@ -432,17 +436,13 @@ pub fn print_type(s: @ps, ty: &ast::Ty) {
             ty_params: opt_vec::Empty
           };
           print_ty_fn(s, None, Some(f.sigil), &f.region,
-                      f.purity, f.onceness, &f.decl, None, &f.bounds,
+                      f.purity, f.onceness, f.decl, None, &f.bounds,
                       Some(&generics), None);
       }
       ast::ty_path(ref path, ref bounds, _) => print_bounded_path(s, path, bounds),
-      ast::ty_fixed_length_vec(ref mt, v) => {
+      ast::ty_fixed_length_vec(ty, v) => {
         word(s.s, "[");
-        match mt.mutbl {
-            ast::MutMutable => word_space(s, "mut"),
-            ast::MutImmutable => ()
-        }
-        print_type(s, mt.ty);
+        print_type(s, ty);
         word(s.s, ", ..");
         print_expr(s, v);
         word(s.s, "]");
@@ -452,15 +452,16 @@ pub fn print_type(s: @ps, ty: &ast::Ty) {
           print_expr(s, e);
           word(s.s, ")");
       }
-      ast::ty_mac(_) => {
-          fail2!("print_type doesn't know how to print a ty_mac");
-      }
       ast::ty_infer => {
-          fail2!("print_type shouldn't see a ty_infer");
+          fail!("print_type shouldn't see a ty_infer");
       }
 
     }
     end(s);
+}
+
+pub fn print_type_ref(s: @ps, ty: &P<ast::Ty>) {
+    print_type(s, *ty);
 }
 
 pub fn print_foreign_item(s: @ps, item: &ast::foreign_item) {
@@ -468,14 +469,14 @@ pub fn print_foreign_item(s: @ps, item: &ast::foreign_item) {
     maybe_print_comment(s, item.span.lo);
     print_outer_attributes(s, item.attrs);
     match item.node {
-      ast::foreign_item_fn(ref decl, ref generics) => {
+      ast::foreign_item_fn(decl, ref generics) => {
         print_fn(s, decl, None, AbiSet::Rust(), item.ident, generics, None,
                  item.vis);
         end(s); // end head-ibox
         word(s.s, ";");
         end(s); // end the outer fn box
       }
-      ast::foreign_item_static(ref t, m) => {
+      ast::foreign_item_static(t, m) => {
         head(s, visibility_qualified(item.vis, "static"));
         if m {
             word_space(s, "mut");
@@ -497,7 +498,7 @@ pub fn print_item(s: @ps, item: &ast::item) {
     let ann_node = node_item(s, item);
     s.ann.pre(ann_node);
     match item.node {
-      ast::item_static(ref ty, m, expr) => {
+      ast::item_static(ty, m, expr) => {
         head(s, visibility_qualified(item.vis, "static"));
         if m == ast::MutMutable {
             word_space(s, "mut");
@@ -514,7 +515,7 @@ pub fn print_item(s: @ps, item: &ast::item) {
         end(s); // end the outer cbox
 
       }
-      ast::item_fn(ref decl, purity, abi, ref typarams, ref body) => {
+      ast::item_fn(decl, purity, abi, ref typarams, body) => {
         print_fn(
             s,
             decl,
@@ -543,7 +544,7 @@ pub fn print_item(s: @ps, item: &ast::item) {
         print_foreign_mod(s, nmod, item.attrs);
         bclose(s, item.span);
       }
-      ast::item_ty(ref ty, ref params) => {
+      ast::item_ty(ty, ref params) => {
         ibox(s, indent_unit);
         ibox(s, 0u);
         word_nbsp(s, visibility_qualified(item.vis, "type"));
@@ -572,7 +573,7 @@ pub fn print_item(s: @ps, item: &ast::item) {
           print_struct(s, struct_def, generics, item.ident, item.span);
       }
 
-      ast::item_impl(ref generics, ref opt_trait, ref ty, ref methods) => {
+      ast::item_impl(ref generics, ref opt_trait, ty, ref methods) => {
         head(s, visibility_qualified(item.vis, "impl"));
         if generics.is_parameterized() {
             print_generics(s, generics);
@@ -592,6 +593,7 @@ pub fn print_item(s: @ps, item: &ast::item) {
 
         space(s.s);
         bopen(s);
+        print_inner_attributes(s, item.attrs);
         for meth in methods.iter() {
            print_method(s, *meth);
         }
@@ -620,7 +622,7 @@ pub fn print_item(s: @ps, item: &ast::item) {
       }
       // I think it's reasonable to hide the context here:
       ast::item_mac(codemap::Spanned { node: ast::mac_invoc_tt(ref pth, ref tts, _),
-                                   _}) => {
+                                   ..}) => {
         print_visibility(s, item.vis);
         print_path(s, pth, false);
         word(s.s, "! ");
@@ -650,10 +652,10 @@ pub fn print_enum_def(s: @ps, enum_definition: &ast::enum_def,
 }
 
 pub fn print_variants(s: @ps,
-                      variants: &[ast::variant],
+                      variants: &[P<ast::variant>],
                       span: codemap::Span) {
     bopen(s);
-    for v in variants.iter() {
+    for &v in variants.iter() {
         space_if_not_bol(s);
         maybe_print_comment(s, v.span.lo);
         print_outer_attributes(s, v.node.attrs);
@@ -699,15 +701,15 @@ pub fn print_struct(s: @ps,
     if ast_util::struct_def_is_tuple_like(struct_def) {
         if !struct_def.fields.is_empty() {
             popen(s);
-            do commasep(s, inconsistent, struct_def.fields) |s, field| {
+            commasep(s, inconsistent, struct_def.fields, |s, field| {
                 match field.node.kind {
-                    ast::named_field(*) => fail2!("unexpected named field"),
+                    ast::named_field(..) => fail!("unexpected named field"),
                     ast::unnamed_field => {
                         maybe_print_comment(s, field.span.lo);
-                        print_type(s, &field.node.ty);
+                        print_type(s, field.node.ty);
                     }
                 }
-            }
+            });
             pclose(s);
         }
         word(s.s, ";");
@@ -720,7 +722,7 @@ pub fn print_struct(s: @ps,
 
         for field in struct_def.fields.iter() {
             match field.node.kind {
-                ast::unnamed_field => fail2!("unexpected unnamed field"),
+                ast::unnamed_field => fail!("unexpected unnamed field"),
                 ast::named_field(ident, visibility) => {
                     hardbreak_if_not_bol(s);
                     maybe_print_comment(s, field.span.lo);
@@ -728,7 +730,7 @@ pub fn print_struct(s: @ps,
                     print_visibility(s, visibility);
                     print_ident(s, ident);
                     word_nbsp(s, ":");
-                    print_type(s, &field.node.ty);
+                    print_type(s, field.node.ty);
                     word(s.s, ",");
                 }
             }
@@ -787,7 +789,7 @@ pub fn print_variant(s: @ps, v: &ast::variant) {
             if !args.is_empty() {
                 popen(s);
                 fn print_variant_arg(s: @ps, arg: &ast::variant_arg) {
-                    print_type(s, &arg.ty);
+                    print_type(s, arg.ty);
                 }
                 commasep(s, consistent, *args, print_variant_arg);
                 pclose(s);
@@ -819,7 +821,7 @@ pub fn print_ty_method(s: @ps, m: &ast::TypeMethod) {
                 &None,
                 m.purity,
                 ast::Many,
-                &m.decl,
+                m.decl,
                 Some(m.ident),
                 &None,
                 Some(&m.generics),
@@ -838,11 +840,11 @@ pub fn print_method(s: @ps, meth: &ast::method) {
     hardbreak_if_not_bol(s);
     maybe_print_comment(s, meth.span.lo);
     print_outer_attributes(s, meth.attrs);
-    print_fn(s, &meth.decl, Some(meth.purity), AbiSet::Rust(),
+    print_fn(s, meth.decl, Some(meth.purity), AbiSet::Rust(),
              meth.ident, &meth.generics, Some(meth.explicit_self.node),
              meth.vis);
     word(s.s, " ");
-    print_block_with_attrs(s, &meth.body, meth.attrs);
+    print_block_with_attrs(s, meth.body, meth.attrs);
 }
 
 pub fn print_outer_attributes(s: @ps, attrs: &[ast::Attribute]) {
@@ -950,7 +952,7 @@ pub fn print_possibly_embedded_block_(s: @ps,
                                       attrs: &[ast::Attribute],
                                       close_box: bool) {
     match blk.rules {
-      ast::UnsafeBlock(*) => word_space(s, "unsafe"),
+      ast::UnsafeBlock(..) => word_space(s, "unsafe"),
       ast::DefaultBlock => ()
     }
     maybe_print_comment(s, blk.span.lo);
@@ -991,7 +993,7 @@ pub fn print_if(s: @ps, test: &ast::Expr, blk: &ast::Block,
           Some(_else) => {
             match _else.node {
               // "another else-if"
-              ast::ExprIf(i, ref t, e) => {
+              ast::ExprIf(i, t, e) => {
                 cbox(s, indent_unit - 1u);
                 ibox(s, 0u);
                 word(s.s, " else if ");
@@ -1001,7 +1003,7 @@ pub fn print_if(s: @ps, test: &ast::Expr, blk: &ast::Block,
                 do_else(s, e);
               }
               // "final else"
-              ast::ExprBlock(ref b) => {
+              ast::ExprBlock(b) => {
                 cbox(s, indent_unit - 1u);
                 ibox(s, 0u);
                 word(s.s, " else ");
@@ -1009,7 +1011,7 @@ pub fn print_if(s: @ps, test: &ast::Expr, blk: &ast::Block,
               }
               // BLEAH, constraints would be great here
               _ => {
-                  fail2!("print_if saw if with weird alternative");
+                  fail!("print_if saw if with weird alternative");
               }
             }
           }
@@ -1108,7 +1110,7 @@ pub fn print_call_post(s: @ps,
 pub fn print_expr(s: @ps, expr: &ast::Expr) {
     fn print_field(s: @ps, field: &ast::Field) {
         ibox(s, indent_unit);
-        print_ident(s, field.ident);
+        print_ident(s, field.ident.node);
         word_space(s, ":");
         print_expr(s, field.expr);
         end(s);
@@ -1190,7 +1192,7 @@ pub fn print_expr(s: @ps, expr: &ast::Expr) {
         print_ident(s, ident);
         if tys.len() > 0u {
             word(s.s, "::<");
-            commasep(s, inconsistent, *tys, print_type);
+            commasep(s, inconsistent, *tys, print_type_ref);
             word(s.s, ">");
         }
         print_call_post(s, sugar, &blk, &mut base_args);
@@ -1210,28 +1212,28 @@ pub fn print_expr(s: @ps, expr: &ast::Expr) {
         print_mutability(s, m);
         // Avoid `& &e` => `&&e`.
         match (m, &expr.node) {
-            (ast::MutImmutable, &ast::ExprAddrOf(*)) => space(s.s),
+            (ast::MutImmutable, &ast::ExprAddrOf(..)) => space(s.s),
             _ => { }
         }
         print_expr(s, expr);
       }
       ast::ExprLit(lit) => print_literal(s, lit),
-      ast::ExprCast(expr, ref ty) => {
+      ast::ExprCast(expr, ty) => {
         print_expr(s, expr);
         space(s.s);
         word_space(s, "as");
         print_type(s, ty);
       }
-      ast::ExprIf(test, ref blk, elseopt) => {
+      ast::ExprIf(test, blk, elseopt) => {
         print_if(s, test, blk, elseopt, false);
       }
-      ast::ExprWhile(test, ref blk) => {
+      ast::ExprWhile(test, blk) => {
         head(s, "while");
         print_expr(s, test);
         space(s.s);
         print_block(s, blk);
       }
-      ast::ExprForLoop(pat, iter, ref blk, opt_ident) => {
+      ast::ExprForLoop(pat, iter, blk, opt_ident) => {
         for ident in opt_ident.iter() {
             word(s.s, "'");
             print_ident(s, *ident);
@@ -1245,7 +1247,7 @@ pub fn print_expr(s: @ps, expr: &ast::Expr) {
         space(s.s);
         print_block(s, blk);
       }
-      ast::ExprLoop(ref blk, opt_ident) => {
+      ast::ExprLoop(blk, opt_ident) => {
         for ident in opt_ident.iter() {
             word(s.s, "'");
             print_ident(s, *ident);
@@ -1295,7 +1297,7 @@ pub fn print_expr(s: @ps, expr: &ast::Expr) {
                 match arm.body.expr {
                     Some(expr) => {
                         match expr.node {
-                            ast::ExprBlock(ref blk) => {
+                            ast::ExprBlock(blk) => {
                                 // the block will close the pattern's ibox
                                 print_block_unclosed_indent(
                                     s, blk, indent_unit);
@@ -1311,16 +1313,16 @@ pub fn print_expr(s: @ps, expr: &ast::Expr) {
                         }
                         end(s); // close enclosing cbox
                     }
-                    None => fail2!()
+                    None => fail!()
                 }
             } else {
                 // the block will close the pattern's ibox
-                print_block_unclosed_indent(s, &arm.body, indent_unit);
+                print_block_unclosed_indent(s, arm.body, indent_unit);
             }
         }
         bclose_(s, expr.span, indent_unit);
       }
-      ast::ExprFnBlock(ref decl, ref body) => {
+      ast::ExprFnBlock(decl, body) => {
         // in do/for blocks we don't want to show an empty
         // argument list, but at this point we don't know which
         // we are inside.
@@ -1333,7 +1335,34 @@ pub fn print_expr(s: @ps, expr: &ast::Expr) {
         assert!(body.expr.is_some());
         // we extract the block, so as not to create another set of boxes
         match body.expr.unwrap().node {
-            ast::ExprBlock(ref blk) => {
+            ast::ExprBlock(blk) => {
+                print_block_unclosed(s, blk);
+            }
+            _ => {
+                // this is a bare expression
+                print_expr(s, body.expr.unwrap());
+                end(s); // need to close a box
+            }
+        }
+        // a box will be closed by print_expr, but we didn't want an overall
+        // wrapper so we closed the corresponding opening. so create an
+        // empty box to satisfy the close.
+        ibox(s, 0);
+      }
+      ast::ExprProc(decl, body) => {
+        // in do/for blocks we don't want to show an empty
+        // argument list, but at this point we don't know which
+        // we are inside.
+        //
+        // if !decl.inputs.is_empty() {
+        print_proc_args(s, decl);
+        space(s.s);
+        // }
+        assert!(body.stmts.is_empty());
+        assert!(body.expr.is_some());
+        // we extract the block, so as not to create another set of boxes
+        match body.expr.unwrap().node {
+            ast::ExprBlock(blk) => {
                 print_block_unclosed(s, blk);
             }
             _ => {
@@ -1350,7 +1379,7 @@ pub fn print_expr(s: @ps, expr: &ast::Expr) {
       ast::ExprDoBody(body) => {
         print_expr(s, body);
       }
-      ast::ExprBlock(ref blk) => {
+      ast::ExprBlock(blk) => {
         // containing cbox, will be closed by print-block at }
         cbox(s, indent_unit);
         // head-box, will be closed by print-block after {
@@ -1376,7 +1405,7 @@ pub fn print_expr(s: @ps, expr: &ast::Expr) {
         print_ident(s, id);
         if tys.len() > 0u {
             word(s.s, "::<");
-            commasep(s, inconsistent, *tys, print_type);
+            commasep(s, inconsistent, *tys, print_type_ref);
             word(s.s, ">");
         }
       }
@@ -1461,7 +1490,7 @@ pub fn print_local_decl(s: @ps, loc: &ast::Local) {
     print_pat(s, loc.pat);
     match loc.ty.node {
       ast::ty_infer => (),
-      _ => { word_space(s, ":"); print_type(s, &loc.ty); }
+      _ => { word_space(s, ":"); print_type(s, loc.ty); }
     }
 }
 
@@ -1472,10 +1501,6 @@ pub fn print_decl(s: @ps, decl: &ast::Decl) {
         space_if_not_bol(s);
         ibox(s, indent_unit);
         word_nbsp(s, "let");
-
-        if loc.is_mutbl {
-            word_nbsp(s, "mut");
-        }
 
         fn print_local(s: @ps, loc: &ast::Local) {
             ibox(s, indent_unit);
@@ -1540,23 +1565,30 @@ fn print_path_(s: @ps,
             }
         }
 
-        if segment.lifetime.is_some() || !segment.types.is_empty() {
+        if !segment.lifetimes.is_empty() || !segment.types.is_empty() {
             if colons_before_params {
                 word(s.s, "::")
             }
             word(s.s, "<");
 
-            for lifetime in segment.lifetime.iter() {
-                print_lifetime(s, lifetime);
-                if !segment.types.is_empty() {
+            let mut comma = false;
+            for lifetime in segment.lifetimes.iter() {
+                if comma {
                     word_space(s, ",")
                 }
+                print_lifetime(s, lifetime);
+                comma = true;
             }
 
-            commasep(s,
-                     inconsistent,
-                     segment.types.map_to_vec(|t| (*t).clone()),
-                     print_type);
+            if !segment.types.is_empty() {
+                if comma {
+                    word_space(s, ",")
+                }
+                commasep(s,
+                         inconsistent,
+                         segment.types.map_to_vec(|&t| t),
+                         print_type_ref);
+            }
 
             word(s.s, ">")
         }
@@ -1580,13 +1612,17 @@ pub fn print_pat(s: @ps, pat: &ast::Pat) {
      is that it doesn't matter */
     match pat.node {
       ast::PatWild => word(s.s, "_"),
+      ast::PatWildMulti => word(s.s, ".."),
       ast::PatIdent(binding_mode, ref path, sub) => {
           match binding_mode {
               ast::BindByRef(mutbl) => {
                   word_nbsp(s, "ref");
                   print_mutability(s, mutbl);
               }
-              ast::BindInfer => {}
+              ast::BindByValue(ast::MutImmutable) => {}
+              ast::BindByValue(ast::MutMutable) => {
+                  word_nbsp(s, "mut");
+              }
           }
           print_path(s, path, true);
           match sub {
@@ -1600,7 +1636,7 @@ pub fn print_pat(s: @ps, pat: &ast::Pat) {
       ast::PatEnum(ref path, ref args_) => {
         print_path(s, path, true);
         match *args_ {
-          None => word(s.s, "(*)"),
+          None => word(s.s, "(..)"),
           Some(ref args) => {
             if !args.is_empty() {
               popen(s);
@@ -1627,7 +1663,7 @@ pub fn print_pat(s: @ps, pat: &ast::Pat) {
                       get_span);
         if etc {
             if fields.len() != 0u { word_space(s, ","); }
-            word(s.s, "_");
+            word(s.s, "..");
         }
         word(s.s, "}");
       }
@@ -1660,18 +1696,19 @@ pub fn print_pat(s: @ps, pat: &ast::Pat) {
       }
       ast::PatVec(ref before, slice, ref after) => {
         word(s.s, "[");
-        do commasep(s, inconsistent, *before) |s, &p| {
-            print_pat(s, p);
-        }
+        commasep(s, inconsistent, *before, |s, &p| print_pat(s, p));
         for &p in slice.iter() {
             if !before.is_empty() { word_space(s, ","); }
-            word(s.s, "..");
+            match p {
+                @ast::Pat { node: ast::PatWildMulti, .. } => {
+                    // this case is handled by print_pat
+                }
+                _ => word(s.s, ".."),
+            }
             print_pat(s, p);
             if !after.is_empty() { word_space(s, ","); }
         }
-        do commasep(s, inconsistent, *after) |s, &p| {
-            print_pat(s, p);
-        }
+        commasep(s, inconsistent, *after, |s, &p| print_pat(s, p));
         word(s.s, "]");
       }
     }
@@ -1686,8 +1723,14 @@ pub fn explicit_self_to_str(explicit_self: &ast::explicit_self_, intr: @ident_in
 pub fn print_explicit_self(s: @ps, explicit_self: ast::explicit_self_) -> bool {
     match explicit_self {
         ast::sty_static => { return false; }
-        ast::sty_value => { word(s.s, "self"); }
-        ast::sty_uniq => { word(s.s, "~self"); }
+        ast::sty_value(m) => {
+            print_mutability(s, m);
+            word(s.s, "self");
+        }
+        ast::sty_uniq(m) => {
+            print_mutability(s, m);
+            word(s.s, "~self");
+        }
         ast::sty_region(ref lt, m) => {
             word(s.s, "&");
             print_opt_lifetime(s, lt);
@@ -1721,7 +1764,7 @@ pub fn print_fn_args(s: @ps, decl: &ast::fn_decl,
                  opt_explicit_self: Option<ast::explicit_self_>) {
     // It is unfortunate to duplicate the commasep logic, but we want the
     // self type and the args all in the same box.
-    box(s, 0u, inconsistent);
+    rbox(s, 0u, inconsistent);
     let mut first = true;
     for explicit_self in opt_explicit_self.iter() {
         first = !print_explicit_self(s, *explicit_self);
@@ -1739,6 +1782,9 @@ pub fn print_fn_args_and_ret(s: @ps, decl: &ast::fn_decl,
                              opt_explicit_self: Option<ast::explicit_self_>) {
     popen(s);
     print_fn_args(s, decl, opt_explicit_self);
+    if decl.variadic {
+        word(s.s, ", ...");
+    }
     pclose(s);
 
     maybe_print_comment(s, decl.output.span.lo);
@@ -1747,7 +1793,7 @@ pub fn print_fn_args_and_ret(s: @ps, decl: &ast::fn_decl,
         _ => {
             space_if_not_bol(s);
             word_space(s, "->");
-            print_type(s, &decl.output);
+            print_type(s, decl.output);
         }
     }
 }
@@ -1762,7 +1808,25 @@ pub fn print_fn_block_args(s: @ps, decl: &ast::fn_decl) {
         _ => {
             space_if_not_bol(s);
             word_space(s, "->");
-            print_type(s, &decl.output);
+            print_type(s, decl.output);
+        }
+    }
+
+    maybe_print_comment(s, decl.output.span.lo);
+}
+
+pub fn print_proc_args(s: @ps, decl: &ast::fn_decl) {
+    word(s.s, "proc");
+    word(s.s, "(");
+    print_fn_args(s, decl, None);
+    word(s.s, ")");
+
+    match decl.output.node {
+        ast::ty_infer => {}
+        _ => {
+            space_if_not_bol(s);
+            word_space(s, "->");
+            print_type(s, decl.output);
         }
     }
 
@@ -1831,7 +1895,7 @@ pub fn print_meta_item(s: @ps, item: &ast::MetaItem) {
       ast::MetaNameValue(name, value) => {
         word_space(s, name);
         word_space(s, "=");
-        print_literal(s, @value);
+        print_literal(s, &value);
       }
       ast::MetaList(name, ref items) => {
         word(s.s, name);
@@ -1849,7 +1913,8 @@ pub fn print_meta_item(s: @ps, item: &ast::MetaItem) {
 pub fn print_view_path(s: @ps, vp: &ast::view_path) {
     match vp.node {
       ast::view_path_simple(ident, ref path, _) => {
-        if path.segments.last().identifier != ident {
+        // FIXME(#6993) can't compare identifiers directly here
+        if path.segments.last().identifier.name != ident.name {
             print_ident(s, ident);
             space(s.s);
             word_space(s, "=");
@@ -1863,11 +1928,15 @@ pub fn print_view_path(s: @ps, vp: &ast::view_path) {
       }
 
       ast::view_path_list(ref path, ref idents, _) => {
-        print_path(s, path, false);
-        word(s.s, "::{");
-        do commasep(s, inconsistent, (*idents)) |s, w| {
-            print_ident(s, w.node.name);
+        if path.segments.is_empty() {
+            word(s.s, "{");
+        } else {
+            print_path(s, path, false);
+            word(s.s, "::{");
         }
+        commasep(s, inconsistent, (*idents), |s, w| {
+            print_ident(s, w.node.name);
+        });
         word(s.s, "}");
       }
     }
@@ -1923,9 +1992,6 @@ pub fn print_mt(s: @ps, mt: &ast::mt) {
 
 pub fn print_arg(s: @ps, input: &ast::arg) {
     ibox(s, indent_unit);
-    if input.is_mutbl {
-        word_space(s, "mut");
-    }
     match input.ty.node {
       ast::ty_infer => print_pat(s, input.pat),
       _ => {
@@ -1942,7 +2008,7 @@ pub fn print_arg(s: @ps, input: &ast::arg) {
                 space(s.s);
             }
         }
-        print_type(s, &input.ty);
+        print_type(s, input.ty);
       }
     }
     end(s);
@@ -1963,21 +2029,42 @@ pub fn print_ty_fn(s: @ps,
 
     // Duplicates the logic in `print_fn_header_info()`.  This is because that
     // function prints the sigil in the wrong place.  That should be fixed.
-    print_extern_opt_abis(s, opt_abis);
-    print_opt_sigil(s, opt_sigil);
-    print_opt_lifetime(s, opt_region);
-    print_purity(s, purity);
-    print_onceness(s, onceness);
-    word(s.s, "fn");
+    if opt_sigil == Some(ast::OwnedSigil) && onceness == ast::Once {
+        word(s.s, "proc");
+    } else if opt_sigil == Some(ast::BorrowedSigil) {
+        print_extern_opt_abis(s, opt_abis);
+        for lifetime in opt_region.iter() {
+            print_lifetime(s, lifetime);
+        }
+        print_purity(s, purity);
+        print_onceness(s, onceness);
+    } else {
+        print_opt_abis_and_extern_if_nondefault(s, opt_abis);
+        print_opt_sigil(s, opt_sigil);
+        print_opt_lifetime(s, opt_region);
+        print_purity(s, purity);
+        print_onceness(s, onceness);
+        word(s.s, "fn");
+    }
+
     match id { Some(id) => { word(s.s, " "); print_ident(s, id); } _ => () }
-    do opt_bounds.as_ref().map |bounds| { print_bounds(s, bounds, true); };
+
+    if opt_sigil != Some(ast::BorrowedSigil) {
+        opt_bounds.as_ref().map(|bounds| print_bounds(s, bounds, true));
+    }
+
     match generics { Some(g) => print_generics(s, g), _ => () }
     zerobreak(s.s);
 
-    popen(s);
+    if opt_sigil == Some(ast::BorrowedSigil) {
+        word(s.s, "|");
+    } else {
+        popen(s);
+    }
+
     // It is unfortunate to duplicate the commasep logic, but we want the
     // self type and the args all in the same box.
-    box(s, 0u, inconsistent);
+    rbox(s, 0u, inconsistent);
     let mut first = true;
     for explicit_self in opt_explicit_self.iter() {
         first = !print_explicit_self(s, *explicit_self);
@@ -1987,7 +2074,17 @@ pub fn print_ty_fn(s: @ps,
         print_arg(s, arg);
     }
     end(s);
-    pclose(s);
+
+    if opt_sigil == Some(ast::BorrowedSigil) {
+        word(s.s, "|");
+
+        opt_bounds.as_ref().map(|bounds| print_bounds(s, bounds, true));
+    } else {
+        if decl.variadic {
+            word(s.s, ", ...");
+        }
+        pclose(s);
+    }
 
     maybe_print_comment(s, decl.output.span.lo);
 
@@ -1998,7 +2095,7 @@ pub fn print_ty_fn(s: @ps,
             ibox(s, indent_unit);
             word_space(s, "->");
             if decl.cf == ast::noreturn { word_nbsp(s, "!"); }
-            else { print_type(s, &decl.output); }
+            else { print_type(s, decl.output); }
             end(s);
         }
     }
@@ -2015,7 +2112,7 @@ pub fn maybe_print_trailing_comment(s: @ps, span: codemap::Span,
         if (*cmnt).style != comments::trailing { return; }
         let span_line = cm.lookup_char_pos(span.hi);
         let comment_line = cm.lookup_char_pos((*cmnt).pos);
-        let mut next = (*cmnt).pos + BytePos(1u);
+        let mut next = (*cmnt).pos + BytePos(1);
         match next_pos { None => (), Some(p) => next = p }
         if span.hi < (*cmnt).pos && (*cmnt).pos < next &&
                span_line.line == comment_line.line {
@@ -2055,9 +2152,7 @@ pub fn print_literal(s: @ps, lit: &ast::lit) {
       ast::lit_str(st, style) => print_string(s, st, style),
       ast::lit_char(ch) => {
           let mut res = ~"'";
-          do char::from_u32(ch).unwrap().escape_default |c| {
-              res.push_char(c);
-          }
+          char::from_u32(ch).unwrap().escape_default(|c| res.push_char(c));
           res.push_char('\'');
           word(s.s, res);
       }
@@ -2091,6 +2186,14 @@ pub fn print_literal(s: @ps, lit: &ast::lit) {
       ast::lit_nil => word(s.s, "()"),
       ast::lit_bool(val) => {
         if val { word(s.s, "true"); } else { word(s.s, "false"); }
+      }
+      ast::lit_binary(arr) => {
+        ibox(s, indent_unit);
+        word(s.s, "[");
+        commasep_cmnt(s, inconsistent, arr, |s, u| word(s.s, format!("{}", *u)),
+                      |_| lit.span);
+        word(s.s, "]");
+        end(s);
       }
     }
 }
@@ -2181,12 +2284,12 @@ pub fn print_string(s: @ps, st: &str, style: ast::StrStyle) {
     word(s.s, st);
 }
 
-pub fn to_str<T>(t: &T, f: &fn(@ps, &T), intr: @ident_interner) -> ~str {
-    do io::with_str_writer |wr| {
-        let s = rust_printer(wr, intr);
-        f(s, t);
-        eof(s.s);
-    }
+pub fn to_str<T>(t: &T, f: |@ps, &T|, intr: @ident_interner) -> ~str {
+    let wr = @mut MemWriter::new();
+    let s = rust_printer(wr as @mut io::Writer, intr);
+    f(s, t);
+    eof(s.s);
+    str::from_utf8_owned(wr.inner_ref().to_owned())
 }
 
 pub fn next_comment(s: @ps) -> Option<comments::cmnt> {
@@ -2210,6 +2313,17 @@ pub fn print_opt_purity(s: @ps, opt_purity: Option<ast::purity>) {
         }
         None => {}
     }
+}
+
+pub fn print_opt_abis_and_extern_if_nondefault(s: @ps,
+                                               opt_abis: Option<AbiSet>) {
+    match opt_abis {
+        Some(abis) if !abis.is_rust() => {
+            word_nbsp(s, "extern");
+            word_nbsp(s, abis.to_str());
+        }
+        Some(_) | None => {}
+    };
 }
 
 pub fn print_extern_opt_abis(s: @ps, opt_abis: Option<AbiSet>) {
@@ -2296,7 +2410,7 @@ mod test {
 
     fn string_check<T:Eq> (given : &T, expected: &T) {
         if !(given == expected) {
-            fail2!("given {:?}, expected {:?}", given, expected);
+            fail!("given {:?}, expected {:?}", given, expected);
         }
     }
 
@@ -2306,10 +2420,11 @@ mod test {
 
         let decl = ast::fn_decl {
             inputs: ~[],
-            output: ast::Ty {id: 0,
-                              node: ast::ty_nil,
-                              span: codemap::dummy_sp()},
-            cf: ast::return_val
+            output: ast::P(ast::Ty {id: 0,
+                                    node: ast::ty_nil,
+                                    span: codemap::dummy_sp()}),
+            cf: ast::return_val,
+            variadic: false
         };
         let generics = ast_util::empty_generics();
         assert_eq!(&fun_to_str(&decl, ast::impure_fn, abba_ident,

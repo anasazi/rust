@@ -8,17 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-fast #9205
+// xfail-win32 #9205
 
 struct TwoU64s {
     one: u64, two: u64
 }
 
+#[link(name = "rustrt")]
 extern {
     pub fn rust_dbg_extern_return_TwoU64s() -> TwoU64s;
 }
 
-#[fixed_stack_segment] #[inline(never)]
 pub fn main() {
     unsafe {
         let y = rust_dbg_extern_return_TwoU64s();

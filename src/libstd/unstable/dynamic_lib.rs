@@ -27,13 +27,13 @@ pub struct DynamicLibrary { priv handle: *libc::c_void }
 
 impl Drop for DynamicLibrary {
     fn drop(&mut self) {
-        match do dl::check_for_errors_in {
+        match dl::check_for_errors_in(|| {
             unsafe {
                 dl::close(self.handle)
             }
-        } {
+        }) {
             Ok(()) => {},
-            Err(str) => fail2!("{}", str)
+            Err(str) => fail!("{}", str)
         }
     }
 }
@@ -43,12 +43,12 @@ impl DynamicLibrary {
     /// handle to the calling process
     pub fn open(filename: Option<&path::Path>) -> Result<DynamicLibrary, ~str> {
         unsafe {
-            let maybe_library = do dl::check_for_errors_in {
+            let maybe_library = dl::check_for_errors_in(|| {
                 match filename {
                     Some(name) => dl::open_external(name),
                     None => dl::open_internal()
                 }
-            };
+            });
 
             // The dynamic library must not be constructed if there is
             // an error opening the library so the destructor does not
@@ -62,14 +62,14 @@ impl DynamicLibrary {
 
     /// Access the value at the symbol of the dynamic library
     pub unsafe fn symbol<T>(&self, symbol: &str) -> Result<T, ~str> {
-        // This function should have a lifetime constraint of 'self on
+        // This function should have a lifetime constraint of 'a on
         // T but that feature is still unimplemented
 
-        let maybe_symbol_value = do dl::check_for_errors_in {
-            do symbol.with_c_str |raw_string| {
+        let maybe_symbol_value = dl::check_for_errors_in(|| {
+            symbol.with_c_str(|raw_string| {
                 dl::symbol(self.handle, raw_string)
-            }
-        };
+            })
+        });
 
         // The value must not be constructed if there is an error so
         // the destructor does not run.
@@ -90,17 +90,18 @@ mod test {
 
     #[test]
     #[ignore(cfg(windows))] // FIXME #8818
+    #[ignore(cfg(target_os="android"))] // FIXME(#10379)
     fn test_loading_cosine() {
         // The math library does not need to be loaded since it is already
         // statically linked in
         let libm = match DynamicLibrary::open(None) {
-            Err(error) => fail2!("Could not load self as module: {}", error),
+            Err(error) => fail!("Could not load self as module: {}", error),
             Ok(libm) => libm
         };
 
         let cosine: extern fn(libc::c_double) -> libc::c_double = unsafe {
             match libm.symbol("cos") {
-                Err(error) => fail2!("Could not load function cos: {}", error),
+                Err(error) => fail!("Could not load function cos: {}", error),
                 Ok(cosine) => cosine
             }
         };
@@ -109,7 +110,7 @@ mod test {
         let expected_result = 1.0;
         let result = cosine(argument);
         if result != expected_result {
-            fail2!("cos({:?}) != {:?} but equaled {:?} instead", argument,
+            fail!("cos({:?}) != {:?} but equaled {:?} instead", argument,
                    expected_result, result)
         }
     }
@@ -124,7 +125,7 @@ mod test {
         let path = GenericPath::new("/dev/null");
         match DynamicLibrary::open(Some(&path)) {
             Err(_) => {}
-            Ok(_) => fail2!("Successfully opened the empty library.")
+            Ok(_) => fail!("Successfully opened the empty library.")
         }
     }
 }
@@ -139,57 +140,49 @@ pub mod dl {
     use path;
     use ptr;
     use str;
-    use unstable::sync::atomically;
+    use unstable::sync::atomic;
     use result::*;
 
     pub unsafe fn open_external(filename: &path::Path) -> *libc::c_void {
-        #[fixed_stack_segment]; #[inline(never)];
-        do filename.with_c_str |raw_name| {
+        filename.with_c_str(|raw_name| {
             dlopen(raw_name, Lazy as libc::c_int)
-        }
+        })
     }
 
     pub unsafe fn open_internal() -> *libc::c_void {
-        #[fixed_stack_segment]; #[inline(never)];
-
         dlopen(ptr::null(), Lazy as libc::c_int)
     }
 
-    pub fn check_for_errors_in<T>(f: &fn()->T) -> Result<T, ~str> {
-        #[fixed_stack_segment]; #[inline(never)];
-
+    pub fn check_for_errors_in<T>(f: || -> T) -> Result<T, ~str> {
+        use unstable::mutex::{Mutex, MUTEX_INIT};
+        static mut lock: Mutex = MUTEX_INIT;
         unsafe {
             // dlerror isn't thread safe, so we need to lock around this entire
-            // sequence. `atomically` asserts that we don't do anything that
+            // sequence. `atomic` asserts that we don't do anything that
             // would cause this task to be descheduled, which could deadlock
             // the scheduler if it happens while the lock is held.
             // FIXME #9105 use a Rust mutex instead of C++ mutexes.
-            do atomically {
-                rust_take_dlerror_lock();
-                let _old_error = dlerror();
+            let _guard = atomic();
+            lock.lock();
+            let _old_error = dlerror();
 
-                let result = f();
+            let result = f();
 
-                let last_error = dlerror();
-                let ret = if ptr::null() == last_error {
-                    Ok(result)
-                } else {
-                    Err(str::raw::from_c_str(last_error))
-                };
-                rust_drop_dlerror_lock();
-                ret
-            }
+            let last_error = dlerror();
+            let ret = if ptr::null() == last_error {
+                Ok(result)
+            } else {
+                Err(str::raw::from_c_str(last_error))
+            };
+            lock.unlock();
+            ret
         }
     }
 
     pub unsafe fn symbol(handle: *libc::c_void, symbol: *libc::c_char) -> *libc::c_void {
-        #[fixed_stack_segment]; #[inline(never)];
-
         dlsym(handle, symbol)
     }
     pub unsafe fn close(handle: *libc::c_void) {
-        #[fixed_stack_segment]; #[inline(never)];
-
         dlclose(handle); ()
     }
 
@@ -198,11 +191,6 @@ pub mod dl {
         Now = 2,
         Global = 256,
         Local = 0,
-    }
-
-    extern {
-        fn rust_take_dlerror_lock();
-        fn rust_drop_dlerror_lock();
     }
 
     #[link_name = "dl"]
@@ -220,64 +208,46 @@ pub mod dl {
     use libc;
     use path;
     use ptr;
-    use unstable::sync::atomically;
+    use unstable::sync::atomic;
     use result::*;
 
     pub unsafe fn open_external(filename: &path::Path) -> *libc::c_void {
-        #[fixed_stack_segment]; #[inline(never)];
-        do os::win32::as_utf16_p(filename.as_str().unwrap()) |raw_name| {
+        os::win32::as_utf16_p(filename.as_str().unwrap(), |raw_name| {
             LoadLibraryW(raw_name)
-        }
+        })
     }
 
     pub unsafe fn open_internal() -> *libc::c_void {
-        #[fixed_stack_segment]; #[inline(never)];
         let handle = ptr::null();
         GetModuleHandleExW(0 as libc::DWORD, ptr::null(), &handle as **libc::c_void);
         handle
     }
 
-    pub fn check_for_errors_in<T>(f: &fn()->T) -> Result<T, ~str> {
-        #[fixed_stack_segment]; #[inline(never)];
+    pub fn check_for_errors_in<T>(f: || -> T) -> Result<T, ~str> {
         unsafe {
-            do atomically {
-                SetLastError(0);
+            let _guard = atomic();
+            SetLastError(0);
 
-                let result = f();
+            let result = f();
 
-                let error = os::errno();
-                if 0 == error {
-                    Ok(result)
-                } else {
-                    Err(format!("Error code {}", error))
-                }
+            let error = os::errno();
+            if 0 == error {
+                Ok(result)
+            } else {
+                Err(format!("Error code {}", error))
             }
         }
     }
 
     pub unsafe fn symbol(handle: *libc::c_void, symbol: *libc::c_char) -> *libc::c_void {
-        #[fixed_stack_segment]; #[inline(never)];
         GetProcAddress(handle, symbol)
     }
     pub unsafe fn close(handle: *libc::c_void) {
-        #[fixed_stack_segment]; #[inline(never)];
         FreeLibrary(handle); ()
     }
 
-    #[cfg(target_arch = "x86")]
     #[link_name = "kernel32"]
-    extern "stdcall" {
-        fn SetLastError(error: u32);
-        fn LoadLibraryW(name: *u16) -> *libc::c_void;
-        fn GetModuleHandleExW(dwFlags: libc::DWORD, name: *u16,
-                              handle: **libc::c_void) -> *libc::c_void;
-        fn GetProcAddress(handle: *libc::c_void, name: *libc::c_char) -> *libc::c_void;
-        fn FreeLibrary(handle: *libc::c_void);
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    #[link_name = "kernel32"]
-    extern {
+    extern "system" {
         fn SetLastError(error: u32);
         fn LoadLibraryW(name: *u16) -> *libc::c_void;
         fn GetModuleHandleExW(dwFlags: libc::DWORD, name: *u16,

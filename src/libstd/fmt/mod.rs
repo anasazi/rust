@@ -134,25 +134,27 @@ actually requesting that an argument ascribes to a particular trait. This allows
 multiple actual types to be formatted via `{:d}` (like `i8` as well as `int`).
 The current mapping of types to traits is:
 
-* `?` => Poly
-* `d` => Signed
-* `i` => Signed
-* `u` => Unsigned
-* `b` => Bool
-* `c` => Char
-* `o` => Octal
-* `x` => LowerHex
-* `X` => UpperHex
-* `s` => String
-* `p` => Pointer
-* `t` => Binary
-* `f` => Float
+* `?` ⇒ `Poly`
+* `d` ⇒ `Signed`
+* `i` ⇒ `Signed`
+* `u` ⇒ `Unsigned`
+* `b` ⇒ `Bool`
+* `c` ⇒ `Char`
+* `o` ⇒ `Octal`
+* `x` ⇒ `LowerHex`
+* `X` ⇒ `UpperHex`
+* `s` ⇒ `String`
+* `p` ⇒ `Pointer`
+* `t` ⇒ `Binary`
+* `f` ⇒ `Float`
+* *nothing* ⇒ `Default`
 
 What this means is that any type of argument which implements the
 `std::fmt::Binary` trait can then be formatted with `{:t}`. Implementations are
 provided for these traits for a number of primitive types by the standard
-library as well. Again, the default formatting type (if no other is specified)
-is `?` which is defined for all types by default.
+library as well. If no format is specified (as in `{}` or `{:6}`), then the
+format trait used is the `Default` trait. This is one of the more commonly
+implemented traits when formatting a custom type.
 
 When implementing a format trait for your own time, you will have to implement a
 method of the signature:
@@ -166,7 +168,50 @@ emit output into the `f.buf` stream. It is up to each format trait
 implementation to correctly adhere to the requested formatting parameters. The
 values of these parameters will be listed in the fields of the `Formatter`
 struct. In order to help with this, the `Formatter` struct also provides some
-helper methods.
+helper methods. An example of implementing the formatting traits would look
+like:
+
+```rust
+use std::fmt;
+use std::f64;
+
+struct Vector2D {
+    x: int,
+    y: int,
+}
+
+impl fmt::Default for Vector2D {
+    fn fmt(obj: &Vector2D, f: &mut fmt::Formatter) {
+        // The `f.buf` value is of the type `&mut io::Writer`, which is what th
+        // write! macro is expecting. Note that this formatting ignores the
+        // various flags provided to format strings.
+        write!(f.buf, "({}, {})", obj.x, obj.y)
+    }
+}
+
+// Different traits allow different forms of output of a type. The meaning of
+// this format is to print the magnitude of a vector.
+impl fmt::Binary for Vector2D {
+    fn fmt(obj: &Vector2D, f: &mut fmt::Formatter) {
+        let magnitude = (obj.x * obj.x + obj.y * obj.y) as f64;
+        let magnitude = magnitude.sqrt();
+
+        // Respect the formatting flags by using the helper method
+        // `pad_integral` on the Formatter object. See the method documentation
+        // for details, and the function `pad` can be used to pad strings.
+        let decimals = f.precision.unwrap_or(3);
+        let string = f64::to_str_exact(magnitude, decimals);
+        f.pad_integral(string.as_bytes(), "", true);
+    }
+}
+
+fn main() {
+    let myvector = Vector2D { x: 3, y: 4 };
+
+    println!("{}", myvector);       // => "(3, 4)"
+    println!("{:10.3t}", myvector); // => "     5.000"
+}
+```
 
 ### Related macros
 
@@ -175,7 +220,7 @@ currently implemented are:
 
 ```rust
 format!      // described above
-write!       // first argument is a &mut rt::io::Writer, the destination
+write!       // first argument is a &mut io::Writer, the destination
 writeln!     // same as write but appends a newline
 print!       // the format string is printed to the standard output
 println!     // same as print but appends a newline
@@ -191,7 +236,7 @@ strings and instead directly write the output. Under the hood, this function is
 actually invoking the `write` function defined in this module. Example usage is:
 
 ```rust
-use std::rt::io;
+use std::io;
 
 let mut w = io::mem::MemWriter::new();
 write!(&mut w as &mut io::Writer, "Hello {}!", "world");
@@ -417,11 +462,11 @@ use prelude::*;
 
 use cast;
 use char::Char;
-use rt::io::Decorator;
-use rt::io::mem::MemWriter;
-use rt::io;
+use io::Decorator;
+use io::mem::MemWriter;
+use io;
 use str;
-use sys;
+use repr;
 use util;
 use vec;
 
@@ -431,7 +476,7 @@ pub mod rt;
 /// A struct to represent both where to emit formatting strings to and how they
 /// should be formatted. A mutable version of this is passed to all formatting
 /// traits.
-pub struct Formatter<'self> {
+pub struct Formatter<'a> {
     /// Flags for formatting (packed version of rt::Flag)
     flags: uint,
     /// Character used as 'fill' whenever there is alignment
@@ -444,22 +489,21 @@ pub struct Formatter<'self> {
     precision: Option<uint>,
 
     /// Output buffer.
-    buf: &'self mut io::Writer,
-
-    priv curarg: vec::VecIterator<'self, Argument<'self>>,
-    priv args: &'self [Argument<'self>],
+    buf: &'a mut io::Writer,
+    priv curarg: vec::VecIterator<'a, Argument<'a>>,
+    priv args: &'a [Argument<'a>],
 }
 
 /// This struct represents the generic "argument" which is taken by the Xprintf
 /// family of functions. It contains a function to format the given value. At
 /// compile time it is ensured that the function and the value have the correct
 /// types, and then this struct is used to canonicalize arguments to one type.
-pub struct Argument<'self> {
+pub struct Argument<'a> {
     priv formatter: extern "Rust" fn(&util::Void, &mut Formatter),
-    priv value: &'self util::Void,
+    priv value: &'a util::Void,
 }
 
-impl<'self> Arguments<'self> {
+impl<'a> Arguments<'a> {
     /// When using the format_args!() macro, this function is used to generate the
     /// Arguments structure. The compiler inserts an `unsafe` block to call this,
     /// which is valid because the compiler performs all necessary validation to
@@ -480,9 +524,9 @@ impl<'self> Arguments<'self> {
 /// and pass it to a user-supplied function. The macro validates the format
 /// string at compile-time so usage of the `write` and `format` functions can
 /// be safely performed.
-pub struct Arguments<'self> {
-    priv fmt: &'self [rt::Piece<'self>],
-    priv args: &'self [Argument<'self>],
+pub struct Arguments<'a> {
+    priv fmt: &'a [rt::Piece<'a>],
+    priv args: &'a [Argument<'a>],
 }
 
 /// When a format is not otherwise specified, types are formatted by ascribing
@@ -562,9 +606,9 @@ pub fn writeln(output: &mut io::Writer, args: &Arguments) {
 /// See the documentation for `format` for why this function is unsafe and care
 /// should be taken if calling it manually.
 ///
-/// Thankfully the rust compiler provides the macro `fmtf!` which will perform
-/// all of this validation at compile-time and provides a safe interface for
-/// invoking this function.
+/// Thankfully the rust compiler provides macros like `write!` and
+/// `format_args!` which perform all of this validation at compile-time
+/// and provide a safe interface for invoking this function.
 ///
 /// # Arguments
 ///
@@ -640,28 +684,13 @@ pub unsafe fn format_unsafe(fmt: &[rt::Piece], args: &[Argument]) -> ~str {
     return str::from_utf8_owned(output.inner());
 }
 
-impl<'self> Formatter<'self> {
+impl<'a> Formatter<'a> {
 
     // First up is the collection of functions used to execute a format string
     // at runtime. This consumes all of the compile-time statics generated by
     // the format! syntax extension.
 
     fn run(&mut self, piece: &rt::Piece, cur: Option<&str>) {
-        let setcount = |slot: &mut Option<uint>, cnt: &parse::Count| {
-            match *cnt {
-                parse::CountIs(n) => { *slot = Some(n); }
-                parse::CountImplied => { *slot = None; }
-                parse::CountIsParam(i) => {
-                    let v = self.args[i].value;
-                    unsafe { *slot = Some(*(v as *util::Void as *uint)); }
-                }
-                parse::CountIsNextParam => {
-                    let v = self.curarg.next().unwrap().value;
-                    unsafe { *slot = Some(*(v as *util::Void as *uint)); }
-                }
-            }
-        };
-
         match *piece {
             rt::String(s) => { self.buf.write(s.as_bytes()); }
             rt::CurrentArgument(()) => { self.buf.write(cur.unwrap().as_bytes()); }
@@ -670,8 +699,8 @@ impl<'self> Formatter<'self> {
                 self.fill = arg.format.fill;
                 self.align = arg.format.align;
                 self.flags = arg.format.flags;
-                setcount(&mut self.width, &arg.format.width);
-                setcount(&mut self.precision, &arg.format.precision);
+                self.width = self.getcount(&arg.format.width);
+                self.precision = self.getcount(&arg.format.precision);
 
                 // Extract the correct argument
                 let value = match arg.position {
@@ -684,6 +713,21 @@ impl<'self> Formatter<'self> {
                     None => { (value.formatter)(value.value, self); }
                     Some(ref method) => { self.execute(*method, value); }
                 }
+            }
+        }
+    }
+
+    fn getcount(&mut self, cnt: &rt::Count) -> Option<uint> {
+        match *cnt {
+            rt::CountIs(n) => { Some(n) }
+            rt::CountImplied => { None }
+            rt::CountIsParam(i) => {
+                let v = self.args[i].value;
+                unsafe { Some(*(v as *util::Void as *uint)) }
+            }
+            rt::CountIsNextParam => {
+                let v = self.curarg.next().unwrap().value;
+                unsafe { Some(*(v as *util::Void as *uint)) }
             }
         }
     }
@@ -724,7 +768,7 @@ impl<'self> Formatter<'self> {
                         Left(parse::Few) => value < 8,
                         Left(parse::Many) => value >= 8,
 
-                        Right(*) => false
+                        Right(..) => false
                     };
                     if run {
                         return self.runplural(value, s.result);
@@ -757,12 +801,12 @@ impl<'self> Formatter<'self> {
     }
 
     fn runplural(&mut self, value: uint, pieces: &[rt::Piece]) {
-        do ::uint::to_str_bytes(value, 10) |buf| {
-            let valuestr = str::from_utf8_slice(buf);
+        ::uint::to_str_bytes(value, 10, |buf| {
+            let valuestr = str::from_utf8(buf);
             for piece in pieces.iter() {
                 self.run(piece, Some(valuestr));
             }
-        }
+        })
     }
 
     // Helper methods used for padding and processing formatting arguments that
@@ -824,9 +868,9 @@ impl<'self> Formatter<'self> {
                     self.fill = '0';
                     sign(self);
                 }
-                do self.with_padding(min - actual_len, parse::AlignRight) |me| {
+                self.with_padding(min - actual_len, parse::AlignRight, |me| {
                     emit(me);
-                }
+                })
             }
         }
     }
@@ -857,7 +901,7 @@ impl<'self> Formatter<'self> {
                 // case where the maximum length will matter.
                 let char_len = s.char_len();
                 if char_len >= max {
-                    let nchars = ::uint::min(max, char_len);
+                    let nchars = ::cmp::min(max, char_len);
                     self.buf.write(s.slice_chars(0, nchars).as_bytes());
                     return
                 }
@@ -880,15 +924,17 @@ impl<'self> Formatter<'self> {
             // If we're under both the maximum and the minimum width, then fill
             // up the minimum width with the specified string + some alignment.
             Some(width) => {
-                do self.with_padding(width - s.len(), parse::AlignLeft) |me| {
+                self.with_padding(width - s.len(), parse::AlignLeft, |me| {
                     me.buf.write(s.as_bytes());
-                }
+                })
             }
         }
     }
 
-    fn with_padding(&mut self, padding: uint,
-                    default: parse::Alignment, f: &fn(&mut Formatter)) {
+    fn with_padding(&mut self,
+                    padding: uint,
+                    default: parse::Alignment,
+                    f: |&mut Formatter|) {
         let align = match self.align {
             parse::AlignUnknown => default,
             parse::AlignLeft | parse::AlignRight => self.align
@@ -942,7 +988,7 @@ impl Bool for bool {
     }
 }
 
-impl<'self, T: str::Str> String for T {
+impl<'a, T: str::Str> String for T {
     fn fmt(s: &T, f: &mut Formatter) {
         f.pad(s.as_slice());
     }
@@ -961,18 +1007,18 @@ macro_rules! int_base(($ty:ident, $into:ident, $base:expr,
                        $name:ident, $prefix:expr) => {
     impl $name for $ty {
         fn fmt(c: &$ty, f: &mut Formatter) {
-            do ::$into::to_str_bytes(*c as $into, $base) |buf| {
+            ::$into::to_str_bytes(*c as $into, $base, |buf| {
                 f.pad_integral(buf, $prefix, true);
-            }
+            })
         }
     }
 })
 macro_rules! upper_hex(($ty:ident, $into:ident) => {
     impl UpperHex for $ty {
         fn fmt(c: &$ty, f: &mut Formatter) {
-            do ::$into::to_str_bytes(*c as $into, 16) |buf| {
+            ::$into::to_str_bytes(*c as $into, 16, |buf| {
                 upperhex(buf, f);
-            }
+            })
         }
     }
 })
@@ -990,31 +1036,26 @@ pub fn upperhex(buf: &[u8], f: &mut Formatter) {
     f.pad_integral(local.slice_to(buf.len()), "0x", true);
 }
 
-// FIXME(#4375) shouldn't need an inner module
 macro_rules! integer(($signed:ident, $unsigned:ident) => {
-    mod $signed {
-        use super::*;
-
-        // Signed is special because it actuall emits the negative sign,
-        // nothing else should do that, however.
-        impl Signed for $signed {
-            fn fmt(c: &$signed, f: &mut Formatter) {
-                do ::$unsigned::to_str_bytes(c.abs() as $unsigned, 10) |buf| {
-                    f.pad_integral(buf, "", *c >= 0);
-                }
-            }
+    // Signed is special because it actuall emits the negative sign,
+    // nothing else should do that, however.
+    impl Signed for $signed {
+        fn fmt(c: &$signed, f: &mut Formatter) {
+            ::$unsigned::to_str_bytes(c.abs() as $unsigned, 10, |buf| {
+                f.pad_integral(buf, "", *c >= 0);
+            })
         }
-        int_base!($signed, $unsigned, 2, Binary, "0b")
-        int_base!($signed, $unsigned, 8, Octal, "0o")
-        int_base!($signed, $unsigned, 16, LowerHex, "0x")
-        upper_hex!($signed, $unsigned)
-
-        int_base!($unsigned, $unsigned, 2, Binary, "0b")
-        int_base!($unsigned, $unsigned, 8, Octal, "0o")
-        int_base!($unsigned, $unsigned, 10, Unsigned, "")
-        int_base!($unsigned, $unsigned, 16, LowerHex, "0x")
-        upper_hex!($unsigned, $unsigned)
     }
+    int_base!($signed, $unsigned, 2, Binary, "0b")
+    int_base!($signed, $unsigned, 8, Octal, "0o")
+    int_base!($signed, $unsigned, 16, LowerHex, "0x")
+    upper_hex!($signed, $unsigned)
+
+    int_base!($unsigned, $unsigned, 2, Binary, "0b")
+    int_base!($unsigned, $unsigned, 8, Octal, "0o")
+    int_base!($unsigned, $unsigned, 10, Unsigned, "")
+    int_base!($unsigned, $unsigned, 16, LowerHex, "0x")
+    upper_hex!($unsigned, $unsigned)
 })
 
 integer!(int, uint)
@@ -1042,17 +1083,13 @@ impl<T> Poly for T {
     fn fmt(t: &T, f: &mut Formatter) {
         match (f.width, f.precision) {
             (None, None) => {
-                // XXX: sys::log_str should have a variant which takes a stream
-                //      and we should directly call that (avoids unnecessary
-                //      allocations)
-                let s = sys::log_str(t);
-                f.buf.write(s.as_bytes());
+                repr::write_repr(f.buf, t);
             }
 
             // If we have a specified width for formatting, then we have to make
             // this allocation of a new string
             _ => {
-                let s = sys::log_str(t);
+                let s = repr::repr_to_str(t);
                 f.pad(s);
             }
         }
@@ -1062,9 +1099,9 @@ impl<T> Poly for T {
 impl<T> Pointer for *T {
     fn fmt(t: &*T, f: &mut Formatter) {
         f.flags |= 1 << (parse::FlagAlternate as uint);
-        do ::uint::to_str_bytes(*t as uint, 16) |buf| {
+        ::uint::to_str_bytes(*t as uint, 16, |buf| {
             f.pad_integral(buf, "0x", true);
-        }
+        })
     }
 }
 impl<T> Pointer for *mut T {
@@ -1074,7 +1111,7 @@ impl<T> Pointer for *mut T {
 // Implementation of Default for various core types
 
 macro_rules! delegate(($ty:ty to $other:ident) => {
-    impl<'self> Default for $ty {
+    impl<'a> Default for $ty {
         fn fmt(me: &$ty, f: &mut Formatter) {
             $other::fmt(me, f)
         }
@@ -1092,7 +1129,7 @@ delegate!( u32 to Unsigned)
 delegate!( u64 to Unsigned)
 delegate!(@str to String)
 delegate!(~str to String)
-delegate!(&'self str to String)
+delegate!(&'a str to String)
 delegate!(bool to Bool)
 delegate!(char to Char)
 delegate!(f32 to Float)

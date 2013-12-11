@@ -11,11 +11,13 @@
 // Regression test that rustc doesn't recurse infinitely substituting
 // the boxed type parameter
 
+#[feature(managed_boxes)];
+
 struct Tree<T> {
     parent: Option<T>
 }
 
-fn empty<T>() -> Tree<T> { fail2!() }
+fn empty<T>() -> Tree<T> { fail!() }
 
 struct Box {
     tree: Tree<@Box>
@@ -28,7 +30,7 @@ fn Box() -> Box {
 }
 
 struct LayoutData {
-    box: Option<@Box>
+    a_box: Option<@Box>
 }
 
 pub fn main() { }

@@ -18,13 +18,16 @@ use path_util::rust_path;
 use util::option_to_vec;
 use package_id::PkgId;
 
-pub fn each_pkg_parent_workspace(cx: &Context, pkgid: &PkgId, action: &fn(&Path) -> bool) -> bool {
+pub fn each_pkg_parent_workspace(cx: &Context,
+                                 pkgid: &PkgId,
+                                 action: |&Path| -> bool)
+                                 -> bool {
     // Using the RUST_PATH, find workspaces that contain
     // this package ID
     let workspaces = pkg_parent_workspaces(cx, pkgid);
     if workspaces.is_empty() {
         // tjc: make this a condition
-        fail2!("Package {} not found in any of \
+        fail!("Package {} not found in any of \
                     the following workspaces: {}",
                    pkgid.path.display(),
                    rust_path().map(|p| p.display().to_str()).to_str());
@@ -49,10 +52,6 @@ pub fn pkg_parent_workspaces(cx: &Context, pkgid: &PkgId) -> ~[Path] {
     else {
         rs
     }
-}
-
-pub fn is_workspace(p: &Path) -> bool {
-    os::path_is_dir(&p.join("src"))
 }
 
 /// Construct a workspace and package-ID name based on the current directory.

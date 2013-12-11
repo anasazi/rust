@@ -14,6 +14,7 @@ use middle::trans::base::*;
 use middle::trans::build::*;
 use middle::trans::callee;
 use middle::trans::common::*;
+use middle::trans::debuginfo;
 use middle::trans::expr;
 use middle::ty;
 use util::common::indenter;
@@ -46,11 +47,11 @@ pub fn trans_block(bcx: @mut Block, b: &ast::Block, dest: expr::Dest) -> @mut Bl
 
 pub fn trans_if(bcx: @mut Block,
             cond: &ast::Expr,
-            thn: &ast::Block,
+            thn: ast::P<ast::Block>,
             els: Option<@ast::Expr>,
             dest: expr::Dest)
          -> @mut Block {
-    debug2!("trans_if(bcx={}, cond={}, thn={:?}, dest={})",
+    debug!("trans_if(bcx={}, cond={}, thn={:?}, dest={})",
            bcx.to_str(), bcx.expr_to_str(cond), thn.id,
            dest.to_str(bcx.ccx()));
     let _indenter = indenter();
@@ -73,10 +74,11 @@ pub fn trans_if(bcx: @mut Block,
                 None => {}
             }
             // if true { .. } [else { .. }]
-            return do with_scope(bcx, thn.info(), "if_true_then") |bcx| {
+            return with_scope(bcx, thn.info(), "if_true_then", |bcx| {
                 let bcx_out = trans_block(bcx, thn, dest);
-                trans_block_cleanups(bcx_out, block_cleanups(bcx))
-            }
+                debuginfo::clear_source_location(bcx.fcx);
+                bcx_out
+            })
         } else {
             let mut trans = TransItemVisitor { ccx: bcx.fcx.ccx } ;
             trans.visit_block(thn, ());
@@ -84,10 +86,14 @@ pub fn trans_if(bcx: @mut Block,
             match els {
                 // if false { .. } else { .. }
                 Some(elexpr) => {
-                    return do with_scope(bcx, elexpr.info(), "if_false_then") |bcx| {
-                        let bcx_out = trans_if_else(bcx, elexpr, dest);
-                        trans_block_cleanups(bcx_out, block_cleanups(bcx))
-                    }
+                    return with_scope(bcx,
+                                      elexpr.info(),
+                                      "if_false_then",
+                                      |bcx| {
+                        let bcx_out = trans_if_else(bcx, elexpr, dest, false);
+                        debuginfo::clear_source_location(bcx.fcx);
+                        bcx_out
+                    })
                 }
                 // if false { .. }
                 None => return bcx,
@@ -98,6 +104,8 @@ pub fn trans_if(bcx: @mut Block,
     let then_bcx_in = scope_block(bcx, thn.info(), "then");
 
     let then_bcx_out = trans_block(then_bcx_in, thn, dest);
+
+    debuginfo::clear_source_location(bcx.fcx);
     let then_bcx_out = trans_block_cleanups(then_bcx_out,
                                             block_cleanups(then_bcx_in));
 
@@ -108,7 +116,7 @@ pub fn trans_if(bcx: @mut Block,
     let (else_bcx_in, next_bcx) = match els {
       Some(elexpr) => {
           let else_bcx_in = scope_block(bcx, elexpr.info(), "else");
-          let else_bcx_out = trans_if_else(else_bcx_in, elexpr, dest);
+          let else_bcx_out = trans_if_else(else_bcx_in, elexpr, dest, true);
           (else_bcx_in, join_blocks(bcx, [then_bcx_out, else_bcx_out]))
       }
       _ => {
@@ -119,27 +127,35 @@ pub fn trans_if(bcx: @mut Block,
       }
     };
 
-    debug2!("then_bcx_in={}, else_bcx_in={}",
+    debug!("then_bcx_in={}, else_bcx_in={}",
            then_bcx_in.to_str(), else_bcx_in.to_str());
 
+    // Clear the source location because it is still set to whatever has been translated
+    // right before.
+    debuginfo::clear_source_location(else_bcx_in.fcx);
     CondBr(bcx, cond_val, then_bcx_in.llbb, else_bcx_in.llbb);
     return next_bcx;
 
     // trans `else [ if { .. } ... | { .. } ]`
     fn trans_if_else(else_bcx_in: @mut Block, elexpr: @ast::Expr,
-                     dest: expr::Dest) -> @mut Block {
+                     dest: expr::Dest, cleanup: bool) -> @mut Block {
         let else_bcx_out = match elexpr.node {
             ast::ExprIf(_, _, _) => {
                 let elseif_blk = ast_util::block_from_expr(elexpr);
-                trans_block(else_bcx_in, &elseif_blk, dest)
+                trans_block(else_bcx_in, elseif_blk, dest)
             }
-            ast::ExprBlock(ref blk) => {
+            ast::ExprBlock(blk) => {
                 trans_block(else_bcx_in, blk, dest)
             }
             // would be nice to have a constraint on ifs
             _ => else_bcx_in.tcx().sess.bug("strange alternative in if")
         };
-        trans_block_cleanups(else_bcx_out, block_cleanups(else_bcx_in))
+        if cleanup {
+            debuginfo::clear_source_location(else_bcx_in.fcx);
+            trans_block_cleanups(else_bcx_out, block_cleanups(else_bcx_in))
+        } else {
+            else_bcx_out
+        }
     }
 }
 
@@ -226,7 +242,7 @@ pub fn trans_break_cont(bcx: @mut Block,
                 loop_break: Some(brk),
                 loop_label: l,
                 parent,
-                _
+                ..
             }) => {
                 // If we're looking for a labeled loop, check the label...
                 target = if to_end {

@@ -9,7 +9,7 @@
 // except according to those terms.
 
 use ast;
-use codemap::{BytePos, Pos, Span};
+use codemap::Span;
 use ext::base::ExtCtxt;
 use ext::base;
 use ext::build::AstBuilder;
@@ -80,7 +80,7 @@ pub mod rt {
         }
     }
 
-    impl<'self> ToSource for &'self [@ast::item] {
+    impl<'a> ToSource for &'a [@ast::item] {
         fn to_source(&self) -> @str {
             self.map(|i| i.to_source()).connect("\n\n").to_managed()
         }
@@ -92,7 +92,7 @@ pub mod rt {
         }
     }
 
-    impl<'self> ToSource for &'self [ast::Ty] {
+    impl<'a> ToSource for &'a [ast::Ty] {
         fn to_source(&self) -> @str {
             self.map(|i| i.to_source()).connect(", ").to_managed()
         }
@@ -116,31 +116,31 @@ pub mod rt {
         }
     }
 
-    impl<'self> ToSource for &'self str {
+    impl<'a> ToSource for &'a str {
         fn to_source(&self) -> @str {
             let lit = dummy_spanned(ast::lit_str(self.to_managed(), ast::CookedStr));
-            pprust::lit_to_str(@lit).to_managed()
+            pprust::lit_to_str(&lit).to_managed()
         }
     }
 
     impl ToSource for int {
         fn to_source(&self) -> @str {
             let lit = dummy_spanned(ast::lit_int(*self as i64, ast::ty_i));
-            pprust::lit_to_str(@lit).to_managed()
+            pprust::lit_to_str(&lit).to_managed()
         }
     }
 
     impl ToSource for i8 {
         fn to_source(&self) -> @str {
             let lit = dummy_spanned(ast::lit_int(*self as i64, ast::ty_i8));
-            pprust::lit_to_str(@lit).to_managed()
+            pprust::lit_to_str(&lit).to_managed()
         }
     }
 
     impl ToSource for i16 {
         fn to_source(&self) -> @str {
             let lit = dummy_spanned(ast::lit_int(*self as i64, ast::ty_i16));
-            pprust::lit_to_str(@lit).to_managed()
+            pprust::lit_to_str(&lit).to_managed()
         }
     }
 
@@ -148,49 +148,49 @@ pub mod rt {
     impl ToSource for i32 {
         fn to_source(&self) -> @str {
             let lit = dummy_spanned(ast::lit_int(*self as i64, ast::ty_i32));
-            pprust::lit_to_str(@lit).to_managed()
+            pprust::lit_to_str(&lit).to_managed()
         }
     }
 
     impl ToSource for i64 {
         fn to_source(&self) -> @str {
             let lit = dummy_spanned(ast::lit_int(*self as i64, ast::ty_i64));
-            pprust::lit_to_str(@lit).to_managed()
+            pprust::lit_to_str(&lit).to_managed()
         }
     }
 
     impl ToSource for uint {
         fn to_source(&self) -> @str {
             let lit = dummy_spanned(ast::lit_uint(*self as u64, ast::ty_u));
-            pprust::lit_to_str(@lit).to_managed()
+            pprust::lit_to_str(&lit).to_managed()
         }
     }
 
     impl ToSource for u8 {
         fn to_source(&self) -> @str {
             let lit = dummy_spanned(ast::lit_uint(*self as u64, ast::ty_u8));
-            pprust::lit_to_str(@lit).to_managed()
+            pprust::lit_to_str(&lit).to_managed()
         }
     }
 
     impl ToSource for u16 {
         fn to_source(&self) -> @str {
             let lit = dummy_spanned(ast::lit_uint(*self as u64, ast::ty_u16));
-            pprust::lit_to_str(@lit).to_managed()
+            pprust::lit_to_str(&lit).to_managed()
         }
     }
 
     impl ToSource for u32 {
         fn to_source(&self) -> @str {
             let lit = dummy_spanned(ast::lit_uint(*self as u64, ast::ty_u32));
-            pprust::lit_to_str(@lit).to_managed()
+            pprust::lit_to_str(&lit).to_managed()
         }
     }
 
     impl ToSource for u64 {
         fn to_source(&self) -> @str {
             let lit = dummy_spanned(ast::lit_uint(*self as u64, ast::ty_u64));
-            pprust::lit_to_str(@lit).to_managed()
+            pprust::lit_to_str(&lit).to_managed()
         }
     }
 
@@ -208,7 +208,7 @@ pub mod rt {
 
     macro_rules! impl_to_tokens_self(
         ($t:ty) => (
-            impl<'self> ToTokens for $t {
+            impl<'a> ToTokens for $t {
                 fn to_tokens(&self, cx: @ExtCtxt) -> ~[token_tree] {
                     cx.parse_tts(self.to_source())
                 }
@@ -218,13 +218,13 @@ pub mod rt {
 
     impl_to_tokens!(ast::Ident)
     impl_to_tokens!(@ast::item)
-    impl_to_tokens_self!(&'self [@ast::item])
+    impl_to_tokens_self!(&'a [@ast::item])
     impl_to_tokens!(ast::Ty)
-    impl_to_tokens_self!(&'self [ast::Ty])
+    impl_to_tokens_self!(&'a [ast::Ty])
     impl_to_tokens!(Generics)
     impl_to_tokens!(@ast::Expr)
     impl_to_tokens!(ast::Block)
-    impl_to_tokens_self!(&'self str)
+    impl_to_tokens_self!(&'a str)
     impl_to_tokens!(int)
     impl_to_tokens!(i8)
     impl_to_tokens!(i16)
@@ -255,8 +255,8 @@ pub mod rt {
             match res {
                 Some(ast) => ast,
                 None => {
-                    error2!("Parse error with ```\n{}\n```", s);
-                    fail2!()
+                    error!("Parse error with ```\n{}\n```", s);
+                    fail!()
                 }
             }
         }
@@ -355,12 +355,6 @@ fn mk_ident(cx: @ExtCtxt, sp: Span, ident: ast::Ident) -> @ast::Expr {
                         cx.expr_ident(sp, id_ext("ext_cx")),
                         id_ext("ident_of"),
                         ~[e_str])
-}
-
-fn mk_bytepos(cx: @ExtCtxt, sp: Span, bpos: BytePos) -> @ast::Expr {
-    let path = id_ext("BytePos");
-    let arg = cx.expr_uint(sp, bpos.to_uint());
-    cx.expr_call_ident(sp, path, ~[arg])
 }
 
 fn mk_binop(cx: @ExtCtxt, sp: Span, bop: token::binop) -> @ast::Expr {
@@ -490,7 +484,7 @@ fn mk_token(cx: @ExtCtxt, sp: Span, tok: &token::Token) -> @ast::Expr {
                                       ~[mk_ident(cx, sp, ident)]);
         }
 
-        INTERPOLATED(_) => fail2!("quote! with interpolated token"),
+        INTERPOLATED(_) => fail!("quote! with interpolated token"),
 
         _ => ()
     }
@@ -528,7 +522,7 @@ fn mk_token(cx: @ExtCtxt, sp: Span, tok: &token::Token) -> @ast::Expr {
         DOLLAR => "DOLLAR",
         UNDERSCORE => "UNDERSCORE",
         EOF => "EOF",
-        _ => fail2!()
+        _ => fail!()
     };
     cx.expr_ident(sp, id_ext(name))
 }
@@ -553,7 +547,7 @@ fn mk_tt(cx: @ExtCtxt, sp: Span, tt: &ast::token_tree)
         }
 
         ast::tt_delim(ref tts) => mk_tts(cx, sp, **tts),
-        ast::tt_seq(*) => fail2!("tt_seq in quote!"),
+        ast::tt_seq(..) => fail!("tt_seq in quote!"),
 
         ast::tt_nonterminal(sp, ident) => {
 

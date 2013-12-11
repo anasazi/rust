@@ -8,16 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-struct parameterized1<'self> {
-    g: &'self fn()
+struct parameterized1<'a> {
+    g: 'a ||
 }
 
 struct not_parameterized1 {
-    g: &'static fn()
+    g: 'static ||
 }
 
 struct not_parameterized2 {
-    g: &'static fn()
+    g: 'static ||
 }
 
 fn take1(p: parameterized1) -> parameterized1 { p }

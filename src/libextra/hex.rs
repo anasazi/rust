@@ -21,7 +21,7 @@ pub trait ToHex {
 
 static CHARS: &'static[u8] = bytes!("0123456789abcdef");
 
-impl<'self> ToHex for &'self [u8] {
+impl<'a> ToHex for &'a [u8] {
     /**
      * Turn a vector of `u8` bytes into a hexadecimal string.
      *
@@ -57,12 +57,12 @@ pub trait FromHex {
     fn from_hex(&self) -> Result<~[u8], ~str>;
 }
 
-impl<'self> FromHex for &'self str {
+impl<'a> FromHex for &'a str {
     /**
      * Convert any hexadecimal encoded string (literal, `@`, `&`, or `~`)
      * to the byte values it encodes.
      *
-     * You can use the `from_utf8` function in `std::str`
+     * You can use the `from_utf8_owned` function in `std::str`
      * to turn a `[u8]` into a string with characters corresponding to those
      * values.
      *
@@ -80,7 +80,7 @@ impl<'self> FromHex for &'self str {
      *     println!("{}", hello_str);
      *     let bytes = hello_str.from_hex().unwrap();
      *     println!("{:?}", bytes);
-     *     let result_str = str::from_utf8(bytes);
+     *     let result_str = str::from_utf8_owned(bytes);
      *     println!("{}", result_str);
      * }
      * ```
@@ -91,7 +91,7 @@ impl<'self> FromHex for &'self str {
         let mut modulus = 0;
         let mut buf = 0u8;
 
-        for (idx, byte) in self.byte_iter().enumerate() {
+        for (idx, byte) in self.bytes().enumerate() {
             buf <<= 4;
 
             match byte as char {
@@ -174,9 +174,9 @@ mod tests {
     pub fn bench_to_hex(bh: & mut BenchHarness) {
         let s = "イロハニホヘト チリヌルヲ ワカヨタレソ ツネナラム \
                  ウヰノオクヤマ ケフコエテ アサキユメミシ ヱヒモセスン";
-        do bh.iter {
+        bh.iter(|| {
             s.as_bytes().to_hex();
-        }
+        });
         bh.bytes = s.len() as u64;
     }
 
@@ -185,9 +185,9 @@ mod tests {
         let s = "イロハニホヘト チリヌルヲ ワカヨタレソ ツネナラム \
                  ウヰノオクヤマ ケフコエテ アサキユメミシ ヱヒモセスン";
         let b = s.as_bytes().to_hex();
-        do bh.iter {
+        bh.iter(|| {
             b.from_hex();
-        }
+        });
         bh.bytes = b.len() as u64;
     }
 }

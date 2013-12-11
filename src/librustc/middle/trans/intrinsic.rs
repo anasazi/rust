@@ -10,27 +10,22 @@
 
 #[allow(non_uppercase_pattern_statics)];
 
-use back::{abi};
+use back::abi;
 use lib::llvm::{SequentiallyConsistent, Acquire, Release, Xchg};
 use lib::llvm::{ValueRef, Pointer, Array, Struct};
 use lib;
 use middle::trans::base::*;
 use middle::trans::build::*;
-use middle::trans::callee::*;
 use middle::trans::common::*;
 use middle::trans::datum::*;
 use middle::trans::type_of::*;
 use middle::trans::type_of;
-use middle::trans::expr::Ignore;
 use middle::trans::machine;
 use middle::trans::glue;
-use middle::ty::FnSig;
 use middle::ty;
 use syntax::ast;
 use syntax::ast_map;
-use syntax::attr;
-use syntax::opt_vec;
-use util::ppaux::{ty_to_str};
+use util::ppaux::ty_to_str;
 use middle::trans::machine::llsize_of;
 use middle::trans::type_::Type;
 
@@ -39,9 +34,9 @@ pub fn trans_intrinsic(ccx: @mut CrateContext,
                        item: &ast::foreign_item,
                        path: ast_map::path,
                        substs: @param_substs,
-                       attributes: &[ast::Attribute],
+                       _attributes: &[ast::Attribute],
                        ref_id: Option<ast::NodeId>) {
-    debug2!("trans_intrinsic(item.ident={})", ccx.sess.str_of(item.ident));
+    debug!("trans_intrinsic(item.ident={})", ccx.sess.str_of(item.ident));
 
     fn simple_llvm_intrinsic(bcx: @mut Block, name: &'static str, num_args: uint) {
         assert!(num_args <= 4);
@@ -78,14 +73,24 @@ pub fn trans_intrinsic(ccx: @mut CrateContext,
         }
     }
 
-    fn memcpy_intrinsic(bcx: @mut Block, name: &'static str, tp_ty: ty::t, sizebits: u8) {
+    fn copy_intrinsic(bcx: @mut Block, allow_overlap: bool, tp_ty: ty::t) {
         let ccx = bcx.ccx();
         let lltp_ty = type_of::type_of(ccx, tp_ty);
         let align = C_i32(machine::llalign_of_min(ccx, lltp_ty) as i32);
-        let size = match sizebits {
-            32 => C_i32(machine::llsize_of_real(ccx, lltp_ty) as i32),
-            64 => C_i64(machine::llsize_of_real(ccx, lltp_ty) as i64),
-            _ => ccx.sess.fatal("Invalid value for sizebits")
+        let size = machine::llsize_of(ccx, lltp_ty);
+        let int_size = machine::llbitsize_of_real(ccx, ccx.int_type);
+        let name = if allow_overlap {
+            if int_size == 32 {
+                "llvm.memmove.p0i8.p0i8.i32"
+            } else {
+                "llvm.memmove.p0i8.p0i8.i64"
+            }
+        } else {
+            if int_size == 32 {
+                "llvm.memcpy.p0i8.p0i8.i32"
+            } else {
+                "llvm.memcpy.p0i8.p0i8.i64"
+            }
         };
 
         let decl = bcx.fcx.llfn;
@@ -99,14 +104,15 @@ pub fn trans_intrinsic(ccx: @mut CrateContext,
         RetVoid(bcx);
     }
 
-    fn memset_intrinsic(bcx: @mut Block, name: &'static str, tp_ty: ty::t, sizebits: u8) {
+    fn memset_intrinsic(bcx: @mut Block, tp_ty: ty::t) {
         let ccx = bcx.ccx();
         let lltp_ty = type_of::type_of(ccx, tp_ty);
         let align = C_i32(machine::llalign_of_min(ccx, lltp_ty) as i32);
-        let size = match sizebits {
-            32 => C_i32(machine::llsize_of_real(ccx, lltp_ty) as i32),
-            64 => C_i64(machine::llsize_of_real(ccx, lltp_ty) as i64),
-            _ => ccx.sess.fatal("Invalid value for sizebits")
+        let size = machine::llsize_of(ccx, lltp_ty);
+        let name = if machine::llbitsize_of_real(ccx, ccx.int_type) == 32 {
+            "llvm.memset.p0i8.i32"
+        } else {
+            "llvm.memset.p0i8.i64"
         };
 
         let decl = bcx.fcx.llfn;
@@ -142,11 +148,6 @@ pub fn trans_intrinsic(ccx: @mut CrateContext,
 
     set_always_inline(fcx.llfn);
 
-    // Set the fixed stack segment flag if necessary.
-    if attr::contains_name(attributes, "fixed_stack_segment") {
-        set_fixed_stack_segment(fcx.llfn);
-    }
-
     let mut bcx = fcx.entry_bcx.unwrap();
     let first_real_arg = fcx.arg_pos(0u);
 
@@ -156,7 +157,7 @@ pub fn trans_intrinsic(ccx: @mut CrateContext,
     // This requires that atomic intrinsics follow a specific naming pattern:
     // "atomic_<operation>[_<ordering>], and no ordering means SeqCst
     if name.starts_with("atomic_") {
-        let split : ~[&str] = name.split_iter('_').collect();
+        let split : ~[&str] = name.split('_').collect();
         assert!(split.len() >= 2, "Atomic intrinsic not correct format");
         let order = if split.len() == 2 {
             lib::llvm::SequentiallyConsistent
@@ -225,6 +226,11 @@ pub fn trans_intrinsic(ccx: @mut CrateContext,
         "abort" => {
             let llfn = bcx.ccx().intrinsics.get_copy(&("llvm.trap"));
             Call(bcx, llfn, [], []);
+            Unreachable(bcx);
+        }
+        "breakpoint" => {
+            let llfn = bcx.ccx().intrinsics.get_copy(&("llvm.debugtrap"));
+            Call(bcx, llfn, [], []);
             RetVoid(bcx);
         }
         "size_of" => {
@@ -278,6 +284,20 @@ pub fn trans_intrinsic(ccx: @mut CrateContext,
             let td = PointerCast(bcx, static_ti.tydesc, userland_tydesc_ty);
             Ret(bcx, td);
         }
+        "type_id" => {
+            let hash = ty::hash_crate_independent(ccx.tcx, substs.tys[0],
+                                                  ccx.link_meta.crate_hash);
+            // NB: This needs to be kept in lockstep with the TypeId struct in
+            //     libstd/unstable/intrinsics.rs
+            let val = C_named_struct(type_of::type_of(ccx, output_type), [C_u64(hash)]);
+            match bcx.fcx.llretptr {
+                Some(ptr) => {
+                    Store(bcx, val, ptr);
+                    RetVoid(bcx);
+                },
+                None => Ret(bcx, val)
+            }
+        }
         "init" => {
             let tp_ty = substs.tys[0];
             let lltp_ty = type_of::type_of(ccx, tp_ty);
@@ -311,7 +331,7 @@ pub fn trans_intrinsic(ccx: @mut CrateContext,
             if in_type_size != out_type_size {
                 let sp = match ccx.tcx.items.get_copy(&ref_id.unwrap()) {
                     ast_map::node_expr(e) => e.span,
-                    _ => fail2!("transmute has non-expr arg"),
+                    _ => fail!("transmute has non-expr arg"),
                 };
                 let pluralize = |n| if 1u == n { "" } else { "s" };
                 ccx.sess.span_fatal(sp,
@@ -375,9 +395,9 @@ pub fn trans_intrinsic(ccx: @mut CrateContext,
             let tp_ty = substs.tys[0];
             Ret(bcx, C_bool(ty::type_needs_drop(ccx.tcx, tp_ty)));
         }
-        "contains_managed" => {
+        "owns_managed" => {
             let tp_ty = substs.tys[0];
-            Ret(bcx, C_bool(ty::type_contents(ccx.tcx, tp_ty).contains_managed()));
+            Ret(bcx, C_bool(ty::type_contents(ccx.tcx, tp_ty).owns_managed()));
         }
         "visit_tydesc" => {
             let td = get_param(decl, first_real_arg);
@@ -385,33 +405,6 @@ pub fn trans_intrinsic(ccx: @mut CrateContext,
             let td = PointerCast(bcx, td, ccx.tydesc_type.ptr_to());
             glue::call_tydesc_glue_full(bcx, visitor, td,
                                         abi::tydesc_field_visit_glue, None);
-            RetVoid(bcx);
-        }
-        "frame_address" => {
-            let frameaddress = ccx.intrinsics.get_copy(& &"llvm.frameaddress");
-            let frameaddress_val = Call(bcx, frameaddress, [C_i32(0i32)], []);
-            let star_u8 = ty::mk_imm_ptr(
-                bcx.tcx(),
-                ty::mk_mach_uint(ast::ty_u8));
-            let fty = ty::mk_closure(bcx.tcx(), ty::ClosureTy {
-                purity: ast::impure_fn,
-                sigil: ast::BorrowedSigil,
-                onceness: ast::Many,
-                region: ty::re_bound(ty::br_anon(0)),
-                bounds: ty::EmptyBuiltinBounds(),
-                sig: FnSig {
-                    bound_lifetime_names: opt_vec::Empty,
-                    inputs: ~[ star_u8 ],
-                    output: ty::mk_nil()
-                }
-            });
-            let datum = Datum {val: get_param(decl, first_real_arg),
-                               mode: ByRef(ZeroMem), ty: fty};
-            let arg_vals = ~[frameaddress_val];
-            bcx = trans_call_inner(
-                bcx, None, fty, ty::mk_nil(),
-                |bcx| Callee {bcx: bcx, data: Closure(datum)},
-                ArgVals(arg_vals), Some(Ignore), DontAutorefArg).bcx;
             RetVoid(bcx);
         }
         "morestack_addr" => {
@@ -430,12 +423,9 @@ pub fn trans_intrinsic(ccx: @mut CrateContext,
             let lladdr = InBoundsGEP(bcx, ptr, [offset]);
             Ret(bcx, lladdr);
         }
-        "memcpy32" => memcpy_intrinsic(bcx, "llvm.memcpy.p0i8.p0i8.i32", substs.tys[0], 32),
-        "memcpy64" => memcpy_intrinsic(bcx, "llvm.memcpy.p0i8.p0i8.i64", substs.tys[0], 64),
-        "memmove32" => memcpy_intrinsic(bcx, "llvm.memmove.p0i8.p0i8.i32", substs.tys[0], 32),
-        "memmove64" => memcpy_intrinsic(bcx, "llvm.memmove.p0i8.p0i8.i64", substs.tys[0], 64),
-        "memset32" => memset_intrinsic(bcx, "llvm.memset.p0i8.i32", substs.tys[0], 32),
-        "memset64" => memset_intrinsic(bcx, "llvm.memset.p0i8.i64", substs.tys[0], 64),
+        "copy_nonoverlapping_memory" => copy_intrinsic(bcx, false, substs.tys[0]),
+        "copy_memory" => copy_intrinsic(bcx, true, substs.tys[0]),
+        "set_memory" => memset_intrinsic(bcx, substs.tys[0]),
         "sqrtf32" => simple_llvm_intrinsic(bcx, "llvm.sqrt.f32", 1),
         "sqrtf64" => simple_llvm_intrinsic(bcx, "llvm.sqrt.f64", 1),
         "powif32" => simple_llvm_intrinsic(bcx, "llvm.powi.f32", 2),
@@ -460,12 +450,20 @@ pub fn trans_intrinsic(ccx: @mut CrateContext,
         "fmaf64" => simple_llvm_intrinsic(bcx, "llvm.fma.f64", 3),
         "fabsf32" => simple_llvm_intrinsic(bcx, "llvm.fabs.f32", 1),
         "fabsf64" => simple_llvm_intrinsic(bcx, "llvm.fabs.f64", 1),
+        "copysignf32" => simple_llvm_intrinsic(bcx, "llvm.copysign.f32", 2),
+        "copysignf64" => simple_llvm_intrinsic(bcx, "llvm.copysign.f64", 2),
         "floorf32" => simple_llvm_intrinsic(bcx, "llvm.floor.f32", 1),
         "floorf64" => simple_llvm_intrinsic(bcx, "llvm.floor.f64", 1),
         "ceilf32" => simple_llvm_intrinsic(bcx, "llvm.ceil.f32", 1),
         "ceilf64" => simple_llvm_intrinsic(bcx, "llvm.ceil.f64", 1),
         "truncf32" => simple_llvm_intrinsic(bcx, "llvm.trunc.f32", 1),
         "truncf64" => simple_llvm_intrinsic(bcx, "llvm.trunc.f64", 1),
+        "rintf32" => simple_llvm_intrinsic(bcx, "llvm.rint.f32", 1),
+        "rintf64" => simple_llvm_intrinsic(bcx, "llvm.rint.f64", 1),
+        "nearbyintf32" => simple_llvm_intrinsic(bcx, "llvm.nearbyint.f32", 1),
+        "nearbyintf64" => simple_llvm_intrinsic(bcx, "llvm.nearbyint.f64", 1),
+        "roundf32" => simple_llvm_intrinsic(bcx, "llvm.round.f32", 1),
+        "roundf64" => simple_llvm_intrinsic(bcx, "llvm.round.f64", 1),
         "ctpop8" => simple_llvm_intrinsic(bcx, "llvm.ctpop.i8", 1),
         "ctpop16" => simple_llvm_intrinsic(bcx, "llvm.ctpop.i16", 1),
         "ctpop32" => simple_llvm_intrinsic(bcx, "llvm.ctpop.i32", 1),

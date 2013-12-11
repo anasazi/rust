@@ -25,12 +25,11 @@ use syntax::ast::*;
 use syntax::ast;
 use syntax::ast_util::{def_id_of_def, local_def, mtwt_resolve};
 use syntax::ast_util::{path_to_ident, walk_pat, trait_method_to_ty_method};
-use syntax::attr;
 use syntax::parse::token;
 use syntax::parse::token::{ident_interner, interner_get};
 use syntax::parse::token::special_idents;
 use syntax::print::pprust::path_to_str;
-use syntax::codemap::{Span, dummy_sp, BytePos};
+use syntax::codemap::{Span, dummy_sp, Pos};
 use syntax::opt_vec::OptVec;
 use syntax::visit;
 use syntax::visit::Visitor;
@@ -52,12 +51,6 @@ type BindingMap = HashMap<Name,binding_info>;
 
 // Trait method resolution
 pub type TraitMap = HashMap<NodeId,@mut ~[DefId]>;
-
-// A summary of the generics on a trait.
-struct TraitGenerics {
-    has_lifetime: bool,
-    type_parameter_count: uint,
-}
 
 // This is the replacement export map. It maps a module to all of the exports
 // within.
@@ -142,15 +135,9 @@ enum NameDefinition {
     ImportNameDefinition(Def, LastPrivate) //< The name identifies an import.
 }
 
-#[deriving(Eq)]
-enum Mutability {
-    Mutable,
-    Immutable
-}
-
 enum SelfBinding {
     NoSelfBinding,
-    HasSelfBinding(NodeId)
+    HasSelfBinding(NodeId, explicit_self)
 }
 
 impl Visitor<()> for Resolver {
@@ -160,7 +147,7 @@ impl Visitor<()> for Resolver {
     fn visit_arm(&mut self, arm:&Arm, _:()) {
         self.resolve_arm(arm);
     }
-    fn visit_block(&mut self, block:&Block, _:()) {
+    fn visit_block(&mut self, block:P<Block>, _:()) {
         self.resolve_block(block);
     }
     fn visit_expr(&mut self, expr:@Expr, _:()) {
@@ -193,17 +180,14 @@ enum ResolveResult<T> {
 }
 
 impl<T> ResolveResult<T> {
-    fn failed(&self) -> bool {
-        match *self { Failed => true, _ => false }
-    }
     fn indeterminate(&self) -> bool {
         match *self { Indeterminate => true, _ => false }
     }
 }
 
-enum TypeParameters<'self> {
+enum TypeParameters<'a> {
     NoTypeParameters,                   //< No type parameters.
-    HasTypeParameters(&'self Generics,  //< Type parameters.
+    HasTypeParameters(&'a Generics,  //< Type parameters.
                       NodeId,          //< ID of the enclosing item
 
                       // The index to start numbering the type parameters at.
@@ -252,19 +236,6 @@ enum RibKind {
 enum MethodSort {
     Required,
     Provided(NodeId)
-}
-
-// The X-ray flag indicates that a context has the X-ray privilege, which
-// allows it to reference private names. Currently, this is used for the test
-// runner.
-//
-// FIXME #4947: The X-ray flag is kind of questionable in the first
-// place. It might be better to introduce an expr_xray_path instead.
-
-#[deriving(Eq)]
-enum XrayFlag {
-    NoXray,     //< Private items cannot be accessed.
-    Xray        //< Private items can be accessed.
 }
 
 enum UseLexicalScopeFlag {
@@ -665,7 +636,7 @@ impl NameBindings {
     fn get_module(&mut self) -> @mut Module {
         match self.get_module_if_available() {
             None => {
-                fail2!("get_module called on a node with no module \
+                fail!("get_module called on a node with no module \
                        definition!")
             }
             Some(module_def) => module_def
@@ -831,7 +802,6 @@ fn Resolver(session: Session,
         type_ribs: @mut ~[],
         label_ribs: @mut ~[],
 
-        xray_context: NoXray,
         current_trait_refs: None,
 
         self_ident: special_idents::self_,
@@ -883,10 +853,6 @@ struct Resolver {
     // The current set of local scopes, for labels.
     label_ribs: @mut ~[@Rib],
 
-    // Whether the current context is an X-ray context. An X-ray context is
-    // allowed to access private names of any module.
-    xray_context: XrayFlag,
-
     // The trait that the current context can refer to.
     current_trait_refs: Option<~[DefId]>,
 
@@ -915,11 +881,11 @@ struct Resolver {
     used_imports: HashSet<NodeId>,
 }
 
-struct BuildReducedGraphVisitor<'self> {
-    resolver: &'self mut Resolver,
+struct BuildReducedGraphVisitor<'a> {
+    resolver: &'a mut Resolver,
 }
 
-impl<'self> Visitor<ReducedGraphParent> for BuildReducedGraphVisitor<'self> {
+impl<'a> Visitor<ReducedGraphParent> for BuildReducedGraphVisitor<'a> {
 
     fn visit_item(&mut self, item:@item, context:ReducedGraphParent) {
         let p = self.resolver.build_reduced_graph_for_item(item, context);
@@ -928,27 +894,28 @@ impl<'self> Visitor<ReducedGraphParent> for BuildReducedGraphVisitor<'self> {
 
     fn visit_foreign_item(&mut self, foreign_item: @foreign_item,
                           context:ReducedGraphParent) {
-        do self.resolver.build_reduced_graph_for_foreign_item(foreign_item,
-                                                              context) |r, c| {
+        self.resolver.build_reduced_graph_for_foreign_item(foreign_item,
+                                                           context,
+                                                           |r, c| {
             let mut v = BuildReducedGraphVisitor{ resolver: r };
             visit::walk_foreign_item(&mut v, foreign_item, c);
-        }
+        })
     }
 
     fn visit_view_item(&mut self, view_item:&view_item, context:ReducedGraphParent) {
         self.resolver.build_reduced_graph_for_view_item(view_item, context);
     }
 
-    fn visit_block(&mut self, block:&Block, context:ReducedGraphParent) {
+    fn visit_block(&mut self, block:P<Block>, context:ReducedGraphParent) {
         let np = self.resolver.build_reduced_graph_for_block(block, context);
         visit::walk_block(self, block, np);
     }
 
 }
 
-struct UnusedImportCheckVisitor<'self> { resolver: &'self Resolver }
+struct UnusedImportCheckVisitor<'a> { resolver: &'a Resolver }
 
-impl<'self> Visitor<()> for UnusedImportCheckVisitor<'self> {
+impl<'a> Visitor<()> for UnusedImportCheckVisitor<'a> {
     fn visit_view_item(&mut self, vi:&view_item, _:()) {
         self.resolver.check_for_item_unused_imports(vi);
         visit::walk_view_item(self, vi, ());
@@ -1167,7 +1134,7 @@ impl Resolver {
         let is_public = item.vis == ast::public;
 
         match item.node {
-            item_mod(*) => {
+            item_mod(..) => {
                 let (name_bindings, new_parent) =
                     self.add_child(ident, parent, ForbidDuplicateModules, sp);
 
@@ -1183,7 +1150,7 @@ impl Resolver {
                 ModuleReducedGraphParent(name_bindings.get_module())
             }
 
-            item_foreign_mod(*) => parent,
+            item_foreign_mod(..) => parent,
 
             // These items live in the value namespace.
             item_static(_, m, _) => {
@@ -1205,7 +1172,7 @@ impl Resolver {
             }
 
             // These items live in the type namespace.
-            item_ty(*) => {
+            item_ty(..) => {
                 let (name_bindings, _) =
                     self.add_child(ident, parent, ForbidDuplicateTypes, sp);
 
@@ -1221,7 +1188,7 @@ impl Resolver {
                 name_bindings.define_type
                     (DefTy(local_def(item.id)), sp, is_public);
 
-                for variant in (*enum_definition).variants.iter() {
+                for &variant in (*enum_definition).variants.iter() {
                     self.build_reduced_graph_for_variant(
                         variant,
                         local_def(item.id),
@@ -1246,11 +1213,11 @@ impl Resolver {
 
                 // If this is a newtype or unit-like struct, define a name
                 // in the value namespace as well
-                do ctor_id.while_some |cid| {
+                ctor_id.while_some(|cid| {
                     name_bindings.define_value(DefStruct(local_def(cid)), sp,
                                                is_public);
                     None
-                }
+                });
 
                 // Record the def ID of this struct.
                 self.structs.insert(local_def(item.id));
@@ -1258,7 +1225,7 @@ impl Resolver {
                 new_parent
             }
 
-            item_impl(_, None, ref ty, ref methods) => {
+            item_impl(_, None, ty, ref methods) => {
                 // If this implements an anonymous trait, then add all the
                 // methods within to a new module, if the type was defined
                 // within this module.
@@ -1268,11 +1235,8 @@ impl Resolver {
                 // the same module that declared the type.
 
                 // Create the module and add all methods.
-                match ty {
-                    &Ty {
-                        node: ty_path(ref path, _, _),
-                        _
-                    } if path.segments.len() == 1 => {
+                match ty.node {
+                    ty_path(ref path, _, _) if path.segments.len() == 1 => {
                         let name = path_to_ident(path);
 
                         let new_parent = match parent.children.find(&name.name) {
@@ -1294,11 +1258,16 @@ impl Resolver {
                                 let parent_link =
                                     self.get_parent_link(new_parent, ident);
                                 let def_id = local_def(item.id);
+                                let ns = TypeNS;
+                                let is_public =
+                                    !name_bindings.defined_in_namespace(ns) ||
+                                     name_bindings.defined_in_public_namespace(ns);
+
                                 name_bindings.define_module(parent_link,
                                                             Some(def_id),
                                                             ImplModuleKind,
                                                             false,
-                                                            true,
+                                                            is_public,
                                                             sp);
 
                                 ModuleReducedGraphParent(
@@ -1405,7 +1374,7 @@ impl Resolver {
                     }
                     match self.method_map.find_mut(name) {
                         Some(s) => { s.insert(def_id); },
-                        _ => fail2!("Can't happen"),
+                        _ => fail!("Can't happen"),
                     }
                 }
 
@@ -1413,8 +1382,8 @@ impl Resolver {
                 new_parent
             }
 
-            item_mac(*) => {
-                fail2!("item macros unimplemented")
+            item_mac(..) => {
+                fail!("item macros unimplemented")
             }
         }
     }
@@ -1557,10 +1526,10 @@ impl Resolver {
 
     /// Constructs the reduced graph for one foreign item.
     fn build_reduced_graph_for_foreign_item(&mut self,
-                                                foreign_item: @foreign_item,
-                                                parent: ReducedGraphParent,
-                                                f: &fn(&mut Resolver,
-                                                       ReducedGraphParent)) {
+                                            foreign_item: @foreign_item,
+                                            parent: ReducedGraphParent,
+                                            f: |&mut Resolver,
+                                                ReducedGraphParent|) {
         let name = foreign_item.ident;
         let is_public = foreign_item.vis == ast::public;
         let (name_bindings, new_parent) =
@@ -1572,12 +1541,12 @@ impl Resolver {
                 let def = DefFn(local_def(foreign_item.id), unsafe_fn);
                 name_bindings.define_value(def, foreign_item.span, is_public);
 
-                do self.with_type_parameter_rib(
-                    HasTypeParameters(
-                        generics, foreign_item.id, 0, NormalRibKind)) |this|
-                {
-                    f(this, new_parent)
-                }
+                self.with_type_parameter_rib(
+                    HasTypeParameters(generics,
+                                      foreign_item.id,
+                                      0,
+                                      NormalRibKind),
+                    |this| f(this, new_parent));
             }
             foreign_item_static(_, m) => {
                 let def = DefStatic(local_def(foreign_item.id), m);
@@ -1596,7 +1565,7 @@ impl Resolver {
         if self.block_needs_anonymous_module(block) {
             let block_id = block.id;
 
-            debug2!("(building reduced graph for block) creating a new \
+            debug!("(building reduced graph for block) creating a new \
                     anonymous module for block {}",
                    block_id);
 
@@ -1621,7 +1590,7 @@ impl Resolver {
                            final_ident: &str,
                            ident: Ident,
                            new_parent: ReducedGraphParent) {
-        debug2!("(building reduced graph for \
+        debug!("(building reduced graph for \
                 external crate) building external def, priv {:?}",
                vis);
         let is_public = vis == ast::public;
@@ -1640,13 +1609,13 @@ impl Resolver {
           DefMod(def_id) | DefForeignMod(def_id) | DefStruct(def_id) |
           DefTy(def_id) => {
             match child_name_bindings.type_def {
-              Some(TypeNsDef { module_def: Some(module_def), _ }) => {
-                debug2!("(building reduced graph for external crate) \
+              Some(TypeNsDef { module_def: Some(module_def), .. }) => {
+                debug!("(building reduced graph for external crate) \
                         already created module");
                 module_def.def_id = Some(def_id);
               }
               Some(_) | None => {
-                debug2!("(building reduced graph for \
+                debug!("(building reduced graph for \
                         external crate) building module \
                         {}", final_ident);
                 let parent_link = self.get_parent_link(new_parent, ident);
@@ -1666,7 +1635,7 @@ impl Resolver {
         match def {
           DefMod(_) | DefForeignMod(_) => {}
           DefVariant(_, variant_id, is_struct) => {
-            debug2!("(building reduced graph for external crate) building \
+            debug!("(building reduced graph for external crate) building \
                     variant {}",
                    final_ident);
             // We assume the parent is visible, or else we wouldn't have seen
@@ -1680,13 +1649,13 @@ impl Resolver {
                 child_name_bindings.define_value(def, dummy_sp(), is_public);
             }
           }
-          DefFn(*) | DefStaticMethod(*) | DefStatic(*) => {
-            debug2!("(building reduced graph for external \
+          DefFn(..) | DefStaticMethod(..) | DefStatic(..) => {
+            debug!("(building reduced graph for external \
                     crate) building value (fn/static) {}", final_ident);
             child_name_bindings.define_value(def, dummy_sp(), is_public);
           }
           DefTrait(def_id) => {
-              debug2!("(building reduced graph for external \
+              debug!("(building reduced graph for external \
                       crate) building type {}", final_ident);
 
               // If this is a trait, add all the method names
@@ -1700,7 +1669,7 @@ impl Resolver {
                       get_method_name_and_explicit_self(self.session.cstore,
                                                         method_def_id);
 
-                  debug2!("(building reduced graph for \
+                  debug!("(building reduced graph for \
                           external crate) ... adding \
                           trait method '{}'",
                          self.session.str_of(method_name));
@@ -1719,7 +1688,7 @@ impl Resolver {
                   }
                   match self.method_map.find_mut(name) {
                       Some(s) => { s.insert(def_id); },
-                      _ => fail2!("Can't happen"),
+                      _ => fail!("Can't happen"),
                   }
               }
 
@@ -1735,13 +1704,13 @@ impl Resolver {
                                                   dummy_sp())
           }
           DefTy(_) => {
-              debug2!("(building reduced graph for external \
+              debug!("(building reduced graph for external \
                       crate) building type {}", final_ident);
 
               child_name_bindings.define_type(def, dummy_sp(), is_public);
           }
           DefStruct(def_id) => {
-            debug2!("(building reduced graph for external \
+            debug!("(building reduced graph for external \
                     crate) building type and value for {}",
                    final_ident);
             child_name_bindings.define_type(def, dummy_sp(), is_public);
@@ -1750,16 +1719,16 @@ impl Resolver {
             }
             self.structs.insert(def_id);
           }
-          DefMethod(*) => {
-              debug2!("(building reduced graph for external crate) \
+          DefMethod(..) => {
+              debug!("(building reduced graph for external crate) \
                       ignoring {:?}", def);
               // Ignored; handled elsewhere.
           }
-          DefSelf(*) | DefArg(*) | DefLocal(*) |
-          DefPrimTy(*) | DefTyParam(*) | DefBinding(*) |
-          DefUse(*) | DefUpvar(*) | DefRegion(*) |
-          DefTyParamBinder(*) | DefLabel(*) | DefSelfTy(*) => {
-            fail2!("didn't expect `{:?}`", def);
+          DefSelf(..) | DefArg(..) | DefLocal(..) |
+          DefPrimTy(..) | DefTyParam(..) | DefBinding(..) |
+          DefUse(..) | DefUpvar(..) | DefRegion(..) |
+          DefTyParamBinder(..) | DefLabel(..) | DefSelfTy(..) => {
+            fail!("didn't expect `{:?}`", def);
           }
         }
     }
@@ -1777,15 +1746,17 @@ impl Resolver {
                     DefForeignMod(def_id) => {
                         // Foreign modules have no names. Recur and populate
                         // eagerly.
-                        do csearch::each_child_of_item(self.session.cstore,
-                                                       def_id)
-                                |def_like, child_ident, vis| {
+                        csearch::each_child_of_item(self.session.cstore,
+                                                    def_id,
+                                                    |def_like,
+                                                     child_ident,
+                                                     vis| {
                             self.build_reduced_graph_for_external_crate_def(
                                 root,
                                 def_like,
                                 child_ident,
                                 vis)
-                        }
+                        });
                     }
                     _ => {
                         let (child_name_bindings, new_parent) =
@@ -1814,7 +1785,7 @@ impl Resolver {
                         match static_methods_opt {
                             Some(ref static_methods) if
                                 static_methods.len() >= 1 => {
-                                debug2!("(building reduced graph for \
+                                debug!("(building reduced graph for \
                                         external crate) processing \
                                         static methods for type name {}",
                                         self.session.str_of(
@@ -1833,7 +1804,7 @@ impl Resolver {
                                 match child_name_bindings.type_def {
                                     Some(TypeNsDef {
                                         module_def: Some(module_def),
-                                        _
+                                        ..
                                     }) => {
                                         // We already have a module. This
                                         // is OK.
@@ -1866,7 +1837,7 @@ impl Resolver {
                                 for static_method_info in
                                         static_methods.iter() {
                                     let ident = static_method_info.ident;
-                                    debug2!("(building reduced graph for \
+                                    debug!("(building reduced graph for \
                                              external crate) creating \
                                              static method '{}'",
                                            self.session.str_of(ident));
@@ -1893,7 +1864,7 @@ impl Resolver {
                 }
             }
             DlField => {
-                debug2!("(building reduced graph for external crate) \
+                debug!("(building reduced graph for external crate) \
                         ignoring field");
             }
         }
@@ -1901,26 +1872,27 @@ impl Resolver {
 
     /// Builds the reduced graph rooted at the given external module.
     fn populate_external_module(&mut self, module: @mut Module) {
-        debug2!("(populating external module) attempting to populate {}",
+        debug!("(populating external module) attempting to populate {}",
                self.module_to_str(module));
 
         let def_id = match module.def_id {
             None => {
-                debug2!("(populating external module) ... no def ID!");
+                debug!("(populating external module) ... no def ID!");
                 return
             }
             Some(def_id) => def_id,
         };
 
-        do csearch::each_child_of_item(self.session.cstore, def_id)
-                |def_like, child_ident, visibility| {
-            debug2!("(populating external module) ... found ident: {}",
+        csearch::each_child_of_item(self.session.cstore,
+                                    def_id,
+                                    |def_like, child_ident, visibility| {
+            debug!("(populating external module) ... found ident: {}",
                    token::ident_to_str(&child_ident));
             self.build_reduced_graph_for_external_crate_def(module,
                                                             def_like,
                                                             child_ident,
                                                             visibility)
-        }
+        });
         module.populated = true
     }
 
@@ -1937,14 +1909,14 @@ impl Resolver {
     /// crate.
     fn build_reduced_graph_for_external_crate(&mut self,
                                               root: @mut Module) {
-        do csearch::each_top_level_item_of_crate(self.session.cstore,
-                                                 root.def_id.unwrap().crate)
-                |def_like, ident, visibility| {
+        csearch::each_top_level_item_of_crate(self.session.cstore,
+                                              root.def_id.unwrap().crate,
+                                              |def_like, ident, visibility| {
             self.build_reduced_graph_for_external_crate_def(root,
                                                             def_like,
                                                             ident,
                                                             visibility)
-        }
+        });
     }
 
     /// Creates and adds an import directive to the given module.
@@ -1965,14 +1937,14 @@ impl Resolver {
 
         match *subclass {
             SingleImport(target, _) => {
-                debug2!("(building import directive) building import \
+                debug!("(building import directive) building import \
                         directive: {}::{}",
                        self.idents_to_str(directive.module_path),
                        self.session.str_of(target));
 
                 match module_.import_resolutions.find(&target.name) {
                     Some(&resolution) => {
-                        debug2!("(building import directive) bumping \
+                        debug!("(building import directive) bumping \
                                 reference");
                         resolution.outstanding_references += 1;
 
@@ -1981,7 +1953,7 @@ impl Resolver {
                         resolution.value_id = id;
                     }
                     None => {
-                        debug2!("(building import directive) creating new");
+                        debug!("(building import directive) creating new");
                         let resolution = @mut ImportResolution::new(id, is_public);
                         resolution.outstanding_references = 1;
                         module_.import_resolutions.insert(target.name, resolution);
@@ -2013,14 +1985,14 @@ impl Resolver {
         let mut i = 0;
         let mut prev_unresolved_imports = 0;
         loop {
-            debug2!("(resolving imports) iteration {}, {} imports left",
+            debug!("(resolving imports) iteration {}, {} imports left",
                    i, self.unresolved_imports);
 
             let module_root = self.graph_root.get_module();
             self.resolve_imports_for_module_subtree(module_root);
 
             if self.unresolved_imports == 0 {
-                debug2!("(resolving imports) success");
+                debug!("(resolving imports) success");
                 break;
             }
 
@@ -2038,7 +2010,7 @@ impl Resolver {
     /// submodules.
     fn resolve_imports_for_module_subtree(&mut self,
                                               module_: @mut Module) {
-        debug2!("(resolving imports for module subtree) resolving {}",
+        debug!("(resolving imports for module subtree) resolving {}",
                self.module_to_str(module_));
         self.resolve_imports_for_module(module_);
 
@@ -2062,7 +2034,7 @@ impl Resolver {
     /// Attempts to resolve imports for the given module only.
     fn resolve_imports_for_module(&mut self, module: @mut Module) {
         if module.all_imports_resolved() {
-            debug2!("(resolving imports for module) all imports resolved for \
+            debug!("(resolving imports for module) all imports resolved for \
                    {}",
                    self.module_to_str(module));
             return;
@@ -2151,7 +2123,7 @@ impl Resolver {
         let mut resolution_result = Failed;
         let module_path = &import_directive.module_path;
 
-        debug2!("(resolving import for module) resolving import `{}::...` in \
+        debug!("(resolving import for module) resolving import `{}::...` in \
                 `{}`",
                self.idents_to_str(*module_path),
                self.module_to_str(module_));
@@ -2226,7 +2198,7 @@ impl Resolver {
                     assert!(module_.glob_count >= 1);
                     module_.glob_count -= 1;
                 }
-                SingleImport(*) => {
+                SingleImport(..) => {
                     // Ignore.
                 }
             }
@@ -2256,7 +2228,7 @@ impl Resolver {
                              directive: &ImportDirective,
                              lp: LastPrivate)
                                  -> ResolveResult<()> {
-        debug2!("(resolving single import) resolving `{}` = `{}::{}` from \
+        debug!("(resolving single import) resolving `{}` = `{}::{}` from \
                 `{}` id {}, last private {:?}",
                self.session.str_of(target),
                self.module_to_str(containing_module),
@@ -2293,14 +2265,14 @@ impl Resolver {
         // search imports as well.
         let mut used_reexport = false;
         match (value_result, type_result) {
-            (BoundResult(*), BoundResult(*)) => {} // Continue.
+            (BoundResult(..), BoundResult(..)) => {} // Continue.
             _ => {
                 // If there is an unresolved glob at this point in the
                 // containing module, bail out. We don't know enough to be
                 // able to resolve this import.
 
                 if containing_module.glob_count > 0 {
-                    debug2!("(resolving single import) unresolved glob; \
+                    debug!("(resolving single import) unresolved glob; \
                             bailing out");
                     return Indeterminate;
                 }
@@ -2368,7 +2340,7 @@ impl Resolver {
                     }
                     Some(_) => {
                         // The import is unresolved. Bail out.
-                        debug2!("(resolving single import) unresolved import; \
+                        debug!("(resolving single import) unresolved import; \
                                 bailing out");
                         return Indeterminate;
                     }
@@ -2380,7 +2352,7 @@ impl Resolver {
         // external modules.
         let mut used_public = false;
         match type_result {
-            BoundResult(*) => {}
+            BoundResult(..) => {}
             _ => {
                 match containing_module.external_module_children
                                        .find(&source.name) {
@@ -2403,7 +2375,7 @@ impl Resolver {
 
         match value_result {
             BoundResult(target_module, name_bindings) => {
-                debug2!("(resolving single import) found value target");
+                debug!("(resolving single import) found value target");
                 import_resolution.value_target =
                     Some(Target::new(target_module, name_bindings));
                 import_resolution.value_id = directive.id;
@@ -2411,12 +2383,12 @@ impl Resolver {
             }
             UnboundResult => { /* Continue. */ }
             UnknownResult => {
-                fail2!("value result should be known at this point");
+                fail!("value result should be known at this point");
             }
         }
         match type_result {
             BoundResult(target_module, name_bindings) => {
-                debug2!("(resolving single import) found type target: {:?}",
+                debug!("(resolving single import) found type target: {:?}",
                         name_bindings.type_def.unwrap().type_def);
                 import_resolution.type_target =
                     Some(Target::new(target_module, name_bindings));
@@ -2425,7 +2397,7 @@ impl Resolver {
             }
             UnboundResult => { /* Continue. */ }
             UnknownResult => {
-                fail2!("type result should be known at this point");
+                fail!("type result should be known at this point");
             }
         }
 
@@ -2467,7 +2439,7 @@ impl Resolver {
             None => {}
         }
 
-        debug2!("(resolving single import) successfully resolved import");
+        debug!("(resolving single import) successfully resolved import");
         return Success(());
     }
 
@@ -2484,12 +2456,12 @@ impl Resolver {
         // This function works in a highly imperative manner; it eagerly adds
         // everything it can to the list of import resolutions of the module
         // node.
-        debug2!("(resolving glob import) resolving glob import {}", id);
+        debug!("(resolving glob import) resolving glob import {}", id);
 
         // We must bail out if the node has unresolved imports of any kind
         // (including globs).
         if !(*containing_module).all_imports_resolved() {
-            debug2!("(resolving glob import) target module has unresolved \
+            debug!("(resolving glob import) target module has unresolved \
                     imports; bailing out");
             return Indeterminate;
         }
@@ -2499,13 +2471,13 @@ impl Resolver {
         // Add all resolved imports from the containing module.
         for (ident, target_import_resolution) in containing_module.import_resolutions.iter() {
 
-            debug2!("(resolving glob import) writing module resolution \
+            debug!("(resolving glob import) writing module resolution \
                     {:?} into `{}`",
                    target_import_resolution.type_target.is_none(),
                    self.module_to_str(module_));
 
             if !target_import_resolution.is_public {
-                debug2!("(resolving glob import) nevermind, just kidding");
+                debug!("(resolving glob import) nevermind, just kidding");
                 continue
             }
 
@@ -2566,7 +2538,7 @@ impl Resolver {
                 }
             }
 
-            debug2!("(resolving glob import) writing resolution `{}` in `{}` \
+            debug!("(resolving glob import) writing resolution `{}` in `{}` \
                     to `{}`",
                    interner_get(name),
                    self.module_to_str(containing_module),
@@ -2574,13 +2546,13 @@ impl Resolver {
 
             // Merge the child item into the import resolution.
             if name_bindings.defined_in_public_namespace(ValueNS) {
-                debug2!("(resolving glob import) ... for value target");
+                debug!("(resolving glob import) ... for value target");
                 dest_import_resolution.value_target =
                     Some(Target::new(containing_module, name_bindings));
                 dest_import_resolution.value_id = id;
             }
             if name_bindings.defined_in_public_namespace(TypeNS) {
-                debug2!("(resolving glob import) ... for type target");
+                debug!("(resolving glob import) ... for type target");
                 dest_import_resolution.type_target =
                     Some(Target::new(containing_module, name_bindings));
                 dest_import_resolution.type_id = id;
@@ -2610,7 +2582,7 @@ impl Resolver {
             None => {}
         }
 
-        debug2!("(resolving glob import) successfully resolved import");
+        debug!("(resolving glob import) successfully resolved import");
         return Success(());
     }
 
@@ -2643,7 +2615,7 @@ impl Resolver {
                     if "???" == module_name {
                         let span = Span {
                             lo: span.lo,
-                            hi: span.lo + BytePos(segment_name.len()),
+                            hi: span.lo + Pos::from_uint(segment_name.len()),
                             expn_info: span.expn_info,
                         };
                         self.resolve_error(span,
@@ -2658,7 +2630,7 @@ impl Resolver {
                     return Failed;
                 }
                 Indeterminate => {
-                    debug2!("(resolving module path for import) module \
+                    debug!("(resolving module path for import) module \
                             resolution is indeterminate: {}",
                             self.session.str_of(name));
                     return Indeterminate;
@@ -2747,7 +2719,7 @@ impl Resolver {
         let module_path_len = module_path.len();
         assert!(module_path_len > 0);
 
-        debug2!("(resolving module path for import) processing `{}` rooted at \
+        debug!("(resolving module path for import) processing `{}` rooted at \
                `{}`",
                self.idents_to_str(module_path),
                self.module_to_str(module_));
@@ -2776,7 +2748,7 @@ impl Resolver {
                 return Failed;
             }
             Indeterminate => {
-                debug2!("(resolving module path for import) indeterminate; \
+                debug!("(resolving module path for import) indeterminate; \
                         bailing");
                 return Indeterminate;
             }
@@ -2805,7 +2777,7 @@ impl Resolver {
                                 return Failed;
                             }
                             Indeterminate => {
-                                debug2!("(resolving module path for import) \
+                                debug!("(resolving module path for import) \
                                         indeterminate; bailing");
                                 return Indeterminate;
                             }
@@ -2842,7 +2814,7 @@ impl Resolver {
                                      search_through_modules:
                                      SearchThroughModulesFlag)
                                     -> ResolveResult<(Target, bool)> {
-        debug2!("(resolving item in lexical scope) resolving `{}` in \
+        debug!("(resolving item in lexical scope) resolving `{}` in \
                 namespace {:?} in `{}`",
                self.session.str_of(name),
                namespace,
@@ -2854,7 +2826,7 @@ impl Resolver {
         match module_.children.find(&name.name) {
             Some(name_bindings)
                     if name_bindings.defined_in_namespace(namespace) => {
-                debug2!("top name bindings succeeded");
+                debug!("top name bindings succeeded");
                 return Success((Target::new(module_, *name_bindings), false));
             }
             Some(_) | None => { /* Not found; continue. */ }
@@ -2872,12 +2844,12 @@ impl Resolver {
                 match (*import_resolution).target_for_namespace(namespace) {
                     None => {
                         // Not found; continue.
-                        debug2!("(resolving item in lexical scope) found \
+                        debug!("(resolving item in lexical scope) found \
                                 import resolution, but not in namespace {:?}",
                                namespace);
                     }
                     Some(target) => {
-                        debug2!("(resolving item in lexical scope) using \
+                        debug!("(resolving item in lexical scope) using \
                                 import resolution");
                         self.used_imports.insert(import_resolution.id(namespace));
                         return Success((target, false));
@@ -2894,7 +2866,7 @@ impl Resolver {
                     let name_bindings =
                         @mut Resolver::create_name_bindings_from_module(
                             *module);
-                    debug2!("lower name bindings succeeded");
+                    debug!("lower name bindings succeeded");
                     return Success((Target::new(module_, name_bindings), false));
                 }
             }
@@ -2907,7 +2879,7 @@ impl Resolver {
             match search_module.parent_link {
                 NoParentLink => {
                     // No more parents. This module was unresolved.
-                    debug2!("(resolving item in lexical scope) unresolved \
+                    debug!("(resolving item in lexical scope) unresolved \
                             module");
                     return Failed;
                 }
@@ -2917,7 +2889,7 @@ impl Resolver {
                             match search_module.kind {
                                 NormalModuleKind => {
                                     // We stop the search here.
-                                    debug2!("(resolving item in lexical \
+                                    debug!("(resolving item in lexical \
                                             scope) unresolved module: not \
                                             searching through module \
                                             parents");
@@ -2953,13 +2925,13 @@ impl Resolver {
                     // We couldn't see through the higher scope because of an
                     // unresolved import higher up. Bail.
 
-                    debug2!("(resolving item in lexical scope) indeterminate \
+                    debug!("(resolving item in lexical scope) indeterminate \
                             higher scope; bailing");
                     return Indeterminate;
                 }
                 Success((target, used_reexport)) => {
                     // We found the module.
-                    debug2!("(resolving item in lexical scope) found name \
+                    debug!("(resolving item in lexical scope) found name \
                             in module, done");
                     return Success((target, used_reexport));
                 }
@@ -2983,7 +2955,7 @@ impl Resolver {
                     Some(ref type_def) => {
                         match (*type_def).module_def {
                             None => {
-                                error2!("!!! (resolving module in lexical \
+                                error!("!!! (resolving module in lexical \
                                         scope) module wasn't actually a \
                                         module!");
                                 return Failed;
@@ -2994,19 +2966,19 @@ impl Resolver {
                         }
                     }
                     None => {
-                        error2!("!!! (resolving module in lexical scope) module
+                        error!("!!! (resolving module in lexical scope) module
                                 wasn't actually a module!");
                         return Failed;
                     }
                 }
             }
             Indeterminate => {
-                debug2!("(resolving module in lexical scope) indeterminate; \
+                debug!("(resolving module in lexical scope) indeterminate; \
                         bailing");
                 return Indeterminate;
             }
             Failed => {
-                debug2!("(resolving module in lexical scope) failed to \
+                debug!("(resolving module in lexical scope) failed to \
                         resolve");
                 return Failed;
             }
@@ -3079,7 +3051,7 @@ impl Resolver {
         // Now loop through all the `super`s we find.
         while i < module_path.len() &&
                 "super" == token::ident_to_str(&module_path[i]) {
-            debug2!("(resolving module prefix) resolving `super` at {}",
+            debug!("(resolving module prefix) resolving `super` at {}",
                    self.module_to_str(containing_module));
             match self.get_nearest_normal_module_parent(containing_module) {
                 None => return Failed,
@@ -3090,7 +3062,7 @@ impl Resolver {
             }
         }
 
-        debug2!("(resolving module prefix) finished resolving prefix at {}",
+        debug!("(resolving module prefix) finished resolving prefix at {}",
                self.module_to_str(containing_module));
 
         return Success(PrefixFound(containing_module, i));
@@ -3108,7 +3080,7 @@ impl Resolver {
                               namespace: Namespace,
                               name_search_type: NameSearchType)
                               -> ResolveResult<(Target, bool)> {
-        debug2!("(resolving name in module) resolving `{}` in `{}`",
+        debug!("(resolving name in module) resolving `{}` in `{}`",
                self.session.str_of(name),
                self.module_to_str(module_));
 
@@ -3117,7 +3089,7 @@ impl Resolver {
         match module_.children.find(&name.name) {
             Some(name_bindings)
                     if name_bindings.defined_in_namespace(namespace) => {
-                debug2!("(resolving name in module) found node as child");
+                debug!("(resolving name in module) found node as child");
                 return Success((Target::new(module_, *name_bindings), false));
             }
             Some(_) | None => {
@@ -3138,18 +3110,18 @@ impl Resolver {
             Some(import_resolution) => {
                 if import_resolution.is_public &&
                         import_resolution.outstanding_references != 0 {
-                    debug2!("(resolving name in module) import \
+                    debug!("(resolving name in module) import \
                            unresolved; bailing out");
                     return Indeterminate;
                 }
                 match import_resolution.target_for_namespace(namespace) {
                     None => {
-                        debug2!("(resolving name in module) name found, \
+                        debug!("(resolving name in module) name found, \
                                 but not in namespace {:?}",
                                namespace);
                     }
                     Some(target) => {
-                        debug2!("(resolving name in module) resolved to \
+                        debug!("(resolving name in module) resolved to \
                                 import");
                         self.used_imports.insert(import_resolution.id(namespace));
                         return Success((target, true));
@@ -3173,7 +3145,7 @@ impl Resolver {
         }
 
         // We're out of luck.
-        debug2!("(resolving name in module) failed to resolve `{}`",
+        debug!("(resolving name in module) failed to resolve `{}`",
                self.session.str_of(name));
         return Failed;
     }
@@ -3233,19 +3205,19 @@ impl Resolver {
         match module_.def_id {
             Some(def_id) if def_id.crate == LOCAL_CRATE => {
                 // OK. Continue.
-                debug2!("(recording exports for module subtree) recording \
+                debug!("(recording exports for module subtree) recording \
                         exports for local module `{}`",
                        self.module_to_str(module_));
             }
             None => {
                 // Record exports for the root module.
-                debug2!("(recording exports for module subtree) recording \
+                debug!("(recording exports for module subtree) recording \
                         exports for root module `{}`",
                        self.module_to_str(module_));
             }
             Some(_) => {
                 // Bail out.
-                debug2!("(recording exports for module subtree) not recording \
+                debug!("(recording exports for module subtree) not recording \
                         exports for `{}`",
                        self.module_to_str(module_));
                 return;
@@ -3278,7 +3250,7 @@ impl Resolver {
         match module_.def_id {
             Some(def_id) => {
                 self.export_map2.insert(def_id.node, exports2);
-                debug2!("(computing exports) writing exports for {} (some)",
+                debug!("(computing exports) writing exports for {} (some)",
                        def_id.node);
             }
             None => {}
@@ -3293,7 +3265,7 @@ impl Resolver {
                                    reexport: bool) {
         match namebindings.def_for_namespace(ns) {
             Some(d) => {
-                debug2!("(computing exports) YES: {} '{}' => {:?}",
+                debug!("(computing exports) YES: {} '{}' => {:?}",
                        if reexport { ~"reexport" } else { ~"export"},
                        interner_get(name),
                        def_id_of_def(d));
@@ -3304,7 +3276,7 @@ impl Resolver {
                 });
             }
             d_opt => {
-                debug2!("(computing reexports) NO: {:?}", d_opt);
+                debug!("(computing reexports) NO: {:?}", d_opt);
             }
         }
     }
@@ -3318,7 +3290,7 @@ impl Resolver {
             for &ns in xs.iter() {
                 match importresolution.target_for_namespace(ns) {
                     Some(target) => {
-                        debug2!("(computing exports) maybe reexport '{}'",
+                        debug!("(computing exports) maybe reexport '{}'",
                                interner_get(*name));
                         self.add_exports_of_namebindings(exports2,
                                                          *name,
@@ -3350,7 +3322,7 @@ impl Resolver {
     // generate a fake "implementation scope" containing all the
     // implementations thus found, for compatibility with old resolve pass.
 
-    fn with_scope(&mut self, name: Option<Ident>, f: &fn(&mut Resolver)) {
+    fn with_scope(&mut self, name: Option<Ident>, f: |&mut Resolver|) {
         let orig_module = self.current_module;
 
         // Move down in the graph.
@@ -3362,14 +3334,14 @@ impl Resolver {
                 self.populate_module_if_necessary(orig_module);
                 match orig_module.children.find(&name.name) {
                     None => {
-                        debug2!("!!! (with scope) didn't find `{}` in `{}`",
+                        debug!("!!! (with scope) didn't find `{}` in `{}`",
                                self.session.str_of(name),
                                self.module_to_str(orig_module));
                     }
                     Some(name_bindings) => {
                         match (*name_bindings).get_module_if_available() {
                             None => {
-                                debug2!("!!! (with scope) didn't find module \
+                                debug!("!!! (with scope) didn't find module \
                                         for `{}` in `{}`",
                                        self.session.str_of(name),
                                        self.module_to_str(orig_module));
@@ -3401,16 +3373,16 @@ impl Resolver {
         let is_ty_param;
 
         match def_like {
-            DlDef(d @ DefLocal(*)) | DlDef(d @ DefUpvar(*)) |
-            DlDef(d @ DefArg(*)) | DlDef(d @ DefBinding(*)) => {
+            DlDef(d @ DefLocal(..)) | DlDef(d @ DefUpvar(..)) |
+            DlDef(d @ DefArg(..)) | DlDef(d @ DefBinding(..)) => {
                 def = d;
                 is_ty_param = false;
             }
-            DlDef(d @ DefTyParam(*)) => {
+            DlDef(d @ DefTyParam(..)) => {
                 def = d;
                 is_ty_param = true;
             }
-            DlDef(d @ DefSelf(*))
+            DlDef(d @ DefSelf(..))
                     if allow_capturing_self == DontAllowCapturingSelf => {
                 def = d;
                 is_ty_param = false;
@@ -3488,10 +3460,17 @@ impl Resolver {
                     return None;
                 }
                 ConstantItemRibKind => {
-                    // Still doesn't deal with upvars
-                    self.resolve_error(span,
-                                          "attempt to use a non-constant \
-                                           value in a constant");
+                    if is_ty_param {
+                        // see #9186
+                        self.resolve_error(span,
+                                              "cannot use an outer type \
+                                               parameter in this context");
+                    } else {
+                        // Still doesn't deal with upvars
+                        self.resolve_error(span,
+                                              "attempt to use a non-constant \
+                                               value in a constant");
+                    }
 
                 }
             }
@@ -3529,21 +3508,14 @@ impl Resolver {
     }
 
     fn resolve_crate(&mut self, crate: &ast::Crate) {
-        debug2!("(resolving crate) starting");
+        debug!("(resolving crate) starting");
 
         visit::walk_crate(self, crate, ());
     }
 
     fn resolve_item(&mut self, item: @item) {
-        debug2!("(resolving item) resolving {}",
+        debug!("(resolving item) resolving {}",
                self.session.str_of(item.ident));
-
-        // Items with the !resolve_unexported attribute are X-ray contexts.
-        // This is used to allow the test runner to run unexported tests.
-        let orig_xray_flag = self.xray_context;
-        if attr::contains_name(item.attrs, "!resolve_unexported") {
-            self.xray_context = Xray;
-        }
 
         match item.node {
 
@@ -3563,25 +3535,28 @@ impl Resolver {
                 // n.b. the discr expr gets visted twice.
                 // but maybe it's okay since the first time will signal an
                 // error if there is one? -- tjc
-                do self.with_type_parameter_rib(
-                    HasTypeParameters(
-                        generics, item.id, 0, NormalRibKind)) |this| {
+                self.with_type_parameter_rib(HasTypeParameters(generics,
+                                                               item.id,
+                                                               0,
+                                                               NormalRibKind),
+                                             |this| {
                     visit::walk_item(this, item, ());
-                }
+                });
             }
 
             item_ty(_, ref generics) => {
-                do self.with_type_parameter_rib
-                        (HasTypeParameters(generics, item.id, 0,
-                                           NormalRibKind))
-                        |this| {
+                self.with_type_parameter_rib(HasTypeParameters(generics,
+                                                               item.id,
+                                                               0,
+                                                               NormalRibKind),
+                                             |this| {
                     visit::walk_item(this, item, ());
-                }
+                });
             }
 
             item_impl(ref generics,
                       ref implemented_traits,
-                      ref self_type,
+                      self_type,
                       ref methods) => {
                 self.resolve_implementation(item.id,
                                             generics,
@@ -3600,10 +3575,11 @@ impl Resolver {
                                               DlDef(DefSelfTy(item.id)));
 
                 // Create a new rib for the trait-wide type parameters.
-                do self.with_type_parameter_rib
-                        (HasTypeParameters(generics, item.id, 0,
-                                           NormalRibKind)) |this| {
-
+                self.with_type_parameter_rib(HasTypeParameters(generics,
+                                                               item.id,
+                                                               0,
+                                                               NormalRibKind),
+                                             |this| {
                     this.resolve_type_parameters(&generics.ty_params);
 
                     // Resolve derived traits.
@@ -3619,11 +3595,12 @@ impl Resolver {
 
                         match *method {
                           required(ref ty_m) => {
-                            do this.with_type_parameter_rib
+                            this.with_type_parameter_rib
                                 (HasTypeParameters(&ty_m.generics,
                                                    item.id,
                                                    generics.ty_params.len(),
-                                        MethodRibKind(item.id, Required))) |this| {
+                                        MethodRibKind(item.id, Required)),
+                                 |this| {
 
                                 // Resolve the method-specific type
                                 // parameters.
@@ -3631,11 +3608,11 @@ impl Resolver {
                                     &ty_m.generics.ty_params);
 
                                 for argument in ty_m.decl.inputs.iter() {
-                                    this.resolve_type(&argument.ty);
+                                    this.resolve_type(argument.ty);
                                 }
 
-                                this.resolve_type(&ty_m.decl.output);
-                            }
+                                this.resolve_type(ty_m.decl.output);
+                            });
                           }
                           provided(m) => {
                               this.resolve_method(MethodRibKind(item.id,
@@ -3645,7 +3622,7 @@ impl Resolver {
                           }
                         }
                     }
-                }
+                });
 
                 self.type_ribs.pop();
             }
@@ -3657,14 +3634,14 @@ impl Resolver {
             }
 
             item_mod(ref module_) => {
-                do self.with_scope(Some(item.ident)) |this| {
+                self.with_scope(Some(item.ident), |this| {
                     this.resolve_module(module_, item.span, item.ident,
                                         item.id);
-                }
+                });
             }
 
             item_foreign_mod(ref foreign_module) => {
-                do self.with_scope(Some(item.ident)) |this| {
+                self.with_scope(Some(item.ident), |this| {
                     for foreign_item in foreign_module.items.iter() {
                         match foreign_item.node {
                             foreign_item_fn(_, ref generics) => {
@@ -3676,17 +3653,17 @@ impl Resolver {
                                                                 *foreign_item,
                                                                 ()));
                             }
-                            foreign_item_static(*) => {
+                            foreign_item_static(..) => {
                                 visit::walk_foreign_item(this,
                                                          *foreign_item,
                                                          ());
                             }
                         }
                     }
-                }
+                });
             }
 
-            item_fn(ref fn_decl, _, _, ref generics, ref block) => {
+            item_fn(fn_decl, _, _, ref generics, block) => {
                 self.resolve_function(OpaqueFunctionRibKind,
                                       Some(fn_decl),
                                       HasTypeParameters
@@ -3698,23 +3675,21 @@ impl Resolver {
                                       NoSelfBinding);
             }
 
-            item_static(*) => {
+            item_static(..) => {
                 self.with_constant_rib(|this| {
                     visit::walk_item(this, item, ());
                 });
             }
 
-          item_mac(*) => {
-            fail2!("item macros unimplemented")
+          item_mac(..) => {
+            fail!("item macros unimplemented")
           }
         }
-
-        self.xray_context = orig_xray_flag;
     }
 
     fn with_type_parameter_rib(&mut self,
-                                   type_parameters: TypeParameters,
-                                   f: &fn(&mut Resolver)) {
+                               type_parameters: TypeParameters,
+                               f: |&mut Resolver|) {
         match type_parameters {
             HasTypeParameters(generics, node_id, initial_index,
                               rib_kind) => {
@@ -3724,7 +3699,7 @@ impl Resolver {
 
                 for (index, type_parameter) in generics.ty_params.iter().enumerate() {
                     let ident = type_parameter.ident;
-                    debug2!("with_type_parameter_rib: {} {}", node_id,
+                    debug!("with_type_parameter_rib: {} {}", node_id,
                            type_parameter.id);
                     let def_like = DlDef(DefTyParam
                         (local_def(type_parameter.id),
@@ -3746,7 +3721,7 @@ impl Resolver {
         f(self);
 
         match type_parameters {
-            HasTypeParameters(*) => {
+            HasTypeParameters(..) => {
                 self.type_ribs.pop();
             }
 
@@ -3756,23 +3731,25 @@ impl Resolver {
         }
     }
 
-    fn with_label_rib(&mut self, f: &fn(&mut Resolver)) {
+    fn with_label_rib(&mut self, f: |&mut Resolver|) {
         self.label_ribs.push(@Rib::new(NormalRibKind));
         f(self);
         self.label_ribs.pop();
     }
 
-    fn with_constant_rib(&mut self, f: &fn(&mut Resolver)) {
+    fn with_constant_rib(&mut self, f: |&mut Resolver|) {
         self.value_ribs.push(@Rib::new(ConstantItemRibKind));
+        self.type_ribs.push(@Rib::new(ConstantItemRibKind));
         f(self);
+        self.type_ribs.pop();
         self.value_ribs.pop();
     }
 
     fn resolve_function(&mut self,
                             rib_kind: RibKind,
-                            optional_declaration: Option<&fn_decl>,
+                            optional_declaration: Option<P<fn_decl>>,
                             type_parameters: TypeParameters,
-                            block: &Block,
+                            block: P<Block>,
                             self_binding: SelfBinding) {
         // Create a value rib for the function.
         let function_value_rib = @Rib::new(rib_kind);
@@ -3783,7 +3760,7 @@ impl Resolver {
         self.label_ribs.push(function_label_rib);
 
         // If this function has type parameters, add them now.
-        do self.with_type_parameter_rib(type_parameters) |this| {
+        self.with_type_parameter_rib(type_parameters, |this| {
             // Resolve the type parameters.
             match type_parameters {
                 NoTypeParameters => {
@@ -3799,8 +3776,12 @@ impl Resolver {
                 NoSelfBinding => {
                     // Nothing to do.
                 }
-                HasSelfBinding(self_node_id) => {
-                    let def_like = DlDef(DefSelf(self_node_id));
+                HasSelfBinding(self_node_id, explicit_self) => {
+                    let mutable = match explicit_self.node {
+                        sty_uniq(m) | sty_value(m) if m == MutMutable => true,
+                        _ => false
+                    };
+                    let def_like = DlDef(DefSelf(self_node_id, mutable));
                     *function_value_rib.self_binding = Some(def_like);
                 }
             }
@@ -3813,27 +3794,24 @@ impl Resolver {
                 Some(declaration) => {
                     for argument in declaration.inputs.iter() {
                         let binding_mode = ArgumentIrrefutableMode;
-                        let mutability =
-                            if argument.is_mutbl {Mutable} else {Immutable};
                         this.resolve_pattern(argument.pat,
                                              binding_mode,
-                                             mutability,
                                              None);
 
-                        this.resolve_type(&argument.ty);
+                        this.resolve_type(argument.ty);
 
-                        debug2!("(resolving function) recorded argument");
+                        debug!("(resolving function) recorded argument");
                     }
 
-                    this.resolve_type(&declaration.output);
+                    this.resolve_type(declaration.output);
                 }
             }
 
             // Resolve the function body.
             this.resolve_block(block);
 
-            debug2!("(resolving function) leaving function");
-        }
+            debug!("(resolving function) leaving function");
+        });
 
         self.label_ribs.pop();
         self.value_ribs.pop();
@@ -3876,7 +3854,7 @@ impl Resolver {
                 self.resolve_error(trait_reference.path.span, msg);
             }
             Some(def) => {
-                debug2!("(resolving trait) found trait def: {:?}", def);
+                debug!("(resolving trait) found trait def: {:?}", def);
                 self.record_def(trait_reference.ref_id, def);
             }
         }
@@ -3885,9 +3863,9 @@ impl Resolver {
     fn resolve_struct(&mut self,
                           id: NodeId,
                           generics: &Generics,
-                          fields: &[@struct_field]) {
-        let mut ident_map: HashMap<ast::Ident,@struct_field> = HashMap::new();
-        for &field in fields.iter() {
+                          fields: &[struct_field]) {
+        let mut ident_map: HashMap<ast::Ident, &struct_field> = HashMap::new();
+        for field in fields.iter() {
             match field.node.kind {
                 named_field(ident, _) => {
                     match ident_map.find(&ident) {
@@ -3908,18 +3886,19 @@ impl Resolver {
         }
 
         // If applicable, create a rib for the type parameters.
-        do self.with_type_parameter_rib(HasTypeParameters
-                                        (generics, id, 0,
-                                         OpaqueFunctionRibKind)) |this| {
-
+        self.with_type_parameter_rib(HasTypeParameters(generics,
+                                                       id,
+                                                       0,
+                                                       OpaqueFunctionRibKind),
+                                     |this| {
             // Resolve the type parameters.
             this.resolve_type_parameters(&generics.ty_params);
 
             // Resolve fields.
             for field in fields.iter() {
-                this.resolve_type(&field.node.ty);
+                this.resolve_type(field.node.ty);
             }
-        }
+        });
     }
 
     // Does this really need to take a RibKind or is it always going
@@ -3937,13 +3916,13 @@ impl Resolver {
         // we only have self ty if it is a non static method
         let self_binding = match method.explicit_self.node {
           sty_static => { NoSelfBinding }
-          _ => { HasSelfBinding(method.self_id) }
+          _ => { HasSelfBinding(method.self_id, method.explicit_self) }
         };
 
         self.resolve_function(rib_kind,
-                              Some(&method.decl),
+                              Some(method.decl),
                               type_parameters,
-                              &method.body,
+                              method.body,
                               self_binding);
     }
 
@@ -3955,9 +3934,11 @@ impl Resolver {
                                   methods: &[@method]) {
         // If applicable, create a rib for the type parameters.
         let outer_type_parameter_count = generics.ty_params.len();
-        do self.with_type_parameter_rib(HasTypeParameters
-                                        (generics, id, 0,
-                                         NormalRibKind)) |this| {
+        self.with_type_parameter_rib(HasTypeParameters(generics,
+                                                       id,
+                                                       0,
+                                                       NormalRibKind),
+                                     |this| {
             // Resolve the type parameters.
             this.resolve_type_parameters(&generics.ty_params);
 
@@ -4001,7 +3982,7 @@ impl Resolver {
                     self.resolve_function(MethodRibKind(
                                           id,
                                           Provided(method.id)),
-                                          Some(@method.decl),
+                                          Some(method.decl),
                                           HasTypeParameters
                                             (borrowed_type_parameters,
                                              method.id,
@@ -4018,7 +3999,7 @@ impl Resolver {
                 Some(r) => { this.current_trait_refs = r; }
                 None => ()
             }
-        }
+        });
     }
 
     fn resolve_module(&mut self,
@@ -4027,15 +4008,13 @@ impl Resolver {
                           _name: Ident,
                           id: NodeId) {
         // Write the implementations in scope into the module metadata.
-        debug2!("(resolving module) resolving module ID {}", id);
+        debug!("(resolving module) resolving module ID {}", id);
         visit::walk_mod(self, module_, ());
     }
 
     fn resolve_local(&mut self, local: @Local) {
-        let mutability = if local.is_mutbl {Mutable} else {Immutable};
-
         // Resolve the type.
-        self.resolve_type(&local.ty);
+        self.resolve_type(local.ty);
 
         // Resolve the initializer, if necessary.
         match local.init {
@@ -4048,7 +4027,7 @@ impl Resolver {
         }
 
         // Resolve the pattern.
-        self.resolve_pattern(local.pat, LocalIrrefutableMode, mutability, None);
+        self.resolve_pattern(local.pat, LocalIrrefutableMode, None);
     }
 
     // build a map from pattern identifiers to binding-info's.
@@ -4057,12 +4036,12 @@ impl Resolver {
     // user and one 'x' came from the macro.
     fn binding_mode_map(&mut self, pat: @Pat) -> BindingMap {
         let mut result = HashMap::new();
-        do pat_bindings(self.def_map, pat) |binding_mode, _id, sp, path| {
+        pat_bindings(self.def_map, pat, |binding_mode, _id, sp, path| {
             let name = mtwt_resolve(path_to_ident(path));
             result.insert(name,
                           binding_info {span: sp,
                                         binding_mode: binding_mode});
-        }
+        });
         return result;
     }
 
@@ -4112,8 +4091,7 @@ impl Resolver {
 
         let bindings_list = @mut HashMap::new();
         for pattern in arm.pats.iter() {
-            self.resolve_pattern(*pattern, RefutableMode, Immutable,
-                                 Some(bindings_list));
+            self.resolve_pattern(*pattern, RefutableMode, Some(bindings_list));
         }
 
         // This has to happen *after* we determine which
@@ -4121,13 +4099,13 @@ impl Resolver {
         self.check_consistent_bindings(arm);
 
         visit::walk_expr_opt(self, arm.guard, ());
-        self.resolve_block(&arm.body);
+        self.resolve_block(arm.body);
 
         self.value_ribs.pop();
     }
 
-    fn resolve_block(&mut self, block: &Block) {
-        debug2!("(resolving block) entering block");
+    fn resolve_block(&mut self, block: P<Block>) {
+        debug!("(resolving block) entering block");
         self.value_ribs.push(@Rib::new(NormalRibKind));
 
         // Move down in the graph, if there's an anonymous module rooted here.
@@ -4135,7 +4113,7 @@ impl Resolver {
         match self.current_module.anonymous_children.find(&block.id) {
             None => { /* Nothing to do. */ }
             Some(&anonymous_module) => {
-                debug2!("(resolving block) found anonymous module, moving \
+                debug!("(resolving block) found anonymous module, moving \
                         down");
                 self.current_module = anonymous_module;
             }
@@ -4148,7 +4126,7 @@ impl Resolver {
         self.current_module = orig_module;
 
         self.value_ribs.pop();
-        debug2!("(resolving block) leaving block");
+        debug!("(resolving block) leaving block");
     }
 
     fn resolve_type(&mut self, ty: &Ty) {
@@ -4175,7 +4153,7 @@ impl Resolver {
 
                             if path.segments
                                    .iter()
-                                   .any(|s| s.lifetime.is_some()) {
+                                   .any(|s| !s.lifetimes.is_empty()) {
                                 self.session.span_err(path.span,
                                                       "lifetime parameters \
                                                        are not allowed on \
@@ -4199,7 +4177,7 @@ impl Resolver {
                     None => {
                         match self.resolve_path(ty.id, path, TypeNS, true) {
                             Some(def) => {
-                                debug2!("(resolving type) resolved `{}` to \
+                                debug!("(resolving type) resolved `{}` to \
                                         type {:?}",
                                        self.session.str_of(path.segments
                                                                .last()
@@ -4218,7 +4196,7 @@ impl Resolver {
                 match result_def {
                     Some(def) => {
                         // Write the result into the def map.
-                        debug2!("(resolving type) writing resolution for `{}` \
+                        debug!("(resolving type) writing resolution for `{}` \
                                 (id {})",
                                self.path_idents_to_str(path),
                                path_id);
@@ -4231,19 +4209,19 @@ impl Resolver {
                     }
                 }
 
-                do bounds.as_ref().map |bound_vec| {
+                bounds.as_ref().map(|bound_vec| {
                     for bound in bound_vec.iter() {
                         self.resolve_type_parameter_bound(ty.id, bound);
                     }
-                };
+                });
             }
 
             ty_closure(c) => {
-                do c.bounds.as_ref().map |bounds| {
+                c.bounds.as_ref().map(|bounds| {
                     for bound in bounds.iter() {
                         self.resolve_type_parameter_bound(ty.id, bound);
                     }
-                };
+                });
                 visit::walk_ty(self, ty, ());
             }
 
@@ -4257,12 +4235,11 @@ impl Resolver {
     fn resolve_pattern(&mut self,
                        pattern: @Pat,
                        mode: PatternBindingMode,
-                       mutability: Mutability,
                        // Maps idents to the node ID for the (outermost)
                        // pattern that binds them
                        bindings_list: Option<@mut HashMap<Name,NodeId>>) {
         let pat_id = pattern.id;
-        do walk_pat(pattern) |pattern| {
+        walk_pat(pattern, |pattern| {
             match pattern.node {
                 PatIdent(binding_mode, ref path, _)
                         if !path.global && path.segments.len() == 1 => {
@@ -4282,7 +4259,7 @@ impl Resolver {
                     match self.resolve_bare_identifier_pattern(ident) {
                         FoundStructOrEnumVariant(def, lp)
                                 if mode == RefutableMode => {
-                            debug2!("(resolving pattern) resolving `{}` to \
+                            debug!("(resolving pattern) resolving `{}` to \
                                     struct or enum variant",
                                    interner_get(renamed));
 
@@ -4292,7 +4269,7 @@ impl Resolver {
                                 "an enum variant");
                             self.record_def(pattern.id, (def, lp));
                         }
-                        FoundStructOrEnumVariant(*) => {
+                        FoundStructOrEnumVariant(..) => {
                             self.resolve_error(pattern.span,
                                                   format!("declaration of `{}` \
                                                         shadows an enum \
@@ -4301,7 +4278,7 @@ impl Resolver {
                                                        interner_get(renamed)));
                         }
                         FoundConst(def, lp) if mode == RefutableMode => {
-                            debug2!("(resolving pattern) resolving `{}` to \
+                            debug!("(resolving pattern) resolving `{}` to \
                                     constant",
                                    interner_get(renamed));
 
@@ -4311,16 +4288,14 @@ impl Resolver {
                                 "a constant");
                             self.record_def(pattern.id, (def, lp));
                         }
-                        FoundConst(*) => {
+                        FoundConst(..) => {
                             self.resolve_error(pattern.span,
                                                   "only irrefutable patterns \
                                                    allowed here");
                         }
                         BareIdentifierPatternUnresolved => {
-                            debug2!("(resolving pattern) binding `{}`",
+                            debug!("(resolving pattern) binding `{}`",
                                    interner_get(renamed));
-
-                            let is_mutable = mutability == Mutable;
 
                             let def = match mode {
                                 RefutableMode => {
@@ -4331,11 +4306,11 @@ impl Resolver {
                                 }
                                 LocalIrrefutableMode => {
                                     // But for locals, we use `def_local`.
-                                    DefLocal(pattern.id, is_mutable)
+                                    DefLocal(pattern.id, binding_mode)
                                 }
                                 ArgumentIrrefutableMode => {
                                     // And for function arguments, `def_arg`.
-                                    DefArg(pattern.id, is_mutable)
+                                    DefArg(pattern.id, binding_mode)
                                 }
                             };
 
@@ -4386,7 +4361,7 @@ impl Resolver {
                     }
 
                     // Check the types in the path pattern.
-                    for ty in path.segments
+                    for &ty in path.segments
                                   .iter()
                                   .flat_map(|seg| seg.types.iter()) {
                         self.resolve_type(ty);
@@ -4396,11 +4371,11 @@ impl Resolver {
                 PatIdent(binding_mode, ref path, _) => {
                     // This must be an enum variant, struct, or constant.
                     match self.resolve_path(pat_id, path, ValueNS, false) {
-                        Some(def @ (DefVariant(*), _)) |
-                        Some(def @ (DefStruct(*), _)) => {
+                        Some(def @ (DefVariant(..), _)) |
+                        Some(def @ (DefStruct(..), _)) => {
                             self.record_def(pattern.id, def);
                         }
-                        Some(def @ (DefStatic(*), _)) => {
+                        Some(def @ (DefStatic(..), _)) => {
                             self.enforce_default_binding_mode(
                                 pattern,
                                 binding_mode,
@@ -4421,7 +4396,7 @@ impl Resolver {
                     }
 
                     // Check the types in the path pattern.
-                    for ty in path.segments
+                    for &ty in path.segments
                                   .iter()
                                   .flat_map(|s| s.types.iter()) {
                         self.resolve_type(ty);
@@ -4431,10 +4406,10 @@ impl Resolver {
                 PatEnum(ref path, _) => {
                     // This must be an enum variant, struct or const.
                     match self.resolve_path(pat_id, path, ValueNS, false) {
-                        Some(def @ (DefFn(*), _))      |
-                        Some(def @ (DefVariant(*), _)) |
-                        Some(def @ (DefStruct(*), _))  |
-                        Some(def @ (DefStatic(*), _)) => {
+                        Some(def @ (DefFn(..), _))      |
+                        Some(def @ (DefVariant(..), _)) |
+                        Some(def @ (DefStruct(..), _))  |
+                        Some(def @ (DefStatic(..), _)) => {
                             self.record_def(pattern.id, def);
                         }
                         Some(_) => {
@@ -4458,7 +4433,7 @@ impl Resolver {
                     }
 
                     // Check the types in the path pattern.
-                    for ty in path.segments
+                    for &ty in path.segments
                                   .iter()
                                   .flat_map(|s| s.types.iter()) {
                         self.resolve_type(ty);
@@ -4490,7 +4465,7 @@ impl Resolver {
                             self.record_def(pattern.id, definition);
                         }
                         result => {
-                            debug2!("(resolving pattern) didn't find struct \
+                            debug!("(resolving pattern) didn't find struct \
                                     def: {:?}", result);
                             let msg = format!("`{}` does not name a structure",
                                               self.path_idents_to_str(path));
@@ -4504,7 +4479,7 @@ impl Resolver {
                 }
             }
             true
-        };
+        });
     }
 
     fn resolve_bare_identifier_pattern(&mut self, name: Ident)
@@ -4515,12 +4490,12 @@ impl Resolver {
                                                  ValueNS,
                                                  SearchThroughModules) {
             Success((target, _)) => {
-                debug2!("(resolve bare identifier pattern) succeeded in \
+                debug!("(resolve bare identifier pattern) succeeded in \
                          finding {} at {:?}",
                         self.session.str_of(name), target.bindings.value_def);
                 match target.bindings.value_def {
                     None => {
-                        fail2!("resolved name in the value namespace to a \
+                        fail!("resolved name in the value namespace to a \
                               set of name bindings with no def?!");
                     }
                     Some(def) => {
@@ -4528,7 +4503,7 @@ impl Resolver {
                         // considered as not having a private component because
                         // the lookup happened only within the current module.
                         match def.def {
-                            def @ DefVariant(*) | def @ DefStruct(*) => {
+                            def @ DefVariant(..) | def @ DefStruct(..) => {
                                 return FoundStructOrEnumVariant(def, AllPublic);
                             }
                             def @ DefStatic(_, false) => {
@@ -4543,11 +4518,11 @@ impl Resolver {
             }
 
             Indeterminate => {
-                fail2!("unexpected indeterminate result");
+                fail!("unexpected indeterminate result");
             }
 
             Failed => {
-                debug2!("(resolve bare identifier pattern) failed to find {}",
+                debug!("(resolve bare identifier pattern) failed to find {}",
                         self.session.str_of(name));
                 return BareIdentifierPatternUnresolved;
             }
@@ -4562,7 +4537,7 @@ impl Resolver {
                     namespace: Namespace,
                     check_ribs: bool) -> Option<(Def, LastPrivate)> {
         // First, resolve the types.
-        for ty in path.segments.iter().flat_map(|s| s.types.iter()) {
+        for &ty in path.segments.iter().flat_map(|s| s.types.iter()) {
             self.resolve_type(ty);
         }
 
@@ -4667,7 +4642,7 @@ impl Resolver {
                     None => {}
                 }
             }
-            Some(*) | None => {} // Continue.
+            Some(..) | None => {} // Continue.
         }
 
         // Finally, search through external children.
@@ -4713,7 +4688,7 @@ impl Resolver {
             }
 
             Indeterminate => {
-                fail2!("indeterminate unexpected");
+                fail!("indeterminate unexpected");
             }
 
             Success((resulting_module, resulting_last_private)) => {
@@ -4740,7 +4715,7 @@ impl Resolver {
                     Some(s) => {
                         match containing_module.def_id {
                             Some(def_id) if s.contains(&def_id) => {
-                                debug2!("containing module was a trait or impl \
+                                debug!("containing module was a trait or impl \
                                         and name was a method -> not resolved");
                                 return None;
                             },
@@ -4781,7 +4756,7 @@ impl Resolver {
             }
 
             Indeterminate => {
-                fail2!("indeterminate unexpected");
+                fail!("indeterminate unexpected");
             }
 
             Success((resulting_module, resulting_last_private)) => {
@@ -4827,7 +4802,7 @@ impl Resolver {
 
         match search_result {
             Some(DlDef(def)) => {
-                debug2!("(resolving path in local ribs) resolved `{}` to \
+                debug!("(resolving path in local ribs) resolved `{}` to \
                         local: {:?}",
                        self.session.str_of(ident),
                        def);
@@ -4885,13 +4860,13 @@ impl Resolver {
                     None => {
                         // This can happen if we were looking for a type and
                         // found a module instead. Modules don't have defs.
-                        debug2!("(resolving item path by identifier in lexical \
+                        debug!("(resolving item path by identifier in lexical \
                                  scope) failed to resolve {} after success...",
                                  self.session.str_of(ident));
                         return None;
                     }
                     Some(def) => {
-                        debug2!("(resolving item path in lexical scope) \
+                        debug!("(resolving item path in lexical scope) \
                                 resolved `{}` to item",
                                self.session.str_of(ident));
                         // This lookup is "all public" because it only searched
@@ -4902,17 +4877,17 @@ impl Resolver {
                 }
             }
             Indeterminate => {
-                fail2!("unexpected indeterminate result");
+                fail!("unexpected indeterminate result");
             }
             Failed => {
-                debug2!("(resolving item path by identifier in lexical scope) \
+                debug!("(resolving item path by identifier in lexical scope) \
                          failed to resolve {}", self.session.str_of(ident));
                 return None;
             }
         }
     }
 
-    fn with_no_errors<T>(&mut self, f: &fn(&mut Resolver) -> T) -> T {
+    fn with_no_errors<T>(&mut self, f: |&mut Resolver| -> T) -> T {
         self.emit_errors = false;
         let rs = f(self);
         self.emit_errors = true;
@@ -4925,10 +4900,8 @@ impl Resolver {
         }
     }
 
-    fn find_best_match_for_name(&mut self,
-                                    name: &str,
-                                    max_distance: uint)
-                                    -> Option<@str> {
+    fn find_best_match_for_name(&mut self, name: &str, max_distance: uint)
+                                -> Option<@str> {
         let this = &mut *self;
 
         let mut maybes: ~[@str] = ~[];
@@ -4983,13 +4956,13 @@ impl Resolver {
                 match self.resolve_path(expr.id, path, ValueNS, true) {
                     Some(def) => {
                         // Write the result into the def map.
-                        debug2!("(resolving expr) resolved `{}`",
+                        debug!("(resolving expr) resolved `{}`",
                                self.path_idents_to_str(path));
 
                         // First-class methods are not supported yet; error
                         // out here.
                         match def {
-                            (DefMethod(*), _) => {
+                            (DefMethod(..), _) => {
                                 self.resolve_error(expr.span,
                                                       "first-class methods \
                                                        are not supported");
@@ -5048,7 +5021,8 @@ impl Resolver {
                 visit::walk_expr(self, expr, ());
             }
 
-            ExprFnBlock(ref fn_decl, ref block) => {
+            ExprFnBlock(fn_decl, block) |
+            ExprProc(fn_decl, block) => {
                 self.resolve_function(FunctionRibKind(expr.id, block.id),
                                       Some(fn_decl),
                                       NoTypeParameters,
@@ -5069,7 +5043,7 @@ impl Resolver {
                         self.record_def(expr.id, definition);
                     }
                     result => {
-                        debug2!("(resolving expression) didn't find struct \
+                        debug!("(resolving expression) didn't find struct \
                                 def: {:?}", result);
                         let msg = format!("`{}` does not name a structure",
                                           self.path_idents_to_str(path));
@@ -5081,17 +5055,17 @@ impl Resolver {
             }
 
             ExprLoop(_, Some(label)) => {
-                do self.with_label_rib |this| {
+                self.with_label_rib(|this| {
                     let def_like = DlDef(DefLabel(expr.id));
                     let rib = this.label_ribs[this.label_ribs.len() - 1];
                     // plain insert (no renaming)
                     rib.bindings.insert(label.name, def_like);
 
                     visit::walk_expr(this, expr, ());
-                }
+                })
             }
 
-            ExprForLoop(*) => fail2!("non-desugared expr_for_loop"),
+            ExprForLoop(..) => fail!("non-desugared expr_for_loop"),
 
             ExprBreak(Some(label)) | ExprAgain(Some(label)) => {
                 match self.search_ribs(self.label_ribs, label, expr.span,
@@ -5142,7 +5116,7 @@ impl Resolver {
                 self.trait_map.insert(expr.id, @mut traits);
             }
             ExprMethodCall(_, _, ident, _, _, _) => {
-                debug2!("(recording candidate traits for expr) recording \
+                debug!("(recording candidate traits for expr) recording \
                         traits for {}",
                        expr.id);
                 let traits = self.search_for_traits_containing_method(ident);
@@ -5205,7 +5179,7 @@ impl Resolver {
                 let i = self.lang_items.not_trait();
                 self.add_fixed_trait_for_expr(expr.id, i);
             }
-            ExprIndex(*) => {
+            ExprIndex(..) => {
                 let i = self.lang_items.index_trait();
                 self.add_fixed_trait_for_expr(expr.id, i);
             }
@@ -5217,7 +5191,7 @@ impl Resolver {
 
     fn search_for_traits_containing_method(&mut self, name: Ident)
                                                -> ~[DefId] {
-        debug2!("(searching for traits containing method) looking for '{}'",
+        debug!("(searching for traits containing method) looking for '{}'",
                self.session.str_of(name));
 
         let mut found_traits = ~[];
@@ -5319,7 +5293,7 @@ impl Resolver {
                           found_traits: &mut ~[DefId],
                           trait_def_id: DefId,
                           name: Ident) {
-        debug2!("(adding trait info) found trait {}:{} for method '{}'",
+        debug!("(adding trait info) found trait {}:{} for method '{}'",
                trait_def_id.crate,
                trait_def_id.node,
                self.session.str_of(name));
@@ -5338,10 +5312,10 @@ impl Resolver {
     }
 
     fn record_def(&mut self, node_id: NodeId, (def, lp): (Def, LastPrivate)) {
-        debug2!("(recording def) recording {:?} for {:?}, last private {:?}",
+        debug!("(recording def) recording {:?} for {:?}, last private {:?}",
                 def, node_id, lp);
         self.last_private.insert(node_id, lp);
-        do self.def_map.insert_or_update_with(node_id, def) |_, old_value| {
+        self.def_map.insert_or_update_with(node_id, def, |_, old_value| {
             // Resolve appears to "resolve" the same ID multiple
             // times, so here is a sanity check it at least comes to
             // the same conclusion! - nmatsakis
@@ -5349,7 +5323,7 @@ impl Resolver {
                 self.session.bug(format!("node_id {:?} resolved first to {:?} \
                                       and then {:?}", node_id, *old_value, def));
             }
-        };
+        });
     }
 
     fn enforce_default_binding_mode(&mut self,
@@ -5357,8 +5331,8 @@ impl Resolver {
                                         pat_binding_mode: BindingMode,
                                         descr: &str) {
         match pat_binding_mode {
-            BindInfer => {}
-            BindByRef(*) => {
+            BindByValue(_) => {}
+            BindByRef(..) => {
                 self.resolve_error(
                     pat.span,
                     format!("cannot use `ref` binding mode with {}",
@@ -5388,7 +5362,7 @@ impl Resolver {
         if vi.span == dummy_sp() { return }
 
         match vi.node {
-            view_item_extern_mod(*) => {} // ignore
+            view_item_extern_mod(..) => {} // ignore
             view_item_use(ref path) => {
                 for p in path.iter() {
                     match p.node {
@@ -5448,16 +5422,17 @@ impl Resolver {
         return self.idents_to_str(idents.move_rev_iter().collect::<~[ast::Ident]>());
     }
 
+    #[allow(dead_code)]   // useful for debugging
     fn dump_module(&mut self, module_: @mut Module) {
-        debug2!("Dump of module `{}`:", self.module_to_str(module_));
+        debug!("Dump of module `{}`:", self.module_to_str(module_));
 
-        debug2!("Children:");
+        debug!("Children:");
         self.populate_module_if_necessary(module_);
         for (&name, _) in module_.children.iter() {
-            debug2!("* {}", interner_get(name));
+            debug!("* {}", interner_get(name));
         }
 
-        debug2!("Import resolutions:");
+        debug!("Import resolutions:");
         for (name, import_resolution) in module_.import_resolutions.iter() {
             let value_repr;
             match import_resolution.target_for_namespace(ValueNS) {
@@ -5477,7 +5452,7 @@ impl Resolver {
                 }
             }
 
-            debug2!("* {}:{}{}", interner_get(*name),
+            debug!("* {}:{}{}", interner_get(*name),
                    value_repr, type_repr);
         }
     }
@@ -5499,7 +5474,7 @@ pub fn resolve_crate(session: Session,
     let mut resolver = Resolver(session, lang_items, crate.span);
     resolver.resolve(crate);
     let Resolver { def_map, export_map2, trait_map, last_private,
-                   external_exports, _ } = resolver;
+                   external_exports, .. } = resolver;
     CrateMap {
         def_map: def_map,
         exp_map2: export_map2,

@@ -23,6 +23,6 @@ fn iotask(_cx: &ctx, ip: ~str) {
 }
 
 pub fn main() {
-    let (_p, ch) = stream::<int>();
-    task::spawn(|| iotask(&ch, ~"localhost") );
+    let (_p, ch) = Chan::<int>::new();
+    task::spawn(proc() iotask(&ch, ~"localhost") );
 }

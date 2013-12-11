@@ -26,11 +26,11 @@ use middle::ty;
 
 use middle::trans::type_::Type;
 
+use util::sha2::Sha256;
+
 use std::c_str::ToCStr;
-use std::hash;
 use std::hashmap::{HashMap, HashSet};
 use std::local_data;
-use std::vec;
 use std::libc::c_uint;
 use syntax::ast;
 
@@ -42,6 +42,7 @@ pub struct CrateContext {
      sess: session::Session,
      llmod: ModuleRef,
      llcx: ContextRef,
+     metadata_llmod: ModuleRef,
      td: TargetData,
      tn: TypeNames,
      externs: ExternMap,
@@ -97,7 +98,7 @@ pub struct CrateContext {
      lltypes: HashMap<ty::t, Type>,
      llsizingtypes: HashMap<ty::t, Type>,
      adt_reprs: HashMap<ty::t, @adt::Repr>,
-     symbol_hasher: hash::State,
+     symbol_hasher: Sha256,
      type_hashcodes: HashMap<ty::t, @str>,
      type_short_names: HashMap<ty::t, ~str>,
      all_llvm_symbols: HashSet<@str>,
@@ -110,6 +111,7 @@ pub struct CrateContext {
      opaque_vec_type: Type,
      builder: BuilderRef_res,
      crate_map: ValueRef,
+     crate_map_name: ~str,
      // Set when at least one function uses GC. Needed so that
      // decl_gc_metadata knows whether to link to the module metadata, which
      // is not emitted by LLVM's GC pass when no functions use GC.
@@ -124,24 +126,29 @@ impl CrateContext {
                tcx: ty::ctxt,
                emap2: resolve::ExportMap2,
                maps: astencode::Maps,
-               symbol_hasher: hash::State,
+               symbol_hasher: Sha256,
                link_meta: LinkMeta,
                reachable: @mut HashSet<ast::NodeId>)
                -> CrateContext {
         unsafe {
             let llcx = llvm::LLVMContextCreate();
             set_task_llcx(llcx);
-            let llmod = do name.with_c_str |buf| {
+            let llmod = name.with_c_str(|buf| {
                 llvm::LLVMModuleCreateWithNameInContext(buf, llcx)
-            };
+            });
+            let metadata_llmod = format!("{}_metadata", name).with_c_str(|buf| {
+                llvm::LLVMModuleCreateWithNameInContext(buf, llcx)
+            });
             let data_layout: &str = sess.targ_cfg.target_strs.data_layout;
             let targ_triple: &str = sess.targ_cfg.target_strs.target_triple;
-            do data_layout.with_c_str |buf| {
-                llvm::LLVMSetDataLayout(llmod, buf)
-            };
-            do targ_triple.with_c_str |buf| {
-                llvm::LLVMRustSetNormalizedTarget(llmod, buf)
-            };
+            data_layout.with_c_str(|buf| {
+                llvm::LLVMSetDataLayout(llmod, buf);
+                llvm::LLVMSetDataLayout(metadata_llmod, buf);
+            });
+            targ_triple.with_c_str(|buf| {
+                llvm::LLVMRustSetNormalizedTarget(llmod, buf);
+                llvm::LLVMRustSetNormalizedTarget(metadata_llmod, buf);
+            });
             let targ_cfg = sess.targ_cfg;
 
             let td = mk_target_data(sess.targ_cfg.target_strs.data_layout);
@@ -161,7 +168,7 @@ impl CrateContext {
             tn.associate_type("tydesc", &tydesc_type);
             tn.associate_type("str_slice", &str_slice_ty);
 
-            let crate_map = decl_crate_map(sess, link_meta, llmod);
+            let (crate_map_name, crate_map) = decl_crate_map(sess, link_meta.clone(), llmod);
             let dbg_cx = if sess.opts.debuginfo {
                 Some(debuginfo::CrateDebugContext::new(llmod, name.to_owned()))
             } else {
@@ -176,6 +183,7 @@ impl CrateContext {
                   sess: sess,
                   llmod: llmod,
                   llcx: llcx,
+                  metadata_llmod: metadata_llmod,
                   td: td,
                   tn: tn,
                   externs: HashMap::new(),
@@ -231,6 +239,7 @@ impl CrateContext {
                   opaque_vec_type: opaque_vec_type,
                   builder: BuilderRef_res(llvm::LLVMCreateBuilderInContext(llcx)),
                   crate_map: crate_map,
+                  crate_map_name: crate_map_name,
                   uses_gc: false,
                   dbg_cx: dbg_cx,
                   do_not_commit_warning_issued: false
@@ -245,13 +254,13 @@ impl CrateContext {
     pub fn const_inbounds_gepi(&self,
                                pointer: ValueRef,
                                indices: &[uint]) -> ValueRef {
-        debug2!("const_inbounds_gepi: pointer={} indices={:?}",
+        debug!("const_inbounds_gepi: pointer={} indices={:?}",
                self.tn.val_to_str(pointer), indices);
         let v: ~[ValueRef] =
             indices.iter().map(|i| C_i32(*i as i32)).collect();
         unsafe {
             llvm::LLVMConstInBoundsGEP(pointer,
-                                       vec::raw::to_ptr(v),
+                                       v.as_ptr(),
                                        indices.len() as c_uint)
         }
     }

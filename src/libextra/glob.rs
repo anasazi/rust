@@ -24,6 +24,8 @@
  */
 
 use std::{os, path};
+use std::io;
+use std::io::fs;
 use std::path::is_sep;
 
 use sort;
@@ -39,32 +41,32 @@ pub struct GlobIterator {
     priv todo: ~[(Path,uint)]
 }
 
-/**
- * Return an iterator that produces all the Paths that match the given pattern,
- * which may be absolute or relative to the current working directory.
- *
- * This method uses the default match options and is equivalent to calling
- * `glob_with(pattern, MatchOptions::new())`. Use `glob_with` directly if you
- * want to use non-default match options.
- *
- * # Example
- *
- * Consider a directory `/media/pictures` containing only the files `kittens.jpg`,
- * `puppies.jpg` and `hamsters.gif`:
- *
- * ```rust
- * for path in glob("/media/pictures/*.jpg") {
- *     println(path.to_str());
- * }
- * ```
- *
- * The above code will print:
- *
- * ```
- * /media/pictures/kittens.jpg
- * /media/pictures/puppies.jpg
- * ```
- */
+///
+/// Return an iterator that produces all the Paths that match the given pattern,
+/// which may be absolute or relative to the current working directory.
+///
+/// is method uses the default match options and is equivalent to calling
+/// `glob_with(pattern, MatchOptions::new())`. Use `glob_with` directly if you
+/// want to use non-default match options.
+///
+/// # Example
+///
+/// Consider a directory `/media/pictures` containing only the files `kittens.jpg`,
+/// `puppies.jpg` and `hamsters.gif`:
+///
+/// ```rust
+/// for path in glob("/media/pictures/*.jpg") {
+///     println(path.to_str());
+/// }
+/// ```
+///
+/// The above code will print:
+///
+/// ```
+/// /media/pictures/kittens.jpg
+/// /media/pictures/puppies.jpg
+/// ```
+///
 pub fn glob(pattern: &str) -> GlobIterator {
     glob_with(pattern, MatchOptions::new())
 }
@@ -100,7 +102,7 @@ pub fn glob_with(pattern: &str, options: MatchOptions) -> GlobIterator {
 
     let root_len = pat_root.map_default(0u, |p| p.as_vec().len());
     let dir_patterns = pattern.slice_from(root_len.min(&pattern.len()))
-                       .split_terminator_iter(is_sep).map(|s| Pattern::new(s)).to_owned_vec();
+                       .split_terminator(is_sep).map(|s| Pattern::new(s)).to_owned_vec();
 
     let todo = list_dir_sorted(&root).move_iter().map(|x|(x,0u)).to_owned_vec();
 
@@ -146,9 +148,14 @@ impl Iterator<Path> for GlobIterator {
 }
 
 fn list_dir_sorted(path: &Path) -> ~[Path] {
-    let mut children = os::list_dir_path(path);
-    sort::quick_sort(children, |p1, p2| p2.filename().unwrap() <= p1.filename().unwrap());
-    children
+    match io::result(|| fs::readdir(path)) {
+        Ok(children) => {
+            let mut children = children;
+            sort::quick_sort(children, |p1, p2| p2.filename() <= p1.filename());
+            children
+        }
+        Err(..) => ~[]
+    }
 }
 
 /**
@@ -202,7 +209,7 @@ impl Pattern {
      */
     pub fn new(pattern: &str) -> Pattern {
 
-        let chars = pattern.iter().to_owned_vec();
+        let chars = pattern.chars().to_owned_vec();
         let mut tokens = ~[];
         let mut i = 0;
 
@@ -265,7 +272,7 @@ impl Pattern {
      */
     pub fn escape(s: &str) -> ~str {
         let mut escaped = ~"";
-        for c in s.iter() {
+        for c in s.chars() {
             match c {
                 // note that ! does not need escaping because it is only special inside brackets
                 '?' | '*' | '[' | ']' => {
@@ -303,9 +310,9 @@ impl Pattern {
      */
     pub fn matches_path(&self, path: &Path) -> bool {
         // FIXME (#9639): This needs to handle non-utf8 paths
-        do path.as_str().map_default(false) |s| {
+        path.as_str().map_default(false, |s| {
             self.matches(s)
-        }
+        })
     }
 
     /**
@@ -321,9 +328,9 @@ impl Pattern {
      */
     pub fn matches_path_with(&self, path: &Path, options: MatchOptions) -> bool {
         // FIXME (#9639): This needs to handle non-utf8 paths
-        do path.as_str().map_default(false) |s| {
+        path.as_str().map_default(false, |s| {
             self.matches_with(s, options)
-        }
+        })
     }
 
     fn matches_from(&self,
@@ -480,13 +487,13 @@ pub struct MatchOptions {
      * currently only considers upper/lower case relationships between ASCII characters,
      * but in future this might be extended to work with Unicode.
      */
-    case_sensitive: bool,
+    priv case_sensitive: bool,
 
     /**
      * If this is true then path-component separator characters (e.g. `/` on Posix)
      * must be matched by a literal `/`, rather than by `*` or `?` or `[...]`
      */
-    require_literal_separator: bool,
+    priv require_literal_separator: bool,
 
     /**
      * If this is true then paths that contain components that start with a `.` will
@@ -494,7 +501,7 @@ pub struct MatchOptions {
      * will not match. This is useful because such files are conventionally considered
      * hidden on Unix systems and it might be desirable to skip them when listing files.
      */
-    require_literal_leading_dot: bool
+    priv require_literal_leading_dot: bool
 }
 
 impl MatchOptions {
@@ -579,10 +586,10 @@ mod test {
         let pats = ["[a-z123]", "[1a-z23]", "[123a-z]"];
         for &p in pats.iter() {
             let pat = Pattern::new(p);
-            for c in "abcdefghijklmnopqrstuvwxyz".iter() {
+            for c in "abcdefghijklmnopqrstuvwxyz".chars() {
                 assert!(pat.matches(c.to_str()));
             }
-            for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ".iter() {
+            for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ".chars() {
                 let options = MatchOptions {case_sensitive: false, .. MatchOptions::new()};
                 assert!(pat.matches_with(c.to_str(), options));
             }

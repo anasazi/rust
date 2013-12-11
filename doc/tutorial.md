@@ -57,9 +57,13 @@ they don't contain references to names that aren't actually defined.
 
 # Getting started
 
-The Rust compiler currently must be built from a [tarball], unless you
-are on Windows, in which case using the [installer][win-exe] is
-recommended.
+> **NOTE**: The tarball and installer links are for the most recent release,
+> not master.
+
+The Rust compiler currently must be built from a [tarball] or [git], unless
+you are on Windows, in which case using the [installer][win-exe] is
+recommended. There is a list of community-maintained nightly builds and
+packages [on the wiki][wiki-packages].
 
 Since the Rust compiler is written in Rust, it must be built by
 a precompiled "snapshot" version of itself (made in an earlier state
@@ -84,6 +88,7 @@ supported build environments that are most likely to work.
 
 [bug-3319]: https://github.com/mozilla/rust/issues/3319
 [wiki-start]: https://github.com/mozilla/rust/wiki/Note-getting-started-developing-Rust
+[git]: https://github.com/mozilla/rust.git
 
 To build from source you will also need the following prerequisite
 packages:
@@ -113,9 +118,7 @@ for more information on them.
 
 When complete, `make install` will place several programs into
 `/usr/local/bin`: `rustc`, the Rust compiler; `rustdoc`, the
-API-documentation tool; `rustpkg`, the Rust package manager;
-`rusti`, the Rust REPL; and `rust`, a tool which acts both as a unified
-interface for them, and for a few common command line scenarios.
+API-documentation tool; and `rustpkg`, the Rust package manager.
 
 [tarball]: http://static.rust-lang.org/dist/rust-0.8.tar.gz
 [win-exe]: http://static.rust-lang.org/dist/rust-0.8-install.exe
@@ -143,7 +146,7 @@ an error message like this:
 ~~~~ {.notrust}
 hello.rs:2:4: 2:16 error: unresolved name: print_with_unicorns
 hello.rs:2     print_with_unicorns("hello?");
-               ^~~~~~~~~~~~~~~~~~~~~~~
+               ^~~~~~~~~~~~~~~~~~~
 ~~~~
 
 In its simplest form, a Rust program is a `.rs` file with some types
@@ -151,23 +154,7 @@ and functions defined in it. If it has a `main` function, it can be
 compiled to an executable. Rust does not allow code that's not a
 declaration to appear at the top level of the file: all statements must
 live inside a function.  Rust programs can also be compiled as
-libraries, and included in other programs.
-
-## Using the rust tool
-
-While using `rustc` directly to generate your executables, and then
-running them manually is a perfectly valid way to test your code,
-for smaller projects, prototypes, or if you're a beginner, it might be
-more convenient to use the `rust` tool.
-
-The `rust` tool provides central access to the other rust tools,
-as well as handy shortcuts for directly running source files.
-For example, if you have a file `foo.rs` in your current directory,
-`rust run foo.rs` would attempt to compile it and, if successful,
-directly run the resulting binary.
-
-To get a list of all available commands, simply call `rust` without any
-argument.
+libraries, and included in other programs, even ones not written in Rust.
 
 ## Editing Rust code
 
@@ -180,6 +167,9 @@ is the easiest way to keep it up to date. There is also a package for
 Sublime Text 2, available both [standalone][sublime] and through
 [Sublime Package Control][sublime-pkg], and support for Kate
 under `src/etc/kate`.
+
+A community-maintained list of available Rust tooling is [on the
+wiki][wiki-packages].
 
 There is ctags support via `src/etc/ctags.rust`, but many other
 tools and editors are not yet supported. If you end up writing a Rust
@@ -225,14 +215,15 @@ let hi = "hi";
 let mut count = 0;
 
 while count < 10 {
-    println!("count: {}", count);
+    println!("count is {}", count);
     count += 1;
 }
 ~~~~
 
-Although Rust can almost always infer the types of local variables, you
-can specify a variable's type by following it with a colon, then the type
-name. Static items, on the other hand, always require a type annotation.
+Although Rust can almost always infer the types of local variables, you can
+specify a variable's type by following it in the `let` with a colon, then the
+type name. Static items, on the other hand, always require a type annotation.
+
 
 ~~~~
 static MONSTER_FACTOR: f64 = 57.8;
@@ -323,7 +314,7 @@ fn is_four(x: int) -> bool {
 
 There are general signed and unsigned integer types, `int` and `uint`,
 as well as 8-, 16-, 32-, and 64-bit variants, `i8`, `u16`, etc.
-Integers can be written in decimal (`144`), hexadecimal (`0x90`), or
+Integers can be written in decimal (`144`), hexadecimal (`0x90`), octal (`0o70`), or
 binary (`0b10010000`) base. Each integral type has a corresponding literal
 suffix that can be used to indicate the type of a literal: `i` for `int`,
 `u` for `uint`, `i8` for the `i8` type.
@@ -344,7 +335,7 @@ let d = 1000i32; // d is an i32
 There are two floating-point types: `f32`, and `f64`.
 Floating-point numbers are written `0.0`, `1e6`, or `2.1e-4`.
 Like integers, floating-point literals are inferred to the correct type.
-Suffixes ``f32`, and `f64` can be used to create literals of a specific type.
+Suffixes `f32`, and `f64` can be used to create literals of a specific type.
 
 The keywords `true` and `false` produce literals of type `bool`.
 
@@ -352,7 +343,8 @@ Characters, the `char` type, are four-byte Unicode codepoints,
 whose literals are written between single quotes, as in `'x'`.
 Just like C, Rust understands a number of character escapes, using the backslash
 character, such as `\n`, `\r`, and `\t`. String literals,
-written between double quotes, allow the same escape sequences.
+written between double quotes, allow the same escape sequences, and do no
+other processing, unlike languages such as PHP or shell.
 
 On the other hand, raw string literals do not process any escape sequences.
 They are written as `r##"blah"##`, with a matching number of zero or more `#`
@@ -369,23 +361,27 @@ Rust's set of operators contains very few surprises. Arithmetic is done with
 also a unary prefix operator that negates numbers. As in C, the bitwise operators
 `>>`, `<<`, `&`, `|`, and `^` are also supported.
 
-Note that, if applied to an integer value, `!` flips all the bits (like `~` in
-C).
+Note that, if applied to an integer value, `!` flips all the bits (bitwise
+NOT, like `~` in C).
 
 The comparison operators are the traditional `==`, `!=`, `<`, `>`,
 `<=`, and `>=`. Short-circuiting (lazy) boolean operators are written
 `&&` (and) and `||` (or).
 
-For type casting, Rust uses the binary `as` operator.  It takes an
-expression on the left side and a type on the right side and will,
-if a meaningful conversion exists, convert the result of the
-expression to the given type.
+For compile-time type casting, Rust uses the binary `as` operator.  It takes
+an expression on the left side and a type on the right side and will, if a
+meaningful conversion exists, convert the result of the expression to the
+given type. Generally, `as` is only used with the primitive numeric types or
+pointers, and is not overloadable.  [`transmute`][transmute] can be used for
+unsafe C-like casting of same-sized types.
 
 ~~~~
 let x: f64 = 4.0;
 let y: uint = x as uint;
 assert!(y == 4u);
 ~~~~
+
+[transmute]: http://static.rust-lang.org/doc/master/std/cast/fn.transmute.html
 
 ## Syntax extensions
 
@@ -397,7 +393,7 @@ useful of which is [`format!`][fmt], a `sprintf`-like text formatter that you
 will often see in examples, and its related family of macros: `print!`,
 `println!`, and `write!`.
 
-`format!` draws syntax from python, but contains many of the same principles
+`format!` draws syntax from Python, but contains many of the same principles
 that [printf][pf] has. Unlike printf, `format!` will give you a compile-time
 error when the types of the directives don't match the types of the arguments.
 
@@ -414,7 +410,9 @@ println!("what is this thing: {:?}", mystery_object);
 [pf]: http://en.cppreference.com/w/cpp/io/c/fprintf
 [fmt]: http://static.rust-lang.org/doc/master/std/fmt/index.html
 
-You can define your own syntax extensions with the macro system. For details, see the [macro tutorial][macros].
+You can define your own syntax extensions with the macro system. For details,
+see the [macro tutorial][macros]. Note that macro definition is currently
+considered an unstable feature.
 
 # Control structures
 
@@ -475,9 +473,8 @@ their own value. A single arm may match multiple different patterns by
 combining them with the pipe operator (`|`), so long as every pattern
 binds the same set of variables. Ranges of numeric literal patterns
 can be expressed with two dots, as in `M..N`. The underscore (`_`) is
-a wildcard pattern that matches any single value. The asterisk (`*`)
-is a different wildcard that can match one or more fields in an `enum`
-variant.
+a wildcard pattern that matches any single value. (`..`) is a different
+wildcard that can match one or more fields in an `enum` variant.
 
 The patterns in a match arm are followed by a fat arrow, `=>`, then an
 expression to evaluate. Each case is separated by commas. It's often
@@ -509,7 +506,7 @@ types.
 use std::f64;
 use std::num::atan;
 fn angle(vector: (f64, f64)) -> f64 {
-    let pi = f64::consts::pi;
+    let pi = f64::consts::PI;
     match vector {
       (0.0, y) if y < 0.0 => 1.5 * pi,
       (0.0, y) => 0.5 * pi,
@@ -549,7 +546,7 @@ literals and most `enum` variants.
 
 `while` denotes a loop that iterates as long as its given condition
 (which must have type `bool`) evaluates to `true`. Inside a loop, the
-keyword `break` aborts the loop, and `loop` aborts the current
+keyword `break` aborts the loop, and `continue` aborts the current
 iteration and continues with the next.
 
 ~~~~
@@ -593,9 +590,8 @@ struct Point {
 }
 ~~~~
 
-Inherited mutability means that any field of a struct may be mutable, if the
-struct is in a mutable slot (or a field of a struct in a mutable slot, and
-so forth).
+Structs have "inherited mutability", which means that any field of a struct
+may be mutable, if the struct is in a mutable slot.
 
 With a value (say, `mypoint`) of such a type in a mutable location, you can do
 `mypoint.y += 1.0`. But in an immutable location, such an assignment to a
@@ -624,8 +620,8 @@ match mypoint {
 
 In general, the field names of a struct do not have to appear in the same
 order they appear in the type. When you are not interested in all
-the fields of a struct, a struct pattern may end with `, _` (as in
-`Name { field1, _ }`) to indicate that you're ignoring all other fields.
+the fields of a struct, a struct pattern may end with `, ..` (as in
+`Name { field1, .. }`) to indicate that you're ignoring all other fields.
 Additionally, struct fields have a shorthand matching form that simply
 reuses the field name as the binding name.
 
@@ -633,7 +629,7 @@ reuses the field name as the binding name.
 # struct Point { x: f64, y: f64 }
 # let mypoint = Point { x: 0.0, y: 0.0 };
 match mypoint {
-    Point { x, _ } => { println(x.to_str()) }
+    Point { x, .. } => { println(x.to_str()) }
 }
 ~~~
 
@@ -707,14 +703,14 @@ use std::f64;
 # enum Shape { Circle(Point, f64), Rectangle(Point, Point) }
 fn area(sh: Shape) -> f64 {
     match sh {
-        Circle(_, size) => f64::consts::pi * size * size,
+        Circle(_, size) => f64::consts::PI * size * size,
         Rectangle(Point { x, y }, Point { x: x2, y: y2 }) => (x2 - x) * (y2 - y)
     }
 }
 ~~~~
 
 You can write a lone `_` to ignore an individual field, and can
-ignore all fields of a variant like: `Circle(*)`. As in their
+ignore all fields of a variant like: `Circle(..)`. As in their
 introduction form, nullary enum patterns are written without
 parentheses.
 
@@ -743,7 +739,7 @@ enum Shape {
 }
 fn area(sh: Shape) -> f64 {
     match sh {
-        Circle { radius: radius, _ } => f64::consts::pi * square(radius),
+        Circle { radius: radius, .. } => f64::consts::PI * square(radius),
         Rectangle { top_left: top_left, bottom_right: bottom_right } => {
             (bottom_right.x - top_left.x) * (top_left.y - bottom_right.y)
         }
@@ -757,15 +753,15 @@ fn area(sh: Shape) -> f64 {
 
 ## Tuples
 
-Tuples in Rust behave exactly like structs, except that their fields
-do not have names. Thus, you cannot access their fields with dot notation.
-Tuples can have any arity except for 0 (though you may consider
+Tuples in Rust behave exactly like structs, except that their fields do not
+have names. Thus, you cannot access their fields with dot notation.  Tuples
+can have any arity (number of elements) except for 0 (though you may consider
 unit, `()`, as the empty tuple if you like).
 
 ~~~~
 let mytup: (int, int, f64) = (10, 20, 30.0);
 match mytup {
-  (a, b, c) => info2!("{}", a + b + (c as int))
+  (a, b, c) => info!("{}", a + b + (c as int))
 }
 ~~~~
 
@@ -777,11 +773,12 @@ different type from `Bar(1, 2)`), and tuple structs' _fields_ do not have
 names.
 
 For example:
+
 ~~~~
 struct MyTup(int, int, f64);
 let mytup: MyTup = MyTup(10, 20, 30.0);
 match mytup {
-  MyTup(a, b, c) => info2!("{}", a + b + (c as int))
+  MyTup(a, b, c) => info!("{}", a + b + (c as int))
 }
 ~~~~
 
@@ -806,7 +803,7 @@ let id_int: int = *my_gizmo_id;
 ~~~~
 
 Types like this can be useful to differentiate between data that have
-the same type but must be used in different ways.
+the same underlying type but must be used in different ways.
 
 ~~~~
 struct Inches(int);
@@ -821,9 +818,9 @@ confusing numbers that correspond to different units.
 We've already seen several function definitions. Like all other static
 declarations, such as `type`, functions can be declared both at the
 top level and inside other functions (or in modules, which we'll come
-back to [later](#modules-and-crates)). The `fn` keyword introduces a
+back to [later](#crates-and-the-module-system)). The `fn` keyword introduces a
 function. A function has an argument list, which is a parenthesized
-list of `expr: type` pairs separated by commas. An arrow `->`
+list of `name: type` pairs separated by commas. An arrow `->`
 separates the argument list and the function's return type.
 
 ~~~~
@@ -880,9 +877,9 @@ A *destructor* is a function responsible for cleaning up the resources used by
 an object when it is no longer accessible. Destructors can be defined to handle
 the release of resources like files, sockets and heap memory.
 
-Objects are never accessible after their destructor has been called, so there
-are no dynamic failures from accessing freed resources. When a task fails, the
-destructors of all objects in the task are called.
+Objects are never accessible after their destructor has been called, so no
+dynamic failures are possible from accessing freed resources. When a task
+fails, destructors of all objects in the task are called.
 
 The `~` sigil represents a unique handle for a memory allocation on the heap:
 
@@ -907,9 +904,7 @@ calling the destructor, and the owner determines whether the object is mutable.
 
 Ownership is recursive, so mutability is inherited recursively and a destructor
 destroys the contained tree of owned objects. Variables are top-level owners
-and destroy the contained object when they go out of scope. A box managed by
-the garbage collector starts a new ownership tree, and the destructor is called
-when it is collected.
+and destroy the contained object when they go out of scope.
 
 ~~~~
 // the struct owns the objects contained in the `x` and `y` fields
@@ -927,42 +922,388 @@ let mut b = Foo { x: 5, y: ~10 };
 b.x = 10;
 ~~~~
 
-If an object doesn't contain garbage-collected boxes, it consists of a single
-ownership tree and is given the `Owned` trait which allows it to be sent
+If an object doesn't contain any non-Send types, it consists of a single
+ownership tree and is itself given the `Send` trait which allows it to be sent
 between tasks. Custom destructors can only be implemented directly on types
-that are `Owned`, but garbage-collected boxes can still *contain* types with
-custom destructors.
+that are `Send`, but non-`Send` types can still *contain* types with custom
+destructors. Example of types which are not `Send` are [`Gc<T>`][gc] and
+[`Rc<T>`][rc], the shared-ownership types.
 
-# Boxes
+[gc]: http://static.rust-lang.org/doc/master/std/gc/struct.Gc.html
+[rc]: http://static.rust-lang.org/doc/master/std/rc/struct.Rc.html
+
+# Implementing a linked list
+
+An `enum` is a natural fit for describing a linked list, because it can express
+a `List` type as being *either* the end of the list (`Nil`) or another node
+(`Cons`). The full definition of the `Cons` variant will require some thought.
+
+~~~ {.xfail-test}
+enum List {
+    Cons(...), // an incomplete definition of the next element in a List
+    Nil        // the end of a List
+}
+~~~
+
+The obvious approach is to define `Cons` as containing an element in the list
+along with the next `List` node. However, this will generate a compiler error.
+
+~~~ {.xfail-test}
+// error: illegal recursive enum type; wrap the inner value in a box to make it representable
+enum List {
+    Cons(u32, List), // an element (`u32`) and the next node in the list
+    Nil
+}
+~~~
+
+This error message is related to Rust's precise control over memory layout, and
+solving it will require introducing the concept of *boxing*.
+
+## Boxes
 
 A value in Rust is stored directly inside the owner. If a `struct` contains
-four `int` fields, it will be four times as large as a single `int`.  The
-following `struct` type is invalid, as it would have an infinite size:
+four `u32` fields, it will be four times as large as a single `u32`.
 
-~~~~ {.xfail-test}
-struct List {
-    next: Option<List>,
-    data: int
+~~~
+use std::mem::size_of; // bring `size_of` into the current scope, for convenience
+
+struct Foo {
+    a: u32,
+    b: u32,
+    c: u32,
+    d: u32
 }
-~~~~
 
-> ***Note:*** The `Option` type is an enum representing an *optional* value.
-> It's comparable to a nullable pointer in many other languages, but stores the
-> contained value unboxed.
+assert_eq!(size_of::<Foo>(), size_of::<u32>() * 4);
 
-An *owned box* (`~`) uses a heap allocation to provide the invariant of always
-being the size of a pointer, regardless of the contained type. This can be
-leveraged to create a valid recursive `struct` type with a finite size:
-
-~~~~
-struct List {
-    next: Option<~List>,
-    data: int
+struct Bar {
+    a: Foo,
+    b: Foo,
+    c: Foo,
+    d: Foo
 }
+
+assert_eq!(size_of::<Bar>(), size_of::<u32>() * 16);
+~~~
+
+Our previous attempt at defining the `List` type included an `u32` and a `List`
+directly inside `Cons`, making it at least as big as the sum of both types. The
+type was invalid because the size was infinite!
+
+An *owned box* (`~`) uses a dynamic memory allocation to provide the invariant
+of always being the size of a pointer, regardless of the contained type. This
+can be leverage to create a valid `List` definition:
+
+~~~
+enum List {
+    Cons(u32, ~List),
+    Nil
+}
+~~~
+
+Defining a recursive data structure like this is the canonical example of an
+owned box. Much like an unboxed value, an owned box has a single owner and is
+therefore limited to expressing a tree-like data structure.
+
+Consider an instance of our `List` type:
+
+~~~
+# enum List {
+#     Cons(u32, ~List),
+#     Nil
+# }
+let list = Cons(1, ~Cons(2, ~Cons(3, ~Nil)));
+~~~
+
+It represents an owned tree of values, inheriting mutability down the tree and
+being destroyed along with the owner. Since the `list` variable above is
+immutable, the whole list is immutable. The memory allocation itself is the
+box, while the owner holds onto a pointer to it:
+
+      Cons cell        Cons cell        Cons cell
+    +-----------+    +-----+-----+    +-----+-----+
+    |  1  |  ~  | -> |  2  |  ~  | -> |  3  |  ~  | -> Nil
+    +-----------+    +-----+-----+    +-----+-----+
+
+An owned box is a common example of a type with a destructor. The allocated
+memory is cleaned up when the box is destroyed.
+
+## Move semantics
+
+Rust uses a shallow copy for parameter passing, assignment and returning from
+functions. Passing around the `List` will copy only as deep as the pointer to
+the box rather than doing an implicit heap allocation.
+
+~~~
+# enum List {
+#     Cons(u32, ~List),
+#     Nil
+# }
+let xs = Cons(1, ~Cons(2, ~Cons(3, ~Nil)));
+let ys = xs; // copies `Cons(u32, pointer)` shallowly
+~~~
+
+Rust will consider a shallow copy of a type with a destructor like `List` to
+*move ownership* of the value. After a value has been moved, the source
+location cannot be used unless it is reinitialized.
+
+~~~
+# enum List {
+#     Cons(u32, ~List),
+#     Nil
+# }
+let mut xs = Nil;
+let ys = xs;
+
+// attempting to use `xs` will result in an error here
+
+xs = Nil;
+
+// `xs` can be used again
+~~~
+
+A destructor call will only occur for a variable that has not been moved from,
+as it is only called a single time.
+
+
+Avoiding a move can be done with the library-defined `clone` method:
+
+~~~~
+let x = ~5;
+let y = x.clone(); // y is a newly allocated box
+let z = x; // no new memory allocated, x can no longer be used
 ~~~~
 
-Since an owned box has a single owner, they are limited to representing
-tree-like data structures.
+The `clone` method is provided by the `Clone` trait, and can be derived for
+our `List` type. Traits will be explained in detail later.
+
+~~~{.xfail-test}
+#[deriving(Clone)]
+enum List {
+    Cons(u32, ~List),
+    Nil
+}
+
+let x = Cons(5, ~Nil);
+let y = x.clone();
+
+// `x` can still be used!
+
+let z = x;
+
+// and now, it can no longer be used since it has been moved from
+~~~
+
+The mutability of a value may be changed by moving it to a new owner:
+
+~~~~
+let r = ~13;
+let mut s = r; // box becomes mutable
+*s += 1;
+let t = s; // box becomes immutable
+~~~~
+
+A simple way to define a function prepending to the `List` type is to take
+advantage of moves:
+
+~~~
+enum List {
+    Cons(u32, ~List),
+    Nil
+}
+
+fn prepend(xs: List, value: u32) -> List {
+    Cons(value, ~xs)
+}
+
+let mut xs = Nil;
+xs = prepend(xs, 1);
+xs = prepend(xs, 2);
+xs = prepend(xs, 3);
+~~~
+
+However, this is not a very flexible definition of `prepend` as it requires
+ownership of a list to be passed in rather than just mutating it in-place.
+
+## References
+
+The obvious signature for a `List` equality comparison is the following:
+
+~~~{.xfail-test}
+fn eq(xs: List, ys: List) -> bool { ... }
+~~~
+
+However, this will cause both lists to be moved into the function. Ownership
+isn't required to compare the lists, so the function should take *references*
+(&T) instead.
+
+~~~{.xfail-test}
+fn eq(xs: &List, ys: &List) -> bool { ... }
+~~~
+
+A reference is a *non-owning* view of a value. A reference can be obtained with the `&` (address-of)
+operator. It can be dereferenced by using the `*` operator. In a pattern, such as `match` expression
+branches, the `ref` keyword can be used to bind to a variable name by-reference rather than
+by-value. A recursive definition of equality using references is as follows:
+
+~~~
+# enum List {
+#     Cons(u32, ~List),
+#     Nil
+# }
+fn eq(xs: &List, ys: &List) -> bool {
+    // Match on the next node in both lists.
+    match (xs, ys) {
+        // If we have reached the end of both lists, they are equal.
+        (&Nil, &Nil) => true,
+        // If the current element in both lists is equal, keep going.
+        (&Cons(x, ~ref next_xs), &Cons(y, ~ref next_ys)) if x == y => eq(next_xs, next_ys),
+        // If the current elements are not equal, the lists are not equal.
+        _ => false
+    }
+}
+
+let xs = Cons(5, ~Cons(10, ~Nil));
+let ys = Cons(5, ~Cons(10, ~Nil));
+assert!(eq(&xs, &ys));
+~~~
+
+Note that Rust doesn't guarantee [tail-call](http://en.wikipedia.org/wiki/Tail_call) optimization,
+but LLVM is able to handle a simple case like this with optimizations enabled.
+
+## Lists of other types
+
+Our `List` type is currently always a list of 32-bit unsigned integers. By
+leveraging Rust's support for generics, it can be extended to work for any
+element type.
+
+The `u32` in the previous definition can be substituted with a type parameter:
+
+~~~
+enum List<T> {
+    Cons(T, ~List<T>),
+    Nil
+}
+~~~
+
+The old `List` of `u32` is now available as `List<u32>`. The `prepend`
+definition has to be updated too:
+
+~~~
+# enum List<T> {
+#     Cons(T, ~List<T>),
+#     Nil
+# }
+fn prepend<T>(xs: List<T>, value: T) -> List<T> {
+    Cons(value, ~xs)
+}
+~~~
+
+Generic functions and types like this are equivalent to defining specialized
+versions for each set of type parameters.
+
+Using the generic `List<T>` works much like before, thanks to type inference:
+
+~~~
+# enum List<T> {
+#     Cons(T, ~List<T>),
+#     Nil
+# }
+# fn prepend<T>(xs: List<T>, value: T) -> List<T> {
+#     Cons(value, ~xs)
+# }
+let mut xs = Nil; // Unknown type! This is a `List<T>`, but `T` can be anything.
+xs = prepend(xs, 10); // The compiler infers the type of `xs` as `List<int>` from this.
+xs = prepend(xs, 15);
+xs = prepend(xs, 20);
+~~~
+
+The code sample above demonstrates type inference making most type annotations optional. It is
+equivalent to the following type-annotated code:
+
+~~~
+# enum List<T> {
+#     Cons(T, ~List<T>),
+#     Nil
+# }
+# fn prepend<T>(xs: List<T>, value: T) -> List<T> {
+#     Cons(value, ~xs)
+# }
+let mut xs: List<int> = Nil::<int>;
+xs = prepend::<int>(xs, 10);
+xs = prepend::<int>(xs, 15);
+xs = prepend::<int>(xs, 20);
+~~~
+
+In declarations, the language uses `Type<T, U, V>` to describe a list of type
+parameters, but expressions use `identifier::<T, U, V>`, to disambiguate the
+`<` operator.
+
+## Defining list equality with generics
+
+Generic functions are type-checked from the definition, so any necessary properties of the type must
+be specified up-front. Our previous definition of list equality relied on the element type having
+the `==` operator available, and took advantage of the lack of a destructor on `u32` to copy it
+without a move of ownership.
+
+We can add a *trait bound* on the `Eq` trait to require that the type implement the `==` operator.
+Two more `ref` annotations need to be added to avoid attempting to move out the element types:
+
+~~~
+# enum List<T> {
+#     Cons(T, ~List<T>),
+#     Nil
+# }
+fn eq<T: Eq>(xs: &List<T>, ys: &List<T>) -> bool {
+    // Match on the next node in both lists.
+    match (xs, ys) {
+        // If we have reached the end of both lists, they are equal.
+        (&Nil, &Nil) => true,
+        // If the current element in both lists is equal, keep going.
+        (&Cons(ref x, ~ref next_xs), &Cons(ref y, ~ref next_ys)) if x == y => eq(next_xs, next_ys),
+        // If the current elements are not equal, the lists are not equal.
+        _ => false
+    }
+}
+
+let xs = Cons('c', ~Cons('a', ~Cons('t', ~Nil)));
+let ys = Cons('c', ~Cons('a', ~Cons('t', ~Nil)));
+assert!(eq(&xs, &ys));
+~~~
+
+This would be a good opportunity to implement the `Eq` trait for our list type, making the `==` and
+`!=` operators available. We'll need to provide an `impl` for the `Eq` trait and a definition of the
+`eq` method. In a method, the `self` parameter refers to an instance of the type we're implementing
+on.
+
+~~~
+# enum List<T> {
+#     Cons(T, ~List<T>),
+#     Nil
+# }
+impl<T: Eq> Eq for List<T> {
+    fn eq(&self, ys: &List<T>) -> bool {
+        // Match on the next node in both lists.
+        match (self, ys) {
+            // If we have reached the end of both lists, they are equal.
+            (&Nil, &Nil) => true,
+            // If the current element in both lists is equal, keep going.
+            (&Cons(ref x, ~ref next_xs), &Cons(ref y, ~ref next_ys)) if x == y => next_xs == next_ys,
+            // If the current elements are not equal, the lists are not equal.
+            _ => false
+        }
+    }
+}
+
+let xs = Cons(5, ~Cons(10, ~Nil));
+let ys = Cons(5, ~Cons(10, ~Nil));
+assert!(xs.eq(&ys));
+assert!(xs == ys);
+assert!(!xs.ne(&ys));
+assert!(!(xs != ys));
+~~~
+
+# More on boxes
 
 The most common use case for owned boxes is creating recursive data structures
 like a binary search tree. Rust's trait-based generics system (covered later in
@@ -973,18 +1314,18 @@ provide.
 
 In uncommon cases, the indirection can provide a performance gain or memory
 reduction by making values smaller. However, unboxed values should almost
-always be preferred.
+always be preferred when they are usable.
 
 Note that returning large unboxed values via boxes is unnecessary. A large
 value is returned via a hidden output parameter, and the decision on where to
 place the return value should be left to the caller:
 
 ~~~~
-fn foo() -> (int, int, int, int, int, int) {
+fn foo() -> (u64, u64, u64, u64, u64, u64) {
     (5, 5, 5, 5, 5, 5)
 }
 
-let x = ~foo(); // allocates, and writes the integers directly to it
+let x = ~foo(); // allocates a ~ box, and writes the integers directly to it
 ~~~~
 
 Beyond the properties granted by the size, an owned box behaves as a regular
@@ -998,77 +1339,6 @@ y += 2;
 let x = ~5; // immutable
 let mut y = ~5; // mutable
 *y += 2; // the * operator is needed to access the contained value
-~~~~
-
-As covered earlier, an owned box has a destructor to clean up the allocated
-memory. This makes it more restricted than an unboxed type with no destructor
-by introducing *move semantics*.
-
-# Move semantics
-
-Rust uses a shallow copy for parameter passing, assignment and returning from
-functions. This is considered a move of ownership for types with destructors.
-After a value has been moved, it can no longer be used from the source location
-and will not be destroyed when the source goes out of scope.
-
-~~~~
-let x = ~5;
-let y = x.clone(); // y is a newly allocated box
-let z = x; // no new memory allocated, x can no longer be used
-~~~~
-
-The mutability of a value may be changed by moving it to a new owner:
-
-~~~~
-let r = ~13;
-let mut s = r; // box becomes mutable
-*s += 1;
-let t = s; // box becomes immutable
-~~~~
-
-# Managed boxes
-
-A managed box (`@`) is a heap allocation with the lifetime managed by a
-task-local garbage collector. It will be destroyed at some point after there
-are no references left to the box, no later than the end of the task. Managed
-boxes lack an owner, so they start a new ownership tree and don't inherit
-mutability. They do own the contained object, and mutability is defined by the
-type of the managed box (`@` or `@mut`). An object containing a managed box is
-not `Owned`, and can't be sent between tasks.
-
-~~~~
-let a = @5; // immutable
-
-let mut b = @5; // mutable variable, immutable box
-b = @10;
-
-let c = @mut 5; // immutable variable, mutable box
-*c = 10;
-
-let mut d = @mut 5; // mutable variable, mutable box
-*d += 5;
-d = @mut 15;
-~~~~
-
-A mutable variable and an immutable variable can refer to the same box, given
-that their types are compatible. Mutability of a box is a property of its type,
-however, so for example a mutable handle to an immutable box cannot be
-assigned a reference to a mutable box.
-
-~~~~
-let a = @1;     // immutable box
-let b = @mut 2; // mutable box
-
-let mut c : @int;       // declare a variable with type managed immutable int
-let mut d : @mut int;   // and one of type managed mutable int
-
-c = a;          // box type is the same, okay
-d = b;          // box type is the same, okay
-~~~~
-
-~~~~ {.xfail-test}
-// but b cannot be assigned to c, or a to d
-c = b;          // error
 ~~~~
 
 # Borrowed pointers
@@ -1134,7 +1404,7 @@ compute_distance(managed_box, owned_box);
 Here the `&` operator is used to take the address of the variable
 `on_the_stack`; this is because `on_the_stack` has the type `Point`
 (that is, a struct value) and we have to take its address to get a
-value. We also call this _borrowing_ the local variable
+reference. We also call this _borrowing_ the local variable
 `on_the_stack`, because we are creating an alias: that is, another
 route to the same data.
 
@@ -1160,8 +1430,9 @@ For a more in-depth explanation of borrowed pointers, read the
 
 ## Freezing
 
-Borrowing an immutable pointer to an object freezes it and prevents mutation.
-`Owned` objects have freezing enforced statically at compile-time.
+Lending an immutable pointer to an object freezes it and prevents mutation.
+`Freeze` objects have freezing enforced statically at compile-time. Examples
+of non-`Freeze` types are `@mut` and [`RefCell<T>`][refcell].
 
 ~~~~
 let mut x = 5;
@@ -1185,6 +1456,8 @@ let y = x;
 }
 // the box is now unfrozen again
 ~~~~
+
+[refcell]: http://static.rust-lang.org/doc/master/std/cell/struct.RefCell.html
 
 # Dereferencing pointers
 
@@ -1257,58 +1530,80 @@ The indexing operator (`[]`) also auto-dereferences.
 
 # Vectors and strings
 
-A vector is a contiguous section of memory containing zero or more
-values of the same type. Like other types in Rust, vectors can be
-stored on the stack, the local heap, or the exchange heap. Borrowed
-pointers to vectors are also called 'slices'.
+A vector is a contiguous block of memory containing zero or more values of the
+same type. Rust also supports vector reference types, called slices, which are
+a view into a block of memory represented as a pointer and a length.
+
+Strings are represented as vectors of `u8`, with the guarantee of containing a
+valid UTF-8 sequence.
+
+Fixed-size vectors are an unboxed block of memory, with the element length as
+part of the type. A fixed-size vector owns the elements it contains, so the
+elements are mutable if the vector is mutable. Fixed-size strings do not exist.
 
 ~~~
-# enum Crayon {
-#     Almond, AntiqueBrass, Apricot,
-#     Aquamarine, Asparagus, AtomicTangerine,
-#     BananaMania, Beaver, Bittersweet,
-#     Black, BlizzardBlue, Blue
-# }
-// A fixed-size stack vector
-let stack_crayons: [Crayon, ..3] = [Almond, AntiqueBrass, Apricot];
+// A fixed-size vector
+let numbers = [1, 2, 3];
+let more_numbers = numbers;
 
-// A borrowed pointer to stack-allocated vector
-let stack_crayons: &[Crayon] = &[Aquamarine, Asparagus, AtomicTangerine];
-
-// A local heap (managed) vector of crayons
-let local_crayons: @[Crayon] = @[BananaMania, Beaver, Bittersweet];
-
-// An exchange heap (owned) vector of crayons
-let exchange_crayons: ~[Crayon] = ~[Black, BlizzardBlue, Blue];
+// The type of a fixed-size vector is written as `[Type, ..length]`
+let five_zeroes: [int, ..5] = [0, ..5];
 ~~~
 
-The `+` operator means concatenation when applied to vector types.
+A unique vector is dynamically sized, and has a destructor to clean up
+allocated memory on the heap. A unique vector owns the elements it contains, so
+the elements are mutable if the vector is mutable.
 
-~~~~
-# enum Crayon { Almond, AntiqueBrass, Apricot,
-#               Aquamarine, Asparagus, AtomicTangerine,
-#               BananaMania, Beaver, Bittersweet };
-# impl Clone for Crayon {
-#     fn clone(&self) -> Crayon {
-#         *self
-#     }
-# }
+~~~
+// A dynamically sized vector (unique vector)
+let mut numbers = ~[1, 2, 3];
+numbers.push(4);
+numbers.push(5);
 
-let my_crayons = ~[Almond, AntiqueBrass, Apricot];
-let your_crayons = ~[BananaMania, Beaver, Bittersweet];
+// The type of a unique vector is written as ~[int]
+let more_numbers: ~[int] = numbers;
 
-// Add two vectors to create a new one
-let our_crayons = my_crayons + your_crayons;
+// The original `numbers` value can no longer be used, due to move semantics.
 
-// .push_all() will append to a vector, provided it lives in a mutable slot
-let mut my_crayons = my_crayons;
-my_crayons.push_all(your_crayons);
-~~~~
+let mut string = ~"fo";
+string.push_char('o');
+~~~
 
-> ***Note:*** The above examples of vector addition use owned
-> vectors. Some operations on slices and stack vectors are
-> not yet well-supported. Owned vectors are often the most
-> usable.
+Slices are similar to fixed-size vectors, but the length is not part of the
+type. They simply point into a block of memory and do not have ownership over
+the elements.
+
+~~~
+// A slice
+let xs = &[1, 2, 3];
+
+// Slices have their type written as &[int]
+let ys: &[int] = xs;
+
+// Other vector types coerce to slices
+let three = [1, 2, 3];
+let zs: &[int] = three;
+
+// An unadorned string literal is an immutable string slice
+let string = "foobar";
+
+// A string slice type is written as &str
+let view: &str = string.slice(0, 3);
+~~~
+
+Mutable slices also exist, just as there are mutable references. However, there
+are no mutable string slices. Strings are a multi-byte encoding (UTF-8) of
+Unicode code points, so they cannot be freely mutated without the ability to
+alter the length.
+
+~~~
+let mut xs = [1, 2, 3];
+let view = xs.mut_slice(0, 2);
+view[0] = 5;
+
+// The type of a mutable slice is written as &mut [T]
+let ys: &mut [int] = &mut [1, 2, 3];
+~~~
 
 Square brackets denote indexing into a vector:
 
@@ -1336,102 +1631,58 @@ let score = match numbers {
 };
 ~~~~
 
-The elements of a vector _inherit the mutability of the vector_,
-and as such, individual elements may not be reassigned when the
-vector lives in an immutable slot.
+Both vectors and strings support a number of useful [methods](#methods),
+defined in [`std::vec`] and [`std::str`].
 
-~~~ {.xfail-test}
-# enum Crayon { Almond, AntiqueBrass, Apricot,
-#               Aquamarine, Asparagus, AtomicTangerine,
-#               BananaMania, Beaver, Bittersweet };
-let crayons: ~[Crayon] = ~[BananaMania, Beaver, Bittersweet];
+[`std::vec`]: std/vec/index.html
+[`std::str`]: std/str/index.html
 
-crayons[0] = Apricot; // ERROR: Can't assign to immutable vector
-~~~
+# Ownership escape hatches
 
-Moving it into a mutable slot makes the elements assignable.
+Ownership can cleanly describe tree-like data structures, and borrowed pointers provide non-owning
+references. However, more flexibility is often desired and Rust provides ways to escape from strict
+single parent ownership.
 
-~~~
-# enum Crayon { Almond, AntiqueBrass, Apricot,
-#               Aquamarine, Asparagus, AtomicTangerine,
-#               BananaMania, Beaver, Bittersweet };
-let crayons: ~[Crayon] = ~[BananaMania, Beaver, Bittersweet];
-
-// Put the vector into a mutable slot
-let mut mutable_crayons = crayons;
-
-// Now it's mutable to the bone
-mutable_crayons[0] = Apricot;
-~~~
-
-This is a simple example of Rust's _dual-mode data structures_, also
-referred to as _freezing and thawing_.
-
-Strings are implemented with vectors of `u8`, though they have a
-distinct type. They support most of the same allocation options as
-vectors, though the string literal without a storage sigil (for
-example, `"foo"`) is treated differently than a comparable vector
-(`[foo]`).  Whereas plain vectors are stack-allocated fixed-length
-vectors, plain strings are borrowed pointers to read-only (static)
-memory. All strings are immutable.
+The standard library provides the `std::rc::Rc` pointer type to express *shared ownership* over a
+reference counted box. As soon as all of the `Rc` pointers go out of scope, the box and the
+contained value are destroyed.
 
 ~~~
-// A plain string is a slice to read-only (static) memory
-let stack_crayons: &str = "Almond, AntiqueBrass, Apricot";
+use std::rc::Rc;
 
-// The same thing, but with the `&`
-let stack_crayons: &str = &"Aquamarine, Asparagus, AtomicTangerine";
+// A fixed-size array allocated in a reference-counted box
+let x = Rc::new([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+let y = x.clone(); // a new owner
+let z = x; // this moves `x` into `z`, rather than creating a new owner
 
-// A local heap (managed) string
-let local_crayons: @str = @"BananaMania, Beaver, Bittersweet";
+assert_eq!(*z.borrow(), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 
-// An exchange heap (owned) string
-let exchange_crayons: ~str = ~"Black, BlizzardBlue, Blue";
+// the variable is mutable, but not the contents of the box
+let mut a = Rc::new([10, 9, 8, 7, 6, 5, 4, 3, 2, 1]);
+a = z;
 ~~~
 
-Both vectors and strings support a number of useful
-[methods](#methods), defined in [`std::vec`]
-and [`std::str`]. Here are some examples.
-
-[`std::vec`]: std/vec.html
-[`std::str`]: std/str.html
+A garbage collected pointer is provided via `std::gc::Gc`, with a task-local garbage collector
+having ownership of the box. It allows the creation of cycles, and the individual `Gc` pointers do
+not have a destructor.
 
 ~~~
-# enum Crayon {
-#     Almond, AntiqueBrass, Apricot,
-#     Aquamarine, Asparagus, AtomicTangerine,
-#     BananaMania, Beaver, Bittersweet
-# }
-# fn unwrap_crayon(c: Crayon) -> int { 0 }
-# fn eat_crayon_wax(i: int) { }
-# fn store_crayon_in_nasal_cavity(i: uint, c: Crayon) { }
-# fn crayon_to_str(c: Crayon) -> &str { "" }
+use std::gc::Gc;
 
-let crayons = [Almond, AntiqueBrass, Apricot];
+// A fixed-size array allocated in a garbage-collected box
+let x = Gc::new([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+let y = x; // does not perform a move, unlike with `Rc`
+let z = x;
 
-// Check the length of the vector
-assert!(crayons.len() == 3);
-assert!(!crayons.is_empty());
-
-// Iterate over a vector, obtaining a pointer to each element
-// (`for` is explained in the container/iterator tutorial)
-for crayon in crayons.iter() {
-    let delicious_crayon_wax = unwrap_crayon(*crayon);
-    eat_crayon_wax(delicious_crayon_wax);
-}
-
-// Map vector elements
-let crayon_names = crayons.map(|v| crayon_to_str(*v));
-let favorite_crayon_name = crayon_names[0];
-
-// Remove whitespace from before and after the string
-let new_favorite_crayon_name = favorite_crayon_name.trim();
-
-if favorite_crayon_name.len() > 5 {
-   // Create a substring
-   println(favorite_crayon_name.slice_chars(0, 5));
-}
+assert_eq!(*z.borrow(), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 ~~~
+
+With shared ownership, mutability cannot be inherited so the boxes are always immutable. However,
+it's possible to use *dynamic* mutability via types like `std::cell::Cell` where freezing is handled
+via dynamic checks and can fail at runtime.
+
+The `Rc` and `Gc` types are not sendable, so they cannot be used to share memory between tasks. Safe
+immutable and mutable shared memory is provided by the `extra::arc` module.
 
 # Closures
 
@@ -1452,7 +1703,7 @@ Rust also supports _closures_, functions that can access variables in
 the enclosing scope.
 
 ~~~~
-fn call_closure_with_ten(b: &fn(int)) { b(10); }
+fn call_closure_with_ten(b: |int|) { b(10); }
 
 let captured_var = 20;
 let closure = |arg| println!("captured_var={}, arg={}", captured_var, arg);
@@ -1476,7 +1727,7 @@ let square = |x: int| -> uint { (x * x) as uint };
 ~~~~
 
 There are several forms of closure, each with its own role. The most
-common, called a _stack closure_, has type `&fn` and can directly
+common, called a _stack closure_, has type `||` and can directly
 access local variables in the enclosing scope.
 
 ~~~~
@@ -1495,7 +1746,7 @@ pervasively in Rust code.
 
 ## Owned closures
 
-Owned closures, written `~fn` in analogy to the `~` pointer type,
+Owned closures, written `proc`,
 hold on to things that can safely be sent between
 processes. They copy the values they close over, much like managed
 closures, but they also own them: that is, no other code can access
@@ -1506,13 +1757,13 @@ for spawning [tasks][tasks].
 
 Rust closures have a convenient subtyping property: you can pass any kind of
 closure (as long as the arguments and return types match) to functions
-that expect a `&fn()`. Thus, when writing a higher-order function that
+that expect a `||`. Thus, when writing a higher-order function that
 only calls its function argument, and does nothing else with it, you
-should almost always declare the type of that argument as `&fn()`. That way,
+should almost always declare the type of that argument as `||`. That way,
 callers may pass any kind of closure.
 
 ~~~~
-fn call_twice(f: &fn()) { f(); f(); }
+fn call_twice(f: ||) { f(); f(); }
 let closure = || { "I'm a closure, and it doesn't matter what type I am"; };
 fn function() { "I'm a normal function"; }
 call_twice(closure);
@@ -1525,19 +1776,14 @@ call_twice(function);
 
 ## Do syntax
 
-The `do` expression provides a way to treat higher-order functions
-(functions that take closures as arguments) as control structures.
+The `do` expression makes it easier to call functions that take procedures
+as arguments.
 
-Consider this function that iterates over a vector of
-integers, passing in a pointer to each integer in the vector:
+Consider this function that takes a procedure:
 
 ~~~~
-fn each(v: &[int], op: &fn(v: &int)) {
-   let mut n = 0;
-   while n < v.len() {
-       op(&v[n]);
-       n += 1;
-   }
+fn call_it(op: proc(v: int)) {
+    op(10)
 }
 ~~~~
 
@@ -1546,31 +1792,29 @@ argument, we can write it in a way that has a pleasant, block-like
 structure.
 
 ~~~~
-# fn each(v: &[int], op: &fn(v: &int)) { }
-# fn do_some_work(i: &int) { }
-each([1, 2, 3], |n| {
-    do_some_work(n);
+# fn call_it(op: proc(v: int)) { }
+call_it(proc(n) {
+    println(n.to_str());
 });
 ~~~~
 
 This is such a useful pattern that Rust has a special form of function
-call that can be written more like a built-in control structure:
+call for these functions.
 
 ~~~~
-# fn each(v: &[int], op: &fn(v: &int)) { }
-# fn do_some_work(i: &int) { }
-do each([1, 2, 3]) |n| {
-    do_some_work(n);
+# fn call_it(op: proc(v: int)) { }
+do call_it() |n| {
+    println(n.to_str());
 }
 ~~~~
 
 The call is prefixed with the keyword `do` and, instead of writing the
-final closure inside the argument list, it appears outside of the
+final procedure inside the argument list, it appears outside of the
 parentheses, where it looks more like a typical block of
 code.
 
 `do` is a convenient way to create tasks with the `task::spawn`
-function.  `spawn` has the signature `spawn(fn: ~fn())`. In other
+function.  `spawn` has the signature `spawn(fn: proc())`. In other
 words, it is a function that takes an owned closure that takes no
 arguments.
 
@@ -1578,7 +1822,7 @@ arguments.
 use std::task::spawn;
 
 do spawn() || {
-    debug2!("I'm a task, whatever");
+    debug!("I'm a task, whatever");
 }
 ~~~~
 
@@ -1590,7 +1834,7 @@ may be omitted from `do` expressions.
 use std::task::spawn;
 
 do spawn {
-   debug2!("Kablam!");
+   debug!("Kablam!");
 }
 ~~~~
 
@@ -1717,10 +1961,10 @@ impl Circle {
 To call such a method, just prefix it with the type name and a double colon:
 
 ~~~~
-use std::f64::consts::pi;
+use std::f64::consts::PI;
 struct Circle { radius: f64 }
 impl Circle {
-    fn new(area: f64) -> Circle { Circle { radius: (area / pi).sqrt() } }
+    fn new(area: f64) -> Circle { Circle { radius: (area / PI).sqrt() } }
 }
 let c = Circle::new(42.5);
 ~~~~
@@ -1736,7 +1980,7 @@ vector consisting of the result of applying `function` to each element
 of `vector`:
 
 ~~~~
-fn map<T, U>(vector: &[T], function: &fn(v: &T) -> U) -> ~[U] {
+fn map<T, U>(vector: &[T], function: |v: &T| -> U) -> ~[U] {
     let mut accumulator = ~[];
     for element in vector.iter() {
         accumulator.push(function(element));
@@ -1791,7 +2035,7 @@ a function that returns `Option<T>` instead of `T`.
 fn radius(shape: Shape) -> Option<f64> {
     match shape {
         Circle(_, radius) => Some(radius),
-        Rectangle(*)      => None
+        Rectangle(..)      => None
     }
 }
 ~~~~
@@ -1995,13 +2239,13 @@ name and a double colon.  The compiler uses type inference to decide which
 implementation to use.
 
 ~~~~
-use std::f64::consts::pi;
+use std::f64::consts::PI;
 trait Shape { fn new(area: f64) -> Self; }
 struct Circle { radius: f64 }
 struct Square { length: f64 }
 
 impl Shape for Circle {
-    fn new(area: f64) -> Circle { Circle { radius: (area / pi).sqrt() } }
+    fn new(area: f64) -> Circle { Circle { radius: (area / PI).sqrt() } }
 }
 impl Shape for Square {
     fn new(area: f64) -> Square { Square { length: (area).sqrt() } }
@@ -2175,17 +2419,17 @@ trait Circle : Shape { fn radius(&self) -> f64; }
 Now, we can implement `Circle` on a type only if we also implement `Shape`.
 
 ~~~~
-use std::f64::consts::pi;
+use std::f64::consts::PI;
 # trait Shape { fn area(&self) -> f64; }
 # trait Circle : Shape { fn radius(&self) -> f64; }
 # struct Point { x: f64, y: f64 }
 # fn square(x: f64) -> f64 { x * x }
 struct CircleStruct { center: Point, radius: f64 }
 impl Circle for CircleStruct {
-    fn radius(&self) -> f64 { (self.area() / pi).sqrt() }
+    fn radius(&self) -> f64 { (self.area() / PI).sqrt() }
 }
 impl Shape for CircleStruct {
-    fn area(&self) -> f64 { pi * square(self.radius) }
+    fn area(&self) -> f64 { PI * square(self.radius) }
 }
 ~~~~
 
@@ -2210,13 +2454,13 @@ fn radius_times_area<T: Circle>(c: T) -> f64 {
 Likewise, supertrait methods may also be called on trait objects.
 
 ~~~ {.xfail-test}
-use std::f64::consts::pi;
+use std::f64::consts::PI;
 # trait Shape { fn area(&self) -> f64; }
 # trait Circle : Shape { fn radius(&self) -> f64; }
 # struct Point { x: f64, y: f64 }
 # struct CircleStruct { center: Point, radius: f64 }
-# impl Circle for CircleStruct { fn radius(&self) -> f64 { (self.area() / pi).sqrt() } }
-# impl Shape for CircleStruct { fn area(&self) -> f64 { pi * square(self.radius) } }
+# impl Circle for CircleStruct { fn radius(&self) -> f64 { (self.area() / PI).sqrt() } }
+# impl Shape for CircleStruct { fn area(&self) -> f64 { PI * square(self.radius) } }
 
 let concrete = @CircleStruct{center:Point{x:3f,y:4f},radius:5f};
 let mycircle: @Circle = concrete as @Circle;
@@ -2636,21 +2880,25 @@ fn main() {
 ~~~~
 
 And here an example with multiple files:
+
 ~~~{.ignore}
 // a.rs - crate root
 use b::foo;
 mod b;
 fn main() { foo(); }
 ~~~
+
 ~~~{.ignore}
 // b.rs
 use b::c::bar;
 pub mod c;
 pub fn foo() { bar(); }
 ~~~
+
 ~~~
 // c.rs
 pub fn bar() { println("Baz!"); }
+# fn main() {}
 ~~~
 
 There also exist two short forms for importing multiple names at once:
@@ -2797,10 +3045,10 @@ extend with the `-L` switch).
 However, Rust also ships with rustpkg, a package manager that is able to automatically download and build
 libraries if you use it for building your crate. How it works is explained [here][rustpkg],
 but for this tutorial it's only important to know that you can optionally annotate an
-`extern mod` statement with an package id that rustpkg can use to identify it:
+`extern mod` statement with a package id that rustpkg can use to identify it:
 
 ~~~ {.ignore}
-extern mod rust = "github.com/mozilla/rust"; // pretend Rust is an simple library
+extern mod rust = "github.com/mozilla/rust"; // pretend Rust is a simple library
 ~~~
 
 [rustpkg]: rustpkg.html
@@ -2816,28 +3064,27 @@ the link name and the version. It also hashes the filename and the symbols in a 
 based on the link metadata, allowing you to use two different versions of the same library in a crate
 without conflict.
 
-Therefor, if you plan to compile your crate as a library, you should annotate it with that information:
+Therefore, if you plan to compile your crate as a library, you should annotate it with that information:
 
 ~~~~
 // lib.rs
 
 # #[crate_type = "lib"];
-// Crate linkage metadata
-#[link(name = "farm", vers = "2.5")];
+// Package ID
+#[pkgid = "farm#2.5"];
 
 // ...
-# pub fn farm() {}
+# fn farm() {}
 ~~~~
 
-You can also in turn require in a `extern mod` statement that certain link metadata items match some criteria.
-For that, Rust currently parses a comma-separated list of name/value pairs that appear after
-it, and ensures that they match the attributes provided in the `link` attribute of a crate file.
-This enables you to, eg, pick a a crate based on it's version number, or to link an library under an
-different name. For example, this two mod statements would both accept and select the crate define above:
+You can also specify package ID information in a `extern mod` statement.  For
+example, these `extern mod` statements would both accept and select the
+crate define above:
 
 ~~~~ {.xfail-test}
-extern mod farm(vers = "2.5");
-extern mod my_farm(name = "farm", vers = "2.5");
+extern mod farm;
+extern mod farm = "farm#2.5";
+extern mod my_farm = "farm";
 ~~~~
 
 Other crate settings and metadata include things like enabling/disabling certain errors or warnings,
@@ -2848,21 +3095,18 @@ or setting the crate type (library or executable) explicitly:
 // ...
 
 // This crate is a library ("bin" is the default)
+#[pkgid = "farm#2.5"];
 #[crate_type = "lib"];
 
 // Turn on a warning
 #[warn(non_camel_case_types)]
-# pub fn farm() {}
+# fn farm() {}
 ~~~~
 
-If you're compiling your crate with `rustpkg`,
-link annotations will not be necessary, because they get
-inferred by `rustpkg` based on the Package id and naming conventions.
-
-
-> ***Note:*** The rules regarding link metadata, both as attributes and on `extern mod`,
-              as well as their interaction with `rustpkg`
-              are currently not clearly defined and will likely change in the future.
+> ***Note:*** The rules regarding package IDs, both as attributes and as used
+              in `extern mod`, as well as their interaction with `rustpkg` are
+              currently not clearly defined and will likely change in the
+              future.
 
 ## A minimal example
 
@@ -2872,8 +3116,10 @@ We define two crates, and use one of them as a library in the other.
 
 ~~~~
 // world.rs
-#[link(name = "world", vers = "0.42")];
+#[pkgid = "world#0.42"];
+# extern mod extra;
 pub fn explore() -> &'static str { "world" }
+# fn main() {}
 ~~~~
 
 ~~~~ {.xfail-test}
@@ -2894,7 +3140,7 @@ Now compile and run like this (adjust to your platform if necessary):
 Notice that the library produced contains the version in the file name
 as well as an inscrutable string of alphanumerics. As explained in the previous paragraph,
 these are both part of Rust's library versioning scheme. The alphanumerics are
-a hash representing the crates link metadata.
+a hash representing the crates package ID.
 
 ## The standard library and the prelude
 
@@ -2922,15 +3168,15 @@ This allows you to use common types and functions like `Option<T>` or `println`
 without needing to import them. And if you need something from `std` that's not in the prelude,
 you just have to import it with an `use` statement.
 
-For example, it re-exports `println` which is defined in `std::io::println`:
+For example, it re-exports `println` which is defined in `std::io::stdio::println`:
 
 ~~~
-use puts = std::io::println;
+use puts = std::io::stdio::println;
 
 fn main() {
     println("println is imported per default.");
-    puts("Doesn't hinder you from importing it under an different name yourself.");
-    ::std::io::println("Or from not using the automatic import.");
+    puts("Doesn't hinder you from importing it under a different name yourself.");
+    ::std::io::stdio::println("Or from not using the automatic import.");
 }
 ~~~
 
@@ -2946,59 +3192,15 @@ Both auto-insertions can be disabled with an attribute if necessary:
 #[no_implicit_prelude];
 ~~~
 
-## The standard library in detail
+See the [API documentation][stddoc] for details.
 
-The Rust standard library provides runtime features required by the language,
-including the task scheduler and memory allocators, as well as library
-support for Rust built-in types, platform abstractions, and other commonly
-used features.
-
-[`std`] includes modules corresponding to each of the integer types, each of
-the floating point types, the [`bool`] type, [tuples], [characters], [strings],
-[vectors], [managed boxes], [owned boxes],
-and unsafe and borrowed [pointers].  Additionally, `std` provides
-some pervasive types ([`option`] and [`result`]),
-[task] creation and [communication] primitives,
-platform abstractions ([`os`] and [`path`]), basic
-I/O abstractions ([`io`]), [containers] like [`hashmap`],
-common traits ([`kinds`], [`ops`], [`cmp`], [`num`],
-[`to_str`], [`clone`]), and complete bindings to the C standard library ([`libc`]).
-
-The full documentation for `std` can be found here: [standard library].
-
-[standard library]: std/index.html
-[`std`]: std/index.html
-[`bool`]: std/bool.html
-[tuples]: std/tuple.html
-[characters]: std/char.html
-[strings]: std/str.html
-[vectors]: std/vec.html
-[managed boxes]: std/managed.html
-[owned boxes]: std/owned.html
-[pointers]: std/ptr.html
-[`option`]: std/option.html
-[`result`]: std/result.html
-[task]: std/task.html
-[communication]: std/comm.html
-[`os`]: std/os.html
-[`path`]: std/path.html
-[`io`]: std/io.html
-[containers]: std/container.html
-[`hashmap`]: std/hashmap.html
-[`kinds`]: std/kinds.html
-[`ops`]: std/ops.html
-[`cmp`]: std/cmp.html
-[`num`]: std/num.html
-[`to_str`]: std/to_str.html
-[`clone`]: std/clone.html
-[`libc`]: std/libc.html
+[stddoc]: std/index.html
 
 ## The extra library
 
-Rust also ships with the [extra library], an accumulation of
-useful things, that are however not important enough
-to deserve a place in the standard library.
-You can use them by linking to `extra` with an `extern mod extra;`.
+Rust also ships with the [extra library], an accumulation of useful things,
+that are however not important enough to deserve a place in the standard
+library.  You can use them by linking to `extra` with an `extern mod extra;`.
 
 [extra library]: extra/index.html
 
@@ -3014,17 +3216,22 @@ tutorials on individual topics.
 * [Tasks and communication][tasks]
 * [Macros][macros]
 * [The foreign function interface][ffi]
-* [Containers and iterators](tutorial-container.html)
-* [Error-handling and Conditions](tutorial-conditions.html)
+* [Containers and iterators][container]
+* [Error-handling and Conditions][conditions]
 * [Packaging up Rust code][rustpkg]
+* [Documenting Rust code][rustdoc]
 
-There is further documentation on the [wiki], however those tend to be even more out of date as this document.
+There is further documentation on the [wiki], however those tend to be even
+more out of date than this document.
 
 [borrow]: tutorial-borrowed-ptr.html
 [tasks]: tutorial-tasks.html
 [macros]: tutorial-macros.html
 [ffi]: tutorial-ffi.html
+[container]: tutorial-container.html
+[conditions]: tutorial-conditions.html
 [rustpkg]: tutorial-rustpkg.html
+[rustdoc]: rustdoc.html
 
 [wiki]: https://github.com/mozilla/rust/wiki/Docs
-
+[wiki-packages]: https://github.com/mozilla/rust/wiki/Doc-packages,-editors,-and-other-tools

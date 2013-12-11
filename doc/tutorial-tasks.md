@@ -53,12 +53,12 @@ concurrency at this writing:
   for safely sharing immutable data,
 * [`extra::future`] - A type representing values that may be computed concurrently and retrieved at a later time.
 
-[`std::task`]: std/task.html
-[`std::comm`]: std/comm.html
-[`extra::comm`]: extra/comm.html
-[`extra::sync`]: extra/sync.html
-[`extra::arc`]: extra/arc.html
-[`extra::future`]: extra/future.html
+[`std::task`]: std/task/index.html
+[`std::comm`]: std/comm/index.html
+[`extra::comm`]: extra/comm/index.html
+[`extra::sync`]: extra/sync/index.html
+[`extra::arc`]: extra/arc/index.html
+[`extra::future`]: extra/future/index.html
 
 # Basics
 
@@ -69,7 +69,6 @@ calling the `spawn` function with a closure argument. `spawn` executes the
 closure in the new task.
 
 ~~~~
-# use std::io::println;
 # use std::task::spawn;
 
 // Print something profound in a different task using a named function
@@ -77,7 +76,7 @@ fn print_message() { println("I am running in a different task!"); }
 spawn(print_message);
 
 // Print something more profound in a different task using a lambda expression
-spawn( || println("I am also running in a different task!") );
+spawn(proc() println("I am also running in a different task!") );
 
 // The canonical way to spawn is using `do` notation
 do spawn {
@@ -92,7 +91,7 @@ _owned types_. The language leaves the implementation details to the standard
 library.
 
 The `spawn` function has a very simple type signature: `fn spawn(f:
-~fn())`. Because it accepts only owned closures, and owned closures
+proc())`. Because it accepts only owned closures, and owned closures
 contain only owned data, `spawn` can safely move the entire closure
 and all its associated state into an entirely different task for
 execution. Like any closure, the function passed to `spawn` may capture
@@ -105,8 +104,8 @@ an environment that it carries across tasks.
 let child_task_number = generate_task_number();
 
 do spawn {
-   // Capture it in the remote task
-   println!("I am child number {}", child_task_number);
+    // Capture it in the remote task
+    println!("I am child number {}", child_task_number);
 }
 ~~~
 
@@ -122,7 +121,7 @@ receiving messages. Pipes are low-level communication building-blocks and so
 come in a variety of forms, each one appropriate for a different use case. In
 what follows, we cover the most commonly used varieties.
 
-The simplest way to create a pipe is to use the `comm::stream`
+The simplest way to create a pipe is to use `Chan::new`
 function to create a `(Port, Chan)` pair. In Rust parlance, a *channel*
 is a sending endpoint of a pipe, and a *port* is the receiving
 endpoint. Consider the following example of calculating two results
@@ -130,9 +129,8 @@ concurrently:
 
 ~~~~
 # use std::task::spawn;
-# use std::comm::{stream, Port, Chan};
 
-let (port, chan): (Port<int>, Chan<int>) = stream();
+let (port, chan): (Port<int>, Chan<int>) = Chan::new();
 
 do spawn || {
     let result = some_expensive_computation();
@@ -151,8 +149,7 @@ stream for sending and receiving integers (the left-hand side of the `let`,
 a tuple into its component parts).
 
 ~~~~
-# use std::comm::{stream, Chan, Port};
-let (port, chan): (Port<int>, Chan<int>) = stream();
+let (port, chan): (Port<int>, Chan<int>) = Chan::new();
 ~~~~
 
 The child task will use the channel to send data to the parent task,
@@ -161,9 +158,8 @@ spawns the child task.
 
 ~~~~
 # use std::task::spawn;
-# use std::comm::stream;
 # fn some_expensive_computation() -> int { 42 }
-# let (port, chan) = stream();
+# let (port, chan) = Chan::new();
 do spawn || {
     let result = some_expensive_computation();
     chan.send(result);
@@ -181,25 +177,23 @@ computation, then waits for the child's result to arrive on the
 port:
 
 ~~~~
-# use std::comm::{stream};
 # fn some_other_expensive_computation() {}
-# let (port, chan) = stream::<int>();
+# let (port, chan) = Chan::<int>::new();
 # chan.send(0);
 some_other_expensive_computation();
 let result = port.recv();
 ~~~~
 
-The `Port` and `Chan` pair created by `stream` enables efficient communication
-between a single sender and a single receiver, but multiple senders cannot use
-a single `Chan`, and multiple receivers cannot use a single `Port`.  What if our
-example needed to compute multiple results across a number of tasks? The
-following program is ill-typed:
+The `Port` and `Chan` pair created by `Chan::new` enables efficient
+communication between a single sender and a single receiver, but multiple
+senders cannot use a single `Chan`, and multiple receivers cannot use a single
+`Port`.  What if our example needed to compute multiple results across a number
+of tasks? The following program is ill-typed:
 
 ~~~ {.xfail-test}
 # use std::task::{spawn};
-# use std::comm::{stream, Port, Chan};
 # fn some_expensive_computation() -> int { 42 }
-let (port, chan) = stream();
+let (port, chan) = Chan::new();
 
 do spawn {
     chan.send(some_expensive_computation());
@@ -217,10 +211,8 @@ Instead we can use a `SharedChan`, a type that allows a single
 
 ~~~
 # use std::task::spawn;
-# use std::comm::{stream, SharedChan};
 
-let (port, chan) = stream();
-let chan = SharedChan::new(chan);
+let (port, chan) = SharedChan::new();
 
 for init_val in range(0u, 3) {
     // Create a new channel handle to distribute to the child task
@@ -239,28 +231,27 @@ Here we transfer ownership of the channel into a new `SharedChan` value.  Like
 as an *affine* or *linear* type). Unlike with `Chan`, though, the programmer
 may duplicate a `SharedChan`, with the `clone()` method.  A cloned
 `SharedChan` produces a new handle to the same channel, allowing multiple
-tasks to send data to a single port.  Between `spawn`, `stream` and
+tasks to send data to a single port.  Between `spawn`, `Chan` and
 `SharedChan`, we have enough tools to implement many useful concurrency
 patterns.
 
 Note that the above `SharedChan` example is somewhat contrived since
-you could also simply use three `stream` pairs, but it serves to
+you could also simply use three `Chan` pairs, but it serves to
 illustrate the point. For reference, written with multiple streams, it
 might look like the example below.
 
 ~~~
 # use std::task::spawn;
-# use std::comm::stream;
 # use std::vec;
 
 // Create a vector of ports, one for each child task
-let ports = do vec::from_fn(3) |init_val| {
-    let (port, chan) = stream();
+let ports = vec::from_fn(3, |init_val| {
+    let (port, chan) = Chan::new();
     do spawn {
         chan.send(some_expensive_computation(init_val));
     }
     port
-};
+});
 
 // Wait on each port, accumulating the results
 let result = ports.iter().fold(0, |accum, port| accum + port.recv() );
@@ -274,12 +265,12 @@ later.
 The basic example below illustrates this.
 ~~~
 # fn make_a_sandwich() {};
-fn fib(n: uint) -> uint {
+fn fib(n: u64) -> u64 {
     // lengthy computation returning an uint
     12586269025
 }
 
-let mut delayed_fib = extra::future::Future::spawn (|| fib(50) );
+let mut delayed_fib = extra::future::Future::spawn(proc() fib(50));
 make_a_sandwich();
 println!("fib(50) = {:?}", delayed_fib.get())
 ~~~
@@ -342,7 +333,7 @@ fn main() {
     let numbers_arc = Arc::new(numbers);
 
     for num in range(1u, 10) {
-        let (port, chan)  = stream();
+        let (port, chan)  = Chan::new();
         chan.send(numbers_arc.clone());
 
         do spawn {
@@ -371,7 +362,7 @@ and a clone of it is sent to each task
 # use std::rand;
 # let numbers=vec::from_fn(1000000, |_| rand::random::<f64>());
 # let numbers_arc = Arc::new(numbers);
-# let (port, chan)  = stream();
+# let (port, chan)  = Chan::new();
 chan.send(numbers_arc.clone());
 ~~~
 copying only the wrapper and not its contents.
@@ -383,7 +374,7 @@ Each task recovers the underlying data by
 # use std::rand;
 # let numbers=vec::from_fn(1000000, |_| rand::random::<f64>());
 # let numbers_arc=Arc::new(numbers);
-# let (port, chan)  = stream();
+# let (port, chan)  = Chan::new();
 # chan.send(numbers_arc.clone());
 # let local_arc : Arc<~[f64]> = port.recv();
 let task_numbers = local_arc.get();
@@ -402,22 +393,6 @@ task raises an exception the task unwinds its stack---running destructors and
 freeing memory along the way---and then exits. Unlike exceptions in C++,
 exceptions in Rust are unrecoverable within a single task: once a task fails,
 there is no way to "catch" the exception.
-
-All tasks are, by default, _linked_ to each other. That means that the fates
-of all tasks are intertwined: if one fails, so do all the others.
-
-~~~{.xfail-test .linked-failure}
-# use std::task::spawn;
-# use std::task;
-# fn do_some_work() { loop { task::yield() } }
-# do task::try {
-// Create a child task that fails
-do spawn { fail!() }
-
-// This will also fail because the task we spawned failed
-do_some_work();
-# };
-~~~
 
 While it isn't possible for a task to recover from failure, tasks may notify
 each other of failure. The simplest way of handling task failure is with the
@@ -449,7 +424,7 @@ enum. If the child task terminates successfully, `try` will
 return an `Ok` result; if the child task fails, `try` will return
 an `Error` result.
 
-[`Result`]: std/result.html
+[`Result`]: std/result/index.html
 
 > ***Note:*** A failed task does not currently produce a useful error
 > value (`try` always returns `Err(())`). In the
@@ -465,101 +440,7 @@ it trips, indicates an unrecoverable logic error); in other cases you
 might want to contain the failure at a certain boundary (perhaps a
 small piece of input from the outside world, which you happen to be
 processing in parallel, is malformed and its processing task can't
-proceed). Hence, you will need different _linked failure modes_.
-
-## Failure modes
-
-By default, task failure is _bidirectionally linked_, which means that if
-either task fails, it kills the other one.
-
-~~~{.xfail-test .linked-failure}
-# use std::task;
-# use std::comm::oneshot;
-# fn sleep_forever() { loop { let (p, c) = oneshot::<()>(); p.recv(); } }
-# do task::try {
-do spawn {
-    do spawn {
-        fail!();  // All three tasks will fail.
-    }
-    sleep_forever();  // Will get woken up by force, then fail
-}
-sleep_forever();  // Will get woken up by force, then fail
-# };
-~~~
-
-If you want parent tasks to be able to kill their children, but do not want a
-parent to fail automatically if one of its child task fails, you can call
-`task::spawn_supervised` for _unidirectionally linked_ failure. The
-function `task::try`, which we saw previously, uses `spawn_supervised`
-internally, with additional logic to wait for the child task to finish
-before returning. Hence:
-
-~~~{.xfail-test .linked-failure}
-# use std::comm::{stream, Chan, Port};
-# use std::comm::oneshot;
-# use std::task::{spawn, try};
-# use std::task;
-# fn sleep_forever() { loop { let (p, c) = oneshot::<()>(); p.recv(); } }
-# do task::try {
-let (receiver, sender): (Port<int>, Chan<int>) = stream();
-do spawn {  // Bidirectionally linked
-    // Wait for the supervised child task to exist.
-    let message = receiver.recv();
-    // Kill both it and the parent task.
-    assert!(message != 42);
-}
-do try {  // Unidirectionally linked
-    sender.send(42);
-    sleep_forever();  // Will get woken up by force
-}
-// Flow never reaches here -- parent task was killed too.
-# };
-~~~
-
-Supervised failure is useful in any situation where one task manages
-multiple fallible child tasks, and the parent task can recover
-if any child fails. On the other hand, if the _parent_ (supervisor) fails,
-then there is nothing the children can do to recover, so they should
-also fail.
-
-Supervised task failure propagates across multiple generations even if
-an intermediate generation has already exited:
-
-~~~{.xfail-test .linked-failure}
-# use std::task;
-# use std::comm::oneshot;
-# fn sleep_forever() { loop { let (p, c) = oneshot::<()>(); p.recv(); } }
-# fn wait_for_a_while() { for _ in range(0, 1000u) { task::yield() } }
-# do task::try::<int> {
-do task::spawn_supervised {
-    do task::spawn_supervised {
-        sleep_forever();  // Will get woken up by force, then fail
-    }
-    // Intermediate task immediately exits
-}
-wait_for_a_while();
-fail!();  // Will kill grandchild even if child has already exited
-# };
-~~~
-
-Finally, tasks can be configured to not propagate failure to each
-other at all, using `task::spawn_unlinked` for _isolated failure_.
-
-~~~{.xfail-test .linked-failure}
-# use std::task;
-# fn random() -> uint { 100 }
-# fn sleep_for(i: uint) { for _ in range(0, i) { task::yield() } }
-# do task::try::<()> {
-let (time1, time2) = (random(), random());
-do task::spawn_unlinked {
-    sleep_for(time2);  // Won't get forced awake
-    fail!();
-}
-sleep_for(time1);  // Won't get forced awake
-fail!();
-// It will take MAX(time1,time2) for the program to finish.
-# };
-~~~
+proceed).
 
 ## Creating a task with a bi-directional communication path
 
@@ -610,7 +491,7 @@ Here is the code for the parent task:
 # }
 # fn main() {
 
-let (from_child, to_child) = DuplexStream();
+let (from_child, to_child) = DuplexStream::new();
 
 do spawn {
     stringifier(&to_child);

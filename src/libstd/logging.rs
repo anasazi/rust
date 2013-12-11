@@ -20,14 +20,20 @@ There are five macros that the logging subsystem uses:
 
 * `log!(level, ...)` - the generic logging macro, takes a level as a u32 and any
                        related `format!` arguments
-* `debug!(...)` - a macro hard-wired to the log level of 4
-* `info!(...)` - a macro hard-wired to the log level of 3
-* `warn!(...)` - a macro hard-wired to the log level of 2
-* `error!(...)` - a macro hard-wired to the log level of 1
+* `debug!(...)` - a macro hard-wired to the log level of `DEBUG`
+* `info!(...)` - a macro hard-wired to the log level of `INFO`
+* `warn!(...)` - a macro hard-wired to the log level of `WARN`
+* `error!(...)` - a macro hard-wired to the log level of `ERROR`
 
 All of these macros use the same style of syntax as the `format!` syntax
 extension. Details about the syntax can be found in the documentation of
-`std::fmt` along with the Rust tutorial/manual
+`std::fmt` along with the Rust tutorial/manual.
+
+If you want to check at runtime if a given logging level is enabled (e.g. if the
+information you would want to log is expensive to produce), you can use the
+following macro:
+
+* `log_enabled!(level)` - returns true if logging of the given level is enabled
 
 ## Enabling logging
 
@@ -95,6 +101,15 @@ use rt::local::Local;
 use rt::logging::{Logger, StdErrLogger};
 use rt::task::Task;
 
+/// Debug log level
+pub static DEBUG: u32 = 4;
+/// Info log level
+pub static INFO: u32 = 3;
+/// Warn log level
+pub static WARN: u32 = 2;
+/// Error log level
+pub static ERROR: u32 = 1;
+
 /// This function is called directly by the compiler when using the logging
 /// macros. This function does not take into account whether the log level
 /// specified is active or not, it will always log something if this method is
@@ -107,12 +122,20 @@ pub fn log(_level: u32, args: &fmt::Arguments) {
         let optional_task: Option<*mut Task> = Local::try_unsafe_borrow();
         match optional_task {
             Some(local) => {
-                // Use the available logger
-                (*local).logger.log(args);
+                // Lazily initialize the local task's logger
+                match (*local).logger {
+                    // Use the available logger if we have one
+                    Some(ref mut logger) => { logger.log(args); }
+                    None => {
+                        let mut logger = StdErrLogger::new();
+                        logger.log(args);
+                        (*local).logger = Some(logger);
+                    }
+                }
             }
+            // If there's no local task, then always log to stderr
             None => {
-                // There is no logger anywhere, just write to stderr
-                let mut logger = StdErrLogger;
+                let mut logger = StdErrLogger::new();
                 logger.log(args);
             }
         }

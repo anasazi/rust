@@ -8,11 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-struct closure_box<'self> {
-    cl: &'self fn()
+struct closure_box<'a> {
+    cl: 'a ||
 }
 
-fn box_it<'r>(x: &'r fn()) -> closure_box<'r> {
+fn box_it<'r>(x: 'r ||) -> closure_box<'r> {
     closure_box {cl: x}
 }
 

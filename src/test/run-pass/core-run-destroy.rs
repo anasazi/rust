@@ -18,63 +18,82 @@
 use std::libc;
 use std::run;
 use std::str;
+use std::io;
 
 #[test]
 fn test_destroy_once() {
-    let mut p = run::Process::new("echo", [], run::ProcessOptions::new());
+    #[cfg(not(target_os="android"))]
+    static PROG: &'static str = "echo";
+    #[cfg(target_os="android")]
+    static PROG: &'static str = "ls"; // android don't have echo binary
+
+    let mut p = run::Process::new(PROG, [], run::ProcessOptions::new())
+        .expect(format!("failed to exec `{}`", PROG));
     p.destroy(); // this shouldn't crash (and nor should the destructor)
 }
 
 #[test]
 fn test_destroy_twice() {
-    let mut p = run::Process::new("echo", [], run::ProcessOptions::new());
+    #[cfg(not(target_os="android"))]
+    static PROG: &'static str = "echo";
+    #[cfg(target_os="android")]
+    static PROG: &'static str = "ls"; // android don't have echo binary
+
+    let mut p = run::Process::new(PROG, [], run::ProcessOptions::new())
+        .expect(format!("failed to exec `{}`", PROG));
     p.destroy(); // this shouldnt crash...
-    p.destroy(); // ...and nor should this (and nor should the destructor)
+    io::io_error::cond.trap(|_| {}).inside(|| {
+        p.destroy(); // ...and nor should this (and nor should the destructor)
+    })
 }
 
 fn test_destroy_actually_kills(force: bool) {
 
-    #[cfg(unix)]
+    #[cfg(unix,not(target_os="android"))]
     static BLOCK_COMMAND: &'static str = "cat";
+
+    #[cfg(unix,target_os="android")]
+    static BLOCK_COMMAND: &'static str = "/system/bin/cat";
 
     #[cfg(windows)]
     static BLOCK_COMMAND: &'static str = "cmd";
 
     #[cfg(unix,not(target_os="android"))]
     fn process_exists(pid: libc::pid_t) -> bool {
-        let run::ProcessOutput {output, _} = run::process_output("ps", [~"-p", pid.to_str()]);
-        str::from_utf8(output).contains(pid.to_str())
+        let run::ProcessOutput {output, ..} = run::process_output("ps", [~"-p", pid.to_str()])
+            .expect("failed to exec `ps`");
+        str::from_utf8_owned(output).contains(pid.to_str())
     }
 
     #[cfg(unix,target_os="android")]
     fn process_exists(pid: libc::pid_t) -> bool {
-        let run::ProcessOutput {output, _} = run::process_output("/system/bin/ps", [pid.to_str()]);
-        str::from_utf8(output).contains(~"root")
+        let run::ProcessOutput {output, ..} = run::process_output("/system/bin/ps", [pid.to_str()])
+            .expect("failed to exec `/system/bin/ps`");
+        str::from_utf8_owned(output).contains(~"root")
     }
 
     #[cfg(windows)]
     fn process_exists(pid: libc::pid_t) -> bool {
-        #[fixed_stack_segment];
-
         use std::libc::types::os::arch::extra::DWORD;
         use std::libc::funcs::extra::kernel32::{CloseHandle, GetExitCodeProcess, OpenProcess};
         use std::libc::consts::os::extra::{FALSE, PROCESS_QUERY_INFORMATION, STILL_ACTIVE };
 
         unsafe {
-            let proc = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, pid as DWORD);
-            if proc.is_null() {
+            let process = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, pid as DWORD);
+            if process.is_null() {
                 return false;
             }
-            // proc will be non-null if the process is alive, or if it died recently
+            // process will be non-null if the process is alive, or if it died recently
             let mut status = 0;
-            GetExitCodeProcess(proc, &mut status);
-            CloseHandle(proc);
+            GetExitCodeProcess(process, &mut status);
+            CloseHandle(process);
             return status == STILL_ACTIVE;
         }
     }
 
     // this process will stay alive indefinitely trying to read from stdin
-    let mut p = run::Process::new(BLOCK_COMMAND, [], run::ProcessOptions::new());
+    let mut p = run::Process::new(BLOCK_COMMAND, [], run::ProcessOptions::new())
+        .expect(format!("failed to exec `{}`", BLOCK_COMMAND));
 
     assert!(process_exists(p.get_id()));
 

@@ -148,7 +148,7 @@ use syntax::codemap::Span;
 pub enum CaptureMode {
     CapCopy, // Copy the value into the closure.
     CapMove, // Move the value into the closure.
-    CapRef,  // Reference directly from parent stack frame (used by `&fn()`).
+    CapRef,  // Reference directly from parent stack frame (used by `||`).
 }
 
 #[deriving(Encodable, Decodable)]
@@ -193,7 +193,7 @@ enum UseMode {
 
 impl visit::Visitor<()> for VisitContext {
     fn visit_fn(&mut self, fk:&visit::fn_kind, fd:&fn_decl,
-                b:&Block, s:Span, n:NodeId, _:()) {
+                b:P<Block>, s:Span, n:NodeId, _:()) {
         compute_modes_for_fn(self, fk, fd, b, s, n);
     }
     fn visit_expr(&mut self, ex:@Expr, _:()) {
@@ -202,6 +202,8 @@ impl visit::Visitor<()> for VisitContext {
     fn visit_local(&mut self, l:@Local, _:()) {
         compute_modes_for_local(self, l);
     }
+    // FIXME(#10894) should continue recursing
+    fn visit_ty(&mut self, _t: &Ty, _: ()) {}
 }
 
 pub fn compute_moves(tcx: ty::ctxt,
@@ -227,7 +229,7 @@ pub fn moved_variable_node_id_from_def(def: Def) -> Option<NodeId> {
       DefBinding(nid, _) |
       DefArg(nid, _) |
       DefLocal(nid, _) |
-      DefSelf(nid) => Some(nid),
+      DefSelf(nid, _) => Some(nid),
 
       _ => None
     }
@@ -247,7 +249,7 @@ fn compute_modes_for_local<'a>(cx: &mut VisitContext,
 fn compute_modes_for_fn(cx: &mut VisitContext,
                         fk: &visit::fn_kind,
                         decl: &fn_decl,
-                        body: &Block,
+                        body: P<Block>,
                         span: Span,
                         id: NodeId) {
     for a in decl.inputs.iter() {
@@ -275,7 +277,7 @@ impl VisitContext {
          * meaning either copied or moved depending on its type.
          */
 
-        debug2!("consume_expr(expr={})",
+        debug!("consume_expr(expr={})",
                expr.repr(self.tcx));
 
         let expr_ty = ty::expr_ty_adjusted(self.tcx, expr);
@@ -293,7 +295,7 @@ impl VisitContext {
          * meaning either copied or moved depending on its type.
          */
 
-        debug2!("consume_block(blk.id={:?})", blk.id);
+        debug!("consume_block(blk.id={:?})", blk.id);
 
         for stmt in blk.stmts.iter() {
             self.visit_stmt(*stmt, ());
@@ -312,7 +314,7 @@ impl VisitContext {
          * in turn trigger calls to the subcomponents of `expr`.
          */
 
-        debug2!("use_expr(expr={}, mode={:?})",
+        debug!("use_expr(expr={}, mode={:?})",
                expr.repr(self.tcx),
                expr_mode);
 
@@ -322,14 +324,14 @@ impl VisitContext {
         let comp_mode = match self.tcx.adjustments.find(&expr.id) {
             Some(&@ty::AutoDerefRef(
                 ty::AutoDerefRef {
-                    autoref: Some(_), _})) => Read,
+                    autoref: Some(_), ..})) => Read,
             _ => expr_mode
         };
 
-        debug2!("comp_mode = {:?}", comp_mode);
+        debug!("comp_mode = {:?}", comp_mode);
 
         match expr.node {
-            ExprPath(*) | ExprSelf => {
+            ExprPath(..) | ExprSelf => {
                 match comp_mode {
                     Move => {
                         let def = self.tcx.def_map.get_copy(&expr.id);
@@ -372,7 +374,7 @@ impl VisitContext {
                         Many => Read,
                         }
                     },
-                    ty::ty_bare_fn(*) => Read,
+                    ty::ty_bare_fn(..) => Read,
                     ref x =>
                         self.tcx.sess.span_bug(callee.span,
                             format!("non-function type in moves for expr_call: {:?}", x)),
@@ -420,7 +422,7 @@ impl VisitContext {
                     // specified and (2) have a type that
                     // moves-by-default:
                     let consume_with = with_fields.iter().any(|tf| {
-                        !fields.iter().any(|f| f.ident.name == tf.ident.name) &&
+                        !fields.iter().any(|f| f.ident.node.name == tf.ident.name) &&
                             ty::type_moves_by_default(self.tcx, tf.mt.ty)
                     });
 
@@ -450,7 +452,7 @@ impl VisitContext {
                 self.consume_exprs(*exprs);
             }
 
-            ExprIf(cond_expr, ref then_blk, opt_else_expr) => {
+            ExprIf(cond_expr, then_blk, opt_else_expr) => {
                 self.consume_expr(cond_expr);
                 self.consume_block(then_blk);
                 for else_expr in opt_else_expr.iter() {
@@ -459,8 +461,6 @@ impl VisitContext {
             }
 
             ExprMatch(discr, ref arms) => {
-                // We must do this first so that `arms_have_by_move_bindings`
-                // below knows which bindings are moves.
                 for arm in arms.iter() {
                     self.consume_arm(arm);
                 }
@@ -486,21 +486,21 @@ impl VisitContext {
             }
 
             ExprLogLevel |
-            ExprInlineAsm(*) |
-            ExprBreak(*) |
-            ExprAgain(*) |
-            ExprLit(*) => {}
+            ExprInlineAsm(..) |
+            ExprBreak(..) |
+            ExprAgain(..) |
+            ExprLit(..) => {}
 
-            ExprLoop(ref blk, _) => {
+            ExprLoop(blk, _) => {
                 self.consume_block(blk);
             }
 
-            ExprWhile(cond_expr, ref blk) => {
+            ExprWhile(cond_expr, blk) => {
                 self.consume_expr(cond_expr);
                 self.consume_block(blk);
             }
 
-            ExprForLoop(*) => fail2!("non-desugared expr_for_loop"),
+            ExprForLoop(..) => fail!("non-desugared expr_for_loop"),
 
             ExprUnary(_, _, lhs) => {
                 if !self.use_overloaded_operator(expr, lhs, [])
@@ -517,7 +517,7 @@ impl VisitContext {
                 }
             }
 
-            ExprBlock(ref blk) => {
+            ExprBlock(blk) => {
                 self.consume_block(blk);
             }
 
@@ -555,7 +555,8 @@ impl VisitContext {
                 self.use_expr(base, comp_mode);
             }
 
-            ExprFnBlock(ref decl, ref body) => {
+            ExprFnBlock(ref decl, body) |
+            ExprProc(ref decl, body) => {
                 for a in decl.inputs.iter() {
                     self.use_pat(a.pat);
                 }
@@ -568,7 +569,7 @@ impl VisitContext {
                 self.use_expr(base, comp_mode);
             }
 
-            ExprMac(*) => {
+            ExprMac(..) => {
                 self.tcx.sess.span_bug(
                     expr.span,
                     "macro expression remains after expansion");
@@ -605,7 +606,7 @@ impl VisitContext {
             self.consume_expr(*guard);
         }
 
-        self.consume_block(&arm.body);
+        self.consume_block(arm.body);
     }
 
     pub fn use_pat(&mut self, pat: @Pat) {
@@ -615,12 +616,12 @@ impl VisitContext {
          * into itself or not based on its type and annotation.
          */
 
-        do pat_bindings(self.tcx.def_map, pat) |bm, id, _span, path| {
+        pat_bindings(self.tcx.def_map, pat, |bm, id, _span, path| {
             let binding_moves = match bm {
                 BindByRef(_) => false,
-                BindInfer => {
+                BindByValue(_) => {
                     let pat_ty = ty::node_id_to_type(self.tcx, id);
-                    debug2!("pattern {:?} {} type is {}",
+                    debug!("pattern {:?} {} type is {}",
                            id,
                            ast_util::path_to_ident(path).repr(self.tcx),
                            pat_ty.repr(self.tcx));
@@ -628,13 +629,13 @@ impl VisitContext {
                 }
             };
 
-            debug2!("pattern binding {:?}: bm={:?}, binding_moves={}",
+            debug!("pattern binding {:?}: bm={:?}, binding_moves={}",
                    id, bm, binding_moves);
 
             if binding_moves {
                 self.move_maps.moves_map.insert(id);
             }
-        }
+        })
     }
 
     pub fn use_receiver(&mut self,
@@ -656,36 +657,15 @@ impl VisitContext {
         self.consume_expr(arg_expr)
     }
 
-    pub fn arms_have_by_move_bindings(&mut self,
-                                      moves_map: MovesMap,
-                                      arms: &[Arm])
-                                      -> Option<@Pat> {
-        let mut ret = None;
-        for arm in arms.iter() {
-            for &pat in arm.pats.iter() {
-                let cont = do ast_util::walk_pat(pat) |p| {
-                    if moves_map.contains(&p.id) {
-                        ret = Some(p);
-                        false
-                    } else {
-                        true
-                    }
-                };
-                if !cont { return ret }
-            }
-        }
-        ret
-    }
-
     pub fn compute_captures(&mut self, fn_expr_id: NodeId) -> @[CaptureVar] {
-        debug2!("compute_capture_vars(fn_expr_id={:?})", fn_expr_id);
+        debug!("compute_capture_vars(fn_expr_id={:?})", fn_expr_id);
         let _indenter = indenter();
 
         let fn_ty = ty::node_id_to_type(self.tcx, fn_expr_id);
         let sigil = ty::ty_closure_sigil(fn_ty);
         let freevars = freevars::get_freevars(self.tcx, fn_expr_id);
         if sigil == BorrowedSigil {
-            // &fn() captures everything by ref
+            // || captures everything by ref
             at_vec::from_fn(freevars.len(), |i| {
                 let fvar = &freevars[i];
                 CaptureVar {def: fvar.def, span: fvar.span, mode: CapRef}
@@ -696,7 +676,7 @@ impl VisitContext {
                 let fvar = &freevars[i];
                 let fvar_def_id = ast_util::def_id_of_def(fvar.def).node;
                 let fvar_ty = ty::node_id_to_type(self.tcx, fvar_def_id);
-                debug2!("fvar_def_id={:?} fvar_ty={}",
+                debug!("fvar_def_id={:?} fvar_ty={}",
                        fvar_def_id, ppaux::ty_to_str(self.tcx, fvar_ty));
                 let mode = if ty::type_moves_by_default(self.tcx, fvar_ty) {
                     CapMove

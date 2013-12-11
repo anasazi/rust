@@ -12,28 +12,32 @@ use extra::term;
 use std::io;
 
 pub fn note(msg: &str) {
-    pretty_message(msg, "note: ", term::color::GREEN, io::stdout())
+    pretty_message(msg, "note: ", term::color::GREEN);
 }
 
 pub fn warn(msg: &str) {
-    pretty_message(msg, "warning: ", term::color::YELLOW, io::stdout())
+    pretty_message(msg, "warning: ", term::color::YELLOW);
 }
 
 pub fn error(msg: &str) {
-    pretty_message(msg, "error: ", term::color::RED, io::stdout())
+    pretty_message(msg, "error: ", term::color::RED);
 }
 
-fn pretty_message<'a>(msg: &'a str, prefix: &'a str, color: term::color::Color, out: @io::Writer) {
-    let term = term::Terminal::new(out);
+fn pretty_message<'a>(msg: &'a str,
+                      prefix: &'a str,
+                      color: term::color::Color) {
+    let mut term = term::Terminal::new(io::stdout());
+    let mut stdout = io::stdout();
     match term {
-        Ok(ref t) => {
+        Ok(ref mut t) => {
             t.fg(color);
-            out.write_str(prefix);
+            t.write(prefix.as_bytes());
             t.reset();
         },
         _ => {
-            out.write_str(prefix);
+            stdout.write(prefix.as_bytes());
         }
     }
-    out.write_line(msg);
+    stdout.write(msg.as_bytes());
+    stdout.write(['\n' as u8]);
 }

@@ -6,12 +6,14 @@
 .text
 .code 32
 .arm
+#if defined(__APPLE__)
+.align 2
+#else
 .align
-
+#endif
 
 .globl record_sp_limit
 .globl get_sp_limit
-.globl get_sp
 
 record_sp_limit:
 	// First, try to read TLS address from coprocessor
@@ -45,8 +47,4 @@ get_sp_limit:
 #endif
 
 	ldr r0, [r3]
-	mov pc, lr
-
-get_sp:
-	mov r0, sp
 	mov pc, lr

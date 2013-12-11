@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// xfail-android: FIXME(#10393)
+
 // xfail-pretty the `let to_child` line gets an extra newline
 // multi tasking k-nucleotide
 
@@ -15,13 +17,11 @@ extern mod extra;
 
 use extra::sort;
 use std::cmp::Ord;
-use std::comm::{stream, Port, Chan};
 use std::comm;
 use std::hashmap::HashMap;
-use std::io::ReaderUtil;
-use std::io;
 use std::option;
 use std::os;
+use std::io;
 use std::str;
 use std::task;
 use std::util;
@@ -69,14 +69,10 @@ fn sort_and_fmt(mm: &HashMap<~[u8], uint>, total: uint) -> ~str {
 
    let mut buffer = ~"";
 
-   for kv in pairs_sorted.iter() {
-       let (k,v) = (*kv).clone();
+   for &(ref k, v) in pairs_sorted.iter() {
        unsafe {
-           let b = str::raw::from_utf8(k);
-           // FIXME: #4318 Instead of to_ascii and to_str_ascii, could use
-           // to_ascii_move and to_str_move to not do a unnecessary copy.
            buffer.push_str(format!("{} {:0.3f}\n",
-                                   b.to_ascii().to_upper().to_str_ascii(), v));
+                                   k.to_ascii().to_upper().into_str(), v));
        }
    }
 
@@ -85,9 +81,7 @@ fn sort_and_fmt(mm: &HashMap<~[u8], uint>, total: uint) -> ~str {
 
 // given a map, search for the frequency of a pattern
 fn find(mm: &HashMap<~[u8], uint>, key: ~str) -> uint {
-   // FIXME: #4318 Instead of to_ascii and to_str_ascii, could use
-   // to_ascii_move and to_str_move to not do a unnecessary copy.
-   let key = key.to_ascii().to_lower().to_str_ascii();
+   let key = key.into_ascii().to_lower().into_str();
    match mm.find_equiv(&key.as_bytes()) {
       option::None      => { return 0u; }
       option::Some(&num) => { return num; }
@@ -107,8 +101,7 @@ fn update_freq(mm: &mut HashMap<~[u8], uint>, key: &[u8]) {
 // given a ~[u8], for each window call a function
 // i.e., for "hello" and windows of size four,
 // run it("hell") and it("ello"), then return "llo"
-fn windows_with_carry(bb: &[u8], nn: uint,
-                      it: &fn(window: &[u8])) -> ~[u8] {
+fn windows_with_carry(bb: &[u8], nn: uint, it: |window: &[u8]|) -> ~[u8] {
    let mut ii = 0u;
 
    let len = bb.len();
@@ -156,17 +149,14 @@ fn make_sequence_processor(sz: uint,
 
 // given a FASTA file on stdin, process sequence THREE
 fn main() {
-    use std::rt::io::{Reader, Open};
-    use std::rt::io::file::FileInfo;
-    use std::rt::io::native::stdio;
-    use std::rt::io::buffered::BufferedReader;
+    use std::io::Reader;
+    use std::io::stdio;
+    use std::io::mem::MemReader;
+    use std::io::buffered::BufferedReader;
 
     let rdr = if os::getenv("RUST_BENCH").is_some() {
-        // FIXME: Using this compile-time env variable is a crummy way to
-        // get to this massive data set, but include_bin! chokes on it (#2598)
-        let mut path = Path::new(env!("CFG_SRC_DIR"));
-        path.push("src/test/bench/shootout-k-nucleotide.data");
-        ~path.open_reader(Open).unwrap() as ~Reader
+        let foo = include_bin!("shootout-k-nucleotide.data");
+        ~MemReader::new(foo.to_owned()) as ~Reader
     } else {
         ~stdio::stdin() as ~Reader
     };
@@ -174,72 +164,69 @@ fn main() {
 
     // initialize each sequence sorter
     let sizes = ~[1u,2,3,4,6,12,18];
-    let mut streams = vec::from_fn(sizes.len(), |_| Some(stream::<~str>()));
+    let mut streams = vec::from_fn(sizes.len(), |_| Some(Chan::<~str>::new()));
     let mut from_child = ~[];
-    let to_child   = do sizes.iter().zip(streams.mut_iter()).map |(sz, stream_ref)| {
+    let to_child   = sizes.iter().zip(streams.mut_iter()).map(|(sz, stream_ref)| {
         let sz = *sz;
         let stream = util::replace(stream_ref, None);
         let (from_child_, to_parent_) = stream.unwrap();
 
         from_child.push(from_child_);
 
-        let (from_parent, to_child) = comm::stream();
+        let (from_parent, to_child) = Chan::new();
 
-        do task::spawn_with(from_parent) |from_parent| {
+        do spawn {
             make_sequence_processor(sz, &from_parent, &to_parent_);
-        };
+        }
 
         to_child
-    }.collect::<~[Chan<~[u8]>]>();
+    }).collect::<~[Chan<~[u8]>]>();
 
 
    // latch stores true after we've started
    // reading the sequence of interest
    let mut proc_mode = false;
 
-   loop {
-      let line = match rdr.read_line() {
-          Some(ln) => ln, None => break,
-      };
-      let line = line.trim().to_owned();
+   for line in rdr.lines() {
+       let line = line.trim().to_owned();
 
-      if line.len() == 0u { continue; }
+       if line.len() == 0u { continue; }
 
-      match (line[0] as char, proc_mode) {
+       match (line[0] as char, proc_mode) {
 
-         // start processing if this is the one
-         ('>', false) => {
-            match line.slice_from(1).find_str("THREE") {
-               option::Some(_) => { proc_mode = true; }
-               option::None    => { }
-            }
-         }
+           // start processing if this is the one
+           ('>', false) => {
+               match line.slice_from(1).find_str("THREE") {
+                   option::Some(_) => { proc_mode = true; }
+                   option::None    => { }
+               }
+           }
 
-         // break our processing
-         ('>', true) => { break; }
+           // break our processing
+           ('>', true) => { break; }
 
-         // process the sequence for k-mers
-         (_, true) => {
-            let line_bytes = line.as_bytes();
+           // process the sequence for k-mers
+           (_, true) => {
+               let line_bytes = line.as_bytes();
 
-           for (ii, _sz) in sizes.iter().enumerate() {
-               let lb = line_bytes.to_owned();
-               to_child[ii].send(lb);
-            }
-         }
+               for (ii, _sz) in sizes.iter().enumerate() {
+                   let lb = line_bytes.to_owned();
+                   to_child[ii].send(lb);
+               }
+           }
 
-         // whatever
-         _ => { }
-      }
+           // whatever
+           _ => { }
+       }
    }
 
    // finish...
-    for (ii, _sz) in sizes.iter().enumerate() {
-      to_child[ii].send(~[]);
+   for (ii, _sz) in sizes.iter().enumerate() {
+       to_child[ii].send(~[]);
    }
 
    // now fetch and print result messages
-    for (ii, _sz) in sizes.iter().enumerate() {
-      io::println(from_child[ii].recv());
+   for (ii, _sz) in sizes.iter().enumerate() {
+       println(from_child[ii].recv());
    }
 }

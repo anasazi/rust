@@ -8,6 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// xfail-win32: FIXME #10474
+// xfail-android: FIXME(#10381)
+
 // compile-flags:-Z extra-debug-info
 // debugger:rbreak zzz
 // debugger:run
@@ -46,6 +49,7 @@
 // check:$14 = 8
 // debugger:continue
 
+#[feature(managed_boxes)];
 #[allow(unused_variable)];
 
 struct Struct {

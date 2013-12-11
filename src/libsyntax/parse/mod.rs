@@ -20,7 +20,8 @@ use parse::lexer::reader;
 use parse::parser::Parser;
 
 use std::io;
-use std::path::Path;
+use std::io::File;
+use std::str;
 
 pub mod lexer;
 pub mod parser;
@@ -78,6 +79,16 @@ pub fn parse_crate_from_file(
     // why is there no p.abort_if_errors here?
 }
 
+pub fn parse_crate_attrs_from_file(
+    input: &Path,
+    cfg: ast::CrateConfig,
+    sess: @mut ParseSess
+) -> ~[ast::Attribute] {
+    let parser = new_parser_from_file(sess, cfg, input);
+    let (inner, _) = parser.parse_inner_attrs_and_next();
+    return inner;
+}
+
 pub fn parse_crate_from_source_str(
     name: @str,
     source: @str,
@@ -89,6 +100,20 @@ pub fn parse_crate_from_source_str(
                                        name,
                                        source);
     maybe_aborted(p.parse_crate_mod(),p)
+}
+
+pub fn parse_crate_attrs_from_source_str(
+    name: @str,
+    source: @str,
+    cfg: ast::CrateConfig,
+    sess: @mut ParseSess
+) -> ~[ast::Attribute] {
+    let p = new_parser_from_source_str(sess,
+                                       /*bad*/ cfg.clone(),
+                                       name,
+                                       source);
+    let (inner, _) = maybe_aborted(p.parse_inner_attrs_and_next(),p);
+    return inner;
 }
 
 pub fn parse_expr_from_source_str(
@@ -176,19 +201,14 @@ pub fn parse_tts_from_source_str(
 // consumed all of the input before returning the function's
 // result.
 pub fn parse_from_source_str<T>(
-    f: &fn(&Parser) -> T,
-    name: @str, ss: codemap::FileSubstr,
-    source: @str,
-    cfg: ast::CrateConfig,
-    sess: @mut ParseSess
-) -> T {
-    let p = new_parser_from_source_substr(
-        sess,
-        cfg,
-        name,
-        ss,
-        source
-    );
+                             f: |&Parser| -> T,
+                             name: @str,
+                             ss: codemap::FileSubstr,
+                             source: @str,
+                             cfg: ast::CrateConfig,
+                             sess: @mut ParseSess)
+                             -> T {
+    let p = new_parser_from_source_substr(sess, cfg, name, ss, source);
     let r = f(&p);
     if !p.reader.is_eof() {
         p.reader.fatal(~"expected end-of-string");
@@ -260,16 +280,29 @@ pub fn new_parser_from_tts(sess: @mut ParseSess,
 /// add the path to the session's codemap and return the new filemap.
 pub fn file_to_filemap(sess: @mut ParseSess, path: &Path, spanopt: Option<Span>)
     -> @FileMap {
-    match io::read_whole_file_str(path) {
-        // FIXME (#9639): This needs to handle non-utf8 paths
-        Ok(src) => string_to_filemap(sess, src.to_managed(), path.as_str().unwrap().to_managed()),
+    let err = |msg: &str| {
+        match spanopt {
+            Some(sp) => sess.span_diagnostic.span_fatal(sp, msg),
+            None => sess.span_diagnostic.handler().fatal(msg),
+        }
+    };
+    let bytes = match io::result(|| File::open(path).read_to_end()) {
+        Ok(bytes) => bytes,
         Err(e) => {
-            match spanopt {
-                Some(span) => sess.span_diagnostic.span_fatal(span, e),
-                None => sess.span_diagnostic.handler().fatal(e)
-            }
+            err(format!("couldn't read {}: {}", path.display(), e.desc));
+            unreachable!()
+        }
+    };
+    match str::from_utf8_owned_opt(bytes) {
+        Some(s) => {
+            return string_to_filemap(sess, s.to_managed(),
+                                     path.as_str().unwrap().to_managed());
+        }
+        None => {
+            err(format!("{} is not UTF-8 encoded", path.display()))
         }
     }
+    unreachable!()
 }
 
 // given a session and a string, add the string to
@@ -319,6 +352,9 @@ mod test {
     use extra::serialize::Encodable;
     use extra;
     use std::io;
+    use std::io::Decorator;
+    use std::io::mem::MemWriter;
+    use std::str;
     use codemap::{Span, BytePos, Spanned};
     use opt_vec;
     use ast;
@@ -329,15 +365,16 @@ mod test {
     use util::parser_testing::{string_to_expr, string_to_item};
     use util::parser_testing::string_to_stmt;
 
-    #[cfg(test)] fn to_json_str<E : Encodable<extra::json::Encoder>>(val: @E) -> ~str {
-        do io::with_str_writer |writer| {
-            let mut encoder = extra::json::Encoder(writer);
-            val.encode(&mut encoder);
-        }
+    #[cfg(test)]
+    fn to_json_str<'a, E: Encodable<extra::json::Encoder<'a>>>(val: &E) -> ~str {
+        let mut writer = MemWriter::new();
+        let mut encoder = extra::json::Encoder::new(&mut writer as &mut io::Writer);
+        val.encode(&mut encoder);
+        str::from_utf8_owned(writer.inner())
     }
 
     // produce a codemap::span
-    fn sp (a: uint, b: uint) -> Span {
+    fn sp(a: u32, b: u32) -> Span {
         Span{lo:BytePos(a),hi:BytePos(b),expn_info:None}
     }
 
@@ -351,7 +388,7 @@ mod test {
                         segments: ~[
                             ast::PathSegment {
                                 identifier: str_to_ident("a"),
-                                lifetime: None,
+                                lifetimes: opt_vec::Empty,
                                 types: opt_vec::Empty,
                             }
                         ],
@@ -370,12 +407,12 @@ mod test {
                             segments: ~[
                                 ast::PathSegment {
                                     identifier: str_to_ident("a"),
-                                    lifetime: None,
+                                    lifetimes: opt_vec::Empty,
                                     types: opt_vec::Empty,
                                 },
                                 ast::PathSegment {
                                     identifier: str_to_ident("b"),
-                                    lifetime: None,
+                                    lifetimes: opt_vec::Empty,
                                     types: opt_vec::Empty,
                                 }
                             ]
@@ -417,18 +454,18 @@ mod test {
                         _ => assert_eq!("wrong 4","correct")
                     },
                     _ => {
-                        error2!("failing value 3: {:?}",first_set);
+                        error!("failing value 3: {:?}",first_set);
                         assert_eq!("wrong 3","correct")
                     }
                 },
                 _ => {
-                    error2!("failing value 2: {:?}",delim_elts);
+                    error!("failing value 2: {:?}",delim_elts);
                     assert_eq!("wrong","correct");
                 }
 
             },
             _ => {
-                error2!("failing value: {:?}",tts);
+                error!("failing value: {:?}",tts);
                 assert_eq!("wrong 1","correct");
             }
         }
@@ -575,7 +612,7 @@ mod test {
                             segments: ~[
                                 ast::PathSegment {
                                     identifier: str_to_ident("d"),
-                                    lifetime: None,
+                                    lifetimes: opt_vec::Empty,
                                     types: opt_vec::Empty,
                                 }
                             ],
@@ -597,7 +634,7 @@ mod test {
                                segments: ~[
                                 ast::PathSegment {
                                     identifier: str_to_ident("b"),
-                                    lifetime: None,
+                                    lifetimes: opt_vec::Empty,
                                     types: opt_vec::Empty,
                                 }
                                ],
@@ -617,14 +654,14 @@ mod test {
         assert_eq!(parser.parse_pat(),
                    @ast::Pat{id: ast::DUMMY_NODE_ID,
                              node: ast::PatIdent(
-                                ast::BindInfer,
+                                ast::BindByValue(ast::MutImmutable),
                                 ast::Path {
                                     span:sp(0,1),
                                     global:false,
                                     segments: ~[
                                         ast::PathSegment {
                                             identifier: str_to_ident("b"),
-                                            lifetime: None,
+                                            lifetimes: opt_vec::Empty,
                                             types: opt_vec::Empty,
                                         }
                                     ],
@@ -642,28 +679,27 @@ mod test {
                       @ast::item{ident:str_to_ident("a"),
                             attrs:~[],
                             id: ast::DUMMY_NODE_ID,
-                            node: ast::item_fn(ast::fn_decl{
+                            node: ast::item_fn(ast::P(ast::fn_decl{
                                 inputs: ~[ast::arg{
-                                    is_mutbl: false,
-                                    ty: ast::Ty{id: ast::DUMMY_NODE_ID,
-                                                node: ast::ty_path(ast::Path{
+                                    ty: ast::P(ast::Ty{id: ast::DUMMY_NODE_ID,
+                                                       node: ast::ty_path(ast::Path{
                                         span:sp(10,13),
                                         global:false,
                                         segments: ~[
                                             ast::PathSegment {
                                                 identifier:
                                                     str_to_ident("int"),
-                                                lifetime: None,
+                                                lifetimes: opt_vec::Empty,
                                                 types: opt_vec::Empty,
                                             }
                                         ],
                                         }, None, ast::DUMMY_NODE_ID),
                                         span:sp(10,13)
-                                    },
+                                    }),
                                     pat: @ast::Pat {
                                         id: ast::DUMMY_NODE_ID,
                                         node: ast::PatIdent(
-                                            ast::BindInfer,
+                                            ast::BindByValue(ast::MutImmutable),
                                             ast::Path {
                                                 span:sp(6,7),
                                                 global:false,
@@ -671,7 +707,7 @@ mod test {
                                                     ast::PathSegment {
                                                         identifier:
                                                             str_to_ident("b"),
-                                                        lifetime: None,
+                                                        lifetimes: opt_vec::Empty,
                                                         types: opt_vec::Empty,
                                                     }
                                                 ],
@@ -682,18 +718,19 @@ mod test {
                                     },
                                     id: ast::DUMMY_NODE_ID
                                 }],
-                                output: ast::Ty{id: ast::DUMMY_NODE_ID,
-                                                 node: ast::ty_nil,
-                                                 span:sp(15,15)}, // not sure
-                                cf: ast::return_val
-                            },
+                                output: ast::P(ast::Ty{id: ast::DUMMY_NODE_ID,
+                                                       node: ast::ty_nil,
+                                                       span:sp(15,15)}), // not sure
+                                cf: ast::return_val,
+                                variadic: false
+                            }),
                                     ast::impure_fn,
                                     abi::AbiSet::Rust(),
                                     ast::Generics{ // no idea on either of these:
                                         lifetimes: opt_vec::Empty,
                                         ty_params: opt_vec::Empty,
                                     },
-                                    ast::Block {
+                                    ast::P(ast::Block {
                                         view_items: ~[],
                                         stmts: ~[@Spanned{
                                             node: ast::StmtSemi(@ast::Expr{
@@ -707,8 +744,8 @@ mod test {
                                                                 identifier:
                                                                 str_to_ident(
                                                                     "b"),
-                                                                lifetime:
-                                                                    None,
+                                                                lifetimes:
+                                                                opt_vec::Empty,
                                                                 types:
                                                                 opt_vec::Empty
                                                             }
@@ -721,7 +758,7 @@ mod test {
                                         id: ast::DUMMY_NODE_ID,
                                         rules: ast::DefaultBlock, // no idea
                                         span: sp(15,21),
-                                    }),
+                                    })),
                             vis: ast::inherited,
                             span: sp(0,21)}));
     }

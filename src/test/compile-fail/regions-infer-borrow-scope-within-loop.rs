@@ -8,12 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[feature(managed_boxes)];
+
 fn borrow<'r, T>(x: &'r T) -> &'r T {x}
 
-fn foo(cond: &fn() -> bool, box: &fn() -> @int) {
+fn foo(cond: || -> bool, make_box: || -> @int) {
     let mut y: &int;
     loop {
-        let x = box();
+        let x = make_box();
 
         // Here we complain because the resulting region
         // of this borrow is the fn body as a whole.

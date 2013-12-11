@@ -11,6 +11,7 @@
 use std::os;
 use std::run;
 use std::str;
+use std::io::process::ProcessExit;
 
 #[cfg(target_os = "win32")]
 fn target_env(lib_path: &str, prog: &str) -> ~[(~str,~str)] {
@@ -21,11 +22,11 @@ fn target_env(lib_path: &str, prog: &str) -> ~[(~str,~str)] {
     assert!(prog.ends_with(".exe"));
     let aux_path = prog.slice(0u, prog.len() - 4u).to_owned() + ".libaux";
 
-    env = do env.map() |pair| {
+    env = env.map(|pair| {
         let (k,v) = (*pair).clone();
         if k == ~"PATH" { (~"PATH", v + ";" + lib_path + ";" + aux_path) }
         else { (k,v) }
-    };
+    });
     if prog.ends_with("rustc.exe") {
         env.push((~"RUST_THREADS", ~"1"));
     }
@@ -39,16 +40,16 @@ fn target_env(_lib_path: &str, _prog: &str) -> ~[(~str,~str)] {
     os::env()
 }
 
-pub struct Result {status: int, out: ~str, err: ~str}
+pub struct Result {status: ProcessExit, out: ~str, err: ~str}
 
 pub fn run(lib_path: &str,
            prog: &str,
            args: &[~str],
            env: ~[(~str, ~str)],
-           input: Option<~str>) -> Result {
+           input: Option<~str>) -> Option<Result> {
 
     let env = env + target_env(lib_path, prog);
-    let mut proc = run::Process::new(prog, args, run::ProcessOptions {
+    let mut opt_process = run::Process::new(prog, args, run::ProcessOptions {
         env: Some(env),
         dir: None,
         in_fd: None,
@@ -56,14 +57,46 @@ pub fn run(lib_path: &str,
         err_fd: None
     });
 
-    for input in input.iter() {
-        proc.input().write(input.as_bytes());
-    }
-    let output = proc.finish_with_output();
+    match opt_process {
+        Some(ref mut process) => {
+            for input in input.iter() {
+                process.input().write(input.as_bytes());
+            }
+            let run::ProcessOutput { status, output, error } = process.finish_with_output();
 
-    Result {
-        status: output.status,
-        out: str::from_utf8(output.output),
-        err: str::from_utf8(output.error)
+            Some(Result {
+                status: status,
+                out: str::from_utf8_owned(output),
+                err: str::from_utf8_owned(error)
+            })
+        },
+        None => None
+    }
+}
+
+pub fn run_background(lib_path: &str,
+           prog: &str,
+           args: &[~str],
+           env: ~[(~str, ~str)],
+           input: Option<~str>) -> Option<run::Process> {
+
+    let env = env + target_env(lib_path, prog);
+    let opt_process = run::Process::new(prog, args, run::ProcessOptions {
+        env: Some(env),
+        dir: None,
+        in_fd: None,
+        out_fd: None,
+        err_fd: None
+    });
+
+    match opt_process {
+        Some(mut process) => {
+            for input in input.iter() {
+                process.input().write(input.as_bytes());
+            }
+
+            Some(process)
+        },
+        None => None
     }
 }

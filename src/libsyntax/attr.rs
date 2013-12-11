@@ -14,10 +14,11 @@ use extra;
 
 use ast;
 use ast::{Attribute, Attribute_, MetaItem, MetaWord, MetaNameValue, MetaList};
-use codemap::{Spanned, spanned, dummy_spanned};
+use codemap::{Span, Spanned, spanned, dummy_spanned};
 use codemap::BytePos;
 use diagnostic::span_handler;
 use parse::comments::{doc_comment_style, strip_doc_comment_decoration};
+use pkgid::PkgId;
 
 use std::hashmap::HashSet;
 
@@ -168,19 +169,19 @@ pub fn mk_sugared_doc_attr(text: @str, lo: BytePos, hi: BytePos) -> Attribute {
 /// span included in the `==` comparison a plain MetaItem.
 pub fn contains(haystack: &[@ast::MetaItem],
                 needle: @ast::MetaItem) -> bool {
-    debug2!("attr::contains (name={})", needle.name());
-    do haystack.iter().any |item| {
-        debug2!("  testing: {}", item.name());
+    debug!("attr::contains (name={})", needle.name());
+    haystack.iter().any(|item| {
+        debug!("  testing: {}", item.name());
         item.node == needle.node
-    }
+    })
 }
 
 pub fn contains_name<AM: AttrMetaMethods>(metas: &[AM], name: &str) -> bool {
-    debug2!("attr::contains_name (name={})", name);
-    do metas.iter().any |item| {
-        debug2!("  testing: {}", item.name());
+    debug!("attr::contains_name (name={})", name);
+    metas.iter().any(|item| {
+        debug!("  testing: {}", item.name());
         name == item.name()
-    }
+    })
 }
 
 pub fn first_attr_value_str_by_name(attrs: &[Attribute], name: &str)
@@ -204,12 +205,10 @@ pub fn sort_meta_items(items: &[@MetaItem]) -> ~[@MetaItem] {
         .map(|&mi| (mi.name(), mi))
         .collect::<~[(@str, @MetaItem)]>();
 
-    do extra::sort::quick_sort(v) |&(a, _), &(b, _)| {
-        a <= b
-    }
+    extra::sort::quick_sort(v, |&(a, _), &(b, _)| a <= b);
 
     // There doesn't seem to be a more optimal way to do this
-    do v.move_iter().map |(_, m)| {
+    v.move_iter().map(|(_, m)| {
         match m.node {
             MetaList(n, ref mis) => {
                 @Spanned {
@@ -219,7 +218,7 @@ pub fn sort_meta_items(items: &[@MetaItem]) -> ~[@MetaItem] {
             }
             _ => m
         }
-    }.collect()
+    }).collect()
 }
 
 /**
@@ -237,6 +236,13 @@ pub fn find_linkage_metas(attrs: &[Attribute]) -> ~[@MetaItem] {
     result
 }
 
+pub fn find_pkgid(attrs: &[Attribute]) -> Option<PkgId> {
+    match first_attr_value_str_by_name(attrs, "crate_id") {
+        None => None,
+        Some(id) => from_str::<PkgId>(id),
+    }
+}
+
 #[deriving(Eq)]
 pub enum InlineAttr {
     InlineNone,
@@ -248,7 +254,7 @@ pub enum InlineAttr {
 /// True if something like #[inline] is found in the list of attrs.
 pub fn find_inline_attr(attrs: &[Attribute]) -> InlineAttr {
     // FIXME (#2809)---validate the usage of #[inline] and #[inline]
-    do attrs.iter().fold(InlineNone) |ia,attr| {
+    attrs.iter().fold(InlineNone, |ia,attr| {
         match attr.node.value.node {
           MetaWord(n) if "inline" == n => InlineHint,
           MetaList(n, ref items) if "inline" == n => {
@@ -262,7 +268,7 @@ pub fn find_inline_attr(attrs: &[Attribute]) -> InlineAttr {
           }
           _ => ia
         }
-    }
+    })
 }
 
 /// Tests if any `cfg(...)` meta items in `metas` match `cfg`. e.g.
@@ -278,38 +284,38 @@ pub fn test_cfg<AM: AttrMetaMethods, It: Iterator<AM>>
 
     // this would be much nicer as a chain of iterator adaptors, but
     // this doesn't work.
-    let some_cfg_matches = do metas.any |mi| {
-        debug2!("testing name: {}", mi.name());
+    let some_cfg_matches = metas.any(|mi| {
+        debug!("testing name: {}", mi.name());
         if "cfg" == mi.name() { // it is a #[cfg()] attribute
-            debug2!("is cfg");
+            debug!("is cfg");
             no_cfgs = false;
              // only #[cfg(...)] ones are understood.
             match mi.meta_item_list() {
                 Some(cfg_meta) => {
-                    debug2!("is cfg(...)");
-                    do cfg_meta.iter().all |cfg_mi| {
-                        debug2!("cfg({}[...])", cfg_mi.name());
+                    debug!("is cfg(...)");
+                    cfg_meta.iter().all(|cfg_mi| {
+                        debug!("cfg({}[...])", cfg_mi.name());
                         match cfg_mi.node {
                             ast::MetaList(s, ref not_cfgs) if "not" == s => {
-                                debug2!("not!");
+                                debug!("not!");
                                 // inside #[cfg(not(...))], so these need to all
                                 // not match.
                                 not_cfgs.iter().all(|mi| {
-                                    debug2!("cfg(not({}[...]))", mi.name());
+                                    debug!("cfg(not({}[...]))", mi.name());
                                     !contains(cfg, *mi)
                                 })
                             }
                             _ => contains(cfg, *cfg_mi)
                         }
-                    }
+                    })
                 }
                 None => false
             }
         } else {
             false
         }
-    };
-    debug2!("test_cfg (no_cfgs={}, some_cfg_matches={})", no_cfgs, some_cfg_matches);
+    });
+    debug!("test_cfg (no_cfgs={}, some_cfg_matches={})", no_cfgs, some_cfg_matches);
     no_cfgs || some_cfg_matches
 }
 
@@ -360,6 +366,118 @@ pub fn require_unique_names(diagnostic: @mut span_handler,
         if !set.insert(name) {
             diagnostic.span_fatal(meta.span,
                                   format!("duplicate meta item `{}`", name));
+        }
+    }
+}
+
+
+/**
+ * Fold this over attributes to parse #[repr(...)] forms.
+ *
+ * Valid repr contents: any of the primitive integral type names (see
+ * `int_type_of_word`, below) to specify the discriminant type; and `C`, to use
+ * the same discriminant size that the corresponding C enum would.  These are
+ * not allowed on univariant or zero-variant enums, which have no discriminant.
+ *
+ * If a discriminant type is so specified, then the discriminant will be
+ * present (before fields, if any) with that type; reprensentation
+ * optimizations which would remove it will not be done.
+ */
+pub fn find_repr_attr(diagnostic: @mut span_handler, attr: @ast::MetaItem, acc: ReprAttr)
+    -> ReprAttr {
+    let mut acc = acc;
+    match attr.node {
+        ast::MetaList(s, ref items) if "repr" == s => {
+            for item in items.iter() {
+                match item.node {
+                    ast::MetaWord(word) => {
+                        let hint = match word.as_slice() {
+                            // Can't use "extern" because it's not a lexical identifier.
+                            "C" => ReprExtern,
+                            _ => match int_type_of_word(word) {
+                                Some(ity) => ReprInt(item.span, ity),
+                                None => {
+                                    // Not a word we recognize
+                                    diagnostic.span_err(item.span,
+                                                        "unrecognized representation hint");
+                                    ReprAny
+                                }
+                            }
+                        };
+                        if hint != ReprAny {
+                            if acc == ReprAny {
+                                acc = hint;
+                            } else if acc != hint {
+                                diagnostic.span_warn(item.span,
+                                                     "conflicting representation hint ignored")
+                            }
+                        }
+                    }
+                    // Not a word:
+                    _ => diagnostic.span_err(item.span, "unrecognized representation hint")
+                }
+            }
+        }
+        // Not a "repr" hint: ignore.
+        _ => { }
+    }
+    return acc;
+}
+
+fn int_type_of_word(s: &str) -> Option<IntType> {
+    match s {
+        "i8" => Some(SignedInt(ast::ty_i8)),
+        "u8" => Some(UnsignedInt(ast::ty_u8)),
+        "i16" => Some(SignedInt(ast::ty_i16)),
+        "u16" => Some(UnsignedInt(ast::ty_u16)),
+        "i32" => Some(SignedInt(ast::ty_i32)),
+        "u32" => Some(UnsignedInt(ast::ty_u32)),
+        "i64" => Some(SignedInt(ast::ty_i64)),
+        "u64" => Some(UnsignedInt(ast::ty_u64)),
+        "int" => Some(SignedInt(ast::ty_i)),
+        "uint" => Some(UnsignedInt(ast::ty_u)),
+        _ => None
+    }
+}
+
+#[deriving(Eq)]
+pub enum ReprAttr {
+    ReprAny,
+    ReprInt(Span, IntType),
+    ReprExtern
+}
+
+impl ReprAttr {
+    pub fn is_ffi_safe(&self) -> bool {
+        match *self {
+            ReprAny => false,
+            ReprInt(_sp, ity) => ity.is_ffi_safe(),
+            ReprExtern => true
+        }
+    }
+}
+
+#[deriving(Eq)]
+pub enum IntType {
+    SignedInt(ast::int_ty),
+    UnsignedInt(ast::uint_ty)
+}
+
+impl IntType {
+    #[inline]
+    pub fn is_signed(self) -> bool {
+        match self {
+            SignedInt(..) => true,
+            UnsignedInt(..) => false
+        }
+    }
+    fn is_ffi_safe(self) -> bool {
+        match self {
+            SignedInt(ast::ty_i8) | UnsignedInt(ast::ty_u8) |
+            SignedInt(ast::ty_i16) | UnsignedInt(ast::ty_u16) |
+            SignedInt(ast::ty_i32) | UnsignedInt(ast::ty_u32) |
+            SignedInt(ast::ty_i64) | UnsignedInt(ast::ty_u64) => true,
+            _ => false
         }
     }
 }

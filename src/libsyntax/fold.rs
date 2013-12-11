@@ -10,9 +10,10 @@
 
 use ast::*;
 use ast;
-use codemap::{Span, Spanned};
+use codemap::{respan, Span, Spanned};
 use parse::token;
 use opt_vec::OptVec;
+use util::small_vector::SmallVector;
 
 // We may eventually want to be able to fold over type parameters, too.
 pub trait ast_fold {
@@ -94,15 +95,16 @@ pub trait ast_fold {
                 match ni.node {
                     foreign_item_fn(ref fdec, ref generics) => {
                         foreign_item_fn(
-                            ast::fn_decl {
+                            P(fn_decl {
                                 inputs: fdec.inputs.map(|a| fold_arg_(a,
                                                                       self)),
-                                output: self.fold_ty(&fdec.output),
+                                output: self.fold_ty(fdec.output),
                                 cf: fdec.cf,
-                            },
+                                variadic: fdec.variadic
+                            }),
                             fold_generics(generics, self))
                     }
-                    foreign_item_static(ref t, m) => {
+                    foreign_item_static(t, m) => {
                         foreign_item_static(self.fold_ty(t), m)
                     }
                 },
@@ -112,18 +114,18 @@ pub trait ast_fold {
         }
     }
 
-    fn fold_item(&self, i: @item) -> Option<@item> {
+    fn fold_item(&self, i: @item) -> SmallVector<@item> {
         noop_fold_item(i, self)
     }
 
-    fn fold_struct_field(&self, sf: @struct_field) -> @struct_field {
+    fn fold_struct_field(&self, sf: &struct_field) -> struct_field {
         let fold_attribute = |x| fold_attribute_(x, self);
 
-        @Spanned {
+        Spanned {
             node: ast::struct_field_ {
                 kind: sf.node.kind,
                 id: self.new_id(sf.node.id),
-                ty: self.fold_ty(&sf.node.ty),
+                ty: self.fold_ty(sf.node.ty),
                 attrs: sf.node.attrs.map(|e| fold_attribute(*e))
             },
             span: self.new_span(sf.span)
@@ -143,10 +145,10 @@ pub trait ast_fold {
             ident: self.fold_ident(m.ident),
             attrs: m.attrs.map(|a| fold_attribute_(*a, self)),
             generics: fold_generics(&m.generics, self),
-            explicit_self: m.explicit_self,
+            explicit_self: self.fold_explicit_self(&m.explicit_self),
             purity: m.purity,
-            decl: fold_fn_decl(&m.decl, self),
-            body: self.fold_block(&m.body),
+            decl: fold_fn_decl(m.decl, self),
+            body: self.fold_block(m.body),
             id: self.new_id(m.id),
             span: self.new_span(m.span),
             self_id: self.new_id(m.self_id),
@@ -154,11 +156,11 @@ pub trait ast_fold {
         }
     }
 
-    fn fold_block(&self, b: &Block) -> Block {
+    fn fold_block(&self, b: P<Block>) -> P<Block> {
         noop_fold_block(b, self)
     }
 
-    fn fold_stmt(&self, s: &Stmt) -> Option<@Stmt> {
+    fn fold_stmt(&self, s: &Stmt) -> SmallVector<@Stmt> {
         noop_fold_stmt(s, self)
     }
 
@@ -166,13 +168,14 @@ pub trait ast_fold {
         Arm {
             pats: a.pats.map(|x| self.fold_pat(*x)),
             guard: a.guard.map(|x| self.fold_expr(x)),
-            body: self.fold_block(&a.body),
+            body: self.fold_block(a.body),
         }
     }
 
     fn fold_pat(&self, p: @Pat) -> @Pat {
         let node = match p.node {
             PatWild => PatWild,
+            PatWildMulti => PatWildMulti,
             PatIdent(binding_mode, ref pth, ref sub) => {
                 PatIdent(binding_mode,
                          self.fold_path(pth),
@@ -185,12 +188,12 @@ pub trait ast_fold {
             }
             PatStruct(ref pth, ref fields, etc) => {
                 let pth_ = self.fold_path(pth);
-                let fs = do fields.map |f| {
+                let fs = fields.map(|f| {
                     ast::FieldPat {
                         ident: f.ident,
                         pat: self.fold_pat(f.pat)
                     }
-                };
+                });
                 PatStruct(pth_, fs, etc)
             }
             PatTup(ref elts) => PatTup(elts.map(|x| self.fold_pat(*x))),
@@ -214,45 +217,44 @@ pub trait ast_fold {
         }
     }
 
-    fn fold_decl(&self, d: @Decl) -> Option<@Decl> {
+    fn fold_decl(&self, d: @Decl) -> SmallVector<@Decl> {
         let node = match d.node {
-            DeclLocal(ref l) => Some(DeclLocal(self.fold_local(*l))),
+            DeclLocal(ref l) => SmallVector::one(DeclLocal(self.fold_local(*l))),
             DeclItem(it) => {
-                match self.fold_item(it) {
-                    Some(it_folded) => Some(DeclItem(it_folded)),
-                    None => None,
-                }
+                self.fold_item(it).move_iter().map(|i| DeclItem(i)).collect()
             }
         };
 
-        node.map(|node| {
+        node.move_iter().map(|node| {
             @Spanned {
                 node: node,
                 span: d.span,
             }
-        })
+        }).collect()
     }
 
     fn fold_expr(&self, e: @Expr) -> @Expr {
         noop_fold_expr(e, self)
     }
 
-    fn fold_ty(&self, t: &Ty) -> Ty {
+    fn fold_ty(&self, t: P<Ty>) -> P<Ty> {
         let node = match t.node {
             ty_nil | ty_bot | ty_infer => t.node.clone(),
             ty_box(ref mt) => ty_box(fold_mt(mt, self)),
-            ty_uniq(ref mt) => ty_uniq(fold_mt(mt, self)),
-            ty_vec(ref mt) => ty_vec(fold_mt(mt, self)),
+            ty_uniq(ty) => ty_uniq(self.fold_ty(ty)),
+            ty_vec(ty) => ty_vec(self.fold_ty(ty)),
             ty_ptr(ref mt) => ty_ptr(fold_mt(mt, self)),
-            ty_rptr(region, ref mt) => ty_rptr(region, fold_mt(mt, self)),
+            ty_rptr(ref region, ref mt) => {
+                ty_rptr(fold_opt_lifetime(region, self), fold_mt(mt, self))
+            }
             ty_closure(ref f) => {
                 ty_closure(@TyClosure {
                     sigil: f.sigil,
                     purity: f.purity,
-                    region: f.region,
+                    region: fold_opt_lifetime(&f.region, self),
                     onceness: f.onceness,
                     bounds: fold_opt_bounds(&f.bounds, self),
-                    decl: fold_fn_decl(&f.decl, self),
+                    decl: fold_fn_decl(f.decl, self),
                     lifetimes: f.lifetimes.map(|l| fold_lifetime(l, self)),
                 })
             }
@@ -261,26 +263,25 @@ pub trait ast_fold {
                     lifetimes: f.lifetimes.map(|l| fold_lifetime(l, self)),
                     purity: f.purity,
                     abis: f.abis,
-                    decl: fold_fn_decl(&f.decl, self)
+                    decl: fold_fn_decl(f.decl, self)
                 })
             }
-            ty_tup(ref tys) => ty_tup(tys.map(|ty| self.fold_ty(ty))),
+            ty_tup(ref tys) => ty_tup(tys.map(|&ty| self.fold_ty(ty))),
             ty_path(ref path, ref bounds, id) => {
                 ty_path(self.fold_path(path),
                         fold_opt_bounds(bounds, self),
                         self.new_id(id))
             }
-            ty_fixed_length_vec(ref mt, e) => {
-                ty_fixed_length_vec(fold_mt(mt, self), self.fold_expr(e))
+            ty_fixed_length_vec(ty, e) => {
+                ty_fixed_length_vec(self.fold_ty(ty), self.fold_expr(e))
             }
-            ty_mac(ref mac) => ty_mac(self.fold_mac(mac)),
             ty_typeof(expr) => ty_typeof(self.fold_expr(expr)),
         };
-        Ty {
+        P(Ty {
             id: self.new_id(t.id),
             span: self.new_span(t.span),
             node: node,
-        }
+        })
     }
 
     fn fold_mod(&self, m: &_mod) -> _mod {
@@ -301,7 +302,7 @@ pub trait ast_fold {
         }
     }
 
-    fn fold_variant(&self, v: &variant) -> variant {
+    fn fold_variant(&self, v: &variant) -> P<variant> {
         let kind;
         match v.node.kind {
             tuple_variant_kind(ref variant_args) => {
@@ -311,7 +312,7 @@ pub trait ast_fold {
             struct_variant_kind(ref struct_def) => {
                 kind = struct_variant_kind(@ast::struct_def {
                     fields: struct_def.fields.iter()
-                        .map(|f| self.fold_struct_field(*f)).collect(),
+                        .map(|f| self.fold_struct_field(f)).collect(),
                     ctor_id: struct_def.ctor_id.map(|c| self.new_id(c))
                 })
             }
@@ -332,10 +333,10 @@ pub trait ast_fold {
             disr_expr: de,
             vis: v.node.vis,
         };
-        Spanned {
+        P(Spanned {
             node: node,
             span: self.new_span(v.span),
-        }
+        })
     }
 
     fn fold_ident(&self, i: Ident) -> Ident {
@@ -348,16 +349,15 @@ pub trait ast_fold {
             global: p.global,
             segments: p.segments.map(|segment| ast::PathSegment {
                 identifier: self.fold_ident(segment.identifier),
-                lifetime: segment.lifetime,
-                types: segment.types.map(|typ| self.fold_ty(typ)),
+                lifetimes: segment.lifetimes.map(|l| fold_lifetime(l, self)),
+                types: segment.types.map(|&typ| self.fold_ty(typ)),
             })
         }
     }
 
     fn fold_local(&self, l: @Local) -> @Local {
         @Local {
-            is_mutbl: l.is_mutbl,
-            ty: self.fold_ty(&l.ty),
+            ty: self.fold_ty(l.ty),
             pat: self.fold_pat(l.pat),
             init: l.init.map(|e| self.fold_expr(e)),
             id: self.new_id(l.id),
@@ -378,7 +378,7 @@ pub trait ast_fold {
         }
     }
 
-    fn map_exprs(&self, f: &fn(@Expr) -> @Expr, es: &[@Expr]) -> ~[@Expr] {
+    fn map_exprs(&self, f: |@Expr| -> @Expr, es: &[@Expr]) -> ~[@Expr] {
         es.map(|x| f(*x))
     }
 
@@ -388,6 +388,24 @@ pub trait ast_fold {
 
     fn new_span(&self, sp: Span) -> Span {
         sp
+    }
+
+    fn fold_explicit_self(&self, es: &explicit_self) -> explicit_self {
+        Spanned {
+            span: self.new_span(es.span),
+            node: self.fold_explicit_self_(&es.node)
+        }
+    }
+
+    fn fold_explicit_self_(&self, es: &explicit_self_) -> explicit_self_ {
+        match *es {
+            sty_static | sty_value(_) | sty_uniq(_) | sty_box(_) => {
+                *es
+            }
+            sty_region(ref lifetime, m) => {
+                sty_region(fold_opt_lifetime(lifetime, self), m)
+            }
+        }
     }
 }
 
@@ -426,8 +444,7 @@ fn fold_attribute_<T:ast_fold>(at: Attribute, fld: &T) -> Attribute {
 //used in noop_fold_foreign_item and noop_fold_fn_decl
 fn fold_arg_<T:ast_fold>(a: &arg, fld: &T) -> arg {
     ast::arg {
-        is_mutbl: a.is_mutbl,
-        ty: fld.fold_ty(&a.ty),
+        ty: fld.fold_ty(a.ty),
         pat: fld.fold_pat(a.pat),
         id: fld.new_id(a.id),
     }
@@ -436,20 +453,20 @@ fn fold_arg_<T:ast_fold>(a: &arg, fld: &T) -> arg {
 // build a new vector of tts by appling the ast_fold's fold_ident to
 // all of the identifiers in the token trees.
 pub fn fold_tts<T:ast_fold>(tts: &[token_tree], fld: &T) -> ~[token_tree] {
-    do tts.map |tt| {
+    tts.map(|tt| {
         match *tt {
             tt_tok(span, ref tok) =>
             tt_tok(span,maybe_fold_ident(tok,fld)),
-            tt_delim(ref tts) => tt_delim(@mut fold_tts(**tts, fld)),
-            tt_seq(span, ref pattern, ref sep, is_optional) =>
+            tt_delim(tts) => tt_delim(@fold_tts(*tts, fld)),
+            tt_seq(span, pattern, ref sep, is_optional) =>
             tt_seq(span,
-                   @mut fold_tts(**pattern, fld),
+                   @fold_tts(*pattern, fld),
                    sep.as_ref().map(|tok|maybe_fold_ident(tok,fld)),
                    is_optional),
             tt_nonterminal(sp,ref ident) =>
             tt_nonterminal(sp,fld.fold_ident(*ident))
         }
-    }
+    })
 }
 
 // apply ident folder if it's an ident, otherwise leave it alone
@@ -463,12 +480,13 @@ fn maybe_fold_ident<T:ast_fold>(t: &token::Token, fld: &T) -> token::Token {
 }
 
 pub fn fold_fn_decl<T:ast_fold>(decl: &ast::fn_decl, fld: &T)
-                                -> ast::fn_decl {
-    ast::fn_decl {
+                                -> P<fn_decl> {
+    P(fn_decl {
         inputs: decl.inputs.map(|x| fold_arg_(x, fld)), // bad copy
-        output: fld.fold_ty(&decl.output),
+        output: fld.fold_ty(decl.output),
         cf: decl.cf,
-    }
+        variadic: decl.variadic
+    })
 }
 
 fn fold_ty_param_bound<T:ast_fold>(tpb: &TyParamBound, fld: &T)
@@ -505,6 +523,11 @@ pub fn fold_lifetimes<T:ast_fold>(lts: &OptVec<Lifetime>, fld: &T)
     lts.map(|l| fold_lifetime(l, fld))
 }
 
+pub fn fold_opt_lifetime<T:ast_fold>(o_lt: &Option<Lifetime>, fld: &T)
+                                     -> Option<Lifetime> {
+    o_lt.as_ref().map(|lt| fold_lifetime(lt, fld))
+}
+
 pub fn fold_generics<T:ast_fold>(generics: &Generics, fld: &T) -> Generics {
     Generics {ty_params: fold_ty_params(&generics.ty_params, fld),
               lifetimes: fold_lifetimes(&generics.lifetimes, fld)}
@@ -513,22 +536,8 @@ pub fn fold_generics<T:ast_fold>(generics: &Generics, fld: &T) -> Generics {
 fn fold_struct_def<T:ast_fold>(struct_def: @ast::struct_def, fld: &T)
                                -> @ast::struct_def {
     @ast::struct_def {
-        fields: struct_def.fields.map(|f| fold_struct_field(*f, fld)),
+        fields: struct_def.fields.map(|f| fold_struct_field(f, fld)),
         ctor_id: struct_def.ctor_id.map(|cid| fld.new_id(cid)),
-    }
-}
-
-fn noop_fold_view_item(vi: &view_item_, fld: @ast_fold) -> view_item_ {
-    match *vi {
-        view_item_extern_mod(ident, name, ref meta_items, node_id) => {
-            view_item_extern_mod(ident,
-                                 name,
-                                 fld.fold_meta_items(*meta_items),
-                                 fld.new_id(node_id))
-        }
-        view_item_use(ref view_paths) => {
-            view_item_use(fld.fold_view_paths(*view_paths))
-        }
     }
 }
 
@@ -539,12 +548,12 @@ fn fold_trait_ref<T:ast_fold>(p: &trait_ref, fld: &T) -> trait_ref {
     }
 }
 
-fn fold_struct_field<T:ast_fold>(f: @struct_field, fld: &T) -> @struct_field {
-    @Spanned {
+fn fold_struct_field<T:ast_fold>(f: &struct_field, fld: &T) -> struct_field {
+    Spanned {
         node: ast::struct_field_ {
             kind: f.node.kind,
             id: fld.new_id(f.node.id),
-            ty: fld.fold_ty(&f.node.ty),
+            ty: fld.fold_ty(f.node.ty),
             attrs: f.node.attrs.map(|a| fold_attribute_(*a, fld)),
         },
         span: fld.new_span(f.span),
@@ -553,7 +562,7 @@ fn fold_struct_field<T:ast_fold>(f: @struct_field, fld: &T) -> @struct_field {
 
 fn fold_field_<T:ast_fold>(field: Field, folder: &T) -> Field {
     ast::Field {
-        ident: folder.fold_ident(field.ident),
+        ident: respan(field.ident.span, folder.fold_ident(field.ident.node)),
         expr: folder.fold_expr(field.expr),
         span: folder.new_span(field.span),
     }
@@ -561,61 +570,47 @@ fn fold_field_<T:ast_fold>(field: Field, folder: &T) -> Field {
 
 fn fold_mt<T:ast_fold>(mt: &mt, folder: &T) -> mt {
     mt {
-        ty: ~folder.fold_ty(mt.ty),
+        ty: folder.fold_ty(mt.ty),
         mutbl: mt.mutbl,
-    }
-}
-
-fn fold_field<T:ast_fold>(f: TypeField, folder: &T) -> TypeField {
-    ast::TypeField {
-        ident: folder.fold_ident(f.ident),
-        mt: fold_mt(&f.mt, folder),
-        span: folder.new_span(f.span),
     }
 }
 
 fn fold_opt_bounds<T:ast_fold>(b: &Option<OptVec<TyParamBound>>, folder: &T)
                                -> Option<OptVec<TyParamBound>> {
-    do b.as_ref().map |bounds| {
-        do bounds.map |bound| {
+    b.as_ref().map(|bounds| {
+        bounds.map(|bound| {
             fold_ty_param_bound(bound, folder)
-        }
-    }
+        })
+    })
 }
 
 fn fold_variant_arg_<T:ast_fold>(va: &variant_arg, folder: &T)
                                  -> variant_arg {
     ast::variant_arg {
-        ty: folder.fold_ty(&va.ty),
+        ty: folder.fold_ty(va.ty),
         id: folder.new_id(va.id)
     }
 }
 
-pub fn noop_fold_block<T:ast_fold>(b: &Block, folder: &T) -> Block {
+pub fn noop_fold_block<T:ast_fold>(b: P<Block>, folder: &T) -> P<Block> {
     let view_items = b.view_items.map(|x| folder.fold_view_item(x));
-    let mut stmts = ~[];
-    for stmt in b.stmts.iter() {
-        match folder.fold_stmt(*stmt) {
-            None => {}
-            Some(stmt) => stmts.push(stmt)
-        }
-    }
-    ast::Block {
+    let stmts = b.stmts.iter().flat_map(|s| folder.fold_stmt(*s).move_iter()).collect();
+    P(Block {
         view_items: view_items,
         stmts: stmts,
         expr: b.expr.map(|x| folder.fold_expr(x)),
         id: folder.new_id(b.id),
         rules: b.rules,
         span: folder.new_span(b.span),
-    }
+    })
 }
 
 pub fn noop_fold_item_underscore<T:ast_fold>(i: &item_, folder: &T) -> item_ {
     match *i {
-        item_static(ref t, m, e) => {
+        item_static(t, m, e) => {
             item_static(folder.fold_ty(t), m, folder.fold_expr(e))
         }
-        item_fn(ref decl, purity, abi, ref generics, ref body) => {
+        item_fn(decl, purity, abi, ref generics, body) => {
             item_fn(
                 fold_fn_decl(decl, folder),
                 purity,
@@ -628,16 +623,16 @@ pub fn noop_fold_item_underscore<T:ast_fold>(i: &item_, folder: &T) -> item_ {
         item_foreign_mod(ref nm) => {
             item_foreign_mod(folder.fold_foreign_mod(nm))
         }
-        item_ty(ref t, ref generics) => {
+        item_ty(t, ref generics) => {
             item_ty(folder.fold_ty(t),
                     fold_generics(generics, folder))
         }
         item_enum(ref enum_definition, ref generics) => {
             item_enum(
                 ast::enum_def {
-                    variants: do enum_definition.variants.map |x| {
+                    variants: enum_definition.variants.map(|&x| {
                         folder.fold_variant(x)
-                    },
+                    }),
                 },
                 fold_generics(generics, folder))
         }
@@ -645,7 +640,7 @@ pub fn noop_fold_item_underscore<T:ast_fold>(i: &item_, folder: &T) -> item_ {
             let struct_def = fold_struct_def(*struct_def, folder);
             item_struct(struct_def, fold_generics(generics, folder))
         }
-        item_impl(ref generics, ref ifce, ref ty, ref methods) => {
+        item_impl(ref generics, ref ifce, ty, ref methods) => {
             item_impl(fold_generics(generics, folder),
                       ifce.as_ref().map(|p| fold_trait_ref(p, folder)),
                       folder.fold_ty(ty),
@@ -653,12 +648,12 @@ pub fn noop_fold_item_underscore<T:ast_fold>(i: &item_, folder: &T) -> item_ {
             )
         }
         item_trait(ref generics, ref traits, ref methods) => {
-            let methods = do methods.map |method| {
+            let methods = methods.map(|method| {
                 match *method {
                     required(ref m) => required(folder.fold_type_method(m)),
                     provided(method) => provided(folder.fold_method(method))
                 }
-            };
+            });
             item_trait(fold_generics(generics, folder),
                        traits.map(|p| fold_trait_ref(p, folder)),
                        methods)
@@ -673,9 +668,9 @@ pub fn noop_fold_type_method<T:ast_fold>(m: &TypeMethod, fld: &T)
         ident: fld.fold_ident(m.ident),
         attrs: m.attrs.map(|a| fold_attribute_(*a, fld)),
         purity: m.purity,
-        decl: fold_fn_decl(&m.decl, fld),
+        decl: fold_fn_decl(m.decl, fld),
         generics: fold_generics(&m.generics, fld),
-        explicit_self: m.explicit_self,
+        explicit_self: fld.fold_explicit_self(&m.explicit_self),
         id: fld.new_id(m.id),
         span: fld.new_span(m.span),
     }
@@ -686,7 +681,7 @@ pub fn noop_fold_mod<T:ast_fold>(m: &_mod, folder: &T) -> _mod {
         view_items: m.view_items
                      .iter()
                      .map(|x| folder.fold_view_item(x)).collect(),
-        items: m.items.iter().filter_map(|x| folder.fold_item(*x)).collect(),
+        items: m.items.iter().flat_map(|x| folder.fold_item(*x).move_iter()).collect(),
     }
 }
 
@@ -703,10 +698,10 @@ pub fn noop_fold_crate<T:ast_fold>(c: Crate, folder: &T) -> Crate {
 }
 
 pub fn noop_fold_item<T:ast_fold>(i: @ast::item, folder: &T)
-                                  -> Option<@ast::item> {
+                                  -> SmallVector<@ast::item> {
     let fold_attribute = |x| fold_attribute_(x, folder);
 
-    Some(@ast::item {
+    SmallVector::one(@ast::item {
         ident: folder.fold_ident(i.ident),
         attrs: i.attrs.map(|e| fold_attribute(*e)),
         id: folder.new_id(i.id),
@@ -740,7 +735,7 @@ pub fn noop_fold_expr<T:ast_fold>(e: @ast::Expr, folder: &T) -> @ast::Expr {
                 folder.new_id(callee_id),
                 folder.fold_expr(f),
                 folder.fold_ident(i),
-                tps.map(|x| folder.fold_ty(x)),
+                tps.map(|&x| folder.fold_ty(x)),
                 folder.map_exprs(|x| folder.fold_expr(x), *args),
                 blk
             )
@@ -756,25 +751,25 @@ pub fn noop_fold_expr<T:ast_fold>(e: @ast::Expr, folder: &T) -> @ast::Expr {
         }
         ExprDoBody(f) => ExprDoBody(folder.fold_expr(f)),
         ExprLit(_) => e.node.clone(),
-        ExprCast(expr, ref ty) => {
+        ExprCast(expr, ty) => {
             ExprCast(folder.fold_expr(expr), folder.fold_ty(ty))
         }
         ExprAddrOf(m, ohs) => ExprAddrOf(m, folder.fold_expr(ohs)),
-        ExprIf(cond, ref tr, fl) => {
+        ExprIf(cond, tr, fl) => {
             ExprIf(folder.fold_expr(cond),
                    folder.fold_block(tr),
                    fl.map(|x| folder.fold_expr(x)))
         }
-        ExprWhile(cond, ref body) => {
+        ExprWhile(cond, body) => {
             ExprWhile(folder.fold_expr(cond), folder.fold_block(body))
         }
-        ExprForLoop(pat, iter, ref body, ref maybe_ident) => {
+        ExprForLoop(pat, iter, body, ref maybe_ident) => {
             ExprForLoop(folder.fold_pat(pat),
                         folder.fold_expr(iter),
                         folder.fold_block(body),
                         maybe_ident.map(|i| folder.fold_ident(i)))
         }
-        ExprLoop(ref body, opt_ident) => {
+        ExprLoop(body, opt_ident) => {
             ExprLoop(folder.fold_block(body),
                      opt_ident.map(|x| folder.fold_ident(x)))
         }
@@ -782,13 +777,16 @@ pub fn noop_fold_expr<T:ast_fold>(e: @ast::Expr, folder: &T) -> @ast::Expr {
             ExprMatch(folder.fold_expr(expr),
                       arms.map(|x| folder.fold_arm(x)))
         }
-        ExprFnBlock(ref decl, ref body) => {
+        ExprFnBlock(decl, body) => {
             ExprFnBlock(
                 fold_fn_decl(decl, folder),
                 folder.fold_block(body)
             )
         }
-        ExprBlock(ref blk) => ExprBlock(folder.fold_block(blk)),
+        ExprProc(decl, body) => {
+            ExprProc(fold_fn_decl(decl, folder), folder.fold_block(body))
+        }
+        ExprBlock(blk) => ExprBlock(folder.fold_block(blk)),
         ExprAssign(el, er) => {
             ExprAssign(folder.fold_expr(el), folder.fold_expr(er))
         }
@@ -799,8 +797,9 @@ pub fn noop_fold_expr<T:ast_fold>(e: @ast::Expr, folder: &T) -> @ast::Expr {
                          folder.fold_expr(er))
         }
         ExprField(el, id, ref tys) => {
-            ExprField(folder.fold_expr(el), folder.fold_ident(id),
-                      tys.map(|x| folder.fold_ty(x)))
+            ExprField(folder.fold_expr(el),
+                      folder.fold_ident(id),
+                      tys.map(|&x| folder.fold_ty(x)))
         }
         ExprIndex(callee_id, el, er) => {
             ExprIndex(folder.new_id(callee_id),
@@ -838,27 +837,26 @@ pub fn noop_fold_expr<T:ast_fold>(e: @ast::Expr, folder: &T) -> @ast::Expr {
     }
 }
 
-pub fn noop_fold_stmt<T:ast_fold>(s: &Stmt, folder: &T) -> Option<@Stmt> {
-    let node = match s.node {
+pub fn noop_fold_stmt<T:ast_fold>(s: &Stmt, folder: &T) -> SmallVector<@Stmt> {
+    let nodes = match s.node {
         StmtDecl(d, nid) => {
-            match folder.fold_decl(d) {
-                Some(d) => Some(StmtDecl(d, folder.new_id(nid))),
-                None => None,
-            }
+            folder.fold_decl(d).move_iter()
+                    .map(|d| StmtDecl(d, folder.new_id(nid)))
+                    .collect()
         }
         StmtExpr(e, nid) => {
-            Some(StmtExpr(folder.fold_expr(e), folder.new_id(nid)))
+            SmallVector::one(StmtExpr(folder.fold_expr(e), folder.new_id(nid)))
         }
         StmtSemi(e, nid) => {
-            Some(StmtSemi(folder.fold_expr(e), folder.new_id(nid)))
+            SmallVector::one(StmtSemi(folder.fold_expr(e), folder.new_id(nid)))
         }
-        StmtMac(ref mac, semi) => Some(StmtMac(folder.fold_mac(mac), semi))
+        StmtMac(ref mac, semi) => SmallVector::one(StmtMac(folder.fold_mac(mac), semi))
     };
 
-    node.map(|node| @Spanned {
+    nodes.move_iter().map(|node| @Spanned {
         node: node,
         span: folder.new_span(s.span),
-    })
+    }).collect()
 }
 
 #[cfg(test)]
@@ -891,7 +889,7 @@ mod test {
                 let a_val = $a;
                 let b_val = $b;
                 if !(pred_val(a_val,b_val)) {
-                    fail2!("expected args satisfying {}, got {:?} and {:?}",
+                    fail!("expected args satisfying {}, got {:?} and {:?}",
                           $predname, a_val, b_val);
                 }
             }

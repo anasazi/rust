@@ -70,7 +70,8 @@ pub fn type_is_immediate(ccx: &mut CrateContext, ty: ty::t) -> bool {
         return true;
     }
     match ty::get(ty).sty {
-        ty::ty_struct(*) | ty::ty_enum(*) | ty::ty_tup(*) => {
+        ty::ty_bot => true,
+        ty::ty_struct(..) | ty::ty_enum(..) | ty::ty_tup(..) => {
             let llty = sizing_type_of(ccx, ty);
             llsize_of_alloc(ccx, llty) <= llsize_of_alloc(ccx, ccx.int_type)
         }
@@ -449,26 +450,26 @@ pub fn add_clean(bcx: @mut Block, val: ValueRef, t: ty::t) {
         return
     }
 
-    debug2!("add_clean({}, {}, {})", bcx.to_str(), bcx.val_to_str(val), t.repr(bcx.tcx()));
+    debug!("add_clean({}, {}, {})", bcx.to_str(), bcx.val_to_str(val), t.repr(bcx.tcx()));
 
     let cleanup_type = cleanup_type(bcx.tcx(), t);
-    do in_scope_cx(bcx, None) |scope_info| {
+    in_scope_cx(bcx, None, |scope_info| {
         scope_info.cleanups.push(clean(@TypeDroppingCleanupFunction {
             val: val,
             t: t,
         } as @CleanupFunction,
         cleanup_type));
         grow_scope_clean(scope_info);
-    }
+    })
 }
 
 pub fn add_clean_temp_immediate(cx: @mut Block, val: ValueRef, ty: ty::t) {
     if !ty::type_needs_drop(cx.tcx(), ty) { return; }
-    debug2!("add_clean_temp_immediate({}, {}, {})",
+    debug!("add_clean_temp_immediate({}, {}, {})",
            cx.to_str(), cx.val_to_str(val),
            ty.repr(cx.tcx()));
     let cleanup_type = cleanup_type(cx.tcx(), ty);
-    do in_scope_cx(cx, None) |scope_info| {
+    in_scope_cx(cx, None, |scope_info| {
         scope_info.cleanups.push(clean_temp(val,
             @ImmediateTypeDroppingCleanupFunction {
                 val: val,
@@ -476,7 +477,7 @@ pub fn add_clean_temp_immediate(cx: @mut Block, val: ValueRef, ty: ty::t) {
             } as @CleanupFunction,
             cleanup_type));
         grow_scope_clean(scope_info);
-    }
+    })
 }
 
 pub fn add_clean_temp_mem(bcx: @mut Block, val: ValueRef, t: ty::t) {
@@ -493,11 +494,11 @@ pub fn add_clean_temp_mem_in_scope(bcx: @mut Block,
 pub fn add_clean_temp_mem_in_scope_(bcx: @mut Block, scope_id: Option<ast::NodeId>,
                                     val: ValueRef, t: ty::t) {
     if !ty::type_needs_drop(bcx.tcx(), t) { return; }
-    debug2!("add_clean_temp_mem({}, {}, {})",
+    debug!("add_clean_temp_mem({}, {}, {})",
            bcx.to_str(), bcx.val_to_str(val),
            t.repr(bcx.tcx()));
     let cleanup_type = cleanup_type(bcx.tcx(), t);
-    do in_scope_cx(bcx, scope_id) |scope_info| {
+    in_scope_cx(bcx, scope_id, |scope_info| {
         scope_info.cleanups.push(clean_temp(val,
             @TypeDroppingCleanupFunction {
                 val: val,
@@ -505,7 +506,7 @@ pub fn add_clean_temp_mem_in_scope_(bcx: @mut Block, scope_id: Option<ast::NodeI
             } as @CleanupFunction,
             cleanup_type));
         grow_scope_clean(scope_info);
-    }
+    })
 }
 pub fn add_clean_return_to_mut(bcx: @mut Block,
                                scope_id: ast::NodeId,
@@ -522,11 +523,11 @@ pub fn add_clean_return_to_mut(bcx: @mut Block,
     //! box was frozen initially. Here, both `frozen_val_ref` and
     //! `bits_val_ref` are in fact pointers to stack slots.
 
-    debug2!("add_clean_return_to_mut({}, {}, {})",
+    debug!("add_clean_return_to_mut({}, {}, {})",
            bcx.to_str(),
            bcx.val_to_str(frozen_val_ref),
            bcx.val_to_str(bits_val_ref));
-    do in_scope_cx(bcx, Some(scope_id)) |scope_info| {
+    in_scope_cx(bcx, Some(scope_id), |scope_info| {
         scope_info.cleanups.push(clean_temp(
                 frozen_val_ref,
                 @WriteGuardReleasingCleanupFunction {
@@ -538,7 +539,7 @@ pub fn add_clean_return_to_mut(bcx: @mut Block,
                 } as @CleanupFunction,
                 normal_exit_only));
         grow_scope_clean(scope_info);
-    }
+    })
 }
 pub fn add_clean_free(cx: @mut Block, ptr: ValueRef, heap: heap) {
     let free_fn = match heap {
@@ -553,12 +554,12 @@ pub fn add_clean_free(cx: @mut Block, ptr: ValueRef, heap: heap) {
             } as @CleanupFunction
         }
     };
-    do in_scope_cx(cx, None) |scope_info| {
+    in_scope_cx(cx, None, |scope_info| {
         scope_info.cleanups.push(clean_temp(ptr,
                                             free_fn,
                                             normal_exit_and_unwind));
         grow_scope_clean(scope_info);
-    }
+    })
 }
 
 // Note that this only works for temporaries. We should, at some point, move
@@ -566,7 +567,7 @@ pub fn add_clean_free(cx: @mut Block, ptr: ValueRef, heap: heap) {
 // this will be more involved. For now, we simply zero out the local, and the
 // drop glue checks whether it is zero.
 pub fn revoke_clean(cx: @mut Block, val: ValueRef) {
-    do in_scope_cx(cx, None) |scope_info| {
+    in_scope_cx(cx, None, |scope_info| {
         let cleanup_pos = scope_info.cleanups.iter().position(
             |cu| match *cu {
                 clean_temp(v, _, _) if v == val => true,
@@ -579,7 +580,7 @@ pub fn revoke_clean(cx: @mut Block, val: ValueRef) {
                                                       scope_info.cleanups.len()));
             shrink_scope_clean(scope_info, *i);
         }
-    }
+    })
 }
 
 pub fn block_cleanups(bcx: &mut Block) -> ~[cleanup] {
@@ -768,15 +769,17 @@ pub fn val_ty(v: ValueRef) -> Type {
     }
 }
 
-pub fn in_scope_cx(cx: @mut Block, scope_id: Option<ast::NodeId>, f: &fn(si: &mut ScopeInfo)) {
+pub fn in_scope_cx(cx: @mut Block,
+                   scope_id: Option<ast::NodeId>,
+                   f: |si: &mut ScopeInfo|) {
     let mut cur = cx;
     let mut cur_scope = cur.scope;
     loop {
         cur_scope = match cur_scope {
             Some(inf) => match scope_id {
                 Some(wanted) => match inf.node_info {
-                    Some(NodeInfo { id: actual, _ }) if wanted == actual => {
-                        debug2!("in_scope_cx: selected cur={} (cx={})",
+                    Some(NodeInfo { id: actual, .. }) if wanted == actual => {
+                        debug!("in_scope_cx: selected cur={} (cx={})",
                                cur.to_str(), cx.to_str());
                         f(inf);
                         return;
@@ -784,7 +787,7 @@ pub fn in_scope_cx(cx: @mut Block, scope_id: Option<ast::NodeId>, f: &fn(si: &mu
                     _ => inf.parent,
                 },
                 None => {
-                    debug2!("in_scope_cx: selected cur={} (cx={})",
+                    debug!("in_scope_cx: selected cur={} (cx={})",
                            cur.to_str(), cx.to_str());
                     f(inf);
                     return;
@@ -841,9 +844,7 @@ pub fn C_integral(t: Type, u: u64, sign_extend: bool) -> ValueRef {
 
 pub fn C_floating(s: &str, t: Type) -> ValueRef {
     unsafe {
-        do s.with_c_str |buf| {
-            llvm::LLVMConstRealOfString(t.to_ref(), buf)
-        }
+        s.with_c_str(|buf| llvm::LLVMConstRealOfString(t.to_ref(), buf))
     }
 }
 
@@ -865,6 +866,10 @@ pub fn C_i32(i: i32) -> ValueRef {
 
 pub fn C_i64(i: i64) -> ValueRef {
     return C_integral(Type::i64(), i as u64, true);
+}
+
+pub fn C_u64(i: u64) -> ValueRef {
+    return C_integral(Type::i64(), i, false);
 }
 
 pub fn C_int(cx: &CrateContext, i: int) -> ValueRef {
@@ -889,14 +894,14 @@ pub fn C_cstr(cx: &mut CrateContext, s: @str) -> ValueRef {
             None => ()
         }
 
-        let sc = do s.as_imm_buf |buf, buflen| {
-            llvm::LLVMConstStringInContext(cx.llcx, buf as *c_char, buflen as c_uint, False)
-        };
+        let sc = llvm::LLVMConstStringInContext(cx.llcx,
+                                                s.as_ptr() as *c_char, s.len() as c_uint,
+                                                False);
 
         let gsym = token::gensym("str");
-        let g = do format!("str{}", gsym).with_c_str |buf| {
+        let g = format!("str{}", gsym).with_c_str(|buf| {
             llvm::LLVMAddGlobal(cx.llmod, val_ty(sc).to_ref(), buf)
-        };
+        });
         llvm::LLVMSetInitializer(g, sc);
         llvm::LLVMSetGlobalConstant(g, True);
         lib::llvm::SetLinkage(g, lib::llvm::InternalLinkage);
@@ -917,41 +922,58 @@ pub fn C_estr_slice(cx: &mut CrateContext, s: @str) -> ValueRef {
     }
 }
 
+pub fn C_binary_slice(cx: &mut CrateContext, data: &[u8]) -> ValueRef {
+    unsafe {
+        let len = data.len();
+        let lldata = C_bytes(data);
+
+        let gsym = token::gensym("binary");
+        let g = format!("binary{}", gsym).with_c_str(|buf| {
+            llvm::LLVMAddGlobal(cx.llmod, val_ty(lldata).to_ref(), buf)
+        });
+        llvm::LLVMSetInitializer(g, lldata);
+        llvm::LLVMSetGlobalConstant(g, True);
+        lib::llvm::SetLinkage(g, lib::llvm::InternalLinkage);
+
+        let cs = llvm::LLVMConstPointerCast(g, Type::i8p().to_ref());
+        C_struct([cs, C_uint(cx, len)], false)
+    }
+}
+
 pub fn C_zero_byte_arr(size: uint) -> ValueRef {
     unsafe {
         let mut i = 0u;
         let mut elts: ~[ValueRef] = ~[];
         while i < size { elts.push(C_u8(0u)); i += 1u; }
         return llvm::LLVMConstArray(Type::i8().to_ref(),
-                                    vec::raw::to_ptr(elts), elts.len() as c_uint);
+                                    elts.as_ptr(), elts.len() as c_uint);
     }
 }
 
 pub fn C_struct(elts: &[ValueRef], packed: bool) -> ValueRef {
     unsafe {
-        do elts.as_imm_buf |ptr, len| {
-            llvm::LLVMConstStructInContext(base::task_llcx(), ptr, len as c_uint, packed as Bool)
-        }
+
+        llvm::LLVMConstStructInContext(base::task_llcx(),
+                                       elts.as_ptr(), elts.len() as c_uint,
+                                       packed as Bool)
     }
 }
 
 pub fn C_named_struct(T: Type, elts: &[ValueRef]) -> ValueRef {
     unsafe {
-        do elts.as_imm_buf |ptr, len| {
-            llvm::LLVMConstNamedStruct(T.to_ref(), ptr, len as c_uint)
-        }
+        llvm::LLVMConstNamedStruct(T.to_ref(), elts.as_ptr(), elts.len() as c_uint)
     }
 }
 
 pub fn C_array(ty: Type, elts: &[ValueRef]) -> ValueRef {
     unsafe {
-        return llvm::LLVMConstArray(ty.to_ref(), vec::raw::to_ptr(elts), elts.len() as c_uint);
+        return llvm::LLVMConstArray(ty.to_ref(), elts.as_ptr(), elts.len() as c_uint);
     }
 }
 
 pub fn C_bytes(bytes: &[u8]) -> ValueRef {
     unsafe {
-        let ptr = cast::transmute(vec::raw::to_ptr(bytes));
+        let ptr = cast::transmute(bytes.as_ptr());
         return llvm::LLVMConstStringInContext(base::task_llcx(), ptr, bytes.len() as c_uint, True);
     }
 }
@@ -965,11 +987,9 @@ pub fn get_param(fndecl: ValueRef, param: uint) -> ValueRef {
 pub fn const_get_elt(cx: &CrateContext, v: ValueRef, us: &[c_uint])
                   -> ValueRef {
     unsafe {
-        let r = do us.as_imm_buf |p, len| {
-            llvm::LLVMConstExtractValue(v, p, len as c_uint)
-        };
+        let r = llvm::LLVMConstExtractValue(v, us.as_ptr(), us.len() as c_uint);
 
-        debug2!("const_get_elt(v={}, us={:?}, r={})",
+        debug!("const_get_elt(v={}, us={:?}, r={})",
                cx.tn.val_to_str(v), us, cx.tn.val_to_str(r));
 
         return r;
@@ -1031,11 +1051,11 @@ pub enum MonoDataClass {
 pub fn mono_data_classify(t: ty::t) -> MonoDataClass {
     match ty::get(t).sty {
         ty::ty_float(_) => MonoFloat,
-        ty::ty_rptr(*) | ty::ty_uniq(*) |
-        ty::ty_box(*) | ty::ty_opaque_box(*) |
+        ty::ty_rptr(..) | ty::ty_uniq(..) |
+        ty::ty_box(..) | ty::ty_opaque_box(..) |
         ty::ty_estr(ty::vstore_uniq) | ty::ty_evec(_, ty::vstore_uniq) |
         ty::ty_estr(ty::vstore_box) | ty::ty_evec(_, ty::vstore_box) |
-        ty::ty_bare_fn(*) => MonoNonNull,
+        ty::ty_bare_fn(..) => MonoNonNull,
         // Is that everything?  Would closures or slices qualify?
         _ => MonoBits
     }
@@ -1126,9 +1146,9 @@ pub fn node_id_type_params(bcx: &mut Block, id: ast::NodeId) -> ~[ty::t] {
 
     match bcx.fcx.param_substs {
       Some(substs) => {
-        do params.iter().map |t| {
+        params.iter().map(|t| {
             ty::subst_tps(tcx, substs.tys, substs.self_ty, *t)
-        }.collect()
+        }).collect()
       }
       _ => params
     }
@@ -1182,9 +1202,9 @@ pub fn resolve_vtable_under_param_substs(tcx: ty::ctxt,
         typeck::vtable_static(trait_id, ref tys, sub) => {
             let tys = match param_substs {
                 Some(substs) => {
-                    do tys.iter().map |t| {
+                    tys.iter().map(|t| {
                         ty::subst_tps(tcx, substs.tys, substs.self_ty, *t)
-                    }.collect()
+                    }).collect()
                 }
                 _ => tys.to_owned()
             };
@@ -1212,7 +1232,7 @@ pub fn find_vtable(tcx: ty::ctxt,
                    n_param: typeck::param_index,
                    n_bound: uint)
                    -> typeck::vtable_origin {
-    debug2!("find_vtable(n_param={:?}, n_bound={}, ps={})",
+    debug!("find_vtable(n_param={:?}, n_bound={}, ps={})",
            n_param, n_bound, ps.repr(tcx));
 
     let param_bounds = match n_param {

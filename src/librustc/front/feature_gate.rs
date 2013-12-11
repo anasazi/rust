@@ -18,11 +18,15 @@
 //! Features are enabled in programs via the crate-level attributes of
 //! #[feature(...)] with a comma-separated list of features.
 
+use middle::lint;
+
 use syntax::ast;
+use syntax::attr;
 use syntax::attr::AttrMetaMethods;
 use syntax::codemap::Span;
 use syntax::visit;
 use syntax::visit::Visitor;
+use syntax::parse::token;
 
 use driver::session::Session;
 
@@ -33,6 +37,12 @@ static KNOWN_FEATURES: &'static [(&'static str, Status)] = &[
     ("globs", Active),
     ("macro_rules", Active),
     ("struct_variant", Active),
+    ("once_fns", Active),
+    ("asm", Active),
+    ("managed_boxes", Active),
+    ("non_ascii_idents", Active),
+    ("thread_local", Active),
+    ("link_args", Active),
 
     // These are used to test this portion of the compiler, they don't actually
     // mean anything
@@ -67,18 +77,35 @@ impl Context {
         }
     }
 
+    fn gate_box(&self, span: Span) {
+        self.gate_feature("managed_boxes", span,
+                          "The managed box syntax is being replaced by the \
+                           `std::gc::Gc` and `std::rc::Rc` types. Equivalent \
+                           functionality to managed trait objects will be \
+                           implemented but is currently missing.");
+    }
+
     fn has_feature(&self, feature: &str) -> bool {
         self.features.iter().any(|n| n.as_slice() == feature)
     }
 }
 
 impl Visitor<()> for Context {
+    fn visit_ident(&mut self, sp: Span, id: ast::Ident, _: ()) {
+        let s = token::ident_to_str(&id);
+
+        if !s.is_ascii() {
+            self.gate_feature("non_ascii_idents", sp,
+                              "non-ascii idents are not fully supported.");
+        }
+    }
+
     fn visit_view_item(&mut self, i: &ast::view_item, _: ()) {
         match i.node {
             ast::view_item_use(ref paths) => {
                 for path in paths.iter() {
                     match path.node {
-                        ast::view_path_glob(*) => {
+                        ast::view_path_glob(..) => {
                             self.gate_feature("globs", path.span,
                                               "glob import statements are \
                                                experimental and possibly buggy");
@@ -93,11 +120,19 @@ impl Visitor<()> for Context {
     }
 
     fn visit_item(&mut self, i: @ast::item, _:()) {
+        for attr in i.attrs.iter() {
+            if "thread_local" == attr.name() {
+                self.gate_feature("thread_local", i.span,
+                                  "`#[thread_local]` is an experimental feature, and does not \
+                                  currently handle destructors. There is no corresponding \
+                                  `#[task_local]` mapping to the task model");
+            }
+        }
         match i.node {
             ast::item_enum(ref def, _) => {
                 for variant in def.variants.iter() {
                     match variant.node.kind {
-                        ast::struct_variant_kind(*) => {
+                        ast::struct_variant_kind(..) => {
                             self.gate_feature("struct_variant", variant.span,
                                               "enum struct variants are \
                                                experimental and possibly buggy");
@@ -107,17 +142,12 @@ impl Visitor<()> for Context {
                 }
             }
 
-            ast::item_mac(ref mac) => {
-                match mac.node {
-                    ast::mac_invoc_tt(ref path, _, _) => {
-                        let rules = self.sess.ident_of("macro_rules");
-                        if path.segments.last().identifier == rules {
-                            self.gate_feature("macro_rules", i.span,
-                                              "macro definitions are not \
-                                               stable enough for use and are \
-                                               subject to change");
-                        }
-                    }
+            ast::item_foreign_mod(..) => {
+                if attr::contains_name(i.attrs, "link_args") {
+                    self.gate_feature("link_args", i.span,
+                                      "the `link_args` attribute is not portable \
+                                       across platforms, it is recommended to \
+                                       use `#[link(name = \"foo\")]` instead")
                 }
             }
 
@@ -125,6 +155,48 @@ impl Visitor<()> for Context {
         }
 
         visit::walk_item(self, i, ());
+    }
+
+    fn visit_mac(&mut self, macro: &ast::mac, _: ()) {
+        let ast::mac_invoc_tt(ref path, _, _) = macro.node;
+
+        if path.segments.last().identifier == self.sess.ident_of("macro_rules") {
+            self.gate_feature("macro_rules", path.span, "macro definitions are \
+                not stable enough for use and are subject to change");
+        }
+
+        else if path.segments.last().identifier == self.sess.ident_of("asm") {
+            self.gate_feature("asm", path.span, "inline assembly is not \
+                stable enough for use and is subject to change");
+        }
+    }
+
+    fn visit_ty(&mut self, t: &ast::Ty, _: ()) {
+        match t.node {
+            ast::ty_closure(closure) if closure.onceness == ast::Once &&
+                    closure.sigil != ast::OwnedSigil => {
+                self.gate_feature("once_fns", t.span,
+                                  "once functions are \
+                                   experimental and likely to be removed");
+
+            },
+            ast::ty_box(_) => { self.gate_box(t.span); }
+            _ => {}
+        }
+
+        visit::walk_ty(self, t, ());
+    }
+
+    fn visit_expr(&mut self, e: @ast::Expr, _: ()) {
+        match e.node {
+            ast::ExprUnary(_, ast::UnBox(..), _) |
+            ast::ExprVstore(_, ast::ExprVstoreBox) |
+            ast::ExprVstore(_, ast::ExprVstoreMutBox) => {
+                self.gate_box(e.span);
+            }
+            _ => {}
+        }
+        visit::walk_expr(self, e, ());
     }
 }
 
@@ -162,7 +234,10 @@ pub fn check_crate(sess: Session, crate: &ast::Crate) {
                                                      directive not necessary");
                         }
                         None => {
-                            sess.span_err(mi.span, "unknown feature");
+                            sess.add_lint(lint::unknown_features,
+                                          ast::CRATE_NODE_ID,
+                                          mi.span,
+                                          ~"unknown feature");
                         }
                     }
                 }

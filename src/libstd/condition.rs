@@ -30,14 +30,14 @@ This macro declares an inner module called `my_error` with one static variable,
 parameters are used for, an example usage of this condition would be:
 
 ```rust
-do my_error::cond.trap(|raised_int| {
+my_error::cond.trap(|raised_int| {
 
     // the condition `my_error` was raised on, and the value it raised is stored
     // in `raised_int`. This closure must return a `~str` type (as specified in
     // the declaration of the condition
     if raised_int == 3 { ~"three" } else { ~"oh well" }
 
-}).inside {
+}).inside(|| {
 
     // The condition handler above is installed for the duration of this block.
     // That handler will override any previous handler, but the previous handler
@@ -50,13 +50,13 @@ do my_error::cond.trap(|raised_int| {
     println(my_error::cond.raise(3)); // prints "three"
     println(my_error::cond.raise(4)); // prints "oh well"
 
-}
+})
  ```
 
 Condition handling is useful in cases where propagating errors is either to
 cumbersome or just not necessary in the first place. It should also be noted,
 though, that if there is not handler installed when a condition is raised, then
-the task invokes `fail2!()` and will terminate.
+the task invokes `fail!()` and will terminate.
 
 ## More Info
 
@@ -81,7 +81,7 @@ pub struct Handler<T, U> {
 /// the condition (useful for debugging).
 ///
 /// This struct should never be created directly, but rather only through the
-/// `condition!` macro provided to all libraries using libstd.
+/// `condition!` macro provided to all libraries using `std`.
 pub struct Condition<T, U> {
     /// Name of the condition handler
     name: &'static str,
@@ -104,7 +104,7 @@ impl<T, U> Condition<T, U> {
     /// // use `trap`'s inside method to register the handler and then run a
     /// // block of code with the handler registered
     /// ```
-    pub fn trap<'a>(&'a self, h: &'a fn(T) -> U) -> Trap<'a, T, U> {
+    pub fn trap<'a>(&'a self, h: 'a |T| -> U) -> Trap<'a, T, U> {
         let h: Closure = unsafe { ::cast::transmute(h) };
         let prev = local_data::get(self.key, |k| k.map(|x| *x));
         let h = @Handler { handle: h, prev: prev };
@@ -128,24 +128,24 @@ impl<T, U> Condition<T, U> {
     /// function will not return.
     pub fn raise(&self, t: T) -> U {
         let msg = format!("Unhandled condition: {}: {:?}", self.name, t);
-        self.raise_default(t, || fail2!("{}", msg.clone()))
+        self.raise_default(t, || fail!("{}", msg.clone()))
     }
 
     /// Performs the same functionality as `raise`, except that when no handler
     /// is found the `default` argument is called instead of failing the task.
-    pub fn raise_default(&self, t: T, default: &fn() -> U) -> U {
+    pub fn raise_default(&self, t: T, default: || -> U) -> U {
         match local_data::pop(self.key) {
             None => {
-                debug2!("Condition.raise: found no handler");
+                debug!("Condition.raise: found no handler");
                 default()
             }
             Some(handler) => {
-                debug2!("Condition.raise: found handler");
+                debug!("Condition.raise: found handler");
                 match handler.prev {
                     None => {}
                     Some(hp) => local_data::set(self.key, hp)
                 }
-                let handle : &fn(T) -> U = unsafe {
+                let handle : |T| -> U = unsafe {
                     ::cast::transmute(handler.handle)
                 };
                 let u = handle(t);
@@ -162,12 +162,12 @@ impl<T, U> Condition<T, U> {
 ///
 /// Normally this object is not dealt with directly, but rather it's directly
 /// used after being returned from `trap`
-struct Trap<'self, T, U> {
-    priv cond: &'self Condition<T, U>,
+pub struct Trap<'a, T, U> {
+    priv cond: &'a Condition<T, U>,
     priv handler: @Handler<T, U>
 }
 
-impl<'self, T, U> Trap<'self, T, U> {
+impl<'a, T, U> Trap<'a, T, U> {
     /// Execute a block of code with this trap handler's exception handler
     /// registered.
     ///
@@ -176,28 +176,42 @@ impl<'self, T, U> Trap<'self, T, U> {
     /// ```rust
     /// condition! { my_error: int -> int; }
     ///
-    /// let result = do my_error::cond.trap(|error| error + 3).inside {
+    /// let result = my_error::cond.trap(|error| error + 3).inside(|| {
     ///     my_error::cond.raise(4)
-    /// };
+    /// });
     /// assert_eq!(result, 7);
     /// ```
-    pub fn inside<V>(&self, inner: &'self fn() -> V) -> V {
+    pub fn inside<V>(&self, inner: 'a || -> V) -> V {
         let _g = Guard { cond: self.cond };
-        debug2!("Trap: pushing handler to TLS");
+        debug!("Trap: pushing handler to TLS");
         local_data::set(self.cond.key, self.handler);
         inner()
     }
+
+    /// Returns a guard that will automatically reset the condition upon
+    /// exit of the scope. This is useful if you want to use conditions with
+    /// an RAII pattern.
+    pub fn guard(&self) -> Guard<'a,T,U> {
+        let guard = Guard {
+            cond: self.cond
+        };
+        debug!("Guard: pushing handler to TLS");
+        local_data::set(self.cond.key, self.handler);
+        guard
+    }
 }
 
-#[doc(hidden)]
-struct Guard<'self, T, U> {
-    priv cond: &'self Condition<T, U>
+/// A guard that will automatically reset the condition handler upon exit of
+/// the scope. This is useful if you want to use conditions with an RAII
+/// pattern.
+pub struct Guard<'a, T, U> {
+    priv cond: &'a Condition<T, U>
 }
 
 #[unsafe_destructor]
-impl<'self, T, U> Drop for Guard<'self, T, U> {
+impl<'a, T, U> Drop for Guard<'a, T, U> {
     fn drop(&mut self) {
-        debug2!("Guard: popping handler from TLS");
+        debug!("Guard: popping handler from TLS");
         let curr = local_data::pop(self.cond.key);
         match curr {
             None => {}
@@ -216,22 +230,22 @@ mod test {
     }
 
     fn trouble(i: int) {
-        debug2!("trouble: raising condition");
+        debug!("trouble: raising condition");
         let j = sadness::cond.raise(i);
-        debug2!("trouble: handler recovered with {}", j);
+        debug!("trouble: handler recovered with {}", j);
     }
 
     fn nested_trap_test_inner() {
         let mut inner_trapped = false;
 
-        do sadness::cond.trap(|_j| {
-            debug2!("nested_trap_test_inner: in handler");
+        sadness::cond.trap(|_j| {
+            debug!("nested_trap_test_inner: in handler");
             inner_trapped = true;
             0
-        }).inside {
-            debug2!("nested_trap_test_inner: in protected block");
+        }).inside(|| {
+            debug!("nested_trap_test_inner: in protected block");
             trouble(1);
-        }
+        });
 
         assert!(inner_trapped);
     }
@@ -240,14 +254,14 @@ mod test {
     fn nested_trap_test_outer() {
         let mut outer_trapped = false;
 
-        do sadness::cond.trap(|_j| {
-            debug2!("nested_trap_test_outer: in handler");
+        sadness::cond.trap(|_j| {
+            debug!("nested_trap_test_outer: in handler");
             outer_trapped = true; 0
-        }).inside {
-            debug2!("nested_guard_test_outer: in protected block");
+        }).inside(|| {
+            debug!("nested_guard_test_outer: in protected block");
             nested_trap_test_inner();
             trouble(1);
-        }
+        });
 
         assert!(outer_trapped);
     }
@@ -255,16 +269,16 @@ mod test {
     fn nested_reraise_trap_test_inner() {
         let mut inner_trapped = false;
 
-        do sadness::cond.trap(|_j| {
-            debug2!("nested_reraise_trap_test_inner: in handler");
+        sadness::cond.trap(|_j| {
+            debug!("nested_reraise_trap_test_inner: in handler");
             inner_trapped = true;
             let i = 10;
-            debug2!("nested_reraise_trap_test_inner: handler re-raising");
+            debug!("nested_reraise_trap_test_inner: handler re-raising");
             sadness::cond.raise(i)
-        }).inside {
-            debug2!("nested_reraise_trap_test_inner: in protected block");
+        }).inside(|| {
+            debug!("nested_reraise_trap_test_inner: in protected block");
             trouble(1);
-        }
+        });
 
         assert!(inner_trapped);
     }
@@ -273,13 +287,13 @@ mod test {
     fn nested_reraise_trap_test_outer() {
         let mut outer_trapped = false;
 
-        do sadness::cond.trap(|_j| {
-            debug2!("nested_reraise_trap_test_outer: in handler");
+        sadness::cond.trap(|_j| {
+            debug!("nested_reraise_trap_test_outer: in handler");
             outer_trapped = true; 0
-        }).inside {
-            debug2!("nested_reraise_trap_test_outer: in protected block");
+        }).inside(|| {
+            debug!("nested_reraise_trap_test_outer: in protected block");
             nested_reraise_trap_test_inner();
-        }
+        });
 
         assert!(outer_trapped);
     }
@@ -288,13 +302,13 @@ mod test {
     fn test_default() {
         let mut trapped = false;
 
-        do sadness::cond.trap(|j| {
-            debug2!("test_default: in handler");
+        sadness::cond.trap(|j| {
+            debug!("test_default: in handler");
             sadness::cond.raise_default(j, || { trapped=true; 5 })
-        }).inside {
-            debug2!("test_default: in protected block");
+        }).inside(|| {
+            debug!("test_default: in protected block");
             trouble(1);
-        }
+        });
 
         assert!(trapped);
     }
@@ -312,12 +326,12 @@ mod test {
             #[test]
             fn test_conditions_are_public() {
                 let mut trapped = false;
-                do sadness::cond.trap(|_| {
+                sadness::cond.trap(|_| {
                     trapped = true;
                     0
-                }).inside {
+                }).inside(|| {
                     sadness::cond.raise(0);
-                }
+                });
                 assert!(trapped);
             }
         }

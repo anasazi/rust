@@ -12,29 +12,27 @@
 
 extern mod extra;
 
-use std::comm::Chan;
-use std::comm;
 use std::task;
 
 pub fn main() { test05(); }
 
 fn test05_start(ch : &Chan<int>) {
     ch.send(10);
-    error2!("sent 10");
+    error!("sent 10");
     ch.send(20);
-    error2!("sent 20");
+    error!("sent 20");
     ch.send(30);
-    error2!("sent 30");
+    error!("sent 30");
 }
 
 fn test05() {
-    let (po, ch) = comm::stream();
-    task::spawn(|| test05_start(&ch) );
+    let (po, ch) = Chan::new();
+    task::spawn(proc() { test05_start(&ch) });
     let mut value: int = po.recv();
-    error2!("{}", value);
+    error!("{}", value);
     value = po.recv();
-    error2!("{}", value);
+    error!("{}", value);
     value = po.recv();
-    error2!("{}", value);
+    error!("{}", value);
     assert_eq!(value, 30);
 }

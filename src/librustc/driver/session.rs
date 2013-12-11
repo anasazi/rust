@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -13,11 +13,11 @@ use back::link;
 use back::target_strs;
 use back;
 use driver::driver::host_triple;
-use driver::session;
 use metadata::filesearch;
 use metadata;
 use middle::lint;
 
+use syntax::attr::AttrMetaMethods;
 use syntax::ast::NodeId;
 use syntax::ast::{int_ty, uint_ty};
 use syntax::codemap::Span;
@@ -28,21 +28,10 @@ use syntax::abi;
 use syntax::parse::token;
 use syntax;
 
-use std::int;
-use std::hashmap::HashMap;
-
-#[deriving(Eq)]
-pub enum Os { OsWin32, OsMacos, OsLinux, OsAndroid, OsFreebsd, }
-
-#[deriving(Clone)]
-pub enum crate_type {
-    bin_crate,
-    lib_crate,
-    unknown_crate,
-}
+use std::hashmap::{HashMap,HashSet};
 
 pub struct config {
-    os: Os,
+    os: abi::Os,
     arch: abi::Architecture,
     target_strs: target_strs::t,
     int_type: int_ty,
@@ -56,30 +45,29 @@ pub static time_llvm_passes:        uint = 1 <<  3;
 pub static trans_stats:             uint = 1 <<  4;
 pub static asm_comments:            uint = 1 <<  5;
 pub static no_verify:               uint = 1 <<  6;
-pub static trace:                   uint = 1 <<  7;
-pub static coherence:               uint = 1 <<  8;
-pub static borrowck_stats:          uint = 1 <<  9;
-pub static borrowck_note_pure:      uint = 1 << 10;
-pub static borrowck_note_loan:      uint = 1 << 11;
-pub static no_landing_pads:         uint = 1 << 12;
-pub static debug_llvm:              uint = 1 << 13;
-pub static count_type_sizes:        uint = 1 << 14;
-pub static meta_stats:              uint = 1 << 15;
-pub static no_opt:                  uint = 1 << 16;
-pub static gc:                      uint = 1 << 17;
-pub static jit:                     uint = 1 << 18;
-pub static debug_info:              uint = 1 << 19;
-pub static extra_debug_info:        uint = 1 << 20;
-pub static statik:                  uint = 1 << 21;
-pub static print_link_args:         uint = 1 << 22;
-pub static no_debug_borrows:        uint = 1 << 23;
-pub static lint_llvm:               uint = 1 << 24;
-pub static once_fns:                uint = 1 << 25;
-pub static print_llvm_passes:       uint = 1 << 26;
-pub static no_vectorize_loops:      uint = 1 << 27;
-pub static no_vectorize_slp:        uint = 1 << 28;
-pub static no_prepopulate_passes:   uint = 1 << 29;
-pub static use_softfp:              uint = 1 << 30;
+pub static borrowck_stats:          uint = 1 <<  7;
+pub static borrowck_note_pure:      uint = 1 <<  8;
+pub static borrowck_note_loan:      uint = 1 <<  9;
+pub static no_landing_pads:         uint = 1 << 10;
+pub static debug_llvm:              uint = 1 << 11;
+pub static count_type_sizes:        uint = 1 << 12;
+pub static meta_stats:              uint = 1 << 13;
+pub static no_opt:                  uint = 1 << 14;
+pub static gc:                      uint = 1 << 15;
+pub static debug_info:              uint = 1 << 16;
+pub static extra_debug_info:        uint = 1 << 17;
+pub static print_link_args:         uint = 1 << 18;
+pub static no_debug_borrows:        uint = 1 << 19;
+pub static lint_llvm:               uint = 1 << 20;
+pub static print_llvm_passes:       uint = 1 << 21;
+pub static no_vectorize_loops:      uint = 1 << 22;
+pub static no_vectorize_slp:        uint = 1 << 23;
+pub static no_prepopulate_passes:   uint = 1 << 24;
+pub static use_softfp:              uint = 1 << 25;
+pub static gen_crate_map:           uint = 1 << 26;
+pub static prefer_dynamic:          uint = 1 << 27;
+pub static no_integrated_as:        uint = 1 << 28;
+pub static lto:                     uint = 1 << 29;
 
 pub fn debugging_opts_map() -> ~[(&'static str, &'static str, uint)] {
     ~[("verbose", "in general, enable more debug printouts", verbose),
@@ -91,8 +79,6 @@ pub fn debugging_opts_map() -> ~[(&'static str, &'static str, uint)] {
      ("trans-stats", "gather trans statistics", trans_stats),
      ("asm-comments", "generate comments into the assembly (may change behavior)", asm_comments),
      ("no-verify", "skip LLVM verification", no_verify),
-     ("trace", "emit trace logs", trace),
-     ("coherence", "perform coherence checking", coherence),
      ("borrowck-stats", "gather borrowck statistics",  borrowck_stats),
      ("borrowck-note-pure", "note where purity is req'd",
       borrowck_note_pure),
@@ -107,20 +93,15 @@ pub fn debugging_opts_map() -> ~[(&'static str, &'static str, uint)] {
      ("no-opt", "do not optimize, even if -O is passed", no_opt),
      ("print-link-args", "Print the arguments passed to the linker", print_link_args),
      ("gc", "Garbage collect shared data (experimental)", gc),
-     ("jit", "Execute using JIT (experimental)", jit),
      ("extra-debug-info", "Extra debugging info (experimental)",
       extra_debug_info),
      ("debug-info", "Produce debug info (experimental)", debug_info),
-     ("static", "Use or produce static libraries or binaries (experimental)", statik),
      ("no-debug-borrows",
       "do not show where borrow checks fail",
       no_debug_borrows),
      ("lint-llvm",
       "Run the LLVM lint pass on the pre-optimization IR",
       lint_llvm),
-     ("once-fns",
-      "Allow 'once fn' closures to deinitialize captured variables",
-      once_fns),
      ("print-llvm-passes",
       "Prints the llvm optimization passes being run",
       print_llvm_passes),
@@ -135,6 +116,11 @@ pub fn debugging_opts_map() -> ~[(&'static str, &'static str, uint)] {
       "Don't run LLVM's SLP vectorization passes",
       no_vectorize_slp),
      ("soft-float", "Generate software floating point library calls", use_softfp),
+     ("gen-crate-map", "Force generation of a toplevel crate map", gen_crate_map),
+     ("prefer-dynamic", "Prefer dynamic linking to static linking", prefer_dynamic),
+     ("no-integrated-as",
+      "Use external assembler rather than LLVM's integrated one", no_integrated_as),
+     ("lto", "Perform LLVM link-time optimizations", lto),
     ]
 }
 
@@ -150,8 +136,8 @@ pub enum OptLevel {
 pub struct options {
     // The crate config requested for the session, which may be combined
     // with additional crate configurations during the compile process
-    crate_type: crate_type,
-    is_static: bool,
+    outputs: ~[OutputStyle],
+
     gc: bool,
     optimize: OptLevel,
     custom_passes: ~[~str],
@@ -160,11 +146,11 @@ pub struct options {
     extra_debuginfo: bool,
     lint_opts: ~[(lint::lint, lint::level)],
     save_temps: bool,
-    jit: bool,
     output_type: back::link::output_type,
-    addl_lib_search_paths: @mut ~[Path], // This is mutable for rustpkg, which
-                                         // updates search paths based on the
-                                         // parsed code
+    addl_lib_search_paths: @mut HashSet<Path>, // This is mutable for rustpkg, which
+                                               // updates search paths based on the
+                                               // parsed code
+    ar: Option<~str>,
     linker: Option<~str>,
     linker_args: ~[~str],
     maybe_sysroot: Option<@Path>,
@@ -182,6 +168,10 @@ pub struct options {
     no_trans: bool,
     debugging_opts: uint,
     android_cross_path: Option<~str>,
+    /// Whether to write .d dependency files
+    write_dependency_info: bool,
+    /// Crate id-related things to maybe print. It's (crate_id, crate_name, crate_file_name).
+    print_metas: (bool, bool, bool),
 }
 
 pub struct crate_metadata {
@@ -200,6 +190,14 @@ pub enum EntryFnType {
     EntryNone,
 }
 
+#[deriving(Eq, Clone)]
+pub enum OutputStyle {
+    OutputExecutable,
+    OutputDylib,
+    OutputRlib,
+    OutputStaticlib,
+}
+
 pub struct Session_ {
     targ_cfg: @config,
     opts: @options,
@@ -214,7 +212,8 @@ pub struct Session_ {
     building_library: @mut bool,
     working_dir: Path,
     lints: @mut HashMap<ast::NodeId, ~[(lint::lint, codemap::Span, ~str)]>,
-    node_id: @mut uint,
+    node_id: @mut ast::NodeId,
+    outputs: @mut ~[OutputStyle],
 }
 
 pub type Session = @Session_;
@@ -279,13 +278,15 @@ impl Session_ {
     pub fn next_node_id(&self) -> ast::NodeId {
         self.reserve_node_ids(1)
     }
-    pub fn reserve_node_ids(&self, count: uint) -> ast::NodeId {
+    pub fn reserve_node_ids(&self, count: ast::NodeId) -> ast::NodeId {
         let v = *self.node_id;
-        *self.node_id += count;
-        if v > (int::max_value as uint) {
-            self.bug("Input too large, ran out of node ids!");
+
+        match v.checked_add(&count) {
+            Some(next) => { *self.node_id = next; }
+            None => self.bug("Input too large, ran out of node ids!")
         }
-        v as int
+
+        v
     }
     pub fn diagnostic(&self) -> @mut diagnostic::span_handler {
         self.span_diagnostic
@@ -314,8 +315,6 @@ impl Session_ {
     pub fn asm_comments(&self) -> bool { self.debugging_opt(asm_comments) }
     pub fn no_verify(&self) -> bool { self.debugging_opt(no_verify) }
     pub fn lint_llvm(&self) -> bool { self.debugging_opt(lint_llvm) }
-    pub fn trace(&self) -> bool { self.debugging_opt(trace) }
-    pub fn coherence(&self) -> bool { self.debugging_opt(coherence) }
     pub fn borrowck_stats(&self) -> bool { self.debugging_opt(borrowck_stats) }
     pub fn borrowck_note_pure(&self) -> bool {
         self.debugging_opt(borrowck_note_pure)
@@ -326,7 +325,6 @@ impl Session_ {
     pub fn debug_borrows(&self) -> bool {
         self.opts.optimize == No && !self.debugging_opt(no_debug_borrows)
     }
-    pub fn once_fns(&self) -> bool { self.debugging_opt(once_fns) }
     pub fn print_llvm_passes(&self) -> bool {
         self.debugging_opt(print_llvm_passes)
     }
@@ -338,6 +336,21 @@ impl Session_ {
     }
     pub fn no_vectorize_slp(&self) -> bool {
         self.debugging_opt(no_vectorize_slp)
+    }
+    pub fn gen_crate_map(&self) -> bool {
+        self.debugging_opt(gen_crate_map)
+    }
+    pub fn prefer_dynamic(&self) -> bool {
+        self.debugging_opt(prefer_dynamic)
+    }
+    pub fn no_integrated_as(&self) -> bool {
+        self.debugging_opt(no_integrated_as)
+    }
+    pub fn lto(&self) -> bool {
+        self.debugging_opt(lto)
+    }
+    pub fn no_landing_pads(&self) -> bool {
+        self.debugging_opt(no_landing_pads)
     }
 
     // pointless function, now...
@@ -359,8 +372,7 @@ impl Session_ {
 /// Some reasonable defaults
 pub fn basic_options() -> @options {
     @options {
-        crate_type: session::lib_crate,
-        is_static: false,
+        outputs: ~[],
         gc: false,
         optimize: No,
         custom_passes: ~[],
@@ -369,9 +381,9 @@ pub fn basic_options() -> @options {
         extra_debuginfo: false,
         lint_opts: ~[],
         save_temps: false,
-        jit: false,
         output_type: link::output_type_exe,
-        addl_lib_search_paths: @mut ~[],
+        addl_lib_search_paths: @mut HashSet::new(),
+        ar: None,
         linker: None,
         linker_args: ~[],
         maybe_sysroot: None,
@@ -385,116 +397,67 @@ pub fn basic_options() -> @options {
         no_trans: false,
         debugging_opts: 0u,
         android_cross_path: None,
+        write_dependency_info: false,
+        print_metas: (false, false, false),
     }
 }
 
 // Seems out of place, but it uses session, so I'm putting it here
-pub fn expect<T:Clone>(sess: Session, opt: Option<T>, msg: &fn() -> ~str)
-                       -> T {
+pub fn expect<T:Clone>(sess: Session, opt: Option<T>, msg: || -> ~str) -> T {
     diagnostic::expect(sess.diagnostic(), opt, msg)
 }
 
-pub fn building_library(req_crate_type: crate_type,
-                        crate: &ast::Crate,
-                        testing: bool) -> bool {
-    match req_crate_type {
-      bin_crate => false,
-      lib_crate => true,
-      unknown_crate => {
-        if testing {
-            false
-        } else {
-            match syntax::attr::first_attr_value_str_by_name(
-                crate.attrs,
-                "crate_type") {
-              Some(s) => "lib" == s,
-              _ => false
-            }
+pub fn building_library(options: &options, crate: &ast::Crate) -> bool {
+    if options.test { return false }
+    for output in options.outputs.iter() {
+        match *output {
+            OutputExecutable => {}
+            OutputStaticlib | OutputDylib | OutputRlib => return true
         }
-      }
+    }
+    match syntax::attr::first_attr_value_str_by_name(crate.attrs, "crate_type") {
+        Some(s) => "lib" == s || "rlib" == s || "dylib" == s || "staticlib" == s,
+        _ => false
     }
 }
 
-pub fn sess_os_to_meta_os(os: Os) -> metadata::loader::Os {
+pub fn collect_outputs(options: &options,
+                       attrs: &[ast::Attribute]) -> ~[OutputStyle] {
+    // If we're generating a test executable, then ignore all other output
+    // styles at all other locations
+    if options.test {
+        return ~[OutputExecutable];
+    }
+    let mut base = options.outputs.clone();
+    let mut iter = attrs.iter().filter_map(|a| {
+        if "crate_type" == a.name() {
+            match a.value_str() {
+                Some(n) if "rlib" == n => Some(OutputRlib),
+                Some(n) if "dylib" == n => Some(OutputDylib),
+                Some(n) if "lib" == n => Some(OutputDylib),
+                Some(n) if "staticlib" == n => Some(OutputStaticlib),
+                Some(n) if "bin" == n => Some(OutputExecutable),
+                _ => None
+            }
+        } else {
+            None
+        }
+    });
+    base.extend(&mut iter);
+    if base.len() == 0 {
+        base.push(OutputExecutable);
+    }
+    return base;
+}
+
+pub fn sess_os_to_meta_os(os: abi::Os) -> metadata::loader::Os {
     use metadata::loader;
 
     match os {
-        OsWin32 => loader::OsWin32,
-        OsLinux => loader::OsLinux,
-        OsAndroid => loader::OsAndroid,
-        OsMacos => loader::OsMacos,
-        OsFreebsd => loader::OsFreebsd
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use driver::session::{bin_crate, building_library, lib_crate};
-    use driver::session::{unknown_crate};
-
-    use syntax::ast;
-    use syntax::attr;
-    use syntax::codemap;
-
-    fn make_crate_type_attr(t: @str) -> ast::Attribute {
-        attr::mk_attr(attr::mk_name_value_item_str(@"crate_type", t))
-    }
-
-    fn make_crate(with_bin: bool, with_lib: bool) -> @ast::Crate {
-        let mut attrs = ~[];
-        if with_bin {
-            attrs.push(make_crate_type_attr(@"bin"));
-        }
-        if with_lib {
-            attrs.push(make_crate_type_attr(@"lib"));
-        }
-        @ast::Crate {
-            module: ast::_mod { view_items: ~[], items: ~[] },
-            attrs: attrs,
-            config: ~[],
-            span: codemap::dummy_sp(),
-        }
-    }
-
-    #[test]
-    fn bin_crate_type_attr_results_in_bin_output() {
-        let crate = make_crate(true, false);
-        assert!(!building_library(unknown_crate, crate, false));
-    }
-
-    #[test]
-    fn lib_crate_type_attr_results_in_lib_output() {
-        let crate = make_crate(false, true);
-        assert!(building_library(unknown_crate, crate, false));
-    }
-
-    #[test]
-    fn bin_option_overrides_lib_crate_type() {
-        let crate = make_crate(false, true);
-        assert!(!building_library(bin_crate, crate, false));
-    }
-
-    #[test]
-    fn lib_option_overrides_bin_crate_type() {
-        let crate = make_crate(true, false);
-        assert!(building_library(lib_crate, crate, false));
-    }
-
-    #[test]
-    fn bin_crate_type_is_default() {
-        let crate = make_crate(false, false);
-        assert!(!building_library(unknown_crate, crate, false));
-    }
-
-    #[test]
-    fn test_option_overrides_lib_crate_type() {
-        let crate = make_crate(false, true);
-        assert!(!building_library(unknown_crate, crate, true));
-    }
-
-    #[test]
-    fn test_option_does_not_override_requested_lib_type() {
-        let crate = make_crate(false, false);
-        assert!(building_library(lib_crate, crate, true));
+        abi::OsWin32 => loader::OsWin32,
+        abi::OsLinux => loader::OsLinux,
+        abi::OsAndroid => loader::OsAndroid,
+        abi::OsMacos => loader::OsMacos,
+        abi::OsFreebsd => loader::OsFreebsd
     }
 }

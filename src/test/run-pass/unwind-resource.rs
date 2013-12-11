@@ -12,7 +12,6 @@
 
 extern mod extra;
 
-use std::comm::{stream, SharedChan};
 use std::task;
 
 struct complainer {
@@ -21,14 +20,14 @@ struct complainer {
 
 impl Drop for complainer {
     fn drop(&mut self) {
-        error2!("About to send!");
+        error!("About to send!");
         self.c.send(true);
-        error2!("Sent!");
+        error!("Sent!");
     }
 }
 
 fn complainer(c: SharedChan<bool>) -> complainer {
-    error2!("Hello!");
+    error!("Hello!");
     complainer {
         c: c
     }
@@ -36,13 +35,12 @@ fn complainer(c: SharedChan<bool>) -> complainer {
 
 fn f(c: SharedChan<bool>) {
     let _c = complainer(c);
-    fail2!();
+    fail!();
 }
 
 pub fn main() {
-    let (p, c) = stream();
-    let c = SharedChan::new(c);
-    task::spawn_unlinked(|| f(c.clone()) );
-    error2!("hiiiiiiiii");
+    let (p, c) = SharedChan::new();
+    task::spawn(proc() f(c.clone()));
+    error!("hiiiiiiiii");
     assert!(p.recv());
 }

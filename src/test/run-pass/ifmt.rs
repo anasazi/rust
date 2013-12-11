@@ -14,16 +14,15 @@
 #[deny(warnings)];
 
 use std::fmt;
-use std::rt::io::Decorator;
-use std::rt::io::mem::MemWriter;
-use std::rt::io;
-use std::rt::io::Writer;
+use std::io::Decorator;
+use std::io::mem::MemWriter;
+use std::io;
+use std::io::Writer;
 use std::str;
 
 struct A;
 struct B;
 
-#[fmt="foo"]
 impl fmt::Signed for A {
     fn fmt(_: &A, f: &mut fmt::Formatter) { f.buf.write("aloha".as_bytes()); }
 }
@@ -119,7 +118,10 @@ pub fn main() {
     t!(format!("{:0>2s}", "a"), "0a");
     t!(format!("{:.*s}", 4, "aaaaaaaaaaaaaaaaaa"), "aaaa");
     t!(format!("{:.1$s}", "aaaaaaaaaaaaaaaaaa", 4), "aaaa");
+    t!(format!("{:.a$s}", "aaaaaaaaaaaaaaaaaa", a=4), "aaaa");
     t!(format!("{:1$s}", "a", 4), "a   ");
+    t!(format!("{1:0$s}", 4, "a"), "a   ");
+    t!(format!("{:a$s}", "a", a=4), "a   ");
     t!(format!("{:-#s}", "a"), "a");
     t!(format!("{:+#s}", "a"), "a");
 

@@ -10,7 +10,7 @@
 
 use common::config;
 
-use std::io;
+#[cfg(target_os = "win32")]
 use std::os::getenv;
 
 /// Conversion table from triple OS name to Rust SYSNAME
@@ -29,9 +29,10 @@ pub fn get_os(triple: &str) -> &'static str {
             return os
         }
     }
-    fail2!("Cannot determine OS from triple");
+    fail!("Cannot determine OS from triple");
 }
 
+#[cfg(target_os = "win32")]
 pub fn make_new_path(path: &str) -> ~str {
 
     // Windows just uses PATH as the library search path, so we have to
@@ -44,25 +45,13 @@ pub fn make_new_path(path: &str) -> ~str {
     }
 }
 
-#[cfg(target_os = "linux")]
-#[cfg(target_os = "freebsd")]
-pub fn lib_path_env_var() -> ~str { ~"LD_LIBRARY_PATH" }
-
-#[cfg(target_os = "macos")]
-pub fn lib_path_env_var() -> ~str { ~"DYLD_LIBRARY_PATH" }
-
 #[cfg(target_os = "win32")]
 pub fn lib_path_env_var() -> ~str { ~"PATH" }
-
-#[cfg(target_os = "linux")]
-#[cfg(target_os = "macos")]
-#[cfg(target_os = "freebsd")]
-pub fn path_div() -> ~str { ~":" }
 
 #[cfg(target_os = "win32")]
 pub fn path_div() -> ~str { ~";" }
 
 pub fn logv(config: &config, s: ~str) {
-    debug2!("{}", s);
-    if config.verbose { io::println(s); }
+    debug!("{}", s);
+    if config.verbose { println(s); }
 }

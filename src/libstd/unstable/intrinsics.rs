@@ -34,7 +34,7 @@ A quick refresher on memory ordering:
 
 // This is needed to prevent duplicate lang item definitions.
 #[cfg(test)]
-pub use realstd::unstable::intrinsics::{TyDesc, Opaque, TyVisitor};
+pub use realstd::unstable::intrinsics::{TyDesc, Opaque, TyVisitor, TypeId};
 
 pub type GlueFn = extern "Rust" fn(*i8);
 
@@ -74,6 +74,8 @@ pub struct TyDesc {
 #[lang="opaque"]
 #[cfg(not(test))]
 pub enum Opaque { }
+
+pub type Disr = u64;
 
 #[lang="ty_visitor"]
 #[cfg(not(test))]
@@ -140,25 +142,25 @@ pub trait TyVisitor {
                        sz: uint, align: uint) -> bool;
 
     fn visit_enter_enum(&mut self, n_variants: uint,
-                        get_disr: extern unsafe fn(ptr: *Opaque) -> int,
+                        get_disr: extern unsafe fn(ptr: *Opaque) -> Disr,
                         sz: uint, align: uint) -> bool;
     fn visit_enter_enum_variant(&mut self, variant: uint,
-                                disr_val: int,
+                                disr_val: Disr,
                                 n_fields: uint,
                                 name: &str) -> bool;
     fn visit_enum_variant_field(&mut self, i: uint, offset: uint, inner: *TyDesc) -> bool;
     fn visit_leave_enum_variant(&mut self, variant: uint,
-                                disr_val: int,
+                                disr_val: Disr,
                                 n_fields: uint,
                                 name: &str) -> bool;
     fn visit_leave_enum(&mut self, n_variants: uint,
-                        get_disr: extern unsafe fn(ptr: *Opaque) -> int,
+                        get_disr: extern unsafe fn(ptr: *Opaque) -> Disr,
                         sz: uint, align: uint) -> bool;
 
     fn visit_enter_fn(&mut self, purity: uint, proto: uint,
                       n_inputs: uint, retstyle: uint) -> bool;
     fn visit_fn_input(&mut self, i: uint, mode: uint, inner: *TyDesc) -> bool;
-    fn visit_fn_output(&mut self, retstyle: uint, inner: *TyDesc) -> bool;
+    fn visit_fn_output(&mut self, retstyle: uint, variadic: bool, inner: *TyDesc) -> bool;
     fn visit_leave_fn(&mut self, purity: uint, proto: uint,
                       n_inputs: uint, retstyle: uint) -> bool;
 
@@ -172,8 +174,10 @@ pub trait TyVisitor {
 
 extern "rust-intrinsic" {
     /// Abort the execution of the process.
-    #[cfg(not(stage0))]
     pub fn abort() -> !;
+
+    /// Execute a breakpoint trap, for inspection by a debugger.
+    pub fn breakpoint();
 
     /// Atomic compare and exchange, sequentially consistent.
     pub fn atomic_cxchg(dst: &mut int, old: int, src: int) -> int;
@@ -306,6 +310,12 @@ extern "rust-intrinsic" {
     /// Get a static pointer to a type descriptor.
     pub fn get_tydesc<T>() -> *TyDesc;
 
+    /// Gets an identifier which is globally unique to the specified type. This
+    /// function will return the same value for a type regardless of whichever
+    /// crate it is invoked in.
+    pub fn type_id<T: 'static>() -> TypeId;
+
+
     /// Create a value initialized to zero.
     ///
     /// `init` is unsafe because it returns a zeroed-out datum,
@@ -327,11 +337,9 @@ extern "rust-intrinsic" {
     pub fn needs_drop<T>() -> bool;
 
     /// Returns `true` if a type is managed (will be allocated on the local heap)
-    pub fn contains_managed<T>() -> bool;
+    pub fn owns_managed<T>() -> bool;
 
     pub fn visit_tydesc(td: *TyDesc, tv: &mut TyVisitor);
-
-    pub fn frame_address(f: &once fn(*u8));
 
     /// Get the address of the `__morestack` stack growth function.
     pub fn morestack_addr() -> *();
@@ -344,26 +352,20 @@ extern "rust-intrinsic" {
     /// integer, since the conversion would throw away aliasing information.
     pub fn offset<T>(dst: *T, offset: int) -> *T;
 
-    /// Equivalent to the `llvm.memcpy.p0i8.0i8.i32` intrinsic, with a size of
-    /// `count` * `size_of::<T>()` and an alignment of `min_align_of::<T>()`
-    pub fn memcpy32<T>(dst: *mut T, src: *T, count: u32);
-    /// Equivalent to the `llvm.memcpy.p0i8.0i8.i64` intrinsic, with a size of
-    /// `count` * `size_of::<T>()` and an alignment of `min_align_of::<T>()`
-    pub fn memcpy64<T>(dst: *mut T, src: *T, count: u64);
+    /// Equivalent to the appropriate `llvm.memcpy.p0i8.0i8.*` intrinsic, with
+    /// a size of `count` * `size_of::<T>()` and an alignment of
+    /// `min_align_of::<T>()`
+    pub fn copy_nonoverlapping_memory<T>(dst: *mut T, src: *T, count: uint);
 
-    /// Equivalent to the `llvm.memmove.p0i8.0i8.i32` intrinsic, with a size of
-    /// `count` * `size_of::<T>()` and an alignment of `min_align_of::<T>()`
-    pub fn memmove32<T>(dst: *mut T, src: *T, count: u32);
-    /// Equivalent to the `llvm.memmove.p0i8.0i8.i64` intrinsic, with a size of
-    /// `count` * `size_of::<T>()` and an alignment of `min_align_of::<T>()`
-    pub fn memmove64<T>(dst: *mut T, src: *T, count: u64);
+    /// Equivalent to the appropriate `llvm.memmove.p0i8.0i8.*` intrinsic, with
+    /// a size of `count` * `size_of::<T>()` and an alignment of
+    /// `min_align_of::<T>()`
+    pub fn copy_memory<T>(dst: *mut T, src: *T, count: uint);
 
-    /// Equivalent to the `llvm.memset.p0i8.i32` intrinsic, with a size of
-    /// `count` * `size_of::<T>()` and an alignment of `min_align_of::<T>()`
-    pub fn memset32<T>(dst: *mut T, val: u8, count: u32);
-    /// Equivalent to the `llvm.memset.p0i8.i64` intrinsic, with a size of
-    /// `count` * `size_of::<T>()` and an alignment of `min_align_of::<T>()`
-    pub fn memset64<T>(dst: *mut T, val: u8, count: u64);
+    /// Equivalent to the appropriate `llvm.memset.p0i8.*` intrinsic, with a
+    /// size of `count` * `size_of::<T>()` and an alignment of
+    /// `min_align_of::<T>()`
+    pub fn set_memory<T>(dst: *mut T, val: u8, count: uint);
 
     pub fn sqrtf32(x: f32) -> f32;
     pub fn sqrtf64(x: f64) -> f64;
@@ -371,28 +373,16 @@ extern "rust-intrinsic" {
     pub fn powif32(a: f32, x: i32) -> f32;
     pub fn powif64(a: f64, x: i32) -> f64;
 
-    // the following kill the stack canary without
-    // `fixed_stack_segment`. This possibly only affects the f64
-    // variants, but it's hard to be sure since it seems to only
-    // occur with fairly specific arguments.
-    #[fixed_stack_segment]
     pub fn sinf32(x: f32) -> f32;
-    #[fixed_stack_segment]
     pub fn sinf64(x: f64) -> f64;
 
-    #[fixed_stack_segment]
     pub fn cosf32(x: f32) -> f32;
-    #[fixed_stack_segment]
     pub fn cosf64(x: f64) -> f64;
 
-    #[fixed_stack_segment]
     pub fn powf32(a: f32, x: f32) -> f32;
-    #[fixed_stack_segment]
     pub fn powf64(a: f64, x: f64) -> f64;
 
-    #[fixed_stack_segment]
     pub fn expf32(x: f32) -> f32;
-    #[fixed_stack_segment]
     pub fn expf64(x: f64) -> f64;
 
     pub fn exp2f32(x: f32) -> f32;
@@ -413,6 +403,9 @@ extern "rust-intrinsic" {
     pub fn fabsf32(x: f32) -> f32;
     pub fn fabsf64(x: f64) -> f64;
 
+    pub fn copysignf32(x: f32, y: f32) -> f32;
+    pub fn copysignf64(x: f64, y: f64) -> f64;
+
     pub fn floorf32(x: f32) -> f32;
     pub fn floorf64(x: f64) -> f64;
 
@@ -421,6 +414,15 @@ extern "rust-intrinsic" {
 
     pub fn truncf32(x: f32) -> f32;
     pub fn truncf64(x: f64) -> f64;
+
+    pub fn rintf32(x: f32) -> f32;
+    pub fn rintf64(x: f64) -> f64;
+
+    pub fn nearbyintf32(x: f32) -> f32;
+    pub fn nearbyintf64(x: f64) -> f64;
+
+    pub fn roundf32(x: f32) -> f32;
+    pub fn roundf64(x: f64) -> f64;
 
     pub fn ctpop8(x: i8) -> i8;
     pub fn ctpop16(x: i16) -> i16;
@@ -485,3 +487,21 @@ extern "rust-intrinsic" {
 #[cfg(target_endian = "big")]    pub fn to_be32(x: i32) -> i32 { x }
 #[cfg(target_endian = "little")] pub fn to_be64(x: i64) -> i64 { unsafe { bswap64(x) } }
 #[cfg(target_endian = "big")]    pub fn to_be64(x: i64) -> i64 { x }
+
+
+/// `TypeId` represents a globally unique identifier for a type
+#[lang="type_id"] // This needs to be kept in lockstep with the code in trans/intrinsic.rs and
+                  // middle/lang_items.rs
+#[deriving(Eq, IterBytes)]
+#[cfg(not(test))]
+pub struct TypeId {
+    priv t: u64,
+}
+
+#[cfg(not(test))]
+impl TypeId {
+    /// Returns the `TypeId` of the type this generic function has been instantiated with
+    pub fn of<T: 'static>() -> TypeId {
+        unsafe { type_id::<T>() }
+    }
+}

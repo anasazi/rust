@@ -18,7 +18,7 @@ the TLS slot.  Useful for dynamic variables, singletons, and interfacing with
 foreign code with bad callback interfaces.
 
 To declare a new key for storing local data of a particular type, use the
-`local_data_key!` macro. This macro will expand to a `static` item apppriately
+`local_data_key!` macro. This macro will expand to a `static` item appropriately
 named and annotated. This name is then passed to the functions in this module to
 modify/read the slot specified by the key.
 
@@ -144,7 +144,7 @@ pub fn pop<T: 'static>(key: Key<T>) -> Option<T> {
         match *entry {
             Some((k, _, loan)) if k == key_value => {
                 if loan != NoLoan {
-                    fail2!("TLS value cannot be removed because it is currently \
+                    fail!("TLS value cannot be removed because it is currently \
                           borrowed as {}", loan.describe());
                 }
                 // Move the data out of the `entry` slot via util::replace.
@@ -157,13 +157,13 @@ pub fn pop<T: 'static>(key: Key<T>) -> Option<T> {
 
                 // Move `data` into transmute to get out the memory that it
                 // owns, we must free it manually later.
-                let (_vtable, box): (uint, ~T) = unsafe {
+                let (_vtable, alloc): (uint, ~T) = unsafe {
                     cast::transmute(data)
                 };
 
-                // Now that we own `box`, we can just move out of it as we would
-                // with any other data.
-                return Some(*box);
+                // Now that we own `alloc`, we can just move out of it as we
+                // would with any other data.
+                return Some(*alloc);
             }
             _ => {}
         }
@@ -177,7 +177,7 @@ pub fn pop<T: 'static>(key: Key<T>) -> Option<T> {
 ///
 /// It is considered a runtime error to attempt to get a value which is already
 /// on loan via the `get_mut` method provided.
-pub fn get<T: 'static, U>(key: Key<T>, f: &fn(Option<&T>) -> U) -> U {
+pub fn get<T: 'static, U>(key: Key<T>, f: |Option<&T>| -> U) -> U {
     get_with(key, ImmLoan, f)
 }
 
@@ -188,8 +188,8 @@ pub fn get<T: 'static, U>(key: Key<T>, f: &fn(Option<&T>) -> U) -> U {
 /// It is considered a runtime error to attempt to get a value which is already
 /// on loan via this or the `get` methods. This is similar to how it's a runtime
 /// error to take two mutable loans on an `@mut` box.
-pub fn get_mut<T: 'static, U>(key: Key<T>, f: &fn(Option<&mut T>) -> U) -> U {
-    do get_with(key, MutLoan) |x| {
+pub fn get_mut<T: 'static, U>(key: Key<T>, f: |Option<&mut T>| -> U) -> U {
+    get_with(key, MutLoan, |x| {
         match x {
             None => f(None),
             // We're violating a lot of compiler guarantees with this
@@ -199,12 +199,15 @@ pub fn get_mut<T: 'static, U>(key: Key<T>, f: &fn(Option<&mut T>) -> U) -> U {
             // there is no need to be upset!
             Some(x) => { f(Some(unsafe { cast::transmute_mut(x) })) }
         }
-    }
+    })
 }
 
-fn get_with<T: 'static, U>(key: Key<T>,
-                           state: LoanState,
-                           f: &fn(Option<&T>) -> U) -> U {
+fn get_with<T:'static,
+            U>(
+            key: Key<T>,
+            state: LoanState,
+            f: |Option<&T>| -> U)
+            -> U {
     // This function must be extremely careful. Because TLS can store owned
     // values, and we must have some form of `get` function other than `pop`,
     // this function has to give a `&` reference back to the caller.
@@ -241,7 +244,7 @@ fn get_with<T: 'static, U>(key: Key<T>,
                         }
                         (ImmLoan, ImmLoan) => {}
                         (want, cur) => {
-                            fail2!("TLS slot cannot be borrowed as {} because \
+                            fail!("TLS slot cannot be borrowed as {} because \
                                     it is already borrowed as {}",
                                   want.describe(), cur.describe());
                         }
@@ -251,8 +254,8 @@ fn get_with<T: 'static, U>(key: Key<T>,
                     // compiler coercions to achieve a '&' pointer.
                     unsafe {
                         match *cast::transmute::<&TLSValue, &(uint, ~T)>(data){
-                            (_vtable, ref box) => {
-                                let value: &T = *box;
+                            (_vtable, ref alloc) => {
+                                let value: &T = *alloc;
                                 ret = f(Some(value));
                             }
                         }
@@ -277,7 +280,6 @@ fn get_with<T: 'static, U>(key: Key<T>,
 }
 
 fn abort() -> ! {
-    #[fixed_stack_segment]; #[inline(never)];
     unsafe { libc::abort() }
 }
 
@@ -305,7 +307,7 @@ pub fn set<T: 'static>(key: Key<T>, data: T) {
             match *entry {
                 Some((ekey, _, loan)) if key == ekey => {
                     if loan != NoLoan {
-                        fail2!("TLS value cannot be overwritten because it is
+                        fail!("TLS value cannot be overwritten because it is
                                already borrowed as {}", loan.describe())
                     }
                     true
@@ -336,7 +338,7 @@ pub fn set<T: 'static>(key: Key<T>, data: T) {
 ///
 /// This function will have the same runtime errors as generated from `pop` and
 /// `set` (the key must not currently be on loan
-pub fn modify<T: 'static>(key: Key<T>, f: &fn(Option<T>) -> Option<T>) {
+pub fn modify<T: 'static>(key: Key<T>, f: |Option<T>| -> Option<T>) {
     match f(pop(key)) {
         Some(next) => { set(key, next); }
         None => {}
@@ -389,15 +391,15 @@ mod tests {
         static my_key: Key<@~str> = &Key;
         modify(my_key, |data| {
             match data {
-                Some(@ref val) => fail2!("unwelcome value: {}", *val),
+                Some(@ref val) => fail!("unwelcome value: {}", *val),
                 None           => Some(@~"first data")
             }
         });
         modify(my_key, |data| {
             match data {
                 Some(@~"first data") => Some(@~"next data"),
-                Some(@ref val)       => fail2!("wrong value: {}", *val),
-                None                 => fail2!("missing value")
+                Some(@ref val)       => fail!("wrong value: {}", *val),
+                None                 => fail!("missing value")
             }
         });
         assert!(*(pop(my_key).unwrap()) == ~"next data");
@@ -436,6 +438,9 @@ mod tests {
         static int_key: Key<@int> = &Key;
         do task::spawn {
             set(str_key, @~"string data");
+            set(str_key, @~"string data 2");
+            set(box_key, @@());
+            set(box_key, @@());
             set(int_key, @42);
             // This could cause a segfault if overwriting-destruction is done
             // with the crazy polymorphic transmute rather than the provided
@@ -457,11 +462,11 @@ mod tests {
             set(str_key, @~"string data");
             set(box_key, @@());
             set(int_key, @42);
-            fail2!();
+            fail!();
         }
         // Not quite nondeterministic.
         set(int_key, @31337);
-        fail2!();
+        fail!();
     }
 
     #[test]
@@ -477,19 +482,19 @@ mod tests {
         static key: Key<~int> = &Key;
         set(key, ~1);
 
-        do get(key) |v| {
-            do get(key) |v| {
-                do get(key) |v| {
+        get(key, |v| {
+            get(key, |v| {
+                get(key, |v| {
                     assert_eq!(**v.unwrap(), 1);
-                }
+                });
                 assert_eq!(**v.unwrap(), 1);
-            }
+            });
             assert_eq!(**v.unwrap(), 1);
-        }
+        });
         set(key, ~2);
-        do get(key) |v| {
+        get(key, |v| {
             assert_eq!(**v.unwrap(), 2);
-        }
+        })
     }
 
     #[test]
@@ -497,13 +502,13 @@ mod tests {
         static key: Key<int> = &Key;
         set(key, 1);
 
-        do get_mut(key) |v| {
+        get_mut(key, |v| {
             *v.unwrap() = 2;
-        }
+        });
 
-        do get(key) |v| {
+        get(key, |v| {
             assert_eq!(*v.unwrap(), 2);
-        }
+        })
     }
 
     #[test]
@@ -531,9 +536,9 @@ mod tests {
     fn test_nested_get_set1() {
         static key: Key<int> = &Key;
         set(key, 4);
-        do get(key) |_| {
+        get(key, |_| {
             set(key, 4);
-        }
+        })
     }
 
     #[test]
@@ -541,9 +546,9 @@ mod tests {
     fn test_nested_get_mut2() {
         static key: Key<int> = &Key;
         set(key, 4);
-        do get(key) |_| {
+        get(key, |_| {
             get_mut(key, |_| {})
-        }
+        })
     }
 
     #[test]
@@ -551,9 +556,9 @@ mod tests {
     fn test_nested_get_mut3() {
         static key: Key<int> = &Key;
         set(key, 4);
-        do get_mut(key) |_| {
+        get_mut(key, |_| {
             get(key, |_| {})
-        }
+        })
     }
 
     #[test]
@@ -561,8 +566,8 @@ mod tests {
     fn test_nested_get_mut4() {
         static key: Key<int> = &Key;
         set(key, 4);
-        do get_mut(key) |_| {
+        get_mut(key, |_| {
             get_mut(key, |_| {})
-        }
+        })
     }
 }

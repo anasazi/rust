@@ -10,7 +10,8 @@
 
 #[allow(missing_doc)];
 
-use std::io;
+use std::io::Reader;
+use std::io::mem::BufReader;
 use std::num;
 use std::str;
 
@@ -20,8 +21,8 @@ pub mod rustrt {
     use super::Tm;
 
     extern {
-        pub fn get_time(sec: &mut i64, nsec: &mut i32);
-        pub fn precise_time_ns(ns: &mut u64);
+        pub fn rust_get_time(sec: &mut i64, nsec: &mut i32);
+        pub fn rust_precise_time_ns(ns: &mut u64);
         pub fn rust_tzset();
         pub fn rust_gmtime(sec: i64, nsec: i32, result: &mut Tm);
         pub fn rust_localtime(sec: i64, nsec: i32, result: &mut Tm);
@@ -31,9 +32,10 @@ pub mod rustrt {
 }
 
 /// A record specifying a time value in seconds and nanoseconds.
+
+
 #[deriving(Clone, DeepClone, Eq, Encodable, Decodable)]
 pub struct Timespec { sec: i64, nsec: i32 }
-
 /*
  * Timespec assumes that pre-epoch Timespecs have negative sec and positive
  * nsec fields. Darwin's and Linux's struct timespec functions handle pre-
@@ -61,12 +63,10 @@ impl Ord for Timespec {
  * nanoseconds since 1970-01-01T00:00:00Z.
  */
 pub fn get_time() -> Timespec {
-    #[fixed_stack_segment]; #[inline(never)];
-
     unsafe {
         let mut sec = 0i64;
         let mut nsec = 0i32;
-        rustrt::get_time(&mut sec, &mut nsec);
+        rustrt::rust_get_time(&mut sec, &mut nsec);
         return Timespec::new(sec, nsec);
     }
 }
@@ -77,11 +77,9 @@ pub fn get_time() -> Timespec {
  * in nanoseconds since an unspecified epoch.
  */
 pub fn precise_time_ns() -> u64 {
-    #[fixed_stack_segment]; #[inline(never)];
-
     unsafe {
         let mut ns = 0u64;
-        rustrt::precise_time_ns(&mut ns);
+        rustrt::rust_precise_time_ns(&mut ns);
         ns
     }
 }
@@ -96,8 +94,6 @@ pub fn precise_time_s() -> f64 {
 }
 
 pub fn tzset() {
-    #[fixed_stack_segment]; #[inline(never)];
-
     unsafe {
         rustrt::rust_tzset();
     }
@@ -141,8 +137,6 @@ pub fn empty_tm() -> Tm {
 
 /// Returns the specified time in UTC
 pub fn at_utc(clock: Timespec) -> Tm {
-    #[fixed_stack_segment]; #[inline(never)];
-
     unsafe {
         let Timespec { sec, nsec } = clock;
         let mut tm = empty_tm();
@@ -158,8 +152,6 @@ pub fn now_utc() -> Tm {
 
 /// Returns the specified time in the local timezone
 pub fn at(clock: Timespec) -> Tm {
-    #[fixed_stack_segment]; #[inline(never)];
-
     unsafe {
         let Timespec { sec, nsec } = clock;
         let mut tm = empty_tm();
@@ -177,8 +169,6 @@ pub fn now() -> Tm {
 impl Tm {
     /// Convert time to the seconds from January 1, 1970
     pub fn to_timespec(&self) -> Timespec {
-        #[fixed_stack_segment]; #[inline(never)];
-
         unsafe {
             let sec = match self.tm_gmtoff {
                 0_i32 => rustrt::rust_timegm(self),
@@ -258,7 +248,7 @@ impl Tm {
 pub fn strptime(s: &str, format: &str) -> Result<Tm, ~str> {
     fn match_str(s: &str, pos: uint, needle: &str) -> bool {
         let mut i = pos;
-        for ch in needle.byte_iter() {
+        for ch in needle.bytes() {
             if s[i] != ch {
                 return false;
             }
@@ -665,61 +655,69 @@ pub fn strptime(s: &str, format: &str) -> Result<Tm, ~str> {
         }
     }
 
-    do io::with_str_reader(format) |rdr| {
-        let mut tm = Tm {
-            tm_sec: 0_i32,
-            tm_min: 0_i32,
-            tm_hour: 0_i32,
-            tm_mday: 0_i32,
-            tm_mon: 0_i32,
-            tm_year: 0_i32,
-            tm_wday: 0_i32,
-            tm_yday: 0_i32,
-            tm_isdst: 0_i32,
-            tm_gmtoff: 0_i32,
-            tm_zone: ~"",
-            tm_nsec: 0_i32,
+    let mut rdr = BufReader::new(format.as_bytes());
+    let mut tm = Tm {
+        tm_sec: 0_i32,
+        tm_min: 0_i32,
+        tm_hour: 0_i32,
+        tm_mday: 0_i32,
+        tm_mon: 0_i32,
+        tm_year: 0_i32,
+        tm_wday: 0_i32,
+        tm_yday: 0_i32,
+        tm_isdst: 0_i32,
+        tm_gmtoff: 0_i32,
+        tm_zone: ~"",
+        tm_nsec: 0_i32,
+    };
+    let mut pos = 0u;
+    let len = s.len();
+    let mut result = Err(~"Invalid time");
+
+    while pos < len {
+        let range = s.char_range_at(pos);
+        let ch = range.ch;
+        let next = range.next;
+
+        let mut buf = [0];
+        let c = match rdr.read(buf) {
+            Some(..) => buf[0] as u8 as char,
+            None => break
         };
-        let mut pos = 0u;
-        let len = s.len();
-        let mut result = Err(~"Invalid time");
-
-        while !rdr.eof() && pos < len {
-            let range = s.char_range_at(pos);
-            let ch = range.ch;
-            let next = range.next;
-
-            match rdr.read_char() {
-                '%' => {
-                    match parse_type(s, pos, rdr.read_char(), &mut tm) {
-                        Ok(next) => pos = next,
-                        Err(e) => { result = Err(e); break; }
-                    }
-                },
-                c => {
-                    if c != ch { break }
-                    pos = next;
+        match c {
+            '%' => {
+                let ch = match rdr.read(buf) {
+                    Some(..) => buf[0] as u8 as char,
+                    None => break
+                };
+                match parse_type(s, pos, ch, &mut tm) {
+                    Ok(next) => pos = next,
+                    Err(e) => { result = Err(e); break; }
                 }
+            },
+            c => {
+                if c != ch { break }
+                pos = next;
             }
         }
-
-        if pos == len && rdr.eof() {
-            Ok(Tm {
-                tm_sec: tm.tm_sec,
-                tm_min: tm.tm_min,
-                tm_hour: tm.tm_hour,
-                tm_mday: tm.tm_mday,
-                tm_mon: tm.tm_mon,
-                tm_year: tm.tm_year,
-                tm_wday: tm.tm_wday,
-                tm_yday: tm.tm_yday,
-                tm_isdst: tm.tm_isdst,
-                tm_gmtoff: tm.tm_gmtoff,
-                tm_zone: tm.tm_zone.clone(),
-                tm_nsec: tm.tm_nsec,
-            })
-        } else { result }
     }
+
+    if pos == len && rdr.eof() {
+        Ok(Tm {
+            tm_sec: tm.tm_sec,
+            tm_min: tm.tm_min,
+            tm_hour: tm.tm_hour,
+            tm_mday: tm.tm_mday,
+            tm_mon: tm.tm_mon,
+            tm_year: tm.tm_year,
+            tm_wday: tm.tm_wday,
+            tm_yday: tm.tm_yday,
+            tm_isdst: tm.tm_isdst,
+            tm_gmtoff: tm.tm_gmtoff,
+            tm_zone: tm.tm_zone.clone(),
+            tm_nsec: tm.tm_nsec,
+        })
+    } else { result }
 }
 
 /// Formats the time according to the format string.
@@ -928,18 +926,26 @@ pub fn strftime(format: &str, tm: &Tm) -> ~str {
         }
     }
 
-    let mut buf = ~"";
+    let mut buf = ~[];
 
-    do io::with_str_reader(format) |rdr| {
-        while !rdr.eof() {
-            match rdr.read_char() {
-                '%' => buf.push_str(parse_type(rdr.read_char(), tm)),
-                ch => buf.push_char(ch)
+    let mut rdr = BufReader::new(format.as_bytes());
+    loop {
+        let mut b = [0];
+        let ch = match rdr.read(b) {
+            Some(..) => b[0],
+            None => break,
+        };
+        match ch as char {
+            '%' => {
+                rdr.read(b);
+                let s = parse_type(b[0] as char, tm);
+                buf.push_all(s.as_bytes());
             }
+            ch => buf.push(ch as u8)
         }
     }
 
-    buf
+    str::from_utf8_owned(buf)
 }
 
 #[cfg(test)]
@@ -947,21 +953,47 @@ mod tests {
     use super::*;
 
     use std::f64;
-    use std::os;
     use std::result::{Err, Ok};
+
+    #[cfg(windows)]
+    fn set_time_zone() {
+        use std::libc;
+        // Windows crt doesn't see any environment variable set by
+        // `SetEnvironmentVariable`, which `os::setenv` internally uses.
+        // It is why we use `putenv` here.
+        extern {
+            fn _putenv(envstring: *libc::c_char) -> libc::c_int;
+        }
+
+        unsafe {
+            // Windows does not understand "America/Los_Angeles".
+            // PST+08 may look wrong, but not! "PST" indicates
+            // the name of timezone. "+08" means UTC = local + 08.
+            "TZ=PST+08".with_c_str(|env| {
+                _putenv(env);
+            })
+        }
+        tzset();
+    }
+    #[cfg(not(windows))]
+    fn set_time_zone() {
+        use std::os;
+        os::setenv("TZ", "America/Los_Angeles");
+        tzset();
+    }
 
     fn test_get_time() {
         static SOME_RECENT_DATE: i64 = 1325376000i64; // 2012-01-01T00:00:00Z
         static SOME_FUTURE_DATE: i64 = 1577836800i64; // 2020-01-01T00:00:00Z
 
         let tv1 = get_time();
-        debug2!("tv1={:?} sec + {:?} nsec", tv1.sec as uint, tv1.nsec as uint);
+        debug!("tv1={:?} sec + {:?} nsec", tv1.sec as uint, tv1.nsec as uint);
 
         assert!(tv1.sec > SOME_RECENT_DATE);
         assert!(tv1.nsec < 1000000000i32);
 
         let tv2 = get_time();
-        debug2!("tv2={:?} sec + {:?} nsec", tv2.sec as uint, tv2.nsec as uint);
+        debug!("tv2={:?} sec + {:?} nsec", tv2.sec as uint, tv2.nsec as uint);
 
         assert!(tv2.sec >= tv1.sec);
         assert!(tv2.sec < SOME_FUTURE_DATE);
@@ -973,73 +1005,69 @@ mod tests {
 
     fn test_precise_time() {
         let s0 = precise_time_s();
-        let ns1 = precise_time_ns();
-
-        debug2!("s0={} sec", f64::to_str_digits(s0, 9u));
+        debug!("s0={} sec", f64::to_str_digits(s0, 9u));
         assert!(s0 > 0.);
-        let ns0 = (s0 * 1000000000.) as u64;
-        debug2!("ns0={:?} ns", ns0);
 
-        debug2!("ns1={:?} ns", ns0);
+        let ns0 = precise_time_ns();
+        let ns1 = precise_time_ns();
+        debug!("ns0={:?} ns", ns0);
+        debug!("ns1={:?} ns", ns1);
         assert!(ns1 >= ns0);
 
         let ns2 = precise_time_ns();
-        debug2!("ns2={:?} ns", ns0);
+        debug!("ns2={:?} ns", ns2);
         assert!(ns2 >= ns1);
     }
 
     fn test_at_utc() {
-        os::setenv("TZ", "America/Los_Angeles");
-        tzset();
+        set_time_zone();
 
         let time = Timespec::new(1234567890, 54321);
         let utc = at_utc(time);
 
-        assert!(utc.tm_sec == 30_i32);
-        assert!(utc.tm_min == 31_i32);
-        assert!(utc.tm_hour == 23_i32);
-        assert!(utc.tm_mday == 13_i32);
-        assert!(utc.tm_mon == 1_i32);
-        assert!(utc.tm_year == 109_i32);
-        assert!(utc.tm_wday == 5_i32);
-        assert!(utc.tm_yday == 43_i32);
-        assert!(utc.tm_isdst == 0_i32);
-        assert!(utc.tm_gmtoff == 0_i32);
-        assert!(utc.tm_zone == ~"UTC");
-        assert!(utc.tm_nsec == 54321_i32);
+        assert_eq!(utc.tm_sec, 30_i32);
+        assert_eq!(utc.tm_min, 31_i32);
+        assert_eq!(utc.tm_hour, 23_i32);
+        assert_eq!(utc.tm_mday, 13_i32);
+        assert_eq!(utc.tm_mon, 1_i32);
+        assert_eq!(utc.tm_year, 109_i32);
+        assert_eq!(utc.tm_wday, 5_i32);
+        assert_eq!(utc.tm_yday, 43_i32);
+        assert_eq!(utc.tm_isdst, 0_i32);
+        assert_eq!(utc.tm_gmtoff, 0_i32);
+        assert_eq!(utc.tm_zone, ~"UTC");
+        assert_eq!(utc.tm_nsec, 54321_i32);
     }
 
     fn test_at() {
-        os::setenv("TZ", "America/Los_Angeles");
-        tzset();
+        set_time_zone();
 
         let time = Timespec::new(1234567890, 54321);
         let local = at(time);
 
-        error2!("time_at: {:?}", local);
+        error!("time_at: {:?}", local);
 
-        assert!(local.tm_sec == 30_i32);
-        assert!(local.tm_min == 31_i32);
-        assert!(local.tm_hour == 15_i32);
-        assert!(local.tm_mday == 13_i32);
-        assert!(local.tm_mon == 1_i32);
-        assert!(local.tm_year == 109_i32);
-        assert!(local.tm_wday == 5_i32);
-        assert!(local.tm_yday == 43_i32);
-        assert!(local.tm_isdst == 0_i32);
-        assert!(local.tm_gmtoff == -28800_i32);
+        assert_eq!(local.tm_sec, 30_i32);
+        assert_eq!(local.tm_min, 31_i32);
+        assert_eq!(local.tm_hour, 15_i32);
+        assert_eq!(local.tm_mday, 13_i32);
+        assert_eq!(local.tm_mon, 1_i32);
+        assert_eq!(local.tm_year, 109_i32);
+        assert_eq!(local.tm_wday, 5_i32);
+        assert_eq!(local.tm_yday, 43_i32);
+        assert_eq!(local.tm_isdst, 0_i32);
+        assert_eq!(local.tm_gmtoff, -28800_i32);
 
         // FIXME (#2350): We should probably standardize on the timezone
         // abbreviation.
         let zone = &local.tm_zone;
         assert!(*zone == ~"PST" || *zone == ~"Pacific Standard Time");
 
-        assert!(local.tm_nsec == 54321_i32);
+        assert_eq!(local.tm_nsec, 54321_i32);
     }
 
     fn test_to_timespec() {
-        os::setenv("TZ", "America/Los_Angeles");
-        tzset();
+        set_time_zone();
 
         let time = Timespec::new(1234567890, 54321);
         let utc = at_utc(time);
@@ -1049,8 +1077,7 @@ mod tests {
     }
 
     fn test_conversions() {
-        os::setenv("TZ", "America/Los_Angeles");
-        tzset();
+        set_time_zone();
 
         let time = Timespec::new(1234567890, 54321);
         let utc = at_utc(time);
@@ -1065,8 +1092,7 @@ mod tests {
     }
 
     fn test_strptime() {
-        os::setenv("TZ", "America/Los_Angeles");
-        tzset();
+        set_time_zone();
 
         match strptime("", "") {
           Ok(ref tm) => {
@@ -1091,7 +1117,7 @@ mod tests {
             == Err(~"Invalid time"));
 
         match strptime("Fri Feb 13 15:31:30.01234 2009", format) {
-          Err(e) => fail2!(e),
+          Err(e) => fail!(e),
           Ok(ref tm) => {
             assert!(tm.tm_sec == 30_i32);
             assert!(tm.tm_min == 31_i32);
@@ -1111,7 +1137,7 @@ mod tests {
         fn test(s: &str, format: &str) -> bool {
             match strptime(s, format) {
               Ok(ref tm) => tm.strftime(format) == s.to_owned(),
-              Err(e) => fail2!(e)
+              Err(e) => fail!(e)
             }
         }
 
@@ -1230,22 +1256,20 @@ mod tests {
     }
 
     fn test_ctime() {
-        os::setenv("TZ", "America/Los_Angeles");
-        tzset();
+        set_time_zone();
 
         let time = Timespec::new(1234567890, 54321);
         let utc   = at_utc(time);
         let local = at(time);
 
-        error2!("test_ctime: {:?} {:?}", utc.ctime(), local.ctime());
+        error!("test_ctime: {:?} {:?}", utc.ctime(), local.ctime());
 
         assert_eq!(utc.ctime(), ~"Fri Feb 13 23:31:30 2009");
         assert_eq!(local.ctime(), ~"Fri Feb 13 15:31:30 2009");
     }
 
     fn test_strftime() {
-        os::setenv("TZ", "America/Los_Angeles");
-        tzset();
+        set_time_zone();
 
         let time = Timespec::new(1234567890, 54321);
         let utc = at_utc(time);
@@ -1305,8 +1329,7 @@ mod tests {
         // abbreviation.
         let rfc822 = local.rfc822();
         let prefix = ~"Fri, 13 Feb 2009 15:31:30 ";
-        assert!(rfc822 == prefix + "PST" ||
-                     rfc822 == prefix + "Pacific Standard Time");
+        assert!(rfc822 == prefix + "PST" || rfc822 == prefix + "Pacific Standard Time");
 
         assert_eq!(local.ctime(), ~"Fri Feb 13 15:31:30 2009");
         assert_eq!(local.rfc822z(), ~"Fri, 13 Feb 2009 15:31:30 -0800");
@@ -1350,6 +1373,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore(cfg(android))] // FIXME #10958
     fn run_tests() {
         // The tests race on tzset. So instead of having many independent
         // tests, we will just call the functions now.

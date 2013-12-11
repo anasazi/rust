@@ -8,49 +8,45 @@ foreign code. Rust is currently unable to call directly into a C++ library, but
 snappy includes a C interface (documented in
 [`snappy-c.h`](https://code.google.com/p/snappy/source/browse/trunk/snappy-c.h)).
 
-The following is a minimal example of calling a foreign function which will compile if snappy is
-installed:
+The following is a minimal example of calling a foreign function which will
+compile if snappy is installed:
 
 ~~~~ {.xfail-test}
 use std::libc::size_t;
 
-#[link_args = "-lsnappy"]
+#[link(name = "snappy")]
 extern {
     fn snappy_max_compressed_length(source_length: size_t) -> size_t;
 }
 
-#[fixed_stack_segment]
 fn main() {
     let x = unsafe { snappy_max_compressed_length(100) };
-    println(fmt!("max compressed length of a 100 byte buffer: %?", x));
+    println!("max compressed length of a 100 byte buffer: {}", x);
 }
 ~~~~
 
-The `extern` block is a list of function signatures in a foreign library, in this case with the
-platform's C ABI. The `#[link_args]` attribute is used to instruct the linker to link against the
-snappy library so the symbols are resolved.
+The `extern` block is a list of function signatures in a foreign library, in
+this case with the platform's C ABI. The `#[link(...)]` attribute is used to
+instruct the linker to link against the snappy library so the symbols are
+resolved.
 
-Foreign functions are assumed to be unsafe so calls to them need to be wrapped with `unsafe {}` as a
-promise to the compiler that everything contained within truly is safe. C libraries often expose
-interfaces that aren't thread-safe, and almost any function that takes a pointer argument isn't
-valid for all possible inputs since the pointer could be dangling, and raw pointers fall outside of
+Foreign functions are assumed to be unsafe so calls to them need to be wrapped
+with `unsafe {}` as a promise to the compiler that everything contained within
+truly is safe. C libraries often expose interfaces that aren't thread-safe, and
+almost any function that takes a pointer argument isn't valid for all possible
+inputs since the pointer could be dangling, and raw pointers fall outside of
 Rust's safe memory model.
 
-Finally, the `#[fixed_stack_segment]` annotation that appears on
-`main()` instructs the Rust compiler that when `main()` executes, it
-should request a "very large" stack segment.  More details on
-stack management can be found in the following sections.
-
-When declaring the argument types to a foreign function, the Rust compiler will not check if the
-declaration is correct, so specifying it correctly is part of keeping the binding correct at
-runtime.
+When declaring the argument types to a foreign function, the Rust compiler can
+not check if the declaration is correct, so specifying it correctly is part of
+keeping the binding correct at runtime.
 
 The `extern` block can be extended to cover the entire snappy API:
 
 ~~~~ {.xfail-test}
 use std::libc::{c_int, size_t};
 
-#[link_args = "-lsnappy"]
+#[link(name = "snappy")]
 extern {
     fn snappy_compress(input: *u8,
                        input_length: size_t,
@@ -81,11 +77,9 @@ length is number of elements currently contained, and the capacity is the total 
 the allocated memory. The length is less than or equal to the capacity.
 
 ~~~~ {.xfail-test}
-#[fixed_stack_segment]
-#[inline(never)]
 pub fn validate_compressed_buffer(src: &[u8]) -> bool {
     unsafe {
-        snappy_validate_compressed_buffer(vec::raw::to_ptr(src), src.len() as size_t) == 0
+        snappy_validate_compressed_buffer(src.as_ptr(), src.len() as size_t) == 0
     }
 }
 ~~~~
@@ -93,36 +87,6 @@ pub fn validate_compressed_buffer(src: &[u8]) -> bool {
 The `validate_compressed_buffer` wrapper above makes use of an `unsafe` block, but it makes the
 guarantee that calling it is safe for all inputs by leaving off `unsafe` from the function
 signature.
-
-The `validate_compressed_buffer` wrapper is also annotated with two
-attributes `#[fixed_stack_segment]` and `#[inline(never)]`. The
-purpose of these attributes is to guarantee that there will be
-sufficient stack for the C function to execute. This is necessary
-because Rust, unlike C, does not assume that the stack is allocated in
-one continuous chunk. Instead, we rely on a *segmented stack* scheme,
-in which the stack grows and shrinks as necessary.  C code, however,
-expects one large stack, and so callers of C functions must request a
-large stack segment to ensure that the C routine will not run off the
-end of the stack.
-
-The compiler includes a lint mode that will report an error if you
-call a C function without a `#[fixed_stack_segment]` attribute. More
-details on the lint mode are given in a later section.
-
-You may be wondering why we include a `#[inline(never)]` directive.
-This directive informs the compiler never to inline this function.
-While not strictly necessary, it is usually a good idea to use an
-`#[inline(never)]` directive in concert with `#[fixed_stack_segment]`.
-The reason is that if a fn annotated with `fixed_stack_segment` is
-inlined, then its caller also inherits the `fixed_stack_segment`
-annotation. This means that rather than requesting a large stack
-segment only for the duration of the call into C, the large stack
-segment would be used for the entire duration of the caller. This is
-not necessarily *bad* -- it can for example be more efficient,
-particularly if `validate_compressed_buffer()` is called multiple
-times in a row -- but it does work against the purpose of the
-segmented stack scheme, which is to keep stacks small and thus
-conserve address space.
 
 The `snappy_compress` and `snappy_uncompress` functions are more complex, since a buffer has to be
 allocated to hold the output too.
@@ -134,18 +98,16 @@ the true length after compression for setting the length.
 
 ~~~~ {.xfail-test}
 pub fn compress(src: &[u8]) -> ~[u8] {
-    #[fixed_stack_segment]; #[inline(never)];
-
     unsafe {
         let srclen = src.len() as size_t;
-        let psrc = vec::raw::to_ptr(src);
+        let psrc = src.as_ptr();
 
         let mut dstlen = snappy_max_compressed_length(srclen);
         let mut dst = vec::with_capacity(dstlen as uint);
-        let pdst = vec::raw::to_mut_ptr(dst);
+        let pdst = dst.as_mut_ptr();
 
         snappy_compress(psrc, srclen, pdst, &mut dstlen);
-        vec::raw::set_len(&mut dst, dstlen as uint);
+        dst.set_len(dstlen as uint);
         dst
     }
 }
@@ -156,20 +118,18 @@ format and `snappy_uncompressed_length` will retrieve the exact buffer size requ
 
 ~~~~ {.xfail-test}
 pub fn uncompress(src: &[u8]) -> Option<~[u8]> {
-    #[fixed_stack_segment]; #[inline(never)];
-
     unsafe {
         let srclen = src.len() as size_t;
-        let psrc = vec::raw::to_ptr(src);
+        let psrc = src.as_ptr();
 
         let mut dstlen: size_t = 0;
         snappy_uncompressed_length(psrc, srclen, &mut dstlen);
 
         let mut dst = vec::with_capacity(dstlen as uint);
-        let pdst = vec::raw::to_mut_ptr(dst);
+        let pdst = dst.as_mut_ptr();
 
         if snappy_uncompress(psrc, srclen, pdst, &mut dstlen) == 0 {
-            vec::raw::set_len(&mut dst, dstlen as uint);
+            dst.set_len(dstlen as uint);
             Some(dst)
         } else {
             None // SNAPPY_INVALID_INPUT
@@ -181,107 +141,37 @@ pub fn uncompress(src: &[u8]) -> Option<~[u8]> {
 For reference, the examples used here are also available as an [library on
 GitHub](https://github.com/thestinger/rust-snappy).
 
-# Automatic wrappers
+# Stack management
 
-Sometimes writing Rust wrappers can be quite tedious.  For example, if
-function does not take any pointer arguments, often there is no need
-for translating types. In such cases, it is usually still a good idea
-to have a Rust wrapper so as to manage the segmented stacks, but you
-can take advantage of the (standard) `externfn!` macro to remove some
-of the tedium.
+Rust tasks by default run on a "large stack". This is actually implemented as a
+reserving a large segment of the address space and then lazily mapping in pages
+as they are needed. When calling an external C function, the code is invoked on
+the same stack as the rust stack. This means that there is no extra
+stack-switching mechanism in place because it is assumed that the large stack
+for the rust task is plenty for the C function to have.
 
-In the initial section, we showed an extern block that added a call
-to a specific snappy API:
+A planned future improvement (net yet implemented at the time of this writing)
+is to have a guard page at the end of every rust stack. No rust function will
+hit this guard page (due to Rust's usage of LLVM's `__morestack`). The intention
+for this unmapped page is to prevent infinite recursion in C from overflowing
+onto other rust stacks. If the guard page is hit, then the process will be
+terminated with a message saying that the guard page was hit.
 
-~~~~ {.xfail-test}
-use std::libc::size_t;
-
-#[link_args = "-lsnappy"]
-extern {
-    fn snappy_max_compressed_length(source_length: size_t) -> size_t;
-}
-
-#[fixed_stack_segment]
-fn main() {
-    let x = unsafe { snappy_max_compressed_length(100) };
-    println(fmt!("max compressed length of a 100 byte buffer: %?", x));
-}
-~~~~
-
-To avoid the need to create a wrapper fn for `snappy_max_compressed_length()`,
-and also to avoid the need to think about `#[fixed_stack_segment]`, we
-could simply use the `externfn!` macro instead, as shown here:
-
-~~~~ {.xfail-test}
-use std::libc::size_t;
-
-externfn!(#[link_args = "-lsnappy"]
-          fn snappy_max_compressed_length(source_length: size_t) -> size_t)
-
-fn main() {
-    let x = unsafe { snappy_max_compressed_length(100) };
-    println(fmt!("max compressed length of a 100 byte buffer: %?", x));
-}
-~~~~
-
-As you can see from the example, `externfn!` replaces the extern block
-entirely. After macro expansion, it will create something like this:
-
-~~~~ {.xfail-test}
-use std::libc::size_t;
-
-// Automatically generated by
-//   externfn!(#[link_args = "-lsnappy"]
-//             fn snappy_max_compressed_length(source_length: size_t) -> size_t)
-unsafe fn snappy_max_compressed_length(source_length: size_t) -> size_t {
-    #[fixed_stack_segment]; #[inline(never)];
-    return snappy_max_compressed_length(source_length);
-
-    #[link_args = "-lsnappy"]
-    extern {
-        fn snappy_max_compressed_length(source_length: size_t) -> size_t;
-    }
-}
-
-fn main() {
-    let x = unsafe { snappy_max_compressed_length(100) };
-    println(fmt!("max compressed length of a 100 byte buffer: %?", x));
-}
-~~~~
-
-# Segmented stacks and the linter
-
-By default, whenever you invoke a non-Rust fn, the `cstack` lint will
-check that one of the following conditions holds:
-
-1. The call occurs inside of a fn that has been annotated with
-   `#[fixed_stack_segment]`;
-2. The call occurs inside of an `extern fn`;
-3. The call occurs within a stack closure created by some other
-   safe fn.
-
-All of these conditions ensure that you are running on a large stack
-segment. However, they are sometimes too strict. If your application
-will be making many calls into C, it is often beneficial to promote
-the `#[fixed_stack_segment]` attribute higher up the call chain.  For
-example, the Rust compiler actually labels main itself as requiring a
-`#[fixed_stack_segment]`. In such cases, the linter is just an
-annoyance, because all C calls that occur from within the Rust
-compiler are made on a large stack. Another situation where this
-frequently occurs is on a 64-bit architecture, where large stacks are
-the default. In cases, you can disable the linter by including a
-`#[allow(cstack)]` directive somewhere, which permits violations of
-the "cstack" rules given above (you can also use `#[warn(cstack)]` to
-convert the errors into warnings, if you prefer).
+For normal external function usage, this all means that there shouldn't be any
+need for any extra effort on a user's perspective. The C stack naturally
+interleaves with the rust stack, and it's "large enough" for both to
+interoperate. If, however, it is determined that a larger stack is necessary,
+there are appropriate functions in the task spawning API to control the size of
+the stack of the task which is spawned.
 
 # Destructors
 
-Foreign libraries often hand off ownership of resources to the calling code,
-which should be wrapped in a destructor to provide safety and guarantee their
-release.
+Foreign libraries often hand off ownership of resources to the calling code.
+When this occurs, we must use Rust's destructors to provide safety and guarantee
+the release of these resources (especially in the case of failure).
 
-A type with the same functionality as owned boxes can be implemented by
-wrapping `malloc` and `free`:
+As an example, we give a reimplementation of owned boxes by wrapping `malloc`
+and `free`:
 
 ~~~~
 use std::cast;
@@ -289,20 +179,26 @@ use std::libc::{c_void, size_t, malloc, free};
 use std::ptr;
 use std::unstable::intrinsics;
 
-// a wrapper around the handle returned by the foreign code
+// Define a wrapper around the handle returned by the foreign code.
+// Unique<T> has the same semantics as ~T
 pub struct Unique<T> {
+    // It contains a single raw, mutable pointer to the object in question.
     priv ptr: *mut T
 }
 
+// Implement methods for creating and using the values in the box.
+// NB: For simplicity and correctness, we require that T has kind Send
+// (owned boxes relax this restriction, and can contain managed (GC) boxes).
+// This is because, as implemented, the garbage collector would not know
+// about any shared boxes stored in the malloc'd region of memory.
 impl<T: Send> Unique<T> {
     pub fn new(value: T) -> Unique<T> {
-        #[fixed_stack_segment];
-        #[inline(never)];
-
         unsafe {
-            let ptr = malloc(std::sys::size_of::<T>() as size_t) as *mut T;
+            let ptr = malloc(std::mem::size_of::<T>() as size_t) as *mut T;
             assert!(!ptr::is_null(ptr));
             // `*ptr` is uninitialized, and `*ptr = value` would attempt to destroy it
+            // move_val_init moves a value into this memory without
+            // attempting to drop the original value.
             intrinsics::move_val_init(&mut *ptr, value);
             Unique{ptr: ptr}
         }
@@ -319,15 +215,20 @@ impl<T: Send> Unique<T> {
     }
 }
 
+// The key ingredient for safety, we associate a destructor with
+// Unique<T>, making the struct manage the raw pointer: when the
+// struct goes out of scope, it will automatically free the raw pointer.
+// NB: This is an unsafe destructor, because rustc will not normally
+// allow destructors to be associated with parametrized types, due to
+// bad interaction with managed boxes. (With the Send restriction,
+// we don't have this problem.)
 #[unsafe_destructor]
 impl<T: Send> Drop for Unique<T> {
     fn drop(&mut self) {
-        #[fixed_stack_segment];
-        #[inline(never)];
-
         unsafe {
-            let x = intrinsics::init(); // dummy value to swap in
-            // moving the object out is needed to call the destructor
+            let x = intrinsics::uninit(); // dummy value to swap in
+            // We need to move the object out of the box, so that
+            // the destructor is called (at the end of this scope.)
             ptr::replace_ptr(self.ptr, x);
             free(self.ptr as *c_void)
         }
@@ -350,9 +251,72 @@ fn main() {
 
 # Linking
 
-In addition to the `#[link_args]` attribute for explicitly passing arguments to the linker, an
-`extern mod` block will pass `-lmodname` to the linker by default unless it has a `#[nolink]`
-attribute applied.
+The `link` attribute on `extern` blocks provides the basic building block for
+instructing rustc how it will link to native libraries. There are two accepted
+forms of the link attribute today:
+
+* `#[link(name = "foo")]`
+* `#[link(name = "foo", kind = "bar")]`
+
+In both of these cases, `foo` is the name of the native library that we're
+linking to, and in the second case `bar` is the type of native library that the
+compiler is linking to. There are currently three known types of native
+libraries:
+
+* Dynamic - `#[link(name = "readline")]
+* Static - `#[link(name = "my_build_dependency", kind = "static")]
+* Frameworks - `#[link(name = "CoreFoundation", kind = "framework")]
+
+Note that frameworks are only available on OSX targets.
+
+The different `kind` values are meant to differentiate how the native library
+participates in linkage. From a linkage perspective, the rust compiler creates
+two flavors of artifacts: partial (rlib/staticlib) and final (dylib/binary).
+Native dynamic libraries and frameworks are propagated to the final artifact
+boundary, while static libraries are not propagated at all.
+
+A few examples of how this model can be used are:
+
+* A native build dependency. Sometimes some C/C++ glue is needed when writing
+  some rust code, but distribution of the C/C++ code in a library format is just
+  a burden. In this case, the code will be archived into `libfoo.a` and then the
+  rust crate would declare a dependency via `#[link(name = "foo", kind =
+  "static")]`.
+
+  Regardless of the flavor of output for the crate, the native static library
+  will be included in the output, meaning that distribution of the native static
+  library is not necessary.
+
+* A normal dynamic dependency. Common system libraries (like `readline`) are
+  available on a large number of systems, and often a static copy of these
+  libraries cannot be found. When this dependency is included in a rust crate,
+  partial targets (like rlibs) will not link to the library, but when the rlib
+  is included in a final target (like a binary), the native library will be
+  linked in.
+
+On OSX, frameworks behave with the same semantics as a dynamic library.
+
+## The `link_args` attribute
+
+There is one other way to tell rustc how to customize linking, and that is via
+the `link_args` attribute. This attribute is applied to `extern` blocks and
+specifies raw flags which need to get passed to the linker when producing an
+artifact. An example usage would be:
+
+~~~ {.xfail-test}
+#[link_args = "-foo -bar -baz"]
+extern {}
+~~~
+
+Note that this feature is currently hidden behind the `feature(link_args)` gate
+because this is not a sanctioned way of performing linking. Right now rustc
+shells out to the system linker, so it makes sense to provide extra command line
+arguments, but this will not always be the case. In the future rustc may use
+LLVM directly to link native libraries in which case `link_args` will have no
+meaning.
+
+It is highly recommended to *not* use this attribute, and rather use the more
+formal `#[link(...)]` attribute on `extern` blocks instead.
 
 # Unsafe blocks
 
@@ -378,14 +342,14 @@ blocks with the `static` keyword:
 ~~~{.xfail-test}
 use std::libc;
 
-#[link_args = "-lreadline"]
+#[link(name = "readline")]
 extern {
     static rl_readline_version: libc::c_int;
 }
 
 fn main() {
-    println(fmt!("You have readline version %d installed.",
-                 rl_readline_version as int));
+    println!("You have readline version {} installed.",
+             rl_readline_version as int);
 }
 ~~~
 
@@ -397,7 +361,7 @@ them.
 use std::libc;
 use std::ptr;
 
-#[link_args = "-lreadline"]
+#[link(name = "readline")]
 extern {
     static mut rl_prompt: *libc::c_char;
 }
@@ -418,15 +382,32 @@ calling foreign functions. Some foreign functions, most notably the Windows API,
 conventions. Rust provides a way to tell the compiler which convention to use:
 
 ~~~~
-#[cfg(target_os = "win32")]
+#[cfg(target_os = "win32", target_arch = "x86")]
 #[link_name = "kernel32"]
 extern "stdcall" {
-    fn SetEnvironmentVariableA(n: *u8, v: *u8) -> int;
+    fn SetEnvironmentVariableA(n: *u8, v: *u8) -> std::libc::c_int;
 }
 ~~~~
 
-This applies to the entire `extern` block, and must be either `"cdecl"` or
-`"stdcall"`. The compiler may eventually support other calling conventions.
+This applies to the entire `extern` block. The list of supported ABI constraints
+are:
+
+* `stdcall`
+* `aapcs`
+* `cdecl`
+* `fastcall`
+* `Rust`
+* `rust-intrinsic`
+* `system`
+* `C`
+
+Most of the abis in this list are self-explanatory, but the `system` abi may
+seem a little odd. This constraint selects whatever the appropriate ABI is for
+interoperating with the target's libraries. For example, on win32 with a x86
+architecture, this means that the abi used would be `stdcall`. On x86_64,
+however, windows uses the `C` calling convention, so `C` would be used. This
+means that in our previous example, we could have used `extern "system" { ... }`
+to define a block for all windows systems, not just x86 ones.
 
 # Interoperability with foreign code
 

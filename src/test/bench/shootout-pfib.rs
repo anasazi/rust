@@ -1,4 +1,3 @@
-// -*- rust -*-
 // Copyright 2012 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
@@ -22,9 +21,6 @@
 extern mod extra;
 
 use extra::{time, getopts};
-use std::comm::{stream, SharedChan};
-use std::io::WriterUtil;
-use std::io;
 use std::os;
 use std::result::{Ok, Err};
 use std::task;
@@ -37,19 +33,17 @@ fn fib(n: int) -> int {
         } else if n <= 2 {
             c.send(1);
         } else {
-            let (pp, cc) = stream();
-            let cc = SharedChan::new(cc);
+            let (pp, cc) = SharedChan::new();
             let ch = cc.clone();
-            task::spawn(|| pfib(&ch, n - 1) );
+            task::spawn(proc() pfib(&ch, n - 1));
             let ch = cc.clone();
-            task::spawn(|| pfib(&ch, n - 2) );
+            task::spawn(proc() pfib(&ch, n - 2));
             c.send(pp.recv() + pp.recv());
         }
     }
 
-    let (p, ch) = stream();
-    let ch = SharedChan::new(ch);
-    let _t = task::spawn(|| pfib(&ch, n) );
+    let (p, ch) = SharedChan::new();
+    let _t = task::spawn(proc() pfib(&ch, n) );
     p.recv()
 }
 
@@ -66,7 +60,7 @@ fn parse_opts(argv: ~[~str]) -> Config {
       Ok(ref m) => {
           return Config {stress: m.opt_present("stress")}
       }
-      Err(_) => { fail2!(); }
+      Err(_) => { fail!(); }
     }
 }
 
@@ -76,7 +70,7 @@ fn stress_task(id: int) {
         let n = 15;
         assert_eq!(fib(n), fib(n));
         i += 1;
-        error2!("{}: Completed {} iterations", id, i);
+        error!("{}: Completed {} iterations", id, i);
     }
 }
 
@@ -84,7 +78,7 @@ fn stress(num_tasks: int) {
     let mut results = ~[];
     for i in range(0, num_tasks) {
         let mut builder = task::task();
-        builder.future_result(|r| results.push(r));
+        results.push(builder.future_result());
         do builder.spawn {
             stress_task(i);
         }
@@ -113,8 +107,6 @@ fn main() {
 
         let num_trials = 10;
 
-        let out = io::stdout();
-
         for n in range(1, max + 1) {
             for _ in range(0, num_trials) {
                 let start = time::precise_time_ns();
@@ -123,8 +115,7 @@ fn main() {
 
                 let elapsed = stop - start;
 
-                out.write_line(format!("{}\t{}\t{}", n, fibn,
-                                       elapsed.to_str()));
+                println!("{}\t{}\t{}", n, fibn, elapsed.to_str());
             }
         }
     }

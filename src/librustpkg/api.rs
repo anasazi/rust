@@ -12,22 +12,35 @@ use context::*;
 use crate::*;
 use package_id::*;
 use package_source::*;
+use path_util::{platform_library_name, target_build_dir};
 use target::*;
 use version::Version;
+use workspace::pkg_parent_workspaces;
 use workcache_support::*;
+pub use path_util::default_workspace;
 
 pub use source_control::{safe_git_clone, git_clone_url};
 
-use std::os;
+use std::run;
 use extra::arc::{Arc,RWArc};
 use extra::workcache;
 use extra::workcache::{Database, Logger, FreshnessMap};
 use extra::treemap::TreeMap;
 
+// A little sad -- duplicated from rustc::back::*
+#[cfg(target_arch = "arm")]
+fn cc_args() -> ~[~str] { ~[~"-marm"] }
+#[cfg(target_arch = "mips")]
+fn cc_args() -> ~[~str] { ~[] }
+#[cfg(target_arch = "x86")]
+fn cc_args() -> ~[~str] { ~[~"-m32"] }
+#[cfg(target_arch = "x86_64")]
+fn cc_args() -> ~[~str] { ~[~"-m64"] }
+
 /// Convenience functions intended for calling from pkg.rs
 /// p is where to put the cache file for dependencies
-pub fn default_context(p: Path) -> BuildContext {
-    new_default_context(new_workcache_context(&p), p)
+pub fn default_context(sysroot: Path, p: Path) -> BuildContext {
+    new_default_context(new_workcache_context(&p), sysroot)
 }
 
 pub fn new_default_context(c: workcache::Context, p: Path) -> BuildContext {
@@ -44,17 +57,17 @@ pub fn new_default_context(c: workcache::Context, p: Path) -> BuildContext {
 
 fn file_is_fresh(path: &str, in_hash: &str) -> bool {
     let path = Path::new(path);
-    os::path_exists(&path) && in_hash == digest_file_with_date(&path)
+    path.exists() && in_hash == digest_file_with_date(&path)
 }
 
 fn binary_is_fresh(path: &str, in_hash: &str) -> bool {
     let path = Path::new(path);
-    os::path_exists(&path) && in_hash == digest_only_date(&path)
+    path.exists() && in_hash == digest_only_date(&path)
 }
 
 pub fn new_workcache_context(p: &Path) -> workcache::Context {
     let db_file = p.join("rustpkg_db.json"); // ??? probably wrong
-    debug2!("Workcache database file: {}", db_file.display());
+    debug!("Workcache database file: {}", db_file.display());
     let db = RWArc::new(Database::new(db_file));
     let lg = RWArc::new(Logger::new());
     let cfg = Arc::new(TreeMap::new());
@@ -68,7 +81,12 @@ pub fn new_workcache_context(p: &Path) -> workcache::Context {
 
 pub fn build_lib(sysroot: Path, root: Path, name: ~str, version: Version,
                  lib: Path) {
-    let cx = default_context(sysroot);
+    build_lib_with_cfgs(sysroot, root, name, version, lib, ~[])
+}
+
+pub fn build_lib_with_cfgs(sysroot: Path, root: Path, name: ~str,
+                           version: Version, lib: Path, cfgs: ~[~str]) {
+    let cx = default_context(sysroot, root.clone());
     let pkg_src = PkgSrc {
         source_workspace: root.clone(),
         build_in_destination: false,
@@ -81,12 +99,17 @@ pub fn build_lib(sysroot: Path, root: Path, name: ~str, version: Version,
         tests: ~[],
         benchs: ~[]
     };
-    pkg_src.build(&cx, ~[]);
+    pkg_src.build(&cx, cfgs, []);
 }
 
 pub fn build_exe(sysroot: Path, root: Path, name: ~str, version: Version,
                  main: Path) {
-    let cx = default_context(sysroot);
+    build_exe_with_cfgs(sysroot, root, name, version, main, ~[])
+}
+
+pub fn build_exe_with_cfgs(sysroot: Path, root: Path, name: ~str,
+                           version: Version, main: Path, cfgs: ~[~str]) {
+    let cx = default_context(sysroot, root.clone());
     let pkg_src = PkgSrc {
         source_workspace: root.clone(),
         build_in_destination: false,
@@ -100,13 +123,79 @@ pub fn build_exe(sysroot: Path, root: Path, name: ~str, version: Version,
         benchs: ~[]
     };
 
-    pkg_src.build(&cx, ~[]);
+    pkg_src.build(&cx, cfgs, []);
 }
 
-pub fn install_pkg(sysroot: Path, workspace: Path, name: ~str, version: Version) {
-    let cx = default_context(sysroot);
+pub fn install_pkg(cx: &BuildContext,
+                   workspace: Path,
+                   name: ~str,
+                   version: Version,
+                   // For now, these inputs are assumed to be inputs to each of the crates
+                   more_inputs: ~[(~str, Path)]) { // pairs of Kind and Path
     let pkgid = PkgId{ version: version, ..PkgId::new(name)};
-    cx.install(PkgSrc::new(workspace.clone(), workspace, false, pkgid), &Everything);
+    cx.install(PkgSrc::new(workspace.clone(), workspace, false, pkgid),
+               &WhatToBuild{ build_type: Inferred,
+                             inputs_to_discover: more_inputs,
+                             sources: Everything });
+}
+
+/// Builds an arbitrary library whose short name is `output`,
+/// by invoking `tool` with arguments `args` plus "-o %s", where %s
+/// is the platform-specific library name for `output`.
+/// Returns that platform-specific name, or None if `tool` could not be started.
+pub fn build_library_in_workspace(exec: &mut workcache::Exec,
+                                  context: &mut Context,
+                                  package_name: &str,
+                                  tool: &str,
+                                  flags: &[~str],
+                                  paths: &[~str],
+                                  output: &str) -> Option<~str> {
+    use command_failed = conditions::command_failed::cond;
+
+    let workspace = my_workspace(context, package_name);
+    let workspace_build_dir = target_build_dir(&workspace);
+    let out_name = workspace_build_dir.join_many([package_name.to_str(),
+                                                  platform_library_name(output)]);
+    // make paths absolute
+    let pkgid = PkgId::new(package_name);
+    let absolute_paths = paths.map(|s| {
+            let whatever = workspace.join_many([~"src",
+                                pkgid.to_str(),
+                                s.to_owned()]);
+            whatever.as_str().unwrap().to_owned()
+        });
+
+    let cc_args = cc_args();
+
+    let all_args = flags + absolute_paths + cc_args +
+         ~[~"-o", out_name.as_str().unwrap().to_owned()];
+    match run::process_status(tool, all_args) {
+        Some(exit_process) => {
+            if exit_process.success() {
+                let out_name_str = out_name.as_str().unwrap().to_owned();
+                exec.discover_output("binary",
+                                     out_name_str,
+                                     digest_only_date(&out_name));
+                context.add_library_path(out_name.dir_path());
+                Some(out_name_str)
+            } else {
+                Some(command_failed.raise((tool.to_owned(), all_args, exit_process)))
+            }
+        },
+        None => None
+    }
+}
+
+pub fn my_workspace(context: &Context, package_name: &str) -> Path {
+    use bad_pkg_id     = conditions::bad_pkg_id::cond;
+
+    // (this assumes no particular version is requested)
+    let pkgid = PkgId::new(package_name);
+    let workspaces = pkg_parent_workspaces(context, &pkgid);
+    if workspaces.is_empty() {
+        bad_pkg_id.raise((Path::new(package_name), package_name.to_owned()));
+    }
+    workspaces[0]
 }
 
 fn mk_crate(p: Path) -> Crate {

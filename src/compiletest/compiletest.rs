@@ -17,6 +17,7 @@ extern mod extra;
 
 use std::os;
 use std::rt;
+use std::io::fs;
 
 use extra::getopts;
 use extra::getopts::groups::{optopt, optflag, reqopt};
@@ -85,20 +86,20 @@ pub fn parse_config(args: ~[~str]) -> config {
         let message = format!("Usage: {} [OPTIONS] [TESTNAME...]", argv0);
         println(getopts::groups::usage(message, groups));
         println("");
-        fail2!()
+        fail!()
     }
 
     let matches =
         &match getopts::groups::getopts(args_, groups) {
           Ok(m) => m,
-          Err(f) => fail2!("{}", f.to_err_msg())
+          Err(f) => fail!("{}", f.to_err_msg())
         };
 
     if matches.opt_present("h") || matches.opt_present("help") {
         let message = format!("Usage: {} [OPTIONS]  [TESTNAME...]", argv0);
         println(getopts::groups::usage(message, groups));
         println("");
-        fail2!()
+        fail!()
     }
 
     fn opt_path(m: &getopts::Matches, nm: &str) -> Path {
@@ -191,10 +192,6 @@ pub fn opt_str2(maybestr: Option<~str>) -> ~str {
     match maybestr { None => ~"(none)", Some(s) => { s } }
 }
 
-pub fn str_opt(maybestr: ~str) -> Option<~str> {
-    if maybestr != ~"(none)" { Some(maybestr) } else { None }
-}
-
 pub fn str_mode(s: ~str) -> mode {
     match s {
       ~"compile-fail" => mode_compile_fail,
@@ -203,7 +200,7 @@ pub fn str_mode(s: ~str) -> mode {
       ~"pretty" => mode_pretty,
       ~"debug-info" => mode_debug_info,
       ~"codegen" => mode_codegen,
-      _ => fail2!("invalid mode")
+      _ => fail!("invalid mode")
     }
 }
 
@@ -219,6 +216,19 @@ pub fn mode_str(mode: mode) -> ~str {
 }
 
 pub fn run_tests(config: &config) {
+    if config.target == ~"arm-linux-androideabi" {
+        match config.mode{
+            mode_debug_info => {
+                println("arm-linux-androideabi debug-info \
+                        test uses tcp 5039 port. please reserve it");
+                //arm-linux-androideabi debug-info test uses remote debugger
+                //so, we test 1 task at once
+                os::setenv("RUST_TEST_TASKS","1");
+            }
+            _ =>{}
+        }
+    }
+
     let opts = test_opts(config);
     let tests = make_tests(config);
     // sadly osx needs some file descriptor limits raised for running tests in
@@ -226,7 +236,7 @@ pub fn run_tests(config: &config) {
     // For context, see #8904
     rt::test::prepare_for_lots_of_tests();
     let res = test::run_tests_console(&opts, tests);
-    if !res { fail2!("Some tests failed"); }
+    if !res { fail!("Some tests failed"); }
 }
 
 pub fn test_opts(config: &config) -> test::TestOpts {
@@ -244,20 +254,20 @@ pub fn test_opts(config: &config) -> test::TestOpts {
 }
 
 pub fn make_tests(config: &config) -> ~[test::TestDescAndFn] {
-    debug2!("making tests from {}",
+    debug!("making tests from {}",
            config.src_base.display());
     let mut tests = ~[];
-    let dirs = os::list_dir_path(&config.src_base);
+    let dirs = fs::readdir(&config.src_base);
     for file in dirs.iter() {
         let file = file.clone();
-        debug2!("inspecting file {}", file.display());
+        debug!("inspecting file {}", file.display());
         if is_test(config, &file) {
-            let t = do make_test(config, &file) {
+            let t = make_test(config, &file, || {
                 match config.mode {
                     mode_codegen => make_metrics_test_closure(config, &file),
                     _ => make_test_closure(config, &file)
                 }
-            };
+            });
             tests.push(t)
         }
     }
@@ -287,8 +297,8 @@ pub fn is_test(config: &config, testfile: &Path) -> bool {
     return valid;
 }
 
-pub fn make_test(config: &config, testfile: &Path,
-                 f: &fn()->test::TestFn) -> test::TestDescAndFn {
+pub fn make_test(config: &config, testfile: &Path, f: || -> test::TestFn)
+                 -> test::TestDescAndFn {
     test::TestDescAndFn {
         desc: test::TestDesc {
             name: make_test_name(config, testfile),
@@ -315,17 +325,17 @@ pub fn make_test_name(config: &config, testfile: &Path) -> test::TestName {
 }
 
 pub fn make_test_closure(config: &config, testfile: &Path) -> test::TestFn {
-    use std::cell::Cell;
-    let config = Cell::new((*config).clone());
+    let config = (*config).clone();
     // FIXME (#9639): This needs to handle non-utf8 paths
-    let testfile = Cell::new(testfile.as_str().unwrap().to_owned());
-    test::DynTestFn(|| { runtest::run(config.take(), testfile.take()) })
+    let testfile = testfile.as_str().unwrap().to_owned();
+    test::DynTestFn(proc() { runtest::run(config, testfile) })
 }
 
 pub fn make_metrics_test_closure(config: &config, testfile: &Path) -> test::TestFn {
-    use std::cell::Cell;
-    let config = Cell::new((*config).clone());
+    let config = (*config).clone();
     // FIXME (#9639): This needs to handle non-utf8 paths
-    let testfile = Cell::new(testfile.as_str().unwrap().to_owned());
-    test::DynMetricFn(|mm| { runtest::run_metrics(config.take(), testfile.take(), mm) })
+    let testfile = testfile.as_str().unwrap().to_owned();
+    test::DynMetricFn(proc(mm) {
+        runtest::run_metrics(config, testfile, mm)
+    })
 }

@@ -8,27 +8,27 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use either::{Left, Right};
 use option::{Option, Some, None};
 use cast::{transmute, transmute_mut_region, transmute_mut_unsafe};
 use clone::Clone;
 use unstable::raw;
 use super::sleeper_list::SleeperList;
-use super::work_queue::WorkQueue;
 use super::stack::{StackPool};
-use super::rtio::{EventLoop, EventLoopObject, RemoteCallbackObject};
+use super::rtio::EventLoop;
 use super::context::Context;
 use super::task::{Task, AnySched, Sched};
-use super::message_queue::MessageQueue;
 use rt::kill::BlockedTask;
+use rt::deque;
 use rt::local_ptr;
 use rt::local::Local;
-use rt::rtio::{RemoteCallback, PausibleIdleCallback};
+use rt::rtio::{RemoteCallback, PausableIdleCallback, Callback};
 use borrow::{to_uint};
-use cell::Cell;
 use rand::{XorShiftRng, Rng, Rand};
 use iter::range;
+use unstable::mutex::Mutex;
 use vec::{OwnedVector};
+
+use mpsc = super::mpsc_queue;
 
 /// A scheduler is responsible for coordinating the execution of Tasks
 /// on a single thread. The scheduler runs inside a slightly modified
@@ -40,14 +40,16 @@ use vec::{OwnedVector};
 /// in too much allocation and too many events.
 pub struct Scheduler {
     /// There are N work queues, one per scheduler.
-    priv work_queue: WorkQueue<~Task>,
+    work_queue: deque::Worker<~Task>,
     /// Work queues for the other schedulers. These are created by
     /// cloning the core work queues.
-    work_queues: ~[WorkQueue<~Task>],
+    work_queues: ~[deque::Stealer<~Task>],
     /// The queue of incoming messages from other schedulers.
     /// These are enqueued by SchedHandles after which a remote callback
     /// is triggered to handle the message.
-    priv message_queue: MessageQueue<SchedMessage>,
+    message_queue: mpsc::Consumer<SchedMessage, ()>,
+    /// Producer used to clone sched handles from
+    message_producer: mpsc::Producer<SchedMessage, ()>,
     /// A shared list of sleeping schedulers. We'll use this to wake
     /// up schedulers when pushing work onto the work queue.
     sleeper_list: SleeperList,
@@ -57,13 +59,11 @@ pub struct Scheduler {
     /// not active since there are multiple event sources that may
     /// wake the scheduler. It just prevents the scheduler from pushing
     /// multiple handles onto the sleeper list.
-    priv sleepy: bool,
+    sleepy: bool,
     /// A flag to indicate we've received the shutdown message and should
     /// no longer try to go to sleep, but exit instead.
     no_sleep: bool,
     stack_pool: StackPool,
-    /// The event loop used to drive the scheduler and perform I/O
-    event_loop: ~EventLoopObject,
     /// The scheduler runs on a special task. When it is not running
     /// it is stored here instead of the work queue.
     sched_task: Option<~Task>,
@@ -77,15 +77,25 @@ pub struct Scheduler {
     friend_handle: Option<SchedHandle>,
     /// A fast XorShift rng for scheduler use
     rng: XorShiftRng,
-    /// A toggleable idle callback
-    idle_callback: Option<~PausibleIdleCallback>,
+    /// A togglable idle callback
+    idle_callback: Option<~PausableIdleCallback>,
     /// A countdown that starts at a random value and is decremented
     /// every time a yield check is performed. When it hits 0 a task
     /// will yield.
     yield_check_count: uint,
     /// A flag to tell the scheduler loop it needs to do some stealing
     /// in order to introduce randomness as part of a yield
-    steal_for_yield: bool
+    steal_for_yield: bool,
+
+    // n.b. currently destructors of an object are run in top-to-bottom in order
+    //      of field declaration. Due to its nature, the pausable idle callback
+    //      must have some sort of handle to the event loop, so it needs to get
+    //      destroyed before the event loop itself. For this reason, we destroy
+    //      the event loop last to ensure that any unsafe references to it are
+    //      destroyed before it's actually destroyed.
+
+    /// The event loop used to drive the scheduler and perform I/O
+    event_loop: ~EventLoop,
 }
 
 /// An indication of how hard to work on a given operation, the difference
@@ -96,7 +106,7 @@ enum EffortLevel {
     GiveItYourBest
 }
 
-static MAX_YIELD_CHECKS: uint = 200;
+static MAX_YIELD_CHECKS: uint = 20000;
 
 fn reset_yield_check(rng: &mut XorShiftRng) -> uint {
     let r: uint = Rand::rand(rng);
@@ -107,9 +117,9 @@ impl Scheduler {
 
     // * Initialization Functions
 
-    pub fn new(event_loop: ~EventLoopObject,
-               work_queue: WorkQueue<~Task>,
-               work_queues: ~[WorkQueue<~Task>],
+    pub fn new(event_loop: ~EventLoop,
+               work_queue: deque::Worker<~Task>,
+               work_queues: ~[deque::Stealer<~Task>],
                sleeper_list: SleeperList)
         -> Scheduler {
 
@@ -119,17 +129,19 @@ impl Scheduler {
 
     }
 
-    pub fn new_special(event_loop: ~EventLoopObject,
-                       work_queue: WorkQueue<~Task>,
-                       work_queues: ~[WorkQueue<~Task>],
+    pub fn new_special(event_loop: ~EventLoop,
+                       work_queue: deque::Worker<~Task>,
+                       work_queues: ~[deque::Stealer<~Task>],
                        sleeper_list: SleeperList,
                        run_anything: bool,
                        friend: Option<SchedHandle>)
         -> Scheduler {
 
+        let (consumer, producer) = mpsc::queue(());
         let mut sched = Scheduler {
             sleeper_list: sleeper_list,
-            message_queue: MessageQueue::new(),
+            message_queue: consumer,
+            message_producer: producer,
             sleepy: false,
             no_sleep: false,
             event_loop: event_loop,
@@ -158,32 +170,31 @@ impl Scheduler {
 
     // Take a main task to run, and a scheduler to run it in. Create a
     // scheduler task and bootstrap into it.
-    pub fn bootstrap(~self, task: ~Task) {
-
-        let mut this = self;
+    pub fn bootstrap(mut ~self, task: ~Task) {
 
         // Build an Idle callback.
-        this.idle_callback = Some(this.event_loop.pausible_idle_callback());
+        let cb = ~SchedRunner as ~Callback;
+        self.idle_callback = Some(self.event_loop.pausable_idle_callback(cb));
 
         // Initialize the TLS key.
-        local_ptr::init_tls_key();
+        local_ptr::init();
 
         // Create a task for the scheduler with an empty context.
         let sched_task = ~Task::new_sched_task();
 
         // Now that we have an empty task struct for the scheduler
         // task, put it in TLS.
-        Local::put::(sched_task);
+        Local::put(sched_task);
 
         // Before starting our first task, make sure the idle callback
         // is active. As we do not start in the sleep state this is
         // important.
-        this.idle_callback.get_mut_ref().start(Scheduler::run_sched_once);
+        self.idle_callback.get_mut_ref().resume();
 
         // Now, as far as all the scheduler state is concerned, we are
         // inside the "scheduler" context. So we can act like the
         // scheduler and resume the provided task.
-        this.resume_task_immediately(task);
+        self.resume_task_immediately(task);
 
         // Now we are back in the scheduler context, having
         // successfully run the input task. Start by running the
@@ -196,7 +207,7 @@ impl Scheduler {
 
         // Close the idle callback.
         let mut sched: ~Scheduler = Local::take();
-        sched.idle_callback.get_mut_ref().close();
+        sched.idle_callback.take();
         // Make one go through the loop to run the close callback.
         sched.run();
 
@@ -211,30 +222,28 @@ impl Scheduler {
 
         // Should not have any messages
         let message = stask.sched.get_mut_ref().message_queue.pop();
-        rtassert!(message.is_none());
+        rtassert!(match message { mpsc::Empty => true, _ => false });
 
         stask.destroyed = true;
     }
 
     // This does not return a scheduler, as the scheduler is placed
     // inside the task.
-    pub fn run(~self) {
-
-        let mut self_sched = self;
+    pub fn run(mut ~self) {
 
         // This is unsafe because we need to place the scheduler, with
         // the event_loop inside, inside our task. But we still need a
         // mutable reference to the event_loop to give it the "run"
         // command.
         unsafe {
-            let event_loop: *mut ~EventLoopObject = &mut self_sched.event_loop;
+            let event_loop: *mut ~EventLoop = &mut self.event_loop;
 
-            // Our scheduler must be in the task before the event loop
-            // is started.
-            let self_sched = Cell::new(self_sched);
-            do Local::borrow |stask: &mut Task| {
-                stask.sched = Some(self_sched.take());
-            };
+            {
+                // Our scheduler must be in the task before the event loop
+                // is started.
+                let mut stask = Local::borrow(None::<Task>);
+                stask.get().sched = Some(self);
+            }
 
             (*event_loop).run();
         }
@@ -307,42 +316,63 @@ impl Scheduler {
     // returns the still-available scheduler. At this point all
     // message-handling will count as a turn of work, and as a result
     // return None.
-    fn interpret_message_queue(~self, effort: EffortLevel) -> Option<~Scheduler> {
-
-        let mut this = self;
+    fn interpret_message_queue(mut ~self, effort: EffortLevel) -> Option<~Scheduler> {
 
         let msg = if effort == DontTryTooHard {
-            // Do a cheap check that may miss messages
-            this.message_queue.casual_pop()
+            self.message_queue.casual_pop()
         } else {
-            this.message_queue.pop()
+            // When popping our message queue, we could see an "inconsistent"
+            // state which means that we *should* be able to pop data, but we
+            // are unable to at this time. Our options are:
+            //
+            //  1. Spin waiting for data
+            //  2. Ignore this and pretend we didn't find a message
+            //
+            // If we choose route 1, then if the pusher in question is currently
+            // pre-empted, we're going to take up our entire time slice just
+            // spinning on this queue. If we choose route 2, then the pusher in
+            // question is still guaranteed to make a send() on its async
+            // handle, so we will guaranteed wake up and see its message at some
+            // point.
+            //
+            // I have chosen to take route #2.
+            match self.message_queue.pop() {
+                mpsc::Data(t) => Some(t),
+                mpsc::Empty | mpsc::Inconsistent => None
+            }
         };
 
         match msg {
             Some(PinnedTask(task)) => {
                 let mut task = task;
-                task.give_home(Sched(this.make_handle()));
-                this.resume_task_immediately(task);
+                task.give_home(Sched(self.make_handle()));
+                self.resume_task_immediately(task);
                 return None;
             }
             Some(TaskFromFriend(task)) => {
                 rtdebug!("got a task from a friend. lovely!");
-                this.process_task(task, Scheduler::resume_task_immediately_cl);
+                self.process_task(task, Scheduler::resume_task_immediately_cl);
+                return None;
+            }
+            Some(RunOnce(task)) => {
+                // bypass the process_task logic to force running this task once
+                // on this home scheduler. This is often used for I/O (homing).
+                Scheduler::resume_task_immediately_cl(self, task);
                 return None;
             }
             Some(Wake) => {
-                this.sleepy = false;
-                Local::put(this);
+                self.sleepy = false;
+                Local::put(self);
                 return None;
             }
             Some(Shutdown) => {
                 rtdebug!("shutting down");
-                if this.sleepy {
+                if self.sleepy {
                     // There may be an outstanding handle on the
                     // sleeper list.  Pop them all to make sure that's
                     // not the case.
                     loop {
-                        match this.sleeper_list.pop() {
+                        match self.sleeper_list.pop() {
                             Some(handle) => {
                                 let mut handle = handle;
                                 handle.send(Wake);
@@ -353,30 +383,28 @@ impl Scheduler {
                 }
                 // No more sleeping. After there are no outstanding
                 // event loop references we will shut down.
-                this.no_sleep = true;
-                this.sleepy = false;
-                Local::put(this);
+                self.no_sleep = true;
+                self.sleepy = false;
+                Local::put(self);
                 return None;
             }
             None => {
-                return Some(this);
+                return Some(self);
             }
         }
     }
 
-    fn do_work(~self) -> Option<~Scheduler> {
-        let mut this = self;
-
+    fn do_work(mut ~self) -> Option<~Scheduler> {
         rtdebug!("scheduler calling do work");
-        match this.find_work() {
+        match self.find_work() {
             Some(task) => {
                 rtdebug!("found some work! processing the task");
-                this.process_task(task, Scheduler::resume_task_immediately_cl);
+                self.process_task(task, Scheduler::resume_task_immediately_cl);
                 return None;
             }
             None => {
                 rtdebug!("no work was found, returning the scheduler struct");
-                return Some(this);
+                return Some(self);
             }
         }
     }
@@ -431,14 +459,14 @@ impl Scheduler {
     fn try_steals(&mut self) -> Option<~Task> {
         let work_queues = &mut self.work_queues;
         let len = work_queues.len();
-        let start_index = self.rng.gen_integer_range(0, len);
+        let start_index = self.rng.gen_range(0, len);
         for index in range(0, len).map(|i| (i + start_index) % len) {
             match work_queues[index].steal() {
-                Some(task) => {
+                deque::Data(task) => {
                     rtdebug!("found task by stealing");
                     return Some(task)
                 }
-                None => ()
+                _ => ()
             }
         };
         rtdebug!("giving up on stealing");
@@ -448,37 +476,33 @@ impl Scheduler {
     // * Task Routing Functions - Make sure tasks send up in the right
     // place.
 
-    fn process_task(~self, task: ~Task,
-                    schedule_fn: SchedulingFn) {
-        let mut this = self;
-        let mut task = task;
-
+    fn process_task(mut ~self, mut task: ~Task, schedule_fn: SchedulingFn) {
         rtdebug!("processing a task");
 
         let home = task.take_unwrap_home();
         match home {
             Sched(home_handle) => {
-                if home_handle.sched_id != this.sched_id() {
+                if home_handle.sched_id != self.sched_id() {
                     rtdebug!("sending task home");
                     task.give_home(Sched(home_handle));
                     Scheduler::send_task_home(task);
-                    Local::put(this);
+                    Local::put(self);
                 } else {
                     rtdebug!("running task here");
                     task.give_home(Sched(home_handle));
-                    schedule_fn(this, task);
+                    schedule_fn(self, task);
                 }
             }
-            AnySched if this.run_anything => {
+            AnySched if self.run_anything => {
                 rtdebug!("running anysched task here");
                 task.give_home(AnySched);
-                schedule_fn(this, task);
+                schedule_fn(self, task);
             }
             AnySched => {
                 rtdebug!("sending task to friend");
                 task.give_home(AnySched);
-                this.send_to_friend(task);
-                Local::put(this);
+                self.send_to_friend(task);
+                Local::put(self);
             }
         }
     }
@@ -517,18 +541,16 @@ impl Scheduler {
     /// to the work queue directly.
     pub fn enqueue_task(&mut self, task: ~Task) {
 
-        let this = self;
-
         // We push the task onto our local queue clone.
-        this.work_queue.push(task);
-        this.idle_callback.get_mut_ref().resume();
+        self.work_queue.push(task);
+        self.idle_callback.get_mut_ref().resume();
 
         // We've made work available. Notify a
         // sleeping scheduler.
 
-        match this.sleeper_list.casual_pop() {
+        match self.sleeper_list.casual_pop() {
             Some(handle) => {
-                        let mut handle = handle;
+                let mut handle = handle;
                 handle.send(Wake)
             }
             None => { (/* pass */) }
@@ -538,9 +560,7 @@ impl Scheduler {
     /// As enqueue_task, but with the possibility for the blocked task to
     /// already have been killed.
     pub fn enqueue_blocked_task(&mut self, blocked_task: BlockedTask) {
-        do blocked_task.wake().map |task| {
-            self.enqueue_task(task);
-        };
+        blocked_task.wake().map(|task| self.enqueue_task(task));
     }
 
     // * Core Context Switching Functions
@@ -553,11 +573,9 @@ impl Scheduler {
     // cleanup function f, which takes the scheduler and the
     // old task as inputs.
 
-    pub fn change_task_context(~self,
+    pub fn change_task_context(mut ~self,
                                next_task: ~Task,
-                               f: &fn(&mut Scheduler, ~Task)) {
-        let mut this = self;
-
+                               f: |&mut Scheduler, ~Task|) {
         // The current task is grabbed from TLS, not taken as an input.
         // Doing an unsafe_take to avoid writing back a null pointer -
         // We're going to call `put` later to do that.
@@ -569,18 +587,18 @@ impl Scheduler {
 
         // These transmutes do something fishy with a closure.
         let f_fake_region = unsafe {
-            transmute::<&fn(&mut Scheduler, ~Task),
-                        &fn(&mut Scheduler, ~Task)>(f)
+            transmute::<|&mut Scheduler, ~Task|,
+                        |&mut Scheduler, ~Task|>(f)
         };
         let f_opaque = ClosureConverter::from_fn(f_fake_region);
 
         // The current task is placed inside an enum with the cleanup
         // function. This enum is then placed inside the scheduler.
-        this.cleanup_job = Some(CleanupJob::new(current_task, f_opaque));
+        self.cleanup_job = Some(CleanupJob::new(current_task, f_opaque));
 
         // The scheduler is then placed inside the next task.
         let mut next_task = next_task;
-        next_task.sched = Some(this);
+        next_task.sched = Some(self);
 
         // However we still need an internal mutable pointer to the
         // original task. The strategy here was "arrange memory, then
@@ -592,7 +610,7 @@ impl Scheduler {
                 transmute_mut_region(*next_task.sched.get_mut_ref());
 
             let current_task: &mut Task = match sched.cleanup_job {
-                Some(CleanupJob { task: ref task, _ }) => {
+                Some(CleanupJob { task: ref task, .. }) => {
                     let task_ptr: *~Task = task;
                     transmute_mut_region(*transmute_mut_unsafe(task_ptr))
                 }
@@ -623,8 +641,11 @@ impl Scheduler {
             let task: *mut Task = Local::unsafe_borrow();
             (*task).sched.get_mut_ref().run_cleanup_job();
 
-            // Must happen after running the cleanup job (of course).
-            (*task).death.check_killed((*task).unwinder.unwinding);
+            // See the comments in switch_running_tasks_and_then for why a lock
+            // is acquired here. This is the resumption points and the "bounce"
+            // that it is referring to.
+            (*task).nasty_deschedule_lock.lock();
+            (*task).nasty_deschedule_lock.unlock();
         }
     }
 
@@ -648,9 +669,9 @@ impl Scheduler {
     // * Context Swapping Helpers - Here be ugliness!
 
     pub fn resume_task_immediately(~self, task: ~Task) {
-        do self.change_task_context(task) |sched, stask| {
+        self.change_task_context(task, |sched, stask| {
             sched.sched_task = Some(stask);
-        }
+        })
     }
 
     fn resume_task_immediately_cl(sched: ~Scheduler,
@@ -678,48 +699,70 @@ impl Scheduler {
     /// This passes a Scheduler pointer to the fn after the context switch
     /// in order to prevent that fn from performing further scheduling operations.
     /// Doing further scheduling could easily result in infinite recursion.
-    pub fn deschedule_running_task_and_then(~self, f: &fn(&mut Scheduler, BlockedTask)) {
+    ///
+    /// Note that if the closure provided relinquishes ownership of the
+    /// BlockedTask, then it is possible for the task to resume execution before
+    /// the closure has finished executing. This would naturally introduce a
+    /// race if the closure and task shared portions of the environment.
+    ///
+    /// This situation is currently prevented, or in other words it is
+    /// guaranteed that this function will not return before the given closure
+    /// has returned.
+    pub fn deschedule_running_task_and_then(mut ~self,
+                                            f: |&mut Scheduler, BlockedTask|) {
         // Trickier - we need to get the scheduler task out of self
         // and use it as the destination.
-        let mut this = self;
-        let stask = this.sched_task.take_unwrap();
+        let stask = self.sched_task.take_unwrap();
         // Otherwise this is the same as below.
-        this.switch_running_tasks_and_then(stask, f);
+        self.switch_running_tasks_and_then(stask, f);
     }
 
     pub fn switch_running_tasks_and_then(~self, next_task: ~Task,
-                                         f: &fn(&mut Scheduler, BlockedTask)) {
-        // This is where we convert the BlockedTask-taking closure into one
-        // that takes just a Task, and is aware of the block-or-killed protocol.
-        do self.change_task_context(next_task) |sched, task| {
-            // Task might need to receive a kill signal instead of blocking.
-            // We can call the "and_then" only if it blocks successfully.
-            match BlockedTask::try_block(task) {
-                Left(killed_task) => sched.enqueue_task(killed_task),
-                Right(blocked_task) => f(sched, blocked_task),
-            }
-        }
+                                         f: |&mut Scheduler, BlockedTask|) {
+        // And here comes one of the sad moments in which a lock is used in a
+        // core portion of the rust runtime. As always, this is highly
+        // undesirable, so there's a good reason behind it.
+        //
+        // There is an excellent outline of the problem in issue #8132, and it's
+        // summarized in that `f` is executed on a sched task, but its
+        // environment is on the previous task. If `f` relinquishes ownership of
+        // the BlockedTask, then it may introduce a race where `f` is using the
+        // environment as well as the code after the 'deschedule' block.
+        //
+        // The solution we have chosen to adopt for now is to acquire a
+        // task-local lock around this block. The resumption of the task in
+        // context switching will bounce on the lock, thereby waiting for this
+        // block to finish, eliminating the race mentioned above.
+        //
+        // To actually maintain a handle to the lock, we use an unsafe pointer
+        // to it, but we're guaranteed that the task won't exit until we've
+        // unlocked the lock so there's no worry of this memory going away.
+        self.change_task_context(next_task, |sched, mut task| {
+            let lock: *mut Mutex = &mut task.nasty_deschedule_lock;
+            unsafe { (*lock).lock() }
+            f(sched, BlockedTask::block(task));
+            unsafe { (*lock).unlock() }
+        })
     }
 
     fn switch_task(sched: ~Scheduler, task: ~Task) {
-        do sched.switch_running_tasks_and_then(task) |sched, last_task| {
+        sched.switch_running_tasks_and_then(task, |sched, last_task| {
             sched.enqueue_blocked_task(last_task);
-        };
+        });
     }
 
     // * Task Context Helpers
 
     /// Called by a running task to end execution, after which it will
     /// be recycled by the scheduler for reuse in a new task.
-    pub fn terminate_current_task(~self) {
+    pub fn terminate_current_task(mut ~self) {
         // Similar to deschedule running task and then, but cannot go through
         // the task-blocking path. The task is already dying.
-        let mut this = self;
-        let stask = this.sched_task.take_unwrap();
-        do this.change_task_context(stask) |sched, mut dead_task| {
+        let stask = self.sched_task.take_unwrap();
+        self.change_task_context(stask, |sched, mut dead_task| {
             let coroutine = dead_task.coroutine.take_unwrap();
             coroutine.recycle(&mut sched.stack_pool);
-        }
+        })
     }
 
     pub fn run_task(task: ~Task) {
@@ -728,35 +771,31 @@ impl Scheduler {
     }
 
     pub fn run_task_later(next_task: ~Task) {
-        let next_task = Cell::new(next_task);
-        do Local::borrow |sched: &mut Scheduler| {
-            sched.enqueue_task(next_task.take());
-        };
+        let mut sched = Local::borrow(None::<Scheduler>);
+        sched.get().enqueue_task(next_task);
     }
 
     /// Yield control to the scheduler, executing another task. This is guaranteed
     /// to introduce some amount of randomness to the scheduler. Currently the
     /// randomness is a result of performing a round of work stealing (which
     /// may end up stealing from the current scheduler).
-    pub fn yield_now(~self) {
-        let mut this = self;
-        this.yield_check_count = reset_yield_check(&mut this.rng);
+    pub fn yield_now(mut ~self) {
+        self.yield_check_count = reset_yield_check(&mut self.rng);
         // Tell the scheduler to start stealing on the next iteration
-        this.steal_for_yield = true;
-        do this.deschedule_running_task_and_then |sched, task| {
+        self.steal_for_yield = true;
+        self.deschedule_running_task_and_then(|sched, task| {
             sched.enqueue_blocked_task(task);
-        }
+        })
     }
 
-    pub fn maybe_yield(~self) {
+    pub fn maybe_yield(mut ~self) {
         // The number of times to do the yield check before yielding, chosen arbitrarily.
-        let mut this = self;
-        rtassert!(this.yield_check_count > 0);
-        this.yield_check_count -= 1;
-        if this.yield_check_count == 0 {
-            this.yield_now();
+        rtassert!(self.yield_check_count > 0);
+        self.yield_check_count -= 1;
+        if self.yield_check_count == 0 {
+            self.yield_now();
         } else {
-            Local::put(this);
+            Local::put(self);
         }
     }
 
@@ -771,11 +810,11 @@ impl Scheduler {
     }
 
     pub fn make_handle(&mut self) -> SchedHandle {
-        let remote = self.event_loop.remote_callback(Scheduler::run_sched_once);
+        let remote = self.event_loop.remote_callback(~SchedRunner as ~Callback);
 
         return SchedHandle {
             remote: remote,
-            queue: self.message_queue.clone(),
+            queue: self.message_producer.clone(),
             sched_id: self.sched_id()
         };
     }
@@ -783,18 +822,19 @@ impl Scheduler {
 
 // Supporting types
 
-type SchedulingFn = ~fn(~Scheduler, ~Task);
+type SchedulingFn = extern "Rust" fn (~Scheduler, ~Task);
 
 pub enum SchedMessage {
     Wake,
     Shutdown,
     PinnedTask(~Task),
-    TaskFromFriend(~Task)
+    TaskFromFriend(~Task),
+    RunOnce(~Task),
 }
 
 pub struct SchedHandle {
-    priv remote: ~RemoteCallbackObject,
-    priv queue: MessageQueue<SchedMessage>,
+    priv remote: ~RemoteCallback,
+    priv queue: mpsc::Producer<SchedMessage, ()>,
     sched_id: uint
 }
 
@@ -803,11 +843,13 @@ impl SchedHandle {
         self.queue.push(msg);
         self.remote.fire();
     }
-    pub fn send_task_from_friend(&mut self, friend: ~Task) {
-        self.send(TaskFromFriend(friend));
-    }
-    pub fn send_shutdown(&mut self) {
-        self.send(Shutdown);
+}
+
+struct SchedRunner;
+
+impl Callback for SchedRunner {
+    fn call(&mut self) {
+        Scheduler::run_sched_once();
     }
 }
 
@@ -830,22 +872,22 @@ impl CleanupJob {
     }
 }
 
-// XXX: Some hacks to put a &fn in Scheduler without borrowck
+// XXX: Some hacks to put a || closure in Scheduler without borrowck
 // complaining
 type UnsafeTaskReceiver = raw::Closure;
 trait ClosureConverter {
-    fn from_fn(&fn(&mut Scheduler, ~Task)) -> Self;
-    fn to_fn(self) -> &fn(&mut Scheduler, ~Task);
+    fn from_fn(|&mut Scheduler, ~Task|) -> Self;
+    fn to_fn(self) -> |&mut Scheduler, ~Task|;
 }
 impl ClosureConverter for UnsafeTaskReceiver {
-    fn from_fn(f: &fn(&mut Scheduler, ~Task)) -> UnsafeTaskReceiver {
+    fn from_fn(f: |&mut Scheduler, ~Task|) -> UnsafeTaskReceiver {
         unsafe { transmute(f) }
     }
-    fn to_fn(self) -> &fn(&mut Scheduler, ~Task) { unsafe { transmute(self) } }
+    fn to_fn(self) -> |&mut Scheduler, ~Task| { unsafe { transmute(self) } }
 }
 
 // On unix, we read randomness straight from /dev/urandom, but the
-// default constructor of an XorShiftRng does this via io::file, which
+// default constructor of an XorShiftRng does this via io::fs, which
 // relies on the scheduler existing, so we have to manually load
 // randomness. Windows has its own C API for this, so we don't need to
 // worry there.
@@ -854,31 +896,28 @@ fn new_sched_rng() -> XorShiftRng {
     XorShiftRng::new()
 }
 #[cfg(unix)]
-#[fixed_stack_segment] #[inline(never)]
 fn new_sched_rng() -> XorShiftRng {
     use libc;
-    use sys;
+    use mem;
     use c_str::ToCStr;
     use vec::MutableVector;
     use iter::Iterator;
     use rand::SeedableRng;
 
-    let fd = do "/dev/urandom".with_c_str |name| {
+    let fd = "/dev/urandom".with_c_str(|name| {
         unsafe { libc::open(name, libc::O_RDONLY, 0) }
-    };
+    });
     if fd == -1 {
         rtabort!("could not open /dev/urandom for reading.")
     }
 
     let mut seeds = [0u32, .. 4];
-    let size = sys::size_of_val(&seeds);
+    let size = mem::size_of_val(&seeds);
     loop {
-        let nbytes = do seeds.as_mut_buf |buf, _| {
-            unsafe {
-                libc::read(fd,
-                           buf as *mut libc::c_void,
-                           size as libc::size_t)
-            }
+        let nbytes = unsafe {
+            libc::read(fd,
+                       seeds.as_mut_ptr() as *mut libc::c_void,
+                       size as libc::size_t)
         };
         rtassert!(nbytes as uint == size);
 
@@ -894,19 +933,18 @@ fn new_sched_rng() -> XorShiftRng {
 
 #[cfg(test)]
 mod test {
-    extern mod extra;
-
     use prelude::*;
-    use rt::test::*;
-    use unstable::run_in_bare_thread;
+
     use borrow::to_uint;
-    use rt::local::*;
+    use rt::deque::BufferPool;
+    use rt::basic;
     use rt::sched::{Scheduler};
-    use cell::Cell;
-    use rt::thread::Thread;
     use rt::task::{Task, Sched};
+    use rt::test::*;
+    use rt::thread::Thread;
     use rt::util;
-    use option::{Some};
+    use task::TaskResult;
+    use unstable::run_in_bare_thread;
 
     #[test]
     fn trivial_run_in_newsched_task_test() {
@@ -991,7 +1029,9 @@ mod test {
                 assert!(Task::on_appropriate_sched());
             };
 
-            let on_exit: ~fn(bool) = |exit_status| rtassert!(exit_status);
+            let on_exit: proc(TaskResult) = proc(exit_status) {
+                rtassert!(exit_status.is_ok())
+            };
             task.death.on_exit = Some(on_exit);
 
             sched.bootstrap(task);
@@ -1003,42 +1043,39 @@ mod test {
 
     #[test]
     fn test_schedule_home_states() {
-
-        use rt::uv::uvio::UvEventLoop;
         use rt::sleeper_list::SleeperList;
-        use rt::work_queue::WorkQueue;
         use rt::sched::Shutdown;
         use borrow;
-        use rt::comm::*;
 
         do run_in_bare_thread {
 
             let sleepers = SleeperList::new();
-            let normal_queue = WorkQueue::new();
-            let special_queue = WorkQueue::new();
-            let queues = ~[normal_queue.clone(), special_queue.clone()];
+            let mut pool = BufferPool::new();
+            let (normal_worker, normal_stealer) = pool.deque();
+            let (special_worker, special_stealer) = pool.deque();
+            let queues = ~[normal_stealer, special_stealer];
 
             // Our normal scheduler
             let mut normal_sched = ~Scheduler::new(
-                ~UvEventLoop::new(),
-                normal_queue,
+                basic::event_loop(),
+                normal_worker,
                 queues.clone(),
                 sleepers.clone());
 
-            let normal_handle = Cell::new(normal_sched.make_handle());
+            let normal_handle = normal_sched.make_handle();
 
             let friend_handle = normal_sched.make_handle();
 
             // Our special scheduler
             let mut special_sched = ~Scheduler::new_special(
-                ~UvEventLoop::new(),
-                special_queue.clone(),
+                basic::event_loop(),
+                special_worker,
                 queues.clone(),
                 sleepers.clone(),
                 false,
                 Some(friend_handle));
 
-            let special_handle = Cell::new(special_sched.make_handle());
+            let special_handle = special_sched.make_handle();
 
             let t1_handle = special_sched.make_handle();
             let t4_handle = special_sched.make_handle();
@@ -1069,26 +1106,19 @@ mod test {
             };
             rtdebug!("task4 id: **{}**", borrow::to_uint(task4));
 
-            let task1 = Cell::new(task1);
-            let task2 = Cell::new(task2);
-            let task3 = Cell::new(task3);
-            let task4 = Cell::new(task4);
-
             // Signal from the special task that we are done.
-            let (port, chan) = oneshot::<()>();
-            let port = Cell::new(port);
-            let chan = Cell::new(chan);
+            let (port, chan) = Chan::<()>::new();
 
             let normal_task = ~do Task::new_root(&mut normal_sched.stack_pool, None) {
                 rtdebug!("*about to submit task2*");
-                Scheduler::run_task(task2.take());
+                Scheduler::run_task(task2);
                 rtdebug!("*about to submit task4*");
-                Scheduler::run_task(task4.take());
+                Scheduler::run_task(task4);
                 rtdebug!("*normal_task done*");
-                port.take().recv();
-                let mut nh = normal_handle.take();
+                port.recv();
+                let mut nh = normal_handle;
                 nh.send(Shutdown);
-                let mut sh = special_handle.take();
+                let mut sh = special_handle;
                 sh.send(Shutdown);
             };
 
@@ -1096,27 +1126,24 @@ mod test {
 
             let special_task = ~do Task::new_root(&mut special_sched.stack_pool, None) {
                 rtdebug!("*about to submit task1*");
-                Scheduler::run_task(task1.take());
+                Scheduler::run_task(task1);
                 rtdebug!("*about to submit task3*");
-                Scheduler::run_task(task3.take());
+                Scheduler::run_task(task3);
                 rtdebug!("*done with special_task*");
-                chan.take().send(());
+                chan.send(());
             };
 
             rtdebug!("special task: {}", borrow::to_uint(special_task));
 
-            let special_sched = Cell::new(special_sched);
-            let normal_sched = Cell::new(normal_sched);
-            let special_task = Cell::new(special_task);
-            let normal_task = Cell::new(normal_task);
-
+            let normal_sched = normal_sched;
             let normal_thread = do Thread::start {
-                normal_sched.take().bootstrap(normal_task.take());
+                normal_sched.bootstrap(normal_task);
                 rtdebug!("finished with normal_thread");
             };
 
+            let special_sched = special_sched;
             let special_thread = do Thread::start {
-                special_sched.take().bootstrap(special_task.take());
+                special_sched.bootstrap(special_task);
                 rtdebug!("finished with special_sched");
             };
 
@@ -1136,46 +1163,35 @@ mod test {
 
     #[test]
     fn test_io_callback() {
+        use io::timer;
+
         // This is a regression test that when there are no schedulable tasks
         // in the work queue, but we are performing I/O, that once we do put
         // something in the work queue again the scheduler picks it up and doesn't
         // exit before emptying the work queue
-        do run_in_newsched_task {
+        do run_in_uv_task {
             do spawntask {
-                let sched: ~Scheduler = Local::take();
-                do sched.deschedule_running_task_and_then |sched, task| {
-                    let task = Cell::new(task);
-                    do sched.event_loop.callback_ms(10) {
-                        rtdebug!("in callback");
-                        let mut sched: ~Scheduler = Local::take();
-                        sched.enqueue_blocked_task(task.take());
-                        Local::put(sched);
-                    }
-                }
+                timer::sleep(10);
             }
         }
     }
 
     #[test]
     fn handle() {
-        use rt::comm::*;
-
         do run_in_bare_thread {
-            let (port, chan) = oneshot::<()>();
-            let port = Cell::new(port);
-            let chan = Cell::new(chan);
+            let (port, chan) = Chan::new();
 
             let thread_one = do Thread::start {
-                let chan = Cell::new(chan.take());
+                let chan = chan;
                 do run_in_newsched_task_core {
-                    chan.take().send(());
+                    chan.send(());
                 }
             };
 
             let thread_two = do Thread::start {
-                let port = Cell::new(port.take());
+                let port = port;
                 do run_in_newsched_task_core {
-                    port.take().recv();
+                    port.recv();
                 }
             };
 
@@ -1188,64 +1204,61 @@ mod test {
     // Used to deadlock because Shutdown was never recvd.
     #[test]
     fn no_missed_messages() {
-        use rt::work_queue::WorkQueue;
         use rt::sleeper_list::SleeperList;
         use rt::stack::StackPool;
-        use rt::uv::uvio::UvEventLoop;
         use rt::sched::{Shutdown, TaskFromFriend};
-        use util;
 
         do run_in_bare_thread {
-            do stress_factor().times {
+            stress_factor().times(|| {
                 let sleepers = SleeperList::new();
-                let queue = WorkQueue::new();
-                let queues = ~[queue.clone()];
+                let mut pool = BufferPool::new();
+                let (worker, stealer) = pool.deque();
 
                 let mut sched = ~Scheduler::new(
-                    ~UvEventLoop::new(),
-                    queue,
-                    queues.clone(),
+                    basic::event_loop(),
+                    worker,
+                    ~[stealer],
                     sleepers.clone());
 
                 let mut handle = sched.make_handle();
 
-                let sched = Cell::new(sched);
-
+                let sched = sched;
                 let thread = do Thread::start {
-                    let mut sched = sched.take();
-                    let bootstrap_task = ~Task::new_root(&mut sched.stack_pool, None, ||());
+                    let mut sched = sched;
+                    let bootstrap_task =
+                        ~Task::new_root(&mut sched.stack_pool,
+                                        None,
+                                        proc()());
                     sched.bootstrap(bootstrap_task);
                 };
 
                 let mut stack_pool = StackPool::new();
-                let task = ~Task::new_root(&mut stack_pool, None, ||());
+                let task = ~Task::new_root(&mut stack_pool, None, proc()());
                 handle.send(TaskFromFriend(task));
 
                 handle.send(Shutdown);
-                util::ignore(handle);
+                drop(handle);
 
                 thread.join();
-            }
+            })
         }
     }
 
     #[test]
     fn multithreading() {
-        use rt::comm::*;
         use num::Times;
         use vec::OwnedVector;
         use container::Container;
 
         do run_in_mt_newsched_task {
             let mut ports = ~[];
-            do 10.times {
-                let (port, chan) = oneshot();
-                let chan_cell = Cell::new(chan);
+            10.times(|| {
+                let (port, chan) = Chan::new();
                 do spawntask_later {
-                    chan_cell.take().send(());
+                    chan.send(());
                 }
                 ports.push(port);
-            }
+            });
 
             while !ports.is_empty() {
                 ports.pop().recv();
@@ -1255,21 +1268,17 @@ mod test {
 
      #[test]
     fn thread_ring() {
-        use rt::comm::*;
-        use comm::{GenericPort, GenericChan};
-
         do run_in_mt_newsched_task {
-                let (end_port, end_chan) = oneshot();
+            let (end_port, end_chan) = Chan::new();
 
             let n_tasks = 10;
             let token = 2000;
 
-                let (p, ch1) = stream();
-            let mut p = p;
-                ch1.send((token, end_chan));
-                let mut i = 2;
+            let (mut p, ch1) = Chan::new();
+            ch1.send((token, end_chan));
+            let mut i = 2;
             while i <= n_tasks {
-                let (next_p, ch) = stream();
+                let (next_p, ch) = Chan::new();
                 let imm_i = i;
                 let imm_p = p;
                 do spawntask_random {
@@ -1278,26 +1287,26 @@ mod test {
                 p = next_p;
                 i += 1;
             }
-            let imm_p = p;
-            let imm_ch = ch1;
+            let p = p;
             do spawntask_random {
-                roundtrip(1, n_tasks, &imm_p, &imm_ch);
+                roundtrip(1, n_tasks, &p, &ch1);
             }
 
             end_port.recv();
         }
 
         fn roundtrip(id: int, n_tasks: int,
-                     p: &Port<(int, ChanOne<()>)>, ch: &Chan<(int, ChanOne<()>)>) {
+                     p: &Port<(int, Chan<()>)>,
+                     ch: &Chan<(int, Chan<()>)>) {
             while (true) {
                 match p.recv() {
                     (1, end_chan) => {
-                                debug2!("{}\n", id);
-                                end_chan.send(());
-                                return;
+                        debug!("{}\n", id);
+                        end_chan.send(());
+                        return;
                     }
                     (token, end_chan) => {
-                        debug2!("thread: {}   got token: {}", id, token);
+                        debug!("thread: {}   got token: {}", id, token);
                         ch.send((token - 1, end_chan));
                         if token <= n_tasks {
                             return;
@@ -1332,44 +1341,42 @@ mod test {
     }
 
     // FIXME: #9407: xfail-test
+    #[ignore]
+    #[test]
     fn dont_starve_1() {
-        use rt::comm::oneshot;
-
-        do stress_factor().times {
+        stress_factor().times(|| {
             do run_in_mt_newsched_task {
-                let (port, chan) = oneshot();
+                let (port, chan) = Chan::new();
 
                 // This task should not be able to starve the sender;
                 // The sender should get stolen to another thread.
                 do spawntask {
-                    while !port.peek() { }
+                    while port.try_recv().is_none() { }
                 }
 
                 chan.send(());
             }
-        }
+        })
     }
 
     #[test]
     fn dont_starve_2() {
-        use rt::comm::oneshot;
-
-        do stress_factor().times {
+        stress_factor().times(|| {
             do run_in_newsched_task {
-                let (port, chan) = oneshot();
-                let (_port2, chan2) = stream();
+                let (port, chan) = Chan::new();
+                let (_port2, chan2) = Chan::new();
 
                 // This task should not be able to starve the other task.
                 // The sends should eventually yield.
                 do spawntask {
-                    while !port.peek() {
+                    while port.try_recv().is_none() {
                         chan2.send(());
                     }
                 }
 
                 chan.send(());
             }
-        }
+        })
     }
 
     // Regression test for a logic bug that would cause single-threaded schedulers
@@ -1380,7 +1387,7 @@ mod test {
         use num::Times;
 
         do spawn_sched(SingleThreaded) {
-            do 5.times { deschedule(); }
+            5.times(|| { deschedule(); })
         }
         do spawn { }
         do spawn { }

@@ -75,17 +75,17 @@ pub fn get_base_type(inference_context: @mut InferCtxt,
     }
 
     match get(resolved_type).sty {
-        ty_enum(*) | ty_trait(*) | ty_struct(*) => {
-            debug2!("(getting base type) found base type");
+        ty_enum(..) | ty_trait(..) | ty_struct(..) => {
+            debug!("(getting base type) found base type");
             Some(resolved_type)
         }
 
-        ty_nil | ty_bot | ty_bool | ty_char | ty_int(*) | ty_uint(*) | ty_float(*) |
-        ty_estr(*) | ty_evec(*) | ty_bare_fn(*) | ty_closure(*) | ty_tup(*) |
-        ty_infer(*) | ty_param(*) | ty_self(*) | ty_type | ty_opaque_box |
-        ty_opaque_closure_ptr(*) | ty_unboxed_vec(*) | ty_err | ty_box(_) |
+        ty_nil | ty_bot | ty_bool | ty_char | ty_int(..) | ty_uint(..) | ty_float(..) |
+        ty_estr(..) | ty_evec(..) | ty_bare_fn(..) | ty_closure(..) | ty_tup(..) |
+        ty_infer(..) | ty_param(..) | ty_self(..) | ty_type | ty_opaque_box |
+        ty_opaque_closure_ptr(..) | ty_unboxed_vec(..) | ty_err | ty_box(_) |
         ty_uniq(_) | ty_ptr(_) | ty_rptr(_, _) => {
-            debug2!("(getting base type) no base type; found {:?}",
+            debug!("(getting base type) no base type; found {:?}",
                    get(original_type).sty);
             None
         }
@@ -102,7 +102,7 @@ pub fn type_is_defined_in_local_crate(original_type: t) -> bool {
      */
 
     let mut found_nominal = false;
-    do ty::walk_ty(original_type) |t| {
+    ty::walk_ty(original_type, |t| {
         match get(t).sty {
             ty_enum(def_id, _) |
             ty_trait(def_id, _, _, _, _) |
@@ -114,7 +114,7 @@ pub fn type_is_defined_in_local_crate(original_type: t) -> bool {
 
             _ => { }
         }
-    }
+    });
     return found_nominal;
 }
 
@@ -135,7 +135,7 @@ pub fn get_base_type_def_id(inference_context: @mut InferCtxt,
                     return Some(def_id);
                 }
                 _ => {
-                    fail2!("get_base_type() returned a type that wasn't an \
+                    fail!("get_base_type() returned a type that wasn't an \
                            enum, struct, or trait");
                 }
             }
@@ -160,7 +160,7 @@ struct CoherenceCheckVisitor { cc: CoherenceChecker }
 impl visit::Visitor<()> for CoherenceCheckVisitor {
     fn visit_item(&mut self, item:@item, _:()) {
 
-//                debug2!("(checking coherence) item '{}'",
+//                debug!("(checking coherence) item '{}'",
 //                       self.cc.crate_context.tcx.sess.str_of(item.ident));
 
                 match item.node {
@@ -190,7 +190,7 @@ impl visit::Visitor<()> for PrivilegedScopeVisitor {
                         // Then visit the module items.
                         visit::walk_mod(self, module_, ());
                     }
-                    item_impl(_, None, ref ast_ty, _) => {
+                    item_impl(_, None, ast_ty, _) => {
                         if !self.cc.ast_type_is_defined_in_local_crate(ast_ty) {
                             // This is an error.
                             let session = self.cc.crate_context.tcx.sess;
@@ -266,7 +266,7 @@ impl CoherenceChecker {
         // base type.
 
         if associated_traits.len() == 0 {
-            debug2!("(checking implementation) no associated traits for item \
+            debug!("(checking implementation) no associated traits for item \
                     '{}'",
                    self.crate_context.tcx.sess.str_of(item.ident));
 
@@ -290,7 +290,7 @@ impl CoherenceChecker {
         for associated_trait in associated_traits.iter() {
             let trait_ref = ty::node_id_to_trait_ref(
                 self.crate_context.tcx, associated_trait.ref_id);
-            debug2!("(checking implementation) adding impl for trait '{}', item '{}'",
+            debug!("(checking implementation) adding impl for trait '{}', item '{}'",
                    trait_ref.repr(self.crate_context.tcx),
                    self.crate_context.tcx.sess.str_of(item.ident));
 
@@ -325,7 +325,7 @@ impl CoherenceChecker {
                                        trait_ref: &ty::TraitRef,
                                        all_methods: &mut ~[@Method]) {
         let tcx = self.crate_context.tcx;
-        debug2!("instantiate_default_methods(impl_id={:?}, trait_ref={})",
+        debug!("instantiate_default_methods(impl_id={:?}, trait_ref={})",
                impl_id, trait_ref.repr(tcx));
 
         let impl_poly_type = ty::lookup_item_type(tcx, impl_id);
@@ -336,7 +336,7 @@ impl CoherenceChecker {
             let new_id = tcx.sess.next_node_id();
             let new_did = local_def(new_id);
 
-            debug2!("new_did={:?} trait_method={}", new_did, trait_method.repr(tcx));
+            debug!("new_did={:?} trait_method={}", new_did, trait_method.repr(tcx));
 
             // Create substitutions for the various trait parameters.
             let new_method_ty =
@@ -348,7 +348,7 @@ impl CoherenceChecker {
                     *trait_method,
                     Some(trait_method.def_id));
 
-            debug2!("new_method_ty={}", new_method_ty.repr(tcx));
+            debug!("new_method_ty={}", new_method_ty.repr(tcx));
             all_methods.push(new_method_ty);
 
             // construct the polytype for the method based on the method_ty
@@ -357,14 +357,14 @@ impl CoherenceChecker {
                     @vec::append(
                         (*impl_poly_type.generics.type_param_defs).clone(),
                         *new_method_ty.generics.type_param_defs),
-                region_param:
-                    impl_poly_type.generics.region_param
+                region_param_defs:
+                    impl_poly_type.generics.region_param_defs
             };
             let new_polytype = ty::ty_param_bounds_and_ty {
                 generics: new_generics,
                 ty: ty::mk_bare_fn(tcx, new_method_ty.fty.clone())
             };
-            debug2!("new_polytype={}", new_polytype.repr(tcx));
+            debug!("new_polytype={}", new_polytype.repr(tcx));
 
             tcx.tcache.insert(new_did, new_polytype);
             tcx.methods.insert(new_did, new_method_ty);
@@ -413,22 +413,22 @@ impl CoherenceChecker {
     }
 
     pub fn check_implementation_coherence(&self) {
-        do self.crate_context.tcx.trait_impls.each_key |&trait_id| {
+        self.crate_context.tcx.trait_impls.each_key(|&trait_id| {
             self.check_implementation_coherence_of(trait_id);
             true
-        };
+        });
     }
 
     pub fn check_implementation_coherence_of(&self, trait_def_id: DefId) {
         // Unify pairs of polytypes.
-        do self.iter_impls_of_trait(trait_def_id) |a| {
+        self.iter_impls_of_trait(trait_def_id, |a| {
             let implementation_a = a;
             let polytype_a =
                 self.get_self_type_for_implementation(implementation_a);
 
             // "We have an impl of trait <trait_def_id> for type <polytype_a>,
             // and that impl is <implementation_a>"
-            do self.iter_impls_of_trait(trait_def_id) |b| {
+            self.iter_impls_of_trait(trait_def_id, |b| {
                 let implementation_b = b;
 
                 // An impl is coherent with itself
@@ -447,11 +447,11 @@ impl CoherenceChecker {
                                           "note conflicting implementation here");
                     }
                 }
-            }
-        }
+            })
+        })
     }
 
-    pub fn iter_impls_of_trait(&self, trait_def_id: DefId, f: &fn(@Impl)) {
+    pub fn iter_impls_of_trait(&self, trait_def_id: DefId, f: |@Impl|) {
         match self.crate_context.tcx.trait_impls.find(&trait_def_id) {
             Some(impls) => {
                 for &im in impls.iter() {
@@ -482,20 +482,17 @@ impl CoherenceChecker {
     pub fn universally_quantify_polytype(&self,
                                          polytype: ty_param_bounds_and_ty)
                                          -> UniversalQuantificationResult {
-        let regions = match polytype.generics.region_param {
-            None => opt_vec::Empty,
-            Some(_) => {
-                opt_vec::with(
-                    self.inference_context.next_region_var(
-                        infer::BoundRegionInCoherence))
-            }
-        };
+        let region_parameter_count = polytype.generics.region_param_defs.len();
+        let region_parameters =
+            self.inference_context.next_region_vars(
+                infer::BoundRegionInCoherence,
+                region_parameter_count);
 
         let bounds_count = polytype.generics.type_param_defs.len();
         let type_parameters = self.inference_context.next_ty_vars(bounds_count);
 
         let substitutions = substs {
-            regions: ty::NonerasedRegions(regions),
+            regions: ty::NonerasedRegions(opt_vec::from(region_parameters)),
             self_ty: None,
             tps: type_parameters
         };
@@ -539,33 +536,6 @@ impl CoherenceChecker {
         return trait_id;
     }
 
-    // This check doesn't really have anything to do with coherence. It's
-    // here for historical reasons
-    pub fn check_trait_methods_are_implemented(
-        &self,
-        all_methods: &mut ~[@Method],
-        trait_did: DefId,
-        trait_ref_span: Span) {
-
-        let tcx = self.crate_context.tcx;
-
-        let mut provided_names = HashSet::new();
-        // Implemented methods
-        for elt in all_methods.iter() {
-            provided_names.insert(elt.ident.name);
-        }
-
-        let r = ty::trait_methods(tcx, trait_did);
-        for method in r.iter() {
-            debug2!("checking for {}", method.ident.repr(tcx));
-            if provided_names.contains(&method.ident.name) { continue; }
-
-            tcx.sess.span_err(trait_ref_span,
-                              format!("missing method `{}`",
-                                   tcx.sess.str_of(method.ident)));
-        }
-    }
-
     /// For coherence, when we have `impl Type`, we need to guarantee that
     /// `Type` is "local" to the crate. For our purposes, this means that it
     /// must precisely name some nominal type defined in this crate.
@@ -592,7 +562,7 @@ impl CoherenceChecker {
                             }
                             Some(&node_item(item, _)) => {
                                 match item.node {
-                                    item_struct(*) | item_enum(*) => true,
+                                    item_struct(..) | item_enum(..) => true,
                                     _ => false,
                                 }
                             }
@@ -620,17 +590,10 @@ impl CoherenceChecker {
                     let ty_trait_ref = ty::node_id_to_trait_ref(
                         self.crate_context.tcx,
                         trait_ref.ref_id);
-                    let trait_did = ty_trait_ref.def_id;
 
                     self.instantiate_default_methods(local_def(item.id),
                                                      ty_trait_ref,
                                                      &mut methods);
-
-                    // Check that we have implementations of every trait method
-                    self.check_trait_methods_are_implemented(
-                        &mut methods,
-                        trait_did,
-                        trait_ref.path.span);
                 }
 
                 return @Impl {
@@ -702,12 +665,12 @@ impl CoherenceChecker {
         let mut impls_seen = HashSet::new();
 
         let crate_store = self.crate_context.tcx.sess.cstore;
-        do iter_crate_data(crate_store) |crate_number, _crate_metadata| {
-            do each_impl(crate_store, crate_number) |def_id| {
+        iter_crate_data(crate_store, |crate_number, _crate_metadata| {
+            each_impl(crate_store, crate_number, |def_id| {
                 assert_eq!(crate_number, def_id.crate);
                 self.add_external_impl(&mut impls_seen, def_id)
-            }
-        }
+            })
+        })
     }
 
     //

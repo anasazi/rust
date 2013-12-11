@@ -29,7 +29,7 @@ pub fn maybe_instantiate_inline(ccx: @mut CrateContext, fn_id: ast::DefId)
     match ccx.external.find(&fn_id) {
         Some(&Some(node_id)) => {
             // Already inline
-            debug2!("maybe_instantiate_inline({}): already inline as node id {}",
+            debug!("maybe_instantiate_inline({}): already inline as node id {}",
                    ty::item_path_str(ccx.tcx, fn_id), node_id);
             return local_def(node_id);
         }
@@ -67,7 +67,7 @@ pub fn maybe_instantiate_inline(ccx: @mut CrateContext, fn_id: ast::DefId)
             // however, so we use the available_externally linkage which llvm
             // provides
             match item.node {
-                ast::item_static(*) => {
+                ast::item_static(..) => {
                     let g = get_item_val(ccx, item.id);
                     // see the comment in get_item_val() as to why this check is
                     // performed here.
@@ -141,18 +141,18 @@ pub fn maybe_instantiate_inline(ccx: @mut CrateContext, fn_id: ast::DefId)
                   _ => {
                       let self_ty = ty::node_id_to_type(ccx.tcx,
                                                         mth.self_id);
-                      debug2!("calling inline trans_fn with self_ty {}",
+                      debug!("calling inline trans_fn with self_ty {}",
                              ty_to_str(ccx.tcx, self_ty));
                       match mth.explicit_self.node {
-                          ast::sty_value => impl_self(self_ty, ty::ByRef),
+                          ast::sty_value(_) => impl_self(self_ty, ty::ByRef),
                           _ => impl_self(self_ty, ty::ByCopy),
                       }
                   }
               };
               trans_fn(ccx,
                        path,
-                       &mth.decl,
-                       &mth.body,
+                       mth.decl,
+                       mth.body,
                        llfn,
                        self_kind,
                        None,

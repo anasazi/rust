@@ -17,7 +17,7 @@ identifiers to entities without requiring a central allocating authority.
 
 They are particularly useful in distributed systems, though can be used in
 disparate areas, such as databases and network protocols.  Typically a UUID is
-displayed in a readable string form as a sequence of hexadecimals digits,
+displayed in a readable string form as a sequence of hexadecimal digits,
 separated into groups by hyphens.
 
 The uniqueness property is not strictly guaranteed, however for all practical
@@ -66,6 +66,8 @@ use std::rand::Rng;
 use std::cmp::Eq;
 use std::cast::{transmute,transmute_copy};
 
+use serialize::{Encoder, Encodable, Decoder, Decodable};
+
 /// A 128-bit (16 byte) buffer containing the ID
 pub type UuidBytes = [u8, ..16];
 
@@ -87,11 +89,11 @@ pub enum UuidVersion {
 /// The reserved variants of UUIDs
 #[deriving(Eq)]
 pub enum UuidVariant {
-    /// Reserved by the NCS for backward compatability
+    /// Reserved by the NCS for backward compatibility
     VariantNCS,
     /// As described in the RFC4122 Specification (default)
     VariantRFC4122,
-    /// Resreved by Microsoft for backward compatability
+    /// Reserved by Microsoft for backward compatibility
     VariantMicrosoft,
     /// Reserved for future expansion
     VariantFuture,
@@ -173,7 +175,7 @@ impl Uuid {
     pub fn new_v4() -> Uuid {
         let ub = rand::task_rng().gen_vec(16);
         let mut uuid = Uuid{ bytes: [0, .. 16] };
-        vec::bytes::copy_memory(uuid.bytes, ub, 16);
+        vec::bytes::copy_memory(uuid.bytes, ub);
         uuid.set_variant(VariantRFC4122);
         uuid.set_version(Version4Random);
         uuid
@@ -200,7 +202,7 @@ impl Uuid {
         fields.data1 = to_be32(d1 as i32) as u32;
         fields.data2 = to_be16(d2 as i16) as u16;
         fields.data3 = to_be16(d3 as i16) as u16;
-        vec::bytes::copy_memory(fields.data4, d4, 8);
+        vec::bytes::copy_memory(fields.data4, d4);
 
         unsafe {
             transmute(fields)
@@ -217,9 +219,7 @@ impl Uuid {
         }
 
         let mut uuid = Uuid{ bytes: [0, .. 16] };
-        unsafe {
-            vec::raw::copy_memory(uuid.bytes, b, 16);
-        }
+        vec::bytes::copy_memory(uuid.bytes, b);
         Some(uuid)
     }
 
@@ -308,10 +308,10 @@ impl Uuid {
             s[i*2+0] = digit[0];
             s[i*2+1] = digit[1];
         }
-        str::from_utf8(s)
+        str::from_utf8_owned(s)
     }
 
-    /// Returns a string of hexadecimal digits, separated into groups with a hypen
+    /// Returns a string of hexadecimal digits, separated into groups with a hyphen.
     ///
     /// Example: `550e8400-e29b-41d4-a716-446655440000`
     pub fn to_hyphenated_str(&self) -> ~str {
@@ -364,7 +364,7 @@ impl Uuid {
         }
 
         // Make sure all chars are either hex digits or hyphen
-        for (i, c) in us.iter().enumerate() {
+        for (i, c) in us.chars().enumerate() {
             match c {
                 '0'..'9' | 'A'..'F' | 'a'..'f' | '-' => {},
                 _ => return Err(ErrorInvalidCharacter(c, i)),
@@ -372,7 +372,7 @@ impl Uuid {
         }
 
         // Split string up by hyphens into groups
-        let hex_groups: ~[&str] = us.split_str_iter("-").collect();
+        let hex_groups: ~[&str] = us.split_str("-").collect();
 
         // Get the length of each group
         let group_lens: ~[uint] = hex_groups.iter().map(|&v| v.len()).collect();
@@ -405,7 +405,7 @@ impl Uuid {
 
         // At this point, we know we have a valid hex string, without hyphens
         assert!(vs.len() == 32);
-        assert!(vs.iter().all(|c| c.is_digit_radix(16)));
+        assert!(vs.chars().all(|c| c.is_digit_radix(16)));
 
         // Allocate output UUID buffer
         let mut ub = [0u8, ..16];
@@ -440,11 +440,7 @@ impl Zero for Uuid {
 
 impl Clone for Uuid {
     /// Returns a copy of the UUID
-    fn clone(&self) -> Uuid {
-        let mut clone = Uuid{ bytes: [0, .. 16] };
-        vec::bytes::copy_memory(clone.bytes, self.bytes, 16);
-        clone
-    }
+    fn clone(&self) -> Uuid { *self }
 }
 
 impl FromStr for Uuid {
@@ -486,13 +482,28 @@ impl TotalEq for Uuid {
     }
 }
 
+// FIXME #9845: Test these more thoroughly
+impl<T: Encoder> Encodable<T> for Uuid {
+    /// Encode a UUID as a hypenated string
+    fn encode(&self, e: &mut T) {
+        e.emit_str(self.to_hyphenated_str());
+    }
+}
+
+impl<T: Decoder> Decodable<T> for Uuid {
+    /// Decode a UUID from a string
+    fn decode(d: &mut T) -> Uuid {
+        from_str(d.read_str()).unwrap()
+    }
+}
+
 /// Generates a random instance of UUID (V4 conformant)
 impl rand::Rand for Uuid {
     #[inline]
     fn rand<R: rand::Rng>(rng: &mut R) -> Uuid {
         let ub = rng.gen_vec(16);
         let mut uuid = Uuid{ bytes: [0, .. 16] };
-        vec::bytes::copy_memory(uuid.bytes, ub, 16);
+        vec::bytes::copy_memory(uuid.bytes, ub);
         uuid.set_variant(VariantRFC4122);
         uuid.set_version(Version4Random);
         uuid
@@ -505,6 +516,8 @@ mod test {
     use std::str;
     use std::rand;
     use std::num::Zero;
+    use std::io::Decorator;
+    use std::io::mem::MemWriter;
 
     #[test]
     fn test_new_nil() {
@@ -631,7 +644,7 @@ mod test {
         let s = uuid1.to_simple_str();
 
         assert!(s.len() == 32);
-        assert!(s.iter().all(|c| c.is_digit_radix(16)));
+        assert!(s.chars().all(|c| c.is_digit_radix(16)));
     }
 
     #[test]
@@ -640,7 +653,7 @@ mod test {
         let s = uuid1.to_str();
 
         assert!(s.len() == 32);
-        assert!(s.iter().all(|c| c.is_digit_radix(16)));
+        assert!(s.chars().all(|c| c.is_digit_radix(16)));
     }
 
     #[test]
@@ -649,7 +662,7 @@ mod test {
         let s = uuid1.to_hyphenated_str();
 
         assert!(s.len() == 36);
-        assert!(s.iter().all(|c| c.is_digit_radix(16) || c == '-'));
+        assert!(s.chars().all(|c| c.is_digit_radix(16) || c == '-'));
     }
 
     #[test]
@@ -660,7 +673,7 @@ mod test {
 
         assert!(ss.starts_with("urn:uuid:"));
         assert!(s.len() == 36);
-        assert!(s.iter().all(|c| c.is_digit_radix(16) || c == '-'));
+        assert!(s.chars().all(|c| c.is_digit_radix(16) || c == '-'));
     }
 
     #[test]
@@ -670,7 +683,7 @@ mod test {
         let hs = uuid1.to_hyphenated_str();
         let ss = uuid1.to_str();
 
-        let hsn = str::from_chars(hs.iter().filter(|&c| c != '-').collect::<~[char]>());
+        let hsn = str::from_chars(hs.chars().filter(|&c| c != '-').collect::<~[char]>());
 
         assert!(hsn == ss);
     }
@@ -770,6 +783,19 @@ mod test {
         assert!(ub.len() == 16);
         assert!(! ub.iter().all(|&b| b == 0));
     }
+
+    #[test]
+    fn test_serialize_round_trip() {
+        use ebml;
+        use serialize::{Encodable, Decodable};
+
+        let u = Uuid::new_v4();
+        let wr = @mut MemWriter::new();
+        u.encode(&mut ebml::writer::Encoder(wr));
+        let doc = ebml::reader::Doc(wr.inner_ref().as_slice());
+        let u2 = Decodable::decode(&mut ebml::reader::Decoder(doc));
+        assert_eq!(u, u2);
+    }
 }
 
 #[cfg(test)]
@@ -779,24 +805,24 @@ mod bench {
 
     #[bench]
     pub fn create_uuids(bh: &mut BenchHarness) {
-        do bh.iter {
+        bh.iter(|| {
             Uuid::new_v4();
-        }
+        })
     }
 
     #[bench]
     pub fn uuid_to_str(bh: &mut BenchHarness) {
         let u = Uuid::new_v4();
-        do bh.iter {
+        bh.iter(|| {
             u.to_str();
-        }
+        })
     }
 
     #[bench]
     pub fn parse_str(bh: &mut BenchHarness) {
         let s = "urn:uuid:F9168C5E-CEB2-4faa-B6BF-329BF39FA1E4";
-        do bh.iter {
+        bh.iter(|| {
             Uuid::parse_string(s);
-        }
+        })
     }
 }

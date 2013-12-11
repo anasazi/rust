@@ -33,7 +33,7 @@ impl Visitor<bool> for CheckCrateVisitor {
     fn visit_item(&mut self, i:@item, env:bool) {
         check_item(self, self.sess, self.ast_map, self.def_map, i, env);
     }
-    fn visit_pat(&mut self, p:@Pat, env:bool) {
+    fn visit_pat(&mut self, p:&Pat, env:bool) {
         check_pat(self, p, env);
     }
     fn visit_expr(&mut self, ex:@Expr, env:bool) {
@@ -81,14 +81,14 @@ pub fn check_item(v: &mut CheckCrateVisitor,
     }
 }
 
-pub fn check_pat(v: &mut CheckCrateVisitor, p: @Pat, _is_const: bool) {
+pub fn check_pat(v: &mut CheckCrateVisitor, p: &Pat, _is_const: bool) {
     fn is_str(e: @Expr) -> bool {
         match e.node {
             ExprVstore(
                 @Expr { node: ExprLit(@codemap::Spanned {
-                    node: lit_str(*),
-                    _}),
-                       _ },
+                    node: lit_str(..),
+                    ..}),
+                       .. },
                 ExprVstoreUniq
             ) => true,
             _ => false
@@ -117,11 +117,11 @@ pub fn check_expr(v: &mut CheckCrateVisitor,
           ExprUnary(_, UnDeref, _) => { }
           ExprUnary(_, UnBox(_), _) | ExprUnary(_, UnUniq, _) => {
             sess.span_err(e.span,
-                          "disallowed operator in constant expression");
+                          "cannot do allocations in constant expressions");
             return;
           }
-          ExprLit(@codemap::Spanned {node: lit_str(*), _}) => { }
-          ExprBinary(*) | ExprUnary(*) => {
+          ExprLit(@codemap::Spanned {node: lit_str(..), ..}) => { }
+          ExprBinary(..) | ExprUnary(..) => {
             if method_map.contains_key(&e.id) {
                 sess.span_err(e.span, "user-defined operators are not \
                                        allowed in constant expressions");
@@ -147,13 +147,13 @@ pub fn check_expr(v: &mut CheckCrateVisitor,
                              items without type parameters");
             }
             match def_map.find(&e.id) {
-              Some(&DefStatic(*)) |
+              Some(&DefStatic(..)) |
               Some(&DefFn(_, _)) |
               Some(&DefVariant(_, _, _)) |
               Some(&DefStruct(_)) => { }
 
               Some(&def) => {
-                debug2!("(checking const) found bad def: {:?}", def);
+                debug!("(checking const) found bad def: {:?}", def);
                 sess.span_err(
                     e.span,
                     "paths in constants may only refer to \
@@ -166,8 +166,8 @@ pub fn check_expr(v: &mut CheckCrateVisitor,
           }
           ExprCall(callee, _, NoSugar) => {
             match def_map.find(&callee.id) {
-                Some(&DefStruct(*)) => {}    // OK.
-                Some(&DefVariant(*)) => {}    // OK.
+                Some(&DefStruct(..)) => {}    // OK.
+                Some(&DefVariant(..)) => {}    // OK.
                 _ => {
                     sess.span_err(
                         e.span,
@@ -181,38 +181,29 @@ pub fn check_expr(v: &mut CheckCrateVisitor,
           ExprVstore(_, ExprVstoreSlice) |
           ExprVec(_, MutImmutable) |
           ExprAddrOf(MutImmutable, _) |
-          ExprField(*) |
-          ExprIndex(*) |
-          ExprTup(*) |
-          ExprRepeat(*) |
-          ExprStruct(*) => { }
-          ExprAddrOf(*) => {
+          ExprField(..) |
+          ExprIndex(..) |
+          ExprTup(..) |
+          ExprRepeat(..) |
+          ExprStruct(..) => { }
+          ExprAddrOf(..) => {
                 sess.span_err(
                     e.span,
                     "borrowed pointers in constants may only refer to \
                      immutable values");
-          }
+          },
+          ExprVstore(_, ExprVstoreUniq) |
+          ExprVstore(_, ExprVstoreBox) |
+          ExprVstore(_, ExprVstoreMutBox) => {
+              sess.span_err(e.span, "cannot allocate vectors in constant expressions")
+          },
+
           _ => {
             sess.span_err(e.span,
                           "constant contains unimplemented expression type");
             return;
           }
         }
-    }
-    match e.node {
-        ExprLit(@codemap::Spanned {node: lit_int(v, t), _}) => {
-            if (v as u64) > ast_util::int_ty_max(
-                if t == ty_i { sess.targ_cfg.int_type } else { t }) {
-                sess.span_err(e.span, "literal out of range for its type");
-            }
-        }
-        ExprLit(@codemap::Spanned {node: lit_uint(v, t), _}) => {
-            if v > ast_util::uint_ty_max(
-                if t == ty_u { sess.targ_cfg.uint_type } else { t }) {
-                sess.span_err(e.span, "literal out of range for its type");
-            }
-        }
-        _ => ()
     }
     visit::walk_expr(v, e, is_const);
 }
@@ -260,13 +251,13 @@ impl Visitor<()> for CheckItemRecursionVisitor {
 
     fn visit_expr(&mut self, e: @Expr, _: ()) {
         match e.node {
-            ExprPath(*) => match self.env.def_map.find(&e.id) {
+            ExprPath(..) => match self.env.def_map.find(&e.id) {
                 Some(&DefStatic(def_id, _)) if ast_util::is_local(def_id) =>
                     match self.env.ast_map.get_copy(&def_id.node) {
                         ast_map::node_item(it, _) => {
                             self.visit_item(it, ());
                         }
-                        _ => fail2!("const not bound to an item")
+                        _ => fail!("const not bound to an item")
                     },
                 _ => ()
             },

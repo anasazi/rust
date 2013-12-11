@@ -9,6 +9,7 @@
 // except according to those terms.
 
 // xfail-win32
+// xfail-android: FIXME(#10381)
 
 // compile-flags:-Z extra-debug-info
 // debugger:rbreak zzz
@@ -115,7 +116,7 @@ fn main() {
 
     match Struct { x: 239, y: 240 } {
         // ignored field
-        Struct { x: shadowed, _ } => {
+        Struct { x: shadowed, .. } => {
 
             zzz();
             sentinel();

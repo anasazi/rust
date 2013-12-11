@@ -14,8 +14,8 @@
 
 
 use std::{vec, str};
-use std::io::Reader;
 use std::hashmap::HashMap;
+use std::io;
 use super::super::TermInfo;
 
 // These are the orders ncurses uses in its compiled format (as of 5.9). Not sure if portable.
@@ -160,7 +160,8 @@ pub static stringnames: &'static[&'static str] = &'static[ "cbt", "_", "cr", "cs
     "box1"];
 
 /// Parse a compiled terminfo entry, using long capability names if `longnames` is true
-pub fn parse(file: @Reader, longnames: bool) -> Result<~TermInfo, ~str> {
+pub fn parse(file: &mut io::Reader,
+             longnames: bool) -> Result<~TermInfo, ~str> {
     let bnames;
     let snames;
     let nnames;
@@ -190,55 +191,57 @@ pub fn parse(file: @Reader, longnames: bool) -> Result<~TermInfo, ~str> {
 
     assert!(names_bytes          > 0);
 
-    debug2!("names_bytes = {}", names_bytes);
-    debug2!("bools_bytes = {}", bools_bytes);
-    debug2!("numbers_count = {}", numbers_count);
-    debug2!("string_offsets_count = {}", string_offsets_count);
-    debug2!("string_table_bytes = {}", string_table_bytes);
+    debug!("names_bytes = {}", names_bytes);
+    debug!("bools_bytes = {}", bools_bytes);
+    debug!("numbers_count = {}", numbers_count);
+    debug!("string_offsets_count = {}", string_offsets_count);
+    debug!("string_table_bytes = {}", string_table_bytes);
 
     if (bools_bytes as uint) > boolnames.len() {
-        error2!("expected bools_bytes to be less than {} but found {}", boolnames.len(),
+        error!("expected bools_bytes to be less than {} but found {}", boolnames.len(),
                bools_bytes);
         return Err(~"incompatible file: more booleans than expected");
     }
 
     if (numbers_count as uint) > numnames.len() {
-        error2!("expected numbers_count to be less than {} but found {}", numnames.len(),
+        error!("expected numbers_count to be less than {} but found {}", numnames.len(),
                numbers_count);
         return Err(~"incompatible file: more numbers than expected");
     }
 
     if (string_offsets_count as uint) > stringnames.len() {
-        error2!("expected string_offsets_count to be less than {} but found {}", stringnames.len(),
+        error!("expected string_offsets_count to be less than {} but found {}", stringnames.len(),
                string_offsets_count);
         return Err(~"incompatible file: more string offsets than expected");
     }
 
-    let names_str = str::from_utf8(file.read_bytes(names_bytes as uint - 1)); // don't read NUL
-    let term_names: ~[~str] = names_str.split_iter('|').map(|s| s.to_owned()).collect();
+    // don't read NUL
+    let names_str = str::from_utf8_owned(file.read_bytes(names_bytes as uint - 1));
+
+    let term_names: ~[~str] = names_str.split('|').map(|s| s.to_owned()).collect();
 
     file.read_byte(); // consume NUL
 
-    debug2!("term names: {:?}", term_names);
+    debug!("term names: {:?}", term_names);
 
     let mut bools_map = HashMap::new();
     if bools_bytes != 0 {
         for i in range(0, bools_bytes) {
-            let b = file.read_byte();
+            let b = file.read_byte().unwrap();
             if b < 0 {
-                error2!("EOF reading bools after {} entries", i);
+                error!("EOF reading bools after {} entries", i);
                 return Err(~"error: expected more bools but hit EOF");
             } else if b == 1 {
-                debug2!("{} set", bnames[i]);
+                debug!("{} set", bnames[i]);
                 bools_map.insert(bnames[i].to_owned(), true);
             }
         }
     }
 
-    debug2!("bools: {:?}", bools_map);
+    debug!("bools: {:?}", bools_map);
 
     if (bools_bytes + names_bytes) % 2 == 1 {
-        debug2!("adjusting for padding between bools and numbers");
+        debug!("adjusting for padding between bools and numbers");
         file.read_byte(); // compensate for padding
     }
 
@@ -247,13 +250,13 @@ pub fn parse(file: @Reader, longnames: bool) -> Result<~TermInfo, ~str> {
         for i in range(0, numbers_count) {
             let n = file.read_le_u16();
             if n != 0xFFFF {
-                debug2!("{}\\#{}", nnames[i], n);
+                debug!("{}\\#{}", nnames[i], n);
                 numbers_map.insert(nnames[i].to_owned(), n);
             }
         }
     }
 
-    debug2!("numbers: {:?}", numbers_map);
+    debug!("numbers: {:?}", numbers_map);
 
     let mut string_map = HashMap::new();
 
@@ -263,12 +266,12 @@ pub fn parse(file: @Reader, longnames: bool) -> Result<~TermInfo, ~str> {
             string_offsets.push(file.read_le_u16());
         }
 
-        debug2!("offsets: {:?}", string_offsets);
+        debug!("offsets: {:?}", string_offsets);
 
         let string_table = file.read_bytes(string_table_bytes as uint);
 
         if string_table.len() != string_table_bytes as uint {
-            error2!("EOF reading string table after {} bytes, wanted {}", string_table.len(),
+            error!("EOF reading string table after {} bytes, wanted {}", string_table.len(),
                    string_table_bytes);
             return Err(~"error: hit EOF before end of string table");
         }
@@ -313,6 +316,21 @@ pub fn parse(file: @Reader, longnames: bool) -> Result<~TermInfo, ~str> {
     Ok(~TermInfo {names: term_names, bools: bools_map, numbers: numbers_map, strings: string_map })
 }
 
+/// Create a dummy TermInfo struct for msys terminals
+pub fn msys_terminfo() -> ~TermInfo {
+    let mut strings = HashMap::new();
+    strings.insert(~"sgr0", bytes!("\x1b[0m").to_owned());
+    strings.insert(~"bold", bytes!("\x1b[1m;").to_owned());
+    strings.insert(~"setaf", bytes!("\x1b[3%p1%dm").to_owned());
+    strings.insert(~"setab", bytes!("\x1b[4%p1%dm").to_owned());
+    ~TermInfo {
+        names: ~[~"cygwin"], // msys is a fork of an older cygwin version
+        bools: HashMap::new(),
+        numbers: HashMap::new(),
+        strings: strings
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -328,6 +346,6 @@ mod test {
     #[ignore(reason = "no ncurses on buildbots, needs a bundled terminfo file to test against")]
     fn test_parse() {
         // FIXME #6870: Distribute a compiled file in src/tests and test there
-        // parse(io::file_reader(&p("/usr/share/terminfo/r/rxvt-256color")).unwrap(), false);
+        // parse(io::fs_reader(&p("/usr/share/terminfo/r/rxvt-256color")).unwrap(), false);
     }
 }

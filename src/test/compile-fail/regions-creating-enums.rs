@@ -8,9 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-enum ast<'self> {
+enum ast<'a> {
     num(uint),
-    add(&'self ast<'self>, &'self ast<'self>)
+    add(&'a ast<'a>, &'a ast<'a>)
 }
 
 fn build() {
@@ -27,7 +27,7 @@ fn compute(x: &ast) -> uint {
     }
 }
 
-fn map_nums(x: &ast, f: &fn(uint) -> uint) -> &ast {
+fn map_nums(x: &ast, f: |uint| -> uint) -> &ast {
     match *x {
       num(x) => {
         return &num(f(x)); //~ ERROR borrowed value does not live long enough

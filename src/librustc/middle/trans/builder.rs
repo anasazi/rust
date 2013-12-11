@@ -20,7 +20,6 @@ use middle::trans::type_::Type;
 use std::cast;
 use std::hashmap::HashMap;
 use std::libc::{c_uint, c_ulonglong, c_char};
-use std::vec;
 use syntax::codemap::Span;
 use std::ptr::is_not_null;
 
@@ -51,7 +50,7 @@ impl Builder {
             self.ccx.stats.n_llvm_insns += 1;
         }
         if self.ccx.sess.count_llvm_insns() {
-            do base::with_insn_ctxt |v| {
+            base::with_insn_ctxt(|v| {
                 let h = &mut self.ccx.stats.llvm_insns;
 
                 // Build version of path with cycles removed.
@@ -85,7 +84,7 @@ impl Builder {
                     _ => 0u
                 };
                 h.insert(s, n+1u);
-            }
+            })
         }
     }
 
@@ -118,7 +117,7 @@ impl Builder {
     pub fn aggregate_ret(&self, ret_vals: &[ValueRef]) {
         unsafe {
             llvm::LLVMBuildAggregateRet(self.llbuilder,
-                                        vec::raw::to_ptr(ret_vals),
+                                        ret_vals.as_ptr(),
                                         ret_vals.len() as c_uint);
         }
     }
@@ -161,7 +160,7 @@ impl Builder {
         unsafe {
             let v = llvm::LLVMBuildInvoke(self.llbuilder,
                                           llfn,
-                                          vec::raw::to_ptr(args),
+                                          args.as_ptr(),
                                           args.len() as c_uint,
                                           then,
                                           catch,
@@ -419,9 +418,9 @@ impl Builder {
             if name.is_empty() {
                 llvm::LLVMBuildAlloca(self.llbuilder, ty.to_ref(), noname())
             } else {
-                do name.with_c_str |c| {
+                name.with_c_str(|c| {
                     llvm::LLVMBuildAlloca(self.llbuilder, ty.to_ref(), c)
-                }
+                })
             }
         }
     }
@@ -465,18 +464,18 @@ impl Builder {
             let min = llvm::LLVMConstInt(t, lo, signed);
             let max = llvm::LLVMConstInt(t, hi, signed);
 
-            do [min, max].as_imm_buf |ptr, len| {
-                llvm::LLVMSetMetadata(value, lib::llvm::MD_range as c_uint,
-                                      llvm::LLVMMDNodeInContext(self.ccx.llcx,
-                                                                ptr, len as c_uint));
-            }
+            let v = [min, max];
+
+            llvm::LLVMSetMetadata(value, lib::llvm::MD_range as c_uint,
+                                  llvm::LLVMMDNodeInContext(self.ccx.llcx,
+                                                            v.as_ptr(), v.len() as c_uint));
         }
 
         value
     }
 
     pub fn store(&self, val: ValueRef, ptr: ValueRef) {
-        debug2!("Store {} -> {}",
+        debug!("Store {} -> {}",
                self.ccx.tn.val_to_str(val),
                self.ccx.tn.val_to_str(ptr));
         assert!(is_not_null(self.llbuilder));
@@ -487,7 +486,7 @@ impl Builder {
     }
 
     pub fn atomic_store(&self, val: ValueRef, ptr: ValueRef, order: AtomicOrdering) {
-        debug2!("Store {} -> {}",
+        debug!("Store {} -> {}",
                self.ccx.tn.val_to_str(val),
                self.ccx.tn.val_to_str(ptr));
         self.count_insn("store.atomic");
@@ -500,7 +499,7 @@ impl Builder {
     pub fn gep(&self, ptr: ValueRef, indices: &[ValueRef]) -> ValueRef {
         self.count_insn("gep");
         unsafe {
-            llvm::LLVMBuildGEP(self.llbuilder, ptr, vec::raw::to_ptr(indices),
+            llvm::LLVMBuildGEP(self.llbuilder, ptr, indices.as_ptr(),
                                indices.len() as c_uint, noname())
         }
     }
@@ -518,7 +517,7 @@ impl Builder {
             }
             self.inbounds_gep(base, small_vec.slice(0, ixs.len()))
         } else {
-            let v = do ixs.iter().map |i| { C_i32(*i as i32) }.collect::<~[ValueRef]>();
+            let v = ixs.iter().map(|i| C_i32(*i as i32)).collect::<~[ValueRef]>();
             self.count_insn("gepi");
             self.inbounds_gep(base, v)
         }
@@ -528,7 +527,7 @@ impl Builder {
         self.count_insn("inboundsgep");
         unsafe {
             llvm::LLVMBuildInBoundsGEP(
-                self.llbuilder, ptr, vec::raw::to_ptr(indices), indices.len() as c_uint, noname())
+                self.llbuilder, ptr, indices.as_ptr(), indices.len() as c_uint, noname())
         }
     }
 
@@ -716,8 +715,8 @@ impl Builder {
         let phi = self.empty_phi(ty);
         self.count_insn("addincoming");
         unsafe {
-            llvm::LLVMAddIncoming(phi, vec::raw::to_ptr(vals),
-                                  vec::raw::to_ptr(bbs),
+            llvm::LLVMAddIncoming(phi, vals.as_ptr(),
+                                  bbs.as_ptr(),
                                   vals.len() as c_uint);
             phi
         }
@@ -726,7 +725,7 @@ impl Builder {
     pub fn add_span_comment(&self, sp: Span, text: &str) {
         if self.ccx.sess.asm_comments() {
             let s = format!("{} ({})", text, self.ccx.sess.codemap.span_to_str(sp));
-            debug2!("{}", s);
+            debug!("{}", s);
             self.add_comment(s);
         }
     }
@@ -736,12 +735,12 @@ impl Builder {
             let sanitized = text.replace("$", "");
             let comment_text = format!("\\# {}", sanitized.replace("\n", "\n\t# "));
             self.count_insn("inlineasm");
-            let asm = do comment_text.with_c_str |c| {
+            let asm = comment_text.with_c_str(|c| {
                 unsafe {
                     llvm::LLVMConstInlineAsm(Type::func([], &Type::void()).to_ref(),
                                              c, noname(), False, False)
                 }
-            };
+            });
             self.call(asm, [], []);
         }
     }
@@ -757,12 +756,12 @@ impl Builder {
         let alignstack = if alignstack { lib::llvm::True }
                          else          { lib::llvm::False };
 
-        let argtys = do inputs.map |v| {
-            debug2!("Asm Input Type: {:?}", self.ccx.tn.val_to_str(*v));
+        let argtys = inputs.map(|v| {
+            debug!("Asm Input Type: {:?}", self.ccx.tn.val_to_str(*v));
             val_ty(*v)
-        };
+        });
 
-        debug2!("Asm Output Type: {:?}", self.ccx.tn.type_to_str(output));
+        debug!("Asm Output Type: {:?}", self.ccx.tn.type_to_str(output));
         let fty = Type::func(argtys, &output);
         unsafe {
             let v = llvm::LLVMInlineAsm(
@@ -775,7 +774,7 @@ impl Builder {
                 attributes: &[(uint, lib::llvm::Attribute)]) -> ValueRef {
         self.count_insn("call");
         unsafe {
-            let v = llvm::LLVMBuildCall(self.llbuilder, llfn, vec::raw::to_ptr(args),
+            let v = llvm::LLVMBuildCall(self.llbuilder, llfn, args.as_ptr(),
                                         args.len() as c_uint, noname());
             for &(idx, attr) in attributes.iter() {
                 llvm::LLVMAddInstrAttribute(v, idx as c_uint, attr as c_uint);
@@ -878,14 +877,14 @@ impl Builder {
             let BB: BasicBlockRef = llvm::LLVMGetInsertBlock(self.llbuilder);
             let FN: ValueRef = llvm::LLVMGetBasicBlockParent(BB);
             let M: ModuleRef = llvm::LLVMGetGlobalParent(FN);
-            let T: ValueRef = do "llvm.trap".with_c_str |buf| {
+            let T: ValueRef = "llvm.trap".with_c_str(|buf| {
                 llvm::LLVMGetNamedFunction(M, buf)
-            };
+            });
             assert!((T as int != 0));
             let args: &[ValueRef] = [];
             self.count_insn("trap");
             llvm::LLVMBuildCall(
-                self.llbuilder, T, vec::raw::to_ptr(args), args.len() as c_uint, noname());
+                self.llbuilder, T, args.as_ptr(), args.len() as c_uint, noname());
         }
     }
 

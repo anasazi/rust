@@ -1,4 +1,3 @@
-// -*- rust -*-
 // Copyright 2012 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
@@ -15,8 +14,8 @@ use std::task;
 
 pub fn main() {
     let mut i = 10;
-    while i > 0 { task::spawn({let i = i; || child(i)}); i = i - 1; }
-    info2!("main thread exiting");
+    while i > 0 { task::spawn({let i = i; proc() child(i)}); i = i - 1; }
+    info!("main thread exiting");
 }
 
-fn child(x: int) { info2!("{}", x); }
+fn child(x: int) { info!("{}", x); }

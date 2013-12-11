@@ -10,25 +10,17 @@
 
 // Useful conditions
 
-pub use std::path::Path;
 pub use package_id::PkgId;
-pub use std::libc;
-pub use std::libc::stat;
+pub use std::io::FileStat;
+pub use std::io::process::ProcessExit;
+pub use std::path::Path;
 
 condition! {
     pub bad_path: (Path, ~str) -> Path;
 }
 
 condition! {
-    pub bad_stat: (Path, ~str) -> stat;
-}
-
-condition! {
     pub nonexistent_package: (PkgId, ~str) -> Path;
-}
-
-condition! {
-    pub copy_failed: (Path, Path) -> ();
 }
 
 condition! {
@@ -40,17 +32,15 @@ condition! {
 }
 
 condition! {
-    pub no_rust_path: (~str) -> Path;
-}
-
-condition! {
-    pub not_a_workspace: (~str) -> Path;
-}
-
-condition! {
     pub failed_to_create_temp_dir: (~str) -> Path;
 }
 
 condition! {
     pub git_checkout_failed: (~str, Path) -> ();
+}
+
+condition! {
+    // str is output of applying the command (first component)
+    // to the args (second component)
+    pub command_failed: (~str, ~[~str], ProcessExit) -> ~str;
 }

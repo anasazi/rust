@@ -13,13 +13,13 @@
 #[allow(missing_doc)];
 
 
-use std::io;
+use std::io::{Decorator, Writer};
 
-#[cfg(not(target_os = "win32"))] use std::os;
-#[cfg(not(target_os = "win32"))] use terminfo::*;
-#[cfg(not(target_os = "win32"))] use terminfo::searcher::open;
-#[cfg(not(target_os = "win32"))] use terminfo::parser::compiled::parse;
-#[cfg(not(target_os = "win32"))] use terminfo::parm::{expand, Number, Variables};
+use std::os;
+use terminfo::*;
+use terminfo::searcher::open;
+use terminfo::parser::compiled::{parse, msys_terminfo};
+use terminfo::parm::{expand, Number, Variables};
 
 // FIXME (#2807): Windows support.
 
@@ -74,7 +74,6 @@ pub mod attr {
     }
 }
 
-#[cfg(not(target_os = "win32"))]
 fn cap_for_attr(attr: attr::Attr) -> &'static str {
     match attr {
         attr::Bold               => "bold",
@@ -93,29 +92,24 @@ fn cap_for_attr(attr: attr::Attr) -> &'static str {
     }
 }
 
-#[cfg(not(target_os = "win32"))]
-pub struct Terminal {
-    num_colors: u16,
-    priv out: @io::Writer,
+pub struct Terminal<T> {
+    priv num_colors: u16,
+    priv out: T,
     priv ti: ~TermInfo
 }
 
-#[cfg(target_os = "win32")]
-pub struct Terminal {
-    num_colors: u16,
-    priv out: @io::Writer,
-}
+impl<T: Writer> Terminal<T> {
+    pub fn new(out: T) -> Result<Terminal<T>, ~str> {
+        let term = match os::getenv("TERM") {
+            Some(t) => t,
+            None => return Err(~"TERM environment variable undefined")
+        };
 
-#[cfg(not(target_os = "win32"))]
-impl Terminal {
-    pub fn new(out: @io::Writer) -> Result<Terminal, ~str> {
-        let term = os::getenv("TERM");
-        if term.is_none() {
-            return Err(~"TERM environment variable undefined");
-        }
-
-        let entry = open(term.unwrap());
+        let entry = open(term);
         if entry.is_err() {
+            if "cygwin" == term { // msys terminal
+                return Ok(Terminal {out: out, ti: msys_terminfo(), num_colors: 8});
+            }
             return Err(entry.unwrap_err());
         }
 
@@ -138,7 +132,7 @@ impl Terminal {
     /// the corresponding normal color will be used instead.
     ///
     /// Returns true if the color was set, false otherwise.
-    pub fn fg(&self, color: color::Color) -> bool {
+    pub fn fg(&mut self, color: color::Color) -> bool {
         let color = self.dim_if_necessary(color);
         if self.num_colors > color {
             let s = expand(*self.ti.strings.find_equiv(&("setaf")).unwrap(),
@@ -147,7 +141,7 @@ impl Terminal {
                 self.out.write(s.unwrap());
                 return true
             } else {
-                warn2!("{}", s.unwrap_err());
+                warn!("{}", s.unwrap_err());
             }
         }
         false
@@ -158,7 +152,7 @@ impl Terminal {
     /// the corresponding normal color will be used instead.
     ///
     /// Returns true if the color was set, false otherwise.
-    pub fn bg(&self, color: color::Color) -> bool {
+    pub fn bg(&mut self, color: color::Color) -> bool {
         let color = self.dim_if_necessary(color);
         if self.num_colors > color {
             let s = expand(*self.ti.strings.find_equiv(&("setab")).unwrap(),
@@ -167,7 +161,7 @@ impl Terminal {
                 self.out.write(s.unwrap());
                 return true
             } else {
-                warn2!("{}", s.unwrap_err());
+                warn!("{}", s.unwrap_err());
             }
         }
         false
@@ -175,7 +169,7 @@ impl Terminal {
 
     /// Sets the given terminal attribute, if supported.
     /// Returns true if the attribute was supported, false otherwise.
-    pub fn attr(&self, attr: attr::Attr) -> bool {
+    pub fn attr(&mut self, attr: attr::Attr) -> bool {
         match attr {
             attr::ForegroundColor(c) => self.fg(c),
             attr::BackgroundColor(c) => self.bg(c),
@@ -188,7 +182,7 @@ impl Terminal {
                         self.out.write(s.unwrap());
                         return true
                     } else {
-                        warn2!("{}", s.unwrap_err());
+                        warn!("{}", s.unwrap_err());
                     }
                 }
                 false
@@ -210,7 +204,7 @@ impl Terminal {
     }
 
     /// Resets all terminal attributes and color to the default.
-    pub fn reset(&self) {
+    pub fn reset(&mut self) {
         let mut cap = self.ti.strings.find_equiv(&("sgr0"));
         if cap.is_none() {
             // are there any terminals that have color/attrs and not sgr0?
@@ -220,17 +214,17 @@ impl Terminal {
                 cap = self.ti.strings.find_equiv(&("op"));
             }
         }
-        let s = do cap.map_default(Err(~"can't find terminfo capability `sgr0`")) |op| {
+        let s = cap.map_default(Err(~"can't find terminfo capability `sgr0`"), |op| {
             expand(*op, [], &mut Variables::new())
-        };
+        });
         if s.is_ok() {
             self.out.write(s.unwrap());
         } else if self.num_colors > 0 {
-            warn2!("{}", s.unwrap_err());
+            warn!("{}", s.unwrap_err());
         } else {
-            // if we support attributes but not color, it would be nice to still warn2!()
+            // if we support attributes but not color, it would be nice to still warn!()
             // but it's not worth testing all known attributes just for this.
-            debug2!("{}", s.unwrap_err());
+            debug!("{}", s.unwrap_err());
         }
     }
 
@@ -241,28 +235,26 @@ impl Terminal {
     }
 }
 
-#[cfg(target_os = "win32")]
-impl Terminal {
-    pub fn new(out: @io::Writer) -> Result<Terminal, ~str> {
-        return Ok(Terminal {out: out, num_colors: 0});
+impl<T: Writer> Decorator<T> for Terminal<T> {
+    fn inner(self) -> T {
+        self.out
     }
 
-    pub fn fg(&self, _color: color::Color) -> bool {
-        false
+    fn inner_ref<'a>(&'a self) -> &'a T {
+        &self.out
     }
 
-    pub fn bg(&self, _color: color::Color) -> bool {
-        false
+    fn inner_mut_ref<'a>(&'a mut self) -> &'a mut T {
+        &mut self.out
+    }
+}
+
+impl<T: Writer> Writer for Terminal<T> {
+    fn write(&mut self, buf: &[u8]) {
+        self.out.write(buf);
     }
 
-    pub fn attr(&self, _attr: attr::Attr) -> bool {
-        false
-    }
-
-    pub fn supports_attr(&self, _attr: attr::Attr) -> bool {
-        false
-    }
-
-    pub fn reset(&self) {
+    fn flush(&mut self) {
+        self.out.flush();
     }
 }

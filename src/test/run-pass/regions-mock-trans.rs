@@ -10,27 +10,26 @@
 
 use std::cast;
 use std::libc;
-use std::sys;
+use std::mem;
 
 struct arena(());
 
-struct Bcx<'self> {
-    fcx: &'self Fcx<'self>
+struct Bcx<'a> {
+    fcx: &'a Fcx<'a>
 }
 
-struct Fcx<'self> {
-    arena: &'self arena,
-    ccx: &'self Ccx
+struct Fcx<'a> {
+    arena: &'a arena,
+    ccx: &'a Ccx
 }
 
 struct Ccx {
     x: int
 }
 
-#[fixed_stack_segment] #[inline(never)]
 fn alloc<'a>(_bcx : &'a arena) -> &'a Bcx<'a> {
     unsafe {
-        cast::transmute(libc::malloc(sys::size_of::<Bcx<'blk>>()
+        cast::transmute(libc::malloc(mem::size_of::<Bcx<'a>>()
             as libc::size_t))
     }
 }
@@ -39,7 +38,6 @@ fn h<'a>(bcx : &'a Bcx<'a>) -> &'a Bcx<'a> {
     return alloc(bcx.fcx.arena);
 }
 
-#[fixed_stack_segment] #[inline(never)]
 fn g(fcx : &Fcx) {
     let bcx = Bcx { fcx: fcx };
     let bcx2 = h(&bcx);

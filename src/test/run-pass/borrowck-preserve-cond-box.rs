@@ -10,6 +10,8 @@
 
 // exec-env:RUST_POISON_ON_FREE=1
 
+#[feature(managed_boxes)];
+
 fn testfn(cond: bool) {
     let mut x = @3;
     let mut y = @4;
@@ -25,13 +27,13 @@ fn testfn(cond: bool) {
         exp = 4;
     }
 
-    info2!("*r = {}, exp = {}", *r, exp);
+    info!("*r = {}, exp = {}", *r, exp);
     assert_eq!(*r, exp);
 
     x = @5;
     y = @6;
 
-    info2!("*r = {}, exp = {}", *r, exp);
+    info!("*r = {}, exp = {}", *r, exp);
     assert_eq!(*r, exp);
     assert_eq!(x, @5);
     assert_eq!(y, @6);

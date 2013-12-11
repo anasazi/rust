@@ -12,9 +12,9 @@
 
 use clone::Clone;
 use container::Container;
-use iter::Iterator;
+use iter::{Iterator, FromIterator};
 use option::{Option, Some, None};
-use sys;
+use mem;
 use unstable::raw::Repr;
 use vec::{ImmutableVector, OwnedVector};
 
@@ -25,8 +25,8 @@ use vec::{ImmutableVector, OwnedVector};
 #[inline]
 pub fn capacity<T>(v: @[T]) -> uint {
     unsafe {
-        let box = v.repr();
-        (*box).data.alloc / sys::size_of::<T>()
+        let managed_box = v.repr();
+        (*managed_box).data.alloc / mem::size_of::<T>()
     }
 }
 
@@ -43,7 +43,7 @@ pub fn capacity<T>(v: @[T]) -> uint {
  *             onto the vector being constructed.
  */
 #[inline]
-pub fn build<A>(size: Option<uint>, builder: &fn(push: &fn(v: A))) -> @[A] {
+pub fn build<A>(size: Option<uint>, builder: |push: |v: A||) -> @[A] {
     let mut vec = @[];
     unsafe { raw::reserve(&mut vec, size.unwrap_or(4)); }
     builder(|x| unsafe { raw::push(&mut vec, x) });
@@ -56,24 +56,24 @@ pub fn build<A>(size: Option<uint>, builder: &fn(push: &fn(v: A))) -> @[A] {
 /// `lhs`. Afterwards, the `lhs` is then returned for use again.
 #[inline]
 pub fn append<T:Clone>(lhs: @[T], rhs: &[T]) -> @[T] {
-    do build(Some(lhs.len() + rhs.len())) |push| {
+    build(Some(lhs.len() + rhs.len()), |push| {
         for x in lhs.iter() {
             push((*x).clone());
         }
         for elt in rhs.iter() {
             push(elt.clone());
         }
-    }
+    })
 }
 
 
 /// Apply a function to each element of a vector and return the results
-pub fn map<T, U>(v: &[T], f: &fn(x: &T) -> U) -> @[U] {
-    do build(Some(v.len())) |push| {
+pub fn map<T, U>(v: &[T], f: |x: &T| -> U) -> @[U] {
+    build(Some(v.len()), |push| {
         for elem in v.iter() {
             push(f(elem));
         }
-    }
+    })
 }
 
 /**
@@ -82,11 +82,11 @@ pub fn map<T, U>(v: &[T], f: &fn(x: &T) -> U) -> @[U] {
  * Creates an immutable vector of size `n_elts` and initializes the elements
  * to the value returned by the function `op`.
  */
-pub fn from_fn<T>(n_elts: uint, op: &fn(uint) -> T) -> @[T] {
-    do build(Some(n_elts)) |push| {
+pub fn from_fn<T>(n_elts: uint, op: |uint| -> T) -> @[T] {
+    build(Some(n_elts), |push| {
         let mut i: uint = 0u;
         while i < n_elts { push(op(i)); i += 1u; }
-    }
+    })
 }
 
 /**
@@ -96,13 +96,13 @@ pub fn from_fn<T>(n_elts: uint, op: &fn(uint) -> T) -> @[T] {
  * to the value `t`.
  */
 pub fn from_elem<T:Clone>(n_elts: uint, t: T) -> @[T] {
-    do build(Some(n_elts)) |push| {
+    build(Some(n_elts), |push| {
         let mut i: uint = 0u;
         while i < n_elts {
             push(t.clone());
             i += 1u;
         }
-    }
+    })
 }
 
 /**
@@ -134,14 +134,26 @@ impl<T> Clone for @[T] {
     }
 }
 
+impl<A> FromIterator<A> for @[A] {
+    fn from_iterator<T: Iterator<A>>(iterator: &mut T) -> @[A] {
+        let (lower, _) = iterator.size_hint();
+        build(Some(lower), |push| {
+            for x in *iterator {
+                push(x);
+            }
+        })
+    }
+}
+
 #[cfg(not(test))]
+#[allow(missing_doc)]
 pub mod traits {
     use at_vec::append;
     use clone::Clone;
     use ops::Add;
     use vec::Vector;
 
-    impl<'self,T:Clone, V: Vector<T>> Add<V,@[T]> for @[T] {
+    impl<'a,T:Clone, V: Vector<T>> Add<V,@[T]> for @[T] {
         #[inline]
         fn add(&self, rhs: &V) -> @[T] {
             append(*self, rhs.as_slice())
@@ -152,13 +164,14 @@ pub mod traits {
 #[cfg(test)]
 pub mod traits {}
 
+#[allow(missing_doc)]
 pub mod raw {
     use at_vec::capacity;
     use cast;
     use cast::{transmute, transmute_copy};
-    use libc;
+    use option::None;
     use ptr;
-    use sys;
+    use mem;
     use uint;
     use unstable::intrinsics::{move_val_init, TyDesc};
     use unstable::intrinsics;
@@ -174,7 +187,7 @@ pub mod raw {
     #[inline]
     pub unsafe fn set_len<T>(v: &mut @[T], new_len: uint) {
         let repr: *mut Box<Vec<T>> = cast::transmute_copy(v);
-        (*repr).data.fill = new_len * sys::size_of::<T>();
+        (*repr).data.fill = new_len * mem::size_of::<T>();
     }
 
     /**
@@ -197,7 +210,7 @@ pub mod raw {
     unsafe fn push_fast<T>(v: &mut @[T], initval: T) {
         let repr: *mut Box<Vec<T>> = cast::transmute_copy(v);
         let amt = v.len();
-        (*repr).data.fill += sys::size_of::<T>();
+        (*repr).data.fill += mem::size_of::<T>();
         let p = ptr::offset(&(*repr).data.data as *T, amt as int) as *mut T;
         move_val_init(&mut(*p), initval);
     }
@@ -234,9 +247,9 @@ pub mod raw {
         unsafe {
             if n > (**ptr).data.alloc / (*ty).size {
                 let alloc = n * (*ty).size;
-                let total_size = alloc + sys::size_of::<Vec<()>>();
+                let total_size = alloc + mem::size_of::<Vec<()>>();
                 if alloc / (*ty).size != n || total_size < alloc {
-                    fail2!("vector size is too large: {}", n);
+                    fail!("vector size is too large: {}", n);
                 }
                 (*ptr) = local_realloc(*ptr as *(), total_size) as *mut Box<Vec<()>>;
                 (**ptr).data.alloc = alloc;
@@ -247,9 +260,8 @@ pub mod raw {
             use rt::local::Local;
             use rt::task::Task;
 
-            do Local::borrow |task: &mut Task| {
-                task.heap.realloc(ptr as *libc::c_void, size) as *()
-            }
+            let mut task = Local::borrow(None::<Task>);
+            task.get().heap.realloc(ptr as *mut Box<()>, size) as *()
         }
     }
 
@@ -283,11 +295,11 @@ mod test {
     fn test() {
         // Some code that could use that, then:
         fn seq_range(lo: uint, hi: uint) -> @[uint] {
-            do build(None) |push| {
+            build(None, |push| {
                 for i in range(lo, hi) {
                     push(i);
                 }
-            }
+            })
         }
 
         assert_eq!(seq_range(10, 15), @[10, 11, 12, 13, 14]);
@@ -321,80 +333,80 @@ mod test {
     #[bench]
     fn bench_capacity(b: &mut bh) {
         let x = @[1, 2, 3];
-        do b.iter {
-            capacity(x);
-        }
+        b.iter(|| {
+            let _ = capacity(x);
+        });
     }
 
     #[bench]
     fn bench_build_sized(b: &mut bh) {
         let len = 64;
-        do b.iter {
+        b.iter(|| {
             build(Some(len), |push| for i in range(0, 1024) { push(i) });
-        }
+        });
     }
 
     #[bench]
     fn bench_build(b: &mut bh) {
-        do b.iter {
+        b.iter(|| {
             for i in range(0, 95) {
                 build(None, |push| push(i));
             }
-        }
+        });
     }
 
     #[bench]
     fn bench_append(b: &mut bh) {
         let lhs = @[7, ..128];
         let rhs = range(0, 256).to_owned_vec();
-        do b.iter {
-            append(lhs, rhs);
-        }
+        b.iter(|| {
+            let _ = append(lhs, rhs);
+        })
     }
 
     #[bench]
     fn bench_map(b: &mut bh) {
         let elts = range(0, 256).to_owned_vec();
-        do b.iter {
-            map(elts, |x| x*2);
-        }
+        b.iter(|| {
+            let _ = map(elts, |x| x*2);
+        })
     }
 
     #[bench]
     fn bench_from_fn(b: &mut bh) {
-        do b.iter {
-            from_fn(1024, |x| x);
-        }
+        b.iter(|| {
+            let _ = from_fn(1024, |x| x);
+        });
     }
 
     #[bench]
     fn bench_from_elem(b: &mut bh) {
-        do b.iter {
-            from_elem(1024, 0u64);
-        }
+        b.iter(|| {
+            let _ = from_elem(1024, 0u64);
+        });
     }
 
     #[bench]
     fn bench_to_managed_move(b: &mut bh) {
-        do b.iter {
+        b.iter(|| {
             let elts = range(0, 1024).to_owned_vec(); // yikes! can't move out of capture, though
             to_managed_move(elts);
-        }
+        })
     }
 
     #[bench]
     fn bench_to_managed(b: &mut bh) {
         let elts = range(0, 1024).to_owned_vec();
-        do b.iter {
-            to_managed(elts);
-        }
+        b.iter(|| {
+            let _ = to_managed(elts);
+        });
     }
 
     #[bench]
     fn bench_clone(b: &mut bh) {
         let elts = to_managed(range(0, 1024).to_owned_vec());
-        do b.iter {
-            elts.clone();
-        }
+        b.iter(|| {
+            let _ = elts.clone();
+        });
     }
 }

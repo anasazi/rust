@@ -10,10 +10,9 @@
 
 #[feature(globs)];
 #[deny(unused_imports)];
+#[allow(dead_code)];
 
 use cal = bar::c::cc;
-
-use std::io;
 
 use std::either::Right;        //~ ERROR unused import
 
@@ -24,14 +23,22 @@ use std::util::*;              // shouldn't get errors for not using
 use std::option::{Some, None}; //~ ERROR unused import
                                 //~^ ERROR unused import
 
-use std::io::ReaderUtil;       //~ ERROR unused import
+use test::A;       //~ ERROR unused import
 // Be sure that if we just bring some methods into scope that they're also
 // counted as being used.
-use std::io::WriterUtil;
+use test::B;
 
 // Make sure this import is warned about when at least one of its imported names
 // is unused
 use std::vec::{from_fn, from_elem};   //~ ERROR unused import
+
+mod test {
+    pub trait A { fn a(&self) {} }
+    pub trait B { fn b(&self) {} }
+    pub struct C;
+    impl A for C {}
+    impl B for C {}
+}
 
 mod foo {
     pub struct Point{x: int, y: int}
@@ -57,7 +64,7 @@ mod bar {
 fn main() {
     cal(foo::Point{x:3, y:9});
     let a = 3;
-    ignore(a);
-    io::stdout().write_str("a");
+    id(a);
+    test::C.b();
     let _a = from_elem(0, 0);
 }

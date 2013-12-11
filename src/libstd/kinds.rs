@@ -37,3 +37,12 @@ pub trait Freeze {
 pub trait Sized {
     // Empty.
 }
+
+/// Types that can be copied by simply copying bits (i.e. `memcpy`).
+///
+/// The name "POD" stands for "Plain Old Data" and is borrowed from C++.
+#[lang="pod"]
+pub trait Pod {
+    // Empty.
+}
+

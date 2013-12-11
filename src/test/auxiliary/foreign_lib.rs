@@ -8,11 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[crate_id="foreign_lib"];
+// NOTE: remove after the next snapshot
 #[link(name="foreign_lib", vers="0.0")];
 
 pub mod rustrt {
     use std::libc;
 
+    #[link(name = "rustrt")]
     extern {
         fn rust_get_test_int() -> libc::intptr_t;
     }

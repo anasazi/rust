@@ -14,8 +14,8 @@ LLVM_DEPS := $(S)/.gitmodules
 else
 
 # This is just a rough approximation of LLVM deps
-LLVM_DEPS_SRC=$(call rwildcard,$(CFG_LLVM_SRC_DIR)/lib,*cpp *hpp)
-LLVM_DEPS_INC=$(call rwildcard,$(CFG_LLVM_SRC_DIR)/include,*cpp *hpp)
+LLVM_DEPS_SRC=$(call rwildcard,$(CFG_LLVM_SRC_DIR)lib,*cpp *hpp)
+LLVM_DEPS_INC=$(call rwildcard,$(CFG_LLVM_SRC_DIR)include,*cpp *hpp)
 LLVM_DEPS=$(LLVM_DEPS_SRC) $(LLVM_DEPS_INC)
 endif
 
@@ -37,10 +37,21 @@ endif
 # dependencies. In these cases, commit a change that touches
 # the stamp in the source dir.
 $$(LLVM_STAMP_$(1)): $(S)src/rustllvm/llvm-auto-clean-trigger
+	@$$(call E, make: cleaning llvm)
 	$(Q)$(MAKE) clean-llvm
+	@$$(call E, make: done cleaning llvm)
 	touch $$@
 
 endef
 
-$(foreach host,$(CFG_HOST_TRIPLES), \
+$(foreach host,$(CFG_HOST), \
+    $(eval LLVM_CONFIGS := $(LLVM_CONFIGS) $(LLVM_CONFIG_$(host))))
+
+$(S)src/librustc/lib/llvmdeps.rs: \
+		    $(LLVM_CONFIGS) \
+		    $(S)src/etc/mklldeps.py
+	$(Q)$(CFG_PYTHON) $(S)src/etc/mklldeps.py \
+	    "$@" "$(LLVM_COMPONENTS)" $(LLVM_CONFIGS)
+
+$(foreach host,$(CFG_HOST), \
  $(eval $(call DEF_LLVM_RULES,$(host))))

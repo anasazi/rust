@@ -11,17 +11,15 @@
 use libc::{c_void, c_char, size_t, uintptr_t, free, malloc, realloc};
 use unstable::intrinsics::TyDesc;
 use unstable::raw;
-use sys::size_of;
+use mem::size_of;
 
 extern {
-    #[rust_stack]
     fn abort();
 }
 
 #[inline]
-fn get_box_size(body_size: uint, body_align: uint) -> uint {
+pub fn get_box_size(body_size: uint, body_align: uint) -> uint {
     let header_size = size_of::<raw::Box<()>>();
-    // FIXME (#2699): This alignment calculation is suspicious. Is it right?
     let total_size = align_to(header_size, body_align) + body_size;
     total_size
 }
@@ -36,8 +34,6 @@ fn align_to(size: uint, align: uint) -> uint {
 
 /// A wrapper around libc::malloc, aborting on out-of-memory
 pub unsafe fn malloc_raw(size: uint) -> *c_void {
-    #[fixed_stack_segment]; #[inline(never)];
-
     let p = malloc(size as size_t);
     if p.is_null() {
         // we need a non-allocating way to print an error here
@@ -48,8 +44,6 @@ pub unsafe fn malloc_raw(size: uint) -> *c_void {
 
 /// A wrapper around libc::realloc, aborting on out-of-memory
 pub unsafe fn realloc_raw(ptr: *mut c_void, size: uint) -> *mut c_void {
-    #[fixed_stack_segment]; #[inline(never)];
-
     let p = realloc(ptr, size as size_t);
     if p.is_null() {
         // we need a non-allocating way to print an error here
@@ -84,10 +78,10 @@ pub unsafe fn closure_exchange_malloc(td: *c_char, size: uintptr_t) -> *c_char {
     let total_size = get_box_size(size, (*td).align);
     let p = malloc_raw(total_size as uint);
 
-    let box = p as *mut raw::Box<()>;
-    (*box).type_desc = td;
+    let alloc = p as *mut raw::Box<()>;
+    (*alloc).type_desc = td;
 
-    box as *c_char
+    alloc as *c_char
 }
 
 // NB: Calls to free CANNOT be allowed to fail, as throwing an exception from
@@ -100,8 +94,6 @@ pub unsafe fn exchange_free_(ptr: *c_char) {
 }
 
 pub unsafe fn exchange_free(ptr: *c_char) {
-    #[fixed_stack_segment]; #[inline(never)];
-
     free(ptr as *c_void);
 }
 
@@ -111,15 +103,15 @@ mod bench {
 
     #[bench]
     fn alloc_owned_small(bh: &mut BenchHarness) {
-        do bh.iter {
+        bh.iter(|| {
             ~10;
-        }
+        })
     }
 
     #[bench]
     fn alloc_owned_big(bh: &mut BenchHarness) {
-        do bh.iter {
+        bh.iter(|| {
             ~[10, ..1000];
-        }
+        })
     }
 }

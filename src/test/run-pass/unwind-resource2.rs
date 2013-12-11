@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[feature(managed_boxes)];
+
 extern mod extra;
 
 use std::task;
@@ -29,9 +31,9 @@ fn complainer(c: @int) -> complainer {
 
 fn f() {
     let _c = complainer(@0);
-    fail2!();
+    fail!();
 }
 
 pub fn main() {
-    task::spawn_unlinked(f);
+    task::spawn(f);
 }

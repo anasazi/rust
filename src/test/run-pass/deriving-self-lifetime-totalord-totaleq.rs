@@ -1,5 +1,3 @@
-// xfail-test FIXME #6257
-
 // Copyright 2013 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
@@ -13,12 +11,11 @@
 use std::cmp::{Less,Equal,Greater};
 
 #[deriving(TotalEq,TotalOrd)]
-struct A<'self> {
-    x: &'self int
+struct A<'a> {
+    x: &'a int
 }
-
-fn main() {
-    let a = A { x: &1 }, b = A { x: &2 };
+pub fn main() {
+    let (a, b) = (A { x: &1 }, A { x: &2 });
 
     assert!(a.equals(&a));
     assert!(b.equals(&b));

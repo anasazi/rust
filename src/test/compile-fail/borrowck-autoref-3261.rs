@@ -11,20 +11,20 @@
 struct X(Either<(uint,uint),extern fn()>);
 
 impl X {
-    pub fn with(&self, blk: &fn(x: &Either<(uint,uint),extern fn()>)) {
+    pub fn with(&self, blk: |x: &Either<(uint,uint),extern fn()>|) {
         blk(&**self)
     }
 }
 
 fn main() {
     let mut x = X(Right(main));
-    do (&mut x).with |opt| {
+    (&mut x).with(|opt| {
         match opt {
             &Right(ref f) => {
                 x = X(Left((0,0))); //~ ERROR cannot assign to `x`
                 (*f)()
             },
-            _ => fail2!()
+            _ => fail!()
         }
-    }
+    })
 }

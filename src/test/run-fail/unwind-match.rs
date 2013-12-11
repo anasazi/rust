@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[feature(managed_boxes)];
+
 // Issue #945
 // error-pattern:non-exhaustive match failure
 fn test_box() {
@@ -15,7 +17,7 @@ fn test_box() {
 }
 fn test_str() {
   let res = match false { true => { ~"happy" },
-     _ => fail2!("non-exhaustive match failure") };
+     _ => fail!("non-exhaustive match failure") };
   assert_eq!(res, ~"happy");
 }
 fn main() {

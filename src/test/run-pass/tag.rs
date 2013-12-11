@@ -8,7 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// -*- rust -*-
 
 enum colour { red(int, int), green, }
 
@@ -23,7 +22,7 @@ impl Eq for colour {
             }
             green => {
                 match (*other) {
-                    red(*) => false,
+                    red(..) => false,
                     green => true
                 }
             }

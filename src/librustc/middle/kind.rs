@@ -62,7 +62,7 @@ impl Visitor<()> for Context {
         check_expr(self, ex);
     }
 
-    fn visit_fn(&mut self, fk:&visit::fn_kind, fd:&fn_decl, b:&Block, s:Span, n:NodeId, _:()) {
+    fn visit_fn(&mut self, fk:&visit::fn_kind, fd:&fn_decl, b:P<Block>, s:Span, n:NodeId, _:()) {
         check_fn(self, fk, fd, b, s, n);
     }
 
@@ -124,15 +124,15 @@ fn check_impl_of_trait(cx: &mut Context, it: @item, trait_ref: &trait_ref, self_
 
     // If this trait has builtin-kind supertraits, meet them.
     let self_ty: ty::t = ty::node_id_to_type(cx.tcx, it.id);
-    debug2!("checking impl with self type {:?}", ty::get(self_ty).sty);
-    do check_builtin_bounds(cx, self_ty, trait_def.bounds) |missing| {
+    debug!("checking impl with self type {:?}", ty::get(self_ty).sty);
+    check_builtin_bounds(cx, self_ty, trait_def.bounds, |missing| {
         cx.tcx.sess.span_err(self_type.span,
             format!("the type `{}', which does not fulfill `{}`, cannot implement this \
                   trait", ty_to_str(cx.tcx, self_ty), missing.user_string(cx.tcx)));
         cx.tcx.sess.span_note(self_type.span,
             format!("types implementing this trait must fulfill `{}`",
                  trait_def.bounds.user_string(cx.tcx)));
-    }
+    });
 
     // If this is a destructor, check kinds.
     if cx.tcx.lang_items.drop_trait() == Some(trait_def_id) {
@@ -154,7 +154,7 @@ fn check_impl_of_trait(cx: &mut Context, it: @item, trait_ref: &trait_ref, self_
 fn check_item(cx: &mut Context, item: @item) {
     if !attr::contains_name(item.attrs, "unsafe_destructor") {
         match item.node {
-            item_impl(_, Some(ref trait_ref), ref self_type, _) => {
+            item_impl(_, Some(ref trait_ref), self_type, _) => {
                 check_impl_of_trait(cx, item, trait_ref, self_type);
             }
             _ => {}
@@ -167,22 +167,12 @@ fn check_item(cx: &mut Context, item: @item) {
 // Yields the appropriate function to check the kind of closed over
 // variables. `id` is the NodeId for some expression that creates the
 // closure.
-fn with_appropriate_checker(cx: &Context, id: NodeId,
-                            b: &fn(checker: &fn(&Context, @freevar_entry))) {
+fn with_appropriate_checker(cx: &Context,
+                            id: NodeId,
+                            b: |checker: |&Context, @freevar_entry||) {
     fn check_for_uniq(cx: &Context, fv: &freevar_entry, bounds: ty::BuiltinBounds) {
         // all captured data must be owned, regardless of whether it is
         // moved in or copied in.
-        let id = ast_util::def_id_of_def(fv.def).node;
-        let var_t = ty::node_id_to_type(cx.tcx, id);
-
-        // check that only immutable variables are implicitly copied in
-        check_imm_free_var(cx, fv.def, fv.span);
-
-        check_freevar_bounds(cx, fv.span, var_t, bounds, None);
-    }
-
-    fn check_for_box(cx: &Context, fv: &freevar_entry, bounds: ty::BuiltinBounds) {
-        // all captured data must be owned
         let id = ast_util::def_id_of_def(fv.def).node;
         let var_t = ty::node_id_to_type(cx.tcx, id);
 
@@ -215,21 +205,22 @@ fn with_appropriate_checker(cx: &Context, id: NodeId,
         ty::ty_closure(ty::ClosureTy {
             sigil: OwnedSigil,
             bounds: bounds,
-            _
+            ..
         }) => {
             b(|cx, fv| check_for_uniq(cx, fv, bounds))
         }
         ty::ty_closure(ty::ClosureTy {
             sigil: ManagedSigil,
-            _
+            ..
         }) => {
             // can't happen
+            fail!("internal error: saw closure with managed sigil (@fn)");
         }
         ty::ty_closure(ty::ClosureTy {
             sigil: BorrowedSigil,
             bounds: bounds,
             region: region,
-            _
+            ..
         }) => {
             b(|cx, fv| check_for_block(cx, fv, bounds, region))
         }
@@ -249,23 +240,23 @@ fn check_fn(
     cx: &mut Context,
     fk: &visit::fn_kind,
     decl: &fn_decl,
-    body: &Block,
+    body: P<Block>,
     sp: Span,
     fn_id: NodeId) {
 
     // Check kinds on free variables:
-    do with_appropriate_checker(cx, fn_id) |chk| {
+    with_appropriate_checker(cx, fn_id, |chk| {
         let r = freevars::get_freevars(cx.tcx, fn_id);
         for fv in r.iter() {
             chk(cx, *fv);
         }
-    }
+    });
 
     visit::walk_fn(cx, fk, decl, body, sp, fn_id, ());
 }
 
 pub fn check_expr(cx: &mut Context, e: @Expr) {
-    debug2!("kind::check_expr({})", expr_to_str(e, cx.tcx.sess.intr()));
+    debug!("kind::check_expr({})", expr_to_str(e, cx.tcx.sess.intr()));
 
     // Handle any kind bounds on type parameters
     let type_parameter_id = match e.get_callee_id() {
@@ -292,7 +283,7 @@ pub fn check_expr(cx: &mut Context, e: @Expr) {
             };
             if ts.len() != type_param_defs.len() {
                 // Fail earlier to make debugging easier
-                fail2!("internal error: in kind::check_expr, length \
+                fail!("internal error: in kind::check_expr, length \
                       mismatch between actual and declared bounds: actual = \
                       {}, declared = {}",
                       ts.repr(cx.tcx),
@@ -351,9 +342,10 @@ fn check_ty(cx: &mut Context, aty: &Ty) {
 }
 
 // Calls "any_missing" if any bounds were missing.
-pub fn check_builtin_bounds(cx: &Context, ty: ty::t, bounds: ty::BuiltinBounds,
-                            any_missing: &fn(ty::BuiltinBounds))
-{
+pub fn check_builtin_bounds(cx: &Context,
+                            ty: ty::t,
+                            bounds: ty::BuiltinBounds,
+                            any_missing: |ty::BuiltinBounds|) {
     let kind = ty::type_contents(cx.tcx, ty);
     let mut missing = ty::EmptyBuiltinBounds();
     for bound in bounds.iter() {
@@ -372,20 +364,23 @@ pub fn check_typaram_bounds(cx: &Context,
                     ty: ty::t,
                     type_param_def: &ty::TypeParameterDef)
 {
-    do check_builtin_bounds(cx, ty, type_param_def.bounds.builtin_bounds) |missing| {
+    check_builtin_bounds(cx,
+                         ty,
+                         type_param_def.bounds.builtin_bounds,
+                         |missing| {
         cx.tcx.sess.span_err(
             sp,
             format!("instantiating a type parameter with an incompatible type \
                   `{}`, which does not fulfill `{}`",
                  ty_to_str(cx.tcx, ty),
                  missing.user_string(cx.tcx)));
-    }
+    });
 }
 
 pub fn check_freevar_bounds(cx: &Context, sp: Span, ty: ty::t,
                             bounds: ty::BuiltinBounds, referenced_ty: Option<ty::t>)
 {
-    do check_builtin_bounds(cx, ty, bounds) |missing| {
+    check_builtin_bounds(cx, ty, bounds, |missing| {
         // Will be Some if the freevar is implicitly borrowed (stack closure).
         // Emit a less mysterious error message in this case.
         match referenced_ty {
@@ -402,46 +397,30 @@ pub fn check_freevar_bounds(cx: &Context, sp: Span, ty: ty::t,
             sp,
             format!("this closure's environment must satisfy `{}`",
                  bounds.user_string(cx.tcx)));
-    }
+    });
 }
 
 pub fn check_trait_cast_bounds(cx: &Context, sp: Span, ty: ty::t,
                                bounds: ty::BuiltinBounds) {
-    do check_builtin_bounds(cx, ty, bounds) |missing| {
+    check_builtin_bounds(cx, ty, bounds, |missing| {
         cx.tcx.sess.span_err(sp,
             format!("cannot pack type `{}`, which does not fulfill \
                   `{}`, as a trait bounded by {}",
                  ty_to_str(cx.tcx, ty), missing.user_string(cx.tcx),
                  bounds.user_string(cx.tcx)));
-    }
-}
-
-fn is_nullary_variant(cx: &Context, ex: @Expr) -> bool {
-    match ex.node {
-      ExprPath(_) => {
-        match cx.tcx.def_map.get_copy(&ex.id) {
-          DefVariant(edid, vdid, _) => {
-              ty::enum_variant_with_id(cx.tcx, edid, vdid).args.is_empty()
-          }
-          _ => false
-        }
-      }
-      _ => false
-    }
+    });
 }
 
 fn check_imm_free_var(cx: &Context, def: Def, sp: Span) {
     match def {
-        DefLocal(_, is_mutbl) => {
-            if is_mutbl {
-                cx.tcx.sess.span_err(
-                    sp,
-                    "mutable variables cannot be implicitly captured");
-            }
+        DefLocal(_, BindByValue(MutMutable)) => {
+            cx.tcx.sess.span_err(
+                sp,
+                "mutable variables cannot be implicitly captured");
         }
-        DefArg(*) => { /* ok */ }
+        DefLocal(..) | DefArg(..) => { /* ok */ }
         DefUpvar(_, def1, _, _) => { check_imm_free_var(cx, *def1, sp); }
-        DefBinding(*) | DefSelf(*) => { /*ok*/ }
+        DefBinding(..) | DefSelf(..) => { /*ok*/ }
         _ => {
             cx.tcx.sess.span_bug(
                 sp,
@@ -451,7 +430,7 @@ fn check_imm_free_var(cx: &Context, def: Def, sp: Span) {
 }
 
 fn check_copy(cx: &Context, ty: ty::t, sp: Span, reason: &str) {
-    debug2!("type_contents({})={}",
+    debug!("type_contents({})={}",
            ty_to_str(cx.tcx, ty),
            ty::type_contents(cx.tcx, ty).to_str());
     if ty::type_moves_by_default(cx.tcx, ty) {
@@ -477,7 +456,7 @@ pub fn check_send(cx: &Context, ty: ty::t, sp: Span) -> bool {
 pub fn check_durable(tcx: ty::ctxt, ty: ty::t, sp: Span) -> bool {
     if !ty::type_is_static(tcx, ty) {
         match ty::get(ty).sty {
-          ty::ty_param(*) => {
+          ty::ty_param(..) => {
             tcx.sess.span_err(sp, "value may contain borrowed \
                                    pointers; add `'static` bound");
           }
@@ -526,7 +505,7 @@ pub fn check_cast_for_escaping_regions(
     // worries.
     let target_ty = ty::expr_ty(cx.tcx, target);
     match ty::get(target_ty).sty {
-        ty::ty_trait(*) => {}
+        ty::ty_trait(..) => {}
         _ => { return; }
     }
 
@@ -542,12 +521,12 @@ pub fn check_cast_for_escaping_regions(
                 target_regions.push(r);
             }
         },
-        |_| true);
+        |_| ());
 
     // Check, based on the region associated with the trait, whether it can
     // possibly escape the enclosing fn item (note that all type parameters
     // must have been declared on the enclosing fn item).
-    if target_regions.iter().any(|r| is_re_scope(*r)) {
+    if target_regions.iter().any(|r| is_ReScope(*r)) {
         return; /* case (1) */
     }
 
@@ -584,17 +563,12 @@ pub fn check_cast_for_escaping_regions(
                 }
                 _ => {}
             }
-            true
         });
 
-    fn is_re_scope(r: ty::Region) -> bool {
+    fn is_ReScope(r: ty::Region) -> bool {
         match r {
-            ty::re_scope(*) => true,
+            ty::ReScope(..) => true,
             _ => false
         }
-    }
-
-    fn is_subregion_of(cx: &Context, r_sub: ty::Region, r_sup: ty::Region) -> bool {
-        cx.tcx.region_maps.is_subregion_of(r_sub, r_sup)
     }
 }

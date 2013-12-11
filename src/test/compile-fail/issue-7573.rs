@@ -8,8 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::io;
-
 pub struct PkgId {
     local_path: ~str,
     junk: ~str
@@ -32,12 +30,12 @@ pub fn remove_package_from_database() {
     list_database(push_id);
 
     for l in lines_to_use.iter() {
-        io::stdout().write_line(l.local_path);
+        println!("{}", l.local_path);
     }
 
 }
 
-pub fn list_database(f: &fn(&PkgId)) {
+pub fn list_database(f: |&PkgId|) {
     let stuff = ["foo", "bar"];
 
     for l in stuff.iter() {

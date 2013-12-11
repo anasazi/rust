@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// xfail-android: FIXME(#10381)
+
 // compile-flags:-Z extra-debug-info
 // debugger:set print pretty off
 // debugger:rbreak zzz
@@ -22,6 +24,7 @@
 // debugger:print d->val
 // check:$4 = false
 
+#[feature(managed_boxes)];
 #[allow(unused_variable)];
 
 fn main() {

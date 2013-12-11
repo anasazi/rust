@@ -10,26 +10,30 @@
 
 // rustpkg utilities having to do with paths and directories
 
+#[allow(dead_code)];
+
 pub use package_id::PkgId;
 pub use target::{OutputType, Main, Lib, Test, Bench, Target, Build, Install};
 pub use version::{Version, NoVersion, split_version_general, try_parsing_version};
 pub use rustc::metadata::filesearch::rust_path;
+use rustc::metadata::filesearch::libdir;
 use rustc::driver::driver::host_triple;
 
 use std::libc;
 use std::libc::consts::os::posix88::{S_IRUSR, S_IWUSR, S_IXUSR};
-use std::os::mkdir_recursive;
 use std::os;
+use std::io;
+use std::io::fs;
 use messages::*;
 
 pub fn default_workspace() -> Path {
     let p = rust_path();
     if p.is_empty() {
-        fail2!("Empty RUST_PATH");
+        fail!("Empty RUST_PATH");
     }
     let result = p[0];
-    if !os::path_is_dir(&result) {
-        os::mkdir_recursive(&result, U_RWX);
+    if !result.is_dir() {
+        fs::mkdir_recursive(&result, io::UserRWX);
     }
     result
 }
@@ -43,9 +47,13 @@ pub static U_RWX: i32 = (S_IRUSR | S_IWUSR | S_IXUSR) as i32;
 /// Creates a directory that is readable, writeable,
 /// and executable by the user. Returns true iff creation
 /// succeeded.
-pub fn make_dir_rwx(p: &Path) -> bool { os::make_dir(p, U_RWX) }
+pub fn make_dir_rwx(p: &Path) -> bool {
+    io::result(|| fs::mkdir(p, io::UserRWX)).is_ok()
+}
 
-pub fn make_dir_rwx_recursive(p: &Path) -> bool { os::mkdir_recursive(p, U_RWX) }
+pub fn make_dir_rwx_recursive(p: &Path) -> bool {
+    io::result(|| fs::mkdir_recursive(p, io::UserRWX)).is_ok()
+}
 
 // n.b. The next three functions ignore the package version right
 // now. Should fix that.
@@ -58,19 +66,20 @@ pub fn workspace_contains_package_id(pkgid: &PkgId, workspace: &Path) -> bool {
 
 pub fn workspace_contains_package_id_(pkgid: &PkgId, workspace: &Path,
 // Returns the directory it was actually found in
-             workspace_to_src_dir: &fn(&Path) -> Path) -> Option<Path> {
-    if !os::path_is_dir(workspace) {
+             workspace_to_src_dir: |&Path| -> Path) -> Option<Path> {
+    if !workspace.is_dir() {
         return None;
     }
 
     let src_dir = workspace_to_src_dir(workspace);
+    if !src_dir.is_dir() { return None }
 
     let mut found = None;
-    do os::walk_dir(&src_dir) |p| {
-        if os::path_is_dir(p) {
-            if *p == src_dir.join(&pkgid.path) || {
+    for p in fs::walk_dir(&src_dir) {
+        if p.is_dir() {
+            if p == src_dir.join(&pkgid.path) || {
                 let pf = p.filename_str();
-                do pf.iter().any |&g| {
+                pf.iter().any(|&g| {
                     match split_version_general(g, '-') {
                         None => false,
                         Some((ref might_match, ref vers)) => {
@@ -78,19 +87,18 @@ pub fn workspace_contains_package_id_(pkgid: &PkgId, workspace: &Path,
                                 && (pkgid.version == *vers || pkgid.version == NoVersion)
                         }
                     }
-                }
+                })
             } {
                 found = Some(p.clone());
             }
 
-        };
-        true
-    };
+        }
+    }
 
     if found.is_some() {
-        debug2!("Found {} in {}", pkgid.to_str(), workspace.display());
+        debug!("Found {} in {}", pkgid.to_str(), workspace.display());
     } else {
-        debug2!("Didn't find {} in {}", pkgid.to_str(), workspace.display());
+        debug!("Didn't find {} in {}", pkgid.to_str(), workspace.display());
     }
     found
 }
@@ -106,7 +114,7 @@ pub fn target_build_dir(workspace: &Path) -> Path {
 /// Return the target-specific lib subdirectory, pushed onto `base`;
 /// doesn't check that it exists or create it
 fn target_lib_dir(workspace: &Path) -> Path {
-    let mut dir = workspace.join("lib");
+    let mut dir = workspace.join(libdir());
     dir.push(host_triple());
     dir
 }
@@ -123,13 +131,13 @@ fn target_bin_dir(workspace: &Path) -> Path {
 pub fn built_executable_in_workspace(pkgid: &PkgId, workspace: &Path) -> Option<Path> {
     let mut result = target_build_dir(workspace);
     result = mk_output_path(Main, Build, pkgid, result);
-    debug2!("built_executable_in_workspace: checking whether {} exists",
+    debug!("built_executable_in_workspace: checking whether {} exists",
            result.display());
-    if os::path_exists(&result) {
+    if result.exists() {
         Some(result)
     }
     else {
-        debug2!("built_executable_in_workspace: {} does not exist", result.display());
+        debug!("built_executable_in_workspace: {} does not exist", result.display());
         None
     }
 }
@@ -150,13 +158,13 @@ fn output_in_workspace(pkgid: &PkgId, workspace: &Path, what: OutputType) -> Opt
     let mut result = target_build_dir(workspace);
     // should use a target-specific subdirectory
     result = mk_output_path(what, Build, pkgid, result);
-    debug2!("output_in_workspace: checking whether {} exists",
+    debug!("output_in_workspace: checking whether {} exists",
            result.display());
-    if os::path_exists(&result) {
+    if result.exists() {
         Some(result)
     }
     else {
-        error2!("output_in_workspace: {} does not exist", result.display());
+        error!("output_in_workspace: {} does not exist", result.display());
         None
     }
 }
@@ -177,7 +185,7 @@ pub fn installed_library_in_workspace(pkg_path: &Path, workspace: &Path) -> Opti
                                                  short_name,
                                                  Install,
                                                  workspace,
-                                                 "lib",
+                                                 libdir(),
                                                  &NoVersion)
     }
 }
@@ -186,13 +194,13 @@ pub fn installed_library_in_workspace(pkg_path: &Path, workspace: &Path) -> Opti
 /// `short_name` is taken as the link name of the library.
 pub fn library_in_workspace(path: &Path, short_name: &str, where: Target,
                         workspace: &Path, prefix: &str, version: &Version) -> Option<Path> {
-    debug2!("library_in_workspace: checking whether a library named {} exists",
+    debug!("library_in_workspace: checking whether a library named {} exists",
            short_name);
 
     // We don't know what the hash is, so we have to search through the directory
     // contents
 
-    debug2!("short_name = {} where = {:?} workspace = {} \
+    debug!("short_name = {} where = {:?} workspace = {} \
             prefix = {}", short_name, where, workspace.display(), prefix);
 
     let dir_to_search = match where {
@@ -205,29 +213,32 @@ pub fn library_in_workspace(path: &Path, short_name: &str, where: Target,
 
 // rustc doesn't use target-specific subdirectories
 pub fn system_library(sysroot: &Path, lib_name: &str) -> Option<Path> {
-    library_in(lib_name, &NoVersion, &sysroot.join("lib"))
+    library_in(lib_name, &NoVersion, &sysroot.join(libdir()))
 }
 
 fn library_in(short_name: &str, version: &Version, dir_to_search: &Path) -> Option<Path> {
-    debug2!("Listing directory {}", dir_to_search.display());
-    let dir_contents = os::list_dir(dir_to_search);
-    debug2!("dir has {:?} entries", dir_contents.len());
+    debug!("Listing directory {}", dir_to_search.display());
+    let dir_contents = {
+        let _guard = io::ignore_io_error();
+        fs::readdir(dir_to_search)
+    };
+    debug!("dir has {:?} entries", dir_contents.len());
 
     let lib_prefix = format!("{}{}", os::consts::DLL_PREFIX, short_name);
     let lib_filetype = os::consts::DLL_EXTENSION;
 
-    debug2!("lib_prefix = {} and lib_filetype = {}", lib_prefix, lib_filetype);
+    debug!("lib_prefix = {} and lib_filetype = {}", lib_prefix, lib_filetype);
 
     // Find a filename that matches the pattern:
     // (lib_prefix)-hash-(version)(lib_suffix)
-    let mut libraries = do dir_contents.iter().filter |p| {
+    let mut libraries = dir_contents.iter().filter(|p| {
         let extension = p.extension_str();
-        debug2!("p = {}, p's extension is {:?}", p.display(), extension);
+        debug!("p = {}, p's extension is {:?}", p.display(), extension);
         match extension {
             None => false,
             Some(ref s) => lib_filetype == *s
         }
-    };
+    });
 
     let mut result_filename = None;
     for p_path in libraries {
@@ -243,12 +254,12 @@ fn library_in(short_name: &str, version: &Version, dir_to_search: &Path) -> Opti
             if f_name.is_empty() { break; }
             match f_name.rfind('-') {
                 Some(i) => {
-                    debug2!("Maybe {} is a version", f_name.slice(i + 1, f_name.len()));
+                    debug!("Maybe {} is a version", f_name.slice(i + 1, f_name.len()));
                     match try_parsing_version(f_name.slice(i + 1, f_name.len())) {
                        Some(ref found_vers) if version == found_vers => {
                            match f_name.slice(0, i).rfind('-') {
                                Some(j) => {
-                                   debug2!("Maybe {} equals {}", f_name.slice(0, j), lib_prefix);
+                                   debug!("Maybe {} equals {}", f_name.slice(0, j), lib_prefix);
                                    if f_name.slice(0, j) == lib_prefix {
                                        result_filename = Some(p_path.clone());
                                    }
@@ -266,17 +277,17 @@ fn library_in(short_name: &str, version: &Version, dir_to_search: &Path) -> Opti
     } // for
 
     if result_filename.is_none() {
-        debug2!("warning: library_in_workspace didn't find a library in {} for {}",
+        debug!("warning: library_in_workspace didn't find a library in {} for {}",
                   dir_to_search.display(), short_name);
     }
 
     // Return the filename that matches, which we now know exists
     // (if result_filename != None)
-    let abs_path = do result_filename.map |result_filename| {
+    let abs_path = result_filename.map(|result_filename| {
         let absolute_path = dir_to_search.join(&result_filename);
-        debug2!("result_filename = {}", absolute_path.display());
+        debug!("result_filename = {}", absolute_path.display());
         absolute_path
-    };
+    });
 
     abs_path
 }
@@ -294,7 +305,7 @@ pub fn target_executable_in_workspace(pkgid: &PkgId, workspace: &Path) -> Path {
 /// As a side effect, creates the lib-dir if it doesn't exist
 pub fn target_library_in_workspace(pkgid: &PkgId, workspace: &Path) -> Path {
     use conditions::bad_path::cond;
-    if !os::path_is_dir(workspace) {
+    if !workspace.is_dir() {
         cond.raise(((*workspace).clone(),
                     format!("Workspace supplied to target_library_in_workspace \
                              is not a directory! {}", workspace.display())));
@@ -333,7 +344,7 @@ fn target_file_in_workspace(pkgid: &PkgId, workspace: &Path,
                 (Install, Lib)  => target_lib_dir(workspace),
                 (Install, _)    => target_bin_dir(workspace)
     };
-    if !os::path_exists(&result) && !mkdir_recursive(&result, U_RWX) {
+    if io::result(|| fs::mkdir_recursive(&result, io::UserRWX)).is_err() {
         cond.raise((result.clone(), format!("target_file_in_workspace couldn't \
             create the {} dir (pkgid={}, workspace={}, what={:?}, where={:?}",
             subdir, pkgid.to_str(), workspace.display(), what, where)));
@@ -344,18 +355,12 @@ fn target_file_in_workspace(pkgid: &PkgId, workspace: &Path,
 /// Return the directory for <pkgid>'s build artifacts in <workspace>.
 /// Creates it if it doesn't exist.
 pub fn build_pkg_id_in_workspace(pkgid: &PkgId, workspace: &Path) -> Path {
-    use conditions::bad_path::cond;
-
     let mut result = target_build_dir(workspace);
     result.push(&pkgid.path);
-    debug2!("Creating build dir {} for package id {}", result.display(),
+    debug!("Creating build dir {} for package id {}", result.display(),
            pkgid.to_str());
-    if os::path_exists(&result) || os::mkdir_recursive(&result, U_RWX) {
-        result
-    }
-    else {
-        cond.raise((result, format!("Could not create directory for package {}", pkgid.to_str())))
-    }
+    fs::mkdir_recursive(&result, io::UserRWX);
+    return result;
 }
 
 /// Return the output file for a given directory name,
@@ -372,7 +377,7 @@ pub fn mk_output_path(what: OutputType, where: Target,
         // and if we're just building, it goes in a package-specific subdir
         Build => workspace.join(&pkg_id.path)
     };
-    debug2!("[{:?}:{:?}] mk_output_path: short_name = {}, path = {}", what, where,
+    debug!("[{:?}:{:?}] mk_output_path: short_name = {}, path = {}", what, where,
            if what == Lib { short_name_with_version.clone() } else { pkg_id.short_name.clone() },
            dir.display());
     let mut output_path = match what {
@@ -390,7 +395,7 @@ pub fn mk_output_path(what: OutputType, where: Target,
     if !output_path.is_absolute() {
         output_path = os::getcwd().join(&output_path);
     }
-    debug2!("mk_output_path: returning {}", output_path.display());
+    debug!("mk_output_path: returning {}", output_path.display());
     output_path
 }
 
@@ -398,13 +403,13 @@ pub fn mk_output_path(what: OutputType, where: Target,
 pub fn uninstall_package_from(workspace: &Path, pkgid: &PkgId) {
     let mut did_something = false;
     let installed_bin = target_executable_in_workspace(pkgid, workspace);
-    if os::path_exists(&installed_bin) {
-        os::remove_file(&installed_bin);
+    if installed_bin.exists() {
+        fs::unlink(&installed_bin);
         did_something = true;
     }
     let installed_lib = target_library_in_workspace(pkgid, workspace);
-    if os::path_exists(&installed_lib) {
-        os::remove_file(&installed_lib);
+    if installed_lib.exists() {
+        fs::unlink(&installed_lib);
         did_something = true;
     }
     if !did_something {
@@ -414,9 +419,14 @@ pub fn uninstall_package_from(workspace: &Path, pkgid: &PkgId) {
 
 }
 
+pub fn dir_has_crate_file(dir: &Path) -> bool {
+    dir_has_file(dir, "lib.rs") || dir_has_file(dir, "main.rs")
+        || dir_has_file(dir, "test.rs") || dir_has_file(dir, "bench.rs")
+}
+
 fn dir_has_file(dir: &Path, file: &str) -> bool {
     assert!(dir.is_absolute());
-    os::path_exists(&dir.join(file))
+    dir.join(file).exists()
 }
 
 pub fn find_dir_using_rust_path_hack(p: &PkgId) -> Option<Path> {
@@ -426,14 +436,13 @@ pub fn find_dir_using_rust_path_hack(p: &PkgId) -> Option<Path> {
         // Note that this only matches if the package ID being searched for
         // has a name that's a single component
         if dir.ends_with_path(&p.path) || dir.ends_with_path(&versionize(&p.path, &p.version)) {
-            debug2!("In find_dir_using_rust_path_hack: checking dir {}", dir.display());
-            if dir_has_file(dir, "lib.rs") || dir_has_file(dir, "main.rs")
-                || dir_has_file(dir, "test.rs") || dir_has_file(dir, "bench.rs") {
-                debug2!("Did find id {} in dir {}", p.to_str(), dir.display());
+            debug!("In find_dir_using_rust_path_hack: checking dir {}", dir.display());
+            if dir_has_crate_file(dir) {
+                debug!("Did find id {} in dir {}", p.to_str(), dir.display());
                 return Some(dir.clone());
             }
         }
-        debug2!("Didn't find id {} in dir {}", p.to_str(), dir.display())
+        debug!("Didn't find id {} in dir {}", p.to_str(), dir.display())
     }
     None
 }
@@ -457,25 +466,20 @@ pub fn versionize(p: &Path, v: &Version) -> Path {
     p.with_filename(q)
 }
 
-
 #[cfg(target_os = "win32")]
 pub fn chmod_read_only(p: &Path) -> bool {
-    #[fixed_stack_segment];
     unsafe {
-        do p.with_c_str |src_buf| {
-            libc::chmod(src_buf, S_IRUSR as libc::c_int) == 0 as libc::c_int
-        }
+        p.with_c_str(|src_buf| libc::chmod(src_buf, S_IRUSR as libc::c_int) == 0 as libc::c_int)
     }
 }
 
 #[cfg(not(target_os = "win32"))]
 pub fn chmod_read_only(p: &Path) -> bool {
-    #[fixed_stack_segment];
     unsafe {
-        do p.with_c_str |src_buf| {
-            libc::chmod(src_buf, S_IRUSR as libc::mode_t) == 0
-                as libc::c_int
-        }
+        p.with_c_str(|src_buf| libc::chmod(src_buf, S_IRUSR as libc::mode_t) == 0 as libc::c_int)
     }
 }
 
+pub fn platform_library_name(s: &str) -> ~str {
+    format!("{}{}{}", os::consts::DLL_PREFIX, s, os::consts::DLL_SUFFIX)
+}

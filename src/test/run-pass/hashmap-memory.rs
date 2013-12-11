@@ -10,6 +10,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[feature(managed_boxes)];
+
 /**
    A somewhat reduced test case to expose some Valgrind issues.
 
@@ -19,12 +21,11 @@
 pub fn map(filename: ~str, emit: map_reduce::putter) { emit(filename, ~"1"); }
 
 mod map_reduce {
-    use std::comm::{stream, SharedChan};
     use std::hashmap::HashMap;
     use std::str;
     use std::task;
 
-    pub type putter<'self> = &'self fn(~str, ~str);
+    pub type putter<'a> = 'a |~str, ~str|;
 
     pub type mapper = extern fn(~str, putter);
 
@@ -34,24 +35,25 @@ mod map_reduce {
         for i in inputs.iter() {
             let ctrl = ctrl.clone();
             let i = i.clone();
-            task::spawn(|| map_task(ctrl.clone(), i.clone()) );
+            task::spawn(proc() map_task(ctrl.clone(), i.clone()) );
         }
     }
 
     fn map_task(ctrl: SharedChan<ctrl_proto>, input: ~str) {
         let intermediates = @mut HashMap::new();
 
-        fn emit(im: &mut HashMap<~str, int>, ctrl: SharedChan<ctrl_proto>, key: ~str,
+        fn emit(im: &mut HashMap<~str, int>,
+                ctrl: SharedChan<ctrl_proto>, key: ~str,
                 _val: ~str) {
             if im.contains_key(&key) {
                 return;
             }
-            let (pp, cc) = stream();
-            error2!("sending find_reducer");
+            let (pp, cc) = Chan::new();
+            error!("sending find_reducer");
             ctrl.send(find_reducer(key.as_bytes().to_owned(), cc));
-            error2!("receiving");
+            error!("receiving");
             let c = pp.recv();
-            error2!("{:?}", c);
+            error!("{:?}", c);
             im.insert(key, c);
         }
 
@@ -61,8 +63,7 @@ mod map_reduce {
     }
 
     pub fn map_reduce(inputs: ~[~str]) {
-        let (ctrl_port, ctrl_chan) = stream();
-        let ctrl_chan = SharedChan::new(ctrl_chan);
+        let (ctrl_port, ctrl_chan) = SharedChan::new();
 
         // This task becomes the master control task. It spawns others
         // to do the rest.
@@ -80,7 +81,7 @@ mod map_reduce {
               mapper_done => { num_mappers -= 1; }
               find_reducer(k, cc) => {
                 let mut c;
-                match reducers.find(&str::from_utf8(k)) {
+                match reducers.find(&str::from_utf8(k).to_owned()) {
                   Some(&_c) => { c = _c; }
                   None => { c = 0; }
                 }

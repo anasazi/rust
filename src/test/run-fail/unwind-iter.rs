@@ -10,11 +10,12 @@
 
 // error-pattern:fail
 
+#[feature(managed_boxes)];
 #[allow(unreachable_code)];
 #[allow(unused_variable)];
 
-fn x(it: &fn(int)) {
-    fail2!();
+fn x(it: |int|) {
+    fail!();
     it(0);
 }
 

@@ -42,9 +42,8 @@ use std::cast::{transmute, transmute_mut, transmute_mut_region};
 use std::cast;
 use std::num;
 use std::ptr;
-use std::sys;
+use std::mem;
 use std::uint;
-use std::vec;
 use std::unstable::intrinsics;
 use std::unstable::intrinsics::{TyDesc, get_tydesc};
 
@@ -96,12 +95,12 @@ impl Drop for Arena {
     fn drop(&mut self) {
         unsafe {
             destroy_chunk(&self.head);
-            do self.chunks.each |chunk| {
+            self.chunks.each(|chunk| {
                 if !chunk.is_pod {
                     destroy_chunk(chunk);
                 }
                 true
-            };
+            });
         }
     }
 }
@@ -115,7 +114,7 @@ fn round_up_to(base: uint, align: uint) -> uint {
 // in it.
 unsafe fn destroy_chunk(chunk: &Chunk) {
     let mut idx = 0;
-    let buf = vec::raw::to_ptr(chunk.data);
+    let buf = chunk.data.as_ptr();
     let fill = chunk.fill;
 
     while idx < fill {
@@ -123,18 +122,18 @@ unsafe fn destroy_chunk(chunk: &Chunk) {
         let (tydesc, is_done) = un_bitpack_tydesc_ptr(*tydesc_data);
         let (size, align) = ((*tydesc).size, (*tydesc).align);
 
-        let after_tydesc = idx + sys::size_of::<*TyDesc>();
+        let after_tydesc = idx + mem::size_of::<*TyDesc>();
 
         let start = round_up_to(after_tydesc, align);
 
-        //debug2!("freeing object: idx = {}, size = {}, align = {}, done = {}",
+        //debug!("freeing object: idx = {}, size = {}, align = {}, done = {}",
         //       start, size, align, is_done);
         if is_done {
             ((*tydesc).drop_glue)(ptr::offset(buf, start as int) as *i8);
         }
 
         // Find where the next tydesc lives
-        idx = round_up_to(start + size, sys::pref_align_of::<*TyDesc>());
+        idx = round_up_to(start + size, mem::pref_align_of::<*TyDesc>());
     }
 }
 
@@ -176,15 +175,15 @@ impl Arena {
             }
             this.pod_head.fill = end;
 
-            //debug2!("idx = {}, size = {}, align = {}, fill = {}",
+            //debug!("idx = {}, size = {}, align = {}, fill = {}",
             //       start, n_bytes, align, head.fill);
 
-            ptr::offset(vec::raw::to_ptr(this.pod_head.data), start as int)
+            ptr::offset(this.pod_head.data.as_ptr(), start as int)
         }
     }
 
     #[inline]
-    fn alloc_pod<'a, T>(&'a mut self, op: &fn() -> T) -> &'a T {
+    fn alloc_pod<'a, T>(&'a mut self, op: || -> T) -> &'a T {
         unsafe {
             let tydesc = get_tydesc::<T>();
             let ptr = self.alloc_pod_inner((*tydesc).size, (*tydesc).align);
@@ -220,7 +219,7 @@ impl Arena {
                 let head = transmute_mut_region(&mut self.head);
 
                 tydesc_start = head.fill;
-                after_tydesc = head.fill + sys::size_of::<*TyDesc>();
+                after_tydesc = head.fill + mem::size_of::<*TyDesc>();
                 start = round_up_to(after_tydesc, align);
                 end = start + n_bytes;
             }
@@ -230,18 +229,18 @@ impl Arena {
             }
 
             let head = transmute_mut_region(&mut self.head);
-            head.fill = round_up_to(end, sys::pref_align_of::<*TyDesc>());
+            head.fill = round_up_to(end, mem::pref_align_of::<*TyDesc>());
 
-            //debug2!("idx = {}, size = {}, align = {}, fill = {}",
+            //debug!("idx = {}, size = {}, align = {}, fill = {}",
             //       start, n_bytes, align, head.fill);
 
-            let buf = vec::raw::to_ptr(self.head.data);
+            let buf = self.head.data.as_ptr();
             return (ptr::offset(buf, tydesc_start as int), ptr::offset(buf, start as int));
         }
     }
 
     #[inline]
-    fn alloc_nonpod<'a, T>(&'a mut self, op: &fn() -> T) -> &'a T {
+    fn alloc_nonpod<'a, T>(&'a mut self, op: || -> T) -> &'a T {
         unsafe {
             let tydesc = get_tydesc::<T>();
             let (ty_ptr, ptr) =
@@ -263,7 +262,7 @@ impl Arena {
 
     // The external interface
     #[inline]
-    pub fn alloc<'a, T>(&'a self, op: &fn() -> T) -> &'a T {
+    pub fn alloc<'a, T>(&'a self, op: || -> T) -> &'a T {
         unsafe {
             // XXX: Borrow check
             let this = transmute_mut(self);
@@ -282,10 +281,10 @@ fn test_arena_destructors() {
     for i in range(0u, 10) {
         // Arena allocate something with drop glue to make sure it
         // doesn't leak.
-        do arena.alloc { @i };
+        arena.alloc(|| @i);
         // Allocate something with funny size and alignment, to keep
         // things interesting.
-        do arena.alloc { [0u8, 1u8, 2u8] };
+        arena.alloc(|| [0u8, 1u8, 2u8]);
     }
 }
 
@@ -297,14 +296,14 @@ fn test_arena_destructors_fail() {
     for i in range(0u, 10) {
         // Arena allocate something with drop glue to make sure it
         // doesn't leak.
-        do arena.alloc { @i };
+        arena.alloc(|| { @i });
         // Allocate something with funny size and alignment, to keep
         // things interesting.
-        do arena.alloc { [0u8, 1u8, 2u8] };
+        arena.alloc(|| { [0u8, 1u8, 2u8] });
     }
     // Now, fail while allocating
-    do arena.alloc::<@int> {
+    arena.alloc::<@int>(|| {
         // Now fail.
-        fail2!();
-    };
+        fail!();
+    });
 }

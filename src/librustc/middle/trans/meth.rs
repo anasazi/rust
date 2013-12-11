@@ -55,7 +55,7 @@ pub fn trans_impl(ccx: @mut CrateContext,
     let _icx = push_ctxt("impl::trans_impl");
     let tcx = ccx.tcx;
 
-    debug2!("trans_impl(path={}, name={}, id={:?})",
+    debug!("trans_impl(path={}, name={}, id={:?})",
            path.repr(tcx), name.repr(tcx), id);
 
     // Both here and below with generic methods, be sure to recurse and look for
@@ -113,14 +113,14 @@ pub fn trans_method(ccx: @mut CrateContext,
         let self_ty = ty::node_id_to_type(ccx.tcx, method.self_id);
         let self_ty = match param_substs {
             None => self_ty,
-            Some(@param_substs {tys: ref tys, self_ty: ref self_sub, _}) => {
+            Some(@param_substs {tys: ref tys, self_ty: ref self_sub, ..}) => {
                 ty::subst_tps(ccx.tcx, *tys, *self_sub, self_ty)
             }
         };
-        debug2!("calling trans_fn with self_ty {}",
+        debug!("calling trans_fn with self_ty {}",
                self_ty.repr(ccx.tcx));
         match method.explicit_self.node {
-          ast::sty_value => impl_self(self_ty, ty::ByRef),
+          ast::sty_value(_) => impl_self(self_ty, ty::ByRef),
           _ => impl_self(self_ty, ty::ByCopy),
         }
       }
@@ -129,8 +129,8 @@ pub fn trans_method(ccx: @mut CrateContext,
     // generate the actual code
     trans_fn(ccx,
              path,
-             &method.decl,
-             &method.body,
+             method.decl,
+             method.body,
              llfn,
              self_arg,
              param_substs,
@@ -161,7 +161,7 @@ pub fn trans_method_callee(bcx: @mut Block,
                            -> Callee {
     let _icx = push_ctxt("impl::trans_method_callee");
 
-    debug2!("trans_method_callee(callee_id={:?}, this={}, mentry={})",
+    debug!("trans_method_callee(callee_id={:?}, this={}, mentry={})",
            callee_id,
            bcx.expr_to_str(this),
            mentry.repr(bcx.tcx()));
@@ -199,7 +199,7 @@ pub fn trans_method_callee(bcx: @mut Block,
                                                trait_id, off, vtbl)
                 }
                 // how to get rid of this?
-                None => fail2!("trans_method_callee: missing param_substs")
+                None => fail!("trans_method_callee: missing param_substs")
             }
         }
 
@@ -220,7 +220,7 @@ pub fn trans_static_method_callee(bcx: @mut Block,
     let _icx = push_ctxt("impl::trans_static_method_callee");
     let ccx = bcx.ccx();
 
-    debug2!("trans_static_method_callee(method_id={:?}, trait_id={}, \
+    debug!("trans_static_method_callee(method_id={:?}, trait_id={}, \
             callee_id={:?})",
            method_id,
            ty::item_path_str(bcx.tcx(), trait_id),
@@ -250,16 +250,16 @@ pub fn trans_static_method_callee(bcx: @mut Block,
             ast_map::node_trait_method(trait_method, _, _) => {
                 ast_util::trait_method_to_ty_method(trait_method).ident
             }
-            _ => fail2!("callee is not a trait method")
+            _ => fail!("callee is not a trait method")
         }
     } else {
         let path = csearch::get_item_path(bcx.tcx(), method_id);
         match path[path.len()-1] {
             path_pretty_name(s, _) | path_name(s) => { s }
-            path_mod(_) => { fail2!("path doesn't have a name?") }
+            path_mod(_) => { fail!("path doesn't have a name?") }
         }
     };
-    debug2!("trans_static_method_callee: method_id={:?}, callee_id={:?}, \
+    debug!("trans_static_method_callee: method_id={:?}, callee_id={:?}, \
             name={}", method_id, callee_id, ccx.sess.str_of(mname));
 
     let vtbls = resolve_vtables_in_fn_ctxt(
@@ -287,7 +287,7 @@ pub fn trans_static_method_callee(bcx: @mut Block,
             FnData {llfn: PointerCast(bcx, lval, llty)}
         }
         _ => {
-            fail2!("vtable_param left in monomorphized \
+            fail!("vtable_param left in monomorphized \
                    function's vtable substs");
         }
     }
@@ -361,8 +361,8 @@ pub fn trans_monomorphized_callee(bcx: @mut Block,
               })
           }
       }
-      typeck::vtable_param(*) => {
-          fail2!("vtable_param left in monomorphized function's vtable substs");
+      typeck::vtable_param(..) => {
+          fail!("vtable_param left in monomorphized function's vtable substs");
       }
     };
 
@@ -395,13 +395,13 @@ pub fn combine_impl_and_methods_tps(bcx: @mut Block,
     let method = ty::method(ccx.tcx, mth_did);
     let n_m_tps = method.generics.type_param_defs.len();
     let node_substs = node_id_type_params(bcx, callee_id);
-    debug2!("rcvr_substs={:?}", rcvr_substs.repr(ccx.tcx));
+    debug!("rcvr_substs={:?}", rcvr_substs.repr(ccx.tcx));
     let ty_substs
         = vec::append(rcvr_substs.to_owned(),
                       node_substs.tailn(node_substs.len() - n_m_tps));
-    debug2!("n_m_tps={:?}", n_m_tps);
-    debug2!("node_substs={:?}", node_substs.repr(ccx.tcx));
-    debug2!("ty_substs={:?}", ty_substs.repr(ccx.tcx));
+    debug!("n_m_tps={:?}", n_m_tps);
+    debug!("node_substs={:?}", node_substs.repr(ccx.tcx));
+    debug!("ty_substs={:?}", ty_substs.repr(ccx.tcx));
 
 
     // Now, do the same work for the vtables.  The vtables might not
@@ -437,7 +437,7 @@ pub fn trans_trait_callee(bcx: @mut Block,
     // make a local copy for trait if needed
     let self_ty = expr_ty_adjusted(bcx, self_expr);
     let self_scratch = match ty::get(self_ty).sty {
-        ty::ty_trait(_, _, ty::RegionTraitStore(*), _, _) => {
+        ty::ty_trait(_, _, ty::RegionTraitStore(..), _, _) => {
             unpack_datum!(bcx, expr::trans_to_datum(bcx, self_expr))
         }
         _ => {
@@ -474,13 +474,13 @@ pub fn trans_trait_callee_from_llval(bcx: @mut Block,
     let ccx = bcx.ccx();
 
     // Load the data pointer from the object.
-    debug2!("(translating trait callee) loading second index from pair");
+    debug!("(translating trait callee) loading second index from pair");
     let llboxptr = GEPi(bcx, llpair, [0u, abi::trt_field_box]);
     let llbox = Load(bcx, llboxptr);
     let llself = PointerCast(bcx, llbox, Type::opaque_box(ccx).ptr_to());
 
     // Load the function from the vtable and cast it to the expected type.
-    debug2!("(translating trait callee) loading method");
+    debug!("(translating trait callee) loading method");
     let llcallee_ty = type_of_fn_from_ty(ccx, callee_ty);
     let llvtable = Load(bcx,
                         PointerCast(bcx,
@@ -524,7 +524,7 @@ pub fn vtable_id(ccx: @mut CrateContext,
         }
 
         // can't this be checked at the callee?
-        _ => fail2!("vtable_id")
+        _ => fail!("vtable_id")
     }
 }
 
@@ -545,14 +545,14 @@ pub fn get_vtable(bcx: @mut Block,
     }
 
     // Not in the cache. Actually build it.
-    let methods = do origins.flat_map |origin| {
+    let methods = origins.flat_map(|origin| {
         match *origin {
             typeck::vtable_static(id, ref substs, sub_vtables) => {
                 emit_vtable_methods(bcx, id, *substs, sub_vtables)
             }
             _ => ccx.sess.bug("get_vtable: expected a static origin"),
         }
-    };
+    });
 
     // Generate a type descriptor for the vtable.
     let tydesc = get_tydesc(ccx, self_ty);
@@ -578,9 +578,9 @@ pub fn make_vtable(ccx: &mut CrateContext,
 
         let tbl = C_struct(components, false);
         let sym = token::gensym("vtable");
-        let vt_gvar = do format!("vtable{}", sym).with_c_str |buf| {
+        let vt_gvar = format!("vtable{}", sym).with_c_str(|buf| {
             llvm::LLVMAddGlobal(ccx.llmod, val_ty(tbl).to_ref(), buf)
-        };
+        });
         llvm::LLVMSetInitializer(vt_gvar, tbl);
         llvm::LLVMSetGlobalConstant(vt_gvar, lib::llvm::True);
         lib::llvm::SetLinkage(vt_gvar, lib::llvm::InternalLinkage);
@@ -605,13 +605,13 @@ fn emit_vtable_methods(bcx: @mut Block,
     ty::populate_implementations_for_trait_if_necessary(bcx.tcx(), trt_id);
 
     let trait_method_def_ids = ty::trait_method_def_ids(tcx, trt_id);
-    do trait_method_def_ids.map |method_def_id| {
+    trait_method_def_ids.map(|method_def_id| {
         let ident = ty::method(tcx, *method_def_id).ident;
         // The substitutions we have are on the impl, so we grab
         // the method type from the impl to substitute into.
         let m_id = method_with_name(ccx, impl_id, ident.name);
         let m = ty::method(tcx, m_id);
-        debug2!("(making impl vtable) emitting method {} at subst {}",
+        debug!("(making impl vtable) emitting method {} at subst {}",
                m.repr(tcx),
                substs.repr(tcx));
         let fty = ty::subst_tps(tcx,
@@ -619,14 +619,14 @@ fn emit_vtable_methods(bcx: @mut Block,
                                 None,
                                 ty::mk_bare_fn(tcx, m.fty.clone()));
         if m.generics.has_type_params() || ty::type_has_self(fty) {
-            debug2!("(making impl vtable) method has self or type params: {}",
+            debug!("(making impl vtable) method has self or type params: {}",
                    tcx.sess.str_of(ident));
             C_null(Type::nil().ptr_to())
         } else {
             trans_fn_ref_with_vtables(bcx, m_id, 0,
                                       substs, Some(vtables)).llfn
         }
-    }
+    })
 }
 
 pub fn trans_trait_cast(bcx: @mut Block,

@@ -39,6 +39,10 @@
 #define __STDC_FORMAT_MACROS 1
 #endif
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE 1
+#endif
+
 #define ERROR 0
 
 #include <stdlib.h>
@@ -54,11 +58,23 @@
 #include <assert.h>
 
 #if defined(__WIN32__)
+// Prevent unnecessary #include's from <windows.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+// Prevent defining min and max macro
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#if defined(__cplusplus)
 extern "C" {
+#endif
 #include <windows.h>
 #include <tchar.h>
 #include <wincrypt.h>
+#if defined(__cplusplus)
 }
+#endif
 #elif defined(__GNUC__)
 #include <unistd.h>
 #include <dlfcn.h>

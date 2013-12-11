@@ -220,6 +220,7 @@ use util::common::indenter;
 use util::ppaux::{Repr, vec_map_to_str};
 
 use std::hashmap::HashMap;
+use std::ptr;
 use std::vec;
 use syntax::ast;
 use syntax::ast::Ident;
@@ -264,7 +265,7 @@ fn opt_eq(tcx: ty::ctxt, a: &Opt, b: &Opt) -> bool {
                                 a_expr = e.unwrap();
                             }
                         UnitLikeStructLit(_) => {
-                            fail2!("UnitLikeStructLit should have been handled \
+                            fail!("UnitLikeStructLit should have been handled \
                                     above")
                         }
                     }
@@ -277,14 +278,14 @@ fn opt_eq(tcx: ty::ctxt, a: &Opt, b: &Opt) -> bool {
                                 b_expr = e.unwrap();
                             }
                         UnitLikeStructLit(_) => {
-                            fail2!("UnitLikeStructLit should have been handled \
+                            fail!("UnitLikeStructLit should have been handled \
                                     above")
                         }
                     }
 
                     match const_eval::compare_lit_exprs(tcx, a_expr, b_expr) {
                         Some(val1) => val1 == 0,
-                        None => fail2!("compare_list_exprs: type mismatch"),
+                        None => fail!("compare_list_exprs: type mismatch"),
                     }
                 }
             }
@@ -294,7 +295,7 @@ fn opt_eq(tcx: ty::ctxt, a: &Opt, b: &Opt) -> bool {
             let m2 = const_eval::compare_lit_exprs(tcx, a2, b2);
             match (m1, m2) {
                 (Some(val1), Some(val2)) => (val1 == 0 && val2 == 0),
-                _ => fail2!("compare_list_exprs: type mismatch"),
+                _ => fail!("compare_list_exprs: type mismatch"),
             }
         }
         (&var(a, _), &var(b, _)) => a == b,
@@ -358,7 +359,7 @@ fn variant_opt(bcx: @mut Block, pat_id: ast::NodeId)
             }
             unreachable!();
         }
-        ast::DefFn(*) |
+        ast::DefFn(..) |
         ast::DefStruct(_) => {
             return lit(UnitLikeStructLit(pat_id));
         }
@@ -394,9 +395,9 @@ struct BindingInfo {
 type BindingsMap = HashMap<Ident, BindingInfo>;
 
 #[deriving(Clone)]
-struct ArmData<'self> {
+struct ArmData<'a> {
     bodycx: @mut Block,
-    arm: &'self ast::Arm,
+    arm: &'a ast::Arm,
     bindings_map: @BindingsMap
 }
 
@@ -407,13 +408,13 @@ struct ArmData<'self> {
  * these pointers are stored in llmatch variables just before executing `data` arm.
  */
 #[deriving(Clone)]
-struct Match<'self> {
+struct Match<'a> {
     pats: ~[@ast::Pat],
-    data: ArmData<'self>,
+    data: ArmData<'a>,
     bound_ptrs: ~[(Ident, ValueRef)]
 }
 
-impl<'self> Repr for Match<'self> {
+impl<'a> Repr for Match<'a> {
     fn repr(&self, tcx: ty::ctxt) -> ~str {
         if tcx.sess.verbose() {
             // for many programs, this just take too long to serialize
@@ -439,14 +440,14 @@ fn expand_nested_bindings<'r>(bcx: @mut Block,
                                   col: uint,
                                   val: ValueRef)
                               -> ~[Match<'r>] {
-    debug2!("expand_nested_bindings(bcx={}, m={}, col={}, val={})",
+    debug!("expand_nested_bindings(bcx={}, m={}, col={}, val={})",
            bcx.to_str(),
            m.repr(bcx.tcx()),
            col,
            bcx.val_to_str(val));
     let _indenter = indenter();
 
-    do m.map |br| {
+    m.map(|br| {
         match br.pats[col].node {
             ast::PatIdent(_, ref path, Some(inner)) => {
                 let pats = vec::append(
@@ -465,7 +466,7 @@ fn expand_nested_bindings<'r>(bcx: @mut Block,
             }
             _ => (*br).clone(),
         }
-    }
+    })
 }
 
 fn assert_is_binding_or_wild(bcx: @mut Block, p: @ast::Pat) {
@@ -477,7 +478,7 @@ fn assert_is_binding_or_wild(bcx: @mut Block, p: @ast::Pat) {
     }
 }
 
-type enter_pat<'self> = &'self fn(@ast::Pat) -> Option<~[@ast::Pat]>;
+type enter_pat<'a> = 'a |@ast::Pat| -> Option<~[@ast::Pat]>;
 
 fn enter_match<'r>(bcx: @mut Block,
                        dm: DefMap,
@@ -486,7 +487,7 @@ fn enter_match<'r>(bcx: @mut Block,
                        val: ValueRef,
                        e: enter_pat)
                     -> ~[Match<'r>] {
-    debug2!("enter_match(bcx={}, m={}, col={}, val={})",
+    debug!("enter_match(bcx={}, m={}, col={}, val={})",
            bcx.to_str(),
            m.repr(bcx.tcx()),
            col,
@@ -523,7 +524,7 @@ fn enter_match<'r>(bcx: @mut Block,
         }
     }
 
-    debug2!("result={}", result.repr(bcx.tcx()));
+    debug!("result={}", result.repr(bcx.tcx()));
 
     return result;
 }
@@ -535,7 +536,7 @@ fn enter_default<'r>(bcx: @mut Block,
                      val: ValueRef,
                      chk: FailureHandler)
                       -> ~[Match<'r>] {
-    debug2!("enter_default(bcx={}, m={}, col={}, val={})",
+    debug!("enter_default(bcx={}, m={}, col={}, val={})",
            bcx.to_str(),
            m.repr(bcx.tcx()),
            col,
@@ -543,13 +544,13 @@ fn enter_default<'r>(bcx: @mut Block,
     let _indenter = indenter();
 
     // Collect all of the matches that can match against anything.
-    let matches = do enter_match(bcx, dm, m, col, val) |p| {
+    let matches = enter_match(bcx, dm, m, col, val, |p| {
         match p.node {
-          ast::PatWild | ast::PatTup(_) => Some(~[]),
+          ast::PatWild | ast::PatWildMulti | ast::PatTup(_) => Some(~[]),
           ast::PatIdent(_, _, None) if pat_is_binding(dm, p) => Some(~[]),
           _ => None
         }
-    };
+    });
 
     // Ok, now, this is pretty subtle. A "default" match is a match
     // that needs to be considered if none of the actual checks on the
@@ -605,7 +606,7 @@ fn enter_opt<'r>(bcx: @mut Block,
                      variant_size: uint,
                      val: ValueRef)
                   -> ~[Match<'r>] {
-    debug2!("enter_opt(bcx={}, m={}, opt={:?}, col={}, val={})",
+    debug!("enter_opt(bcx={}, m={}, opt={:?}, col={}, val={})",
            bcx.to_str(),
            m.repr(bcx.tcx()),
            *opt,
@@ -616,9 +617,9 @@ fn enter_opt<'r>(bcx: @mut Block,
     let tcx = bcx.tcx();
     let dummy = @ast::Pat {id: 0, node: ast::PatWild, span: dummy_sp()};
     let mut i = 0;
-    do enter_match(bcx, tcx.def_map, m, col, val) |p| {
+    enter_match(bcx, tcx.def_map, m, col, val, |p| {
         let answer = match p.node {
-            ast::PatEnum(*) |
+            ast::PatEnum(..) |
             ast::PatIdent(_, _, None) if pat_is_const(tcx.def_map, p) => {
                 let const_def = tcx.def_map.get_copy(&p.id);
                 let const_def_id = ast_util::def_id_of_def(const_def);
@@ -724,14 +725,14 @@ fn enter_opt<'r>(bcx: @mut Block,
                 // submatch. Thus, including a default match would
                 // cause the default match to fire spuriously.
                 match *opt {
-                    vec_len(*) => None,
+                    vec_len(..) => None,
                     _ => Some(vec::from_elem(variant_size, dummy))
                 }
             }
         };
         i += 1;
         answer
-    }
+    })
 }
 
 fn enter_rec_or_struct<'r>(bcx: @mut Block,
@@ -741,7 +742,7 @@ fn enter_rec_or_struct<'r>(bcx: @mut Block,
                                fields: &[ast::Ident],
                                val: ValueRef)
                             -> ~[Match<'r>] {
-    debug2!("enter_rec_or_struct(bcx={}, m={}, col={}, val={})",
+    debug!("enter_rec_or_struct(bcx={}, m={}, col={}, val={})",
            bcx.to_str(),
            m.repr(bcx.tcx()),
            col,
@@ -749,7 +750,7 @@ fn enter_rec_or_struct<'r>(bcx: @mut Block,
     let _indenter = indenter();
 
     let dummy = @ast::Pat {id: 0, node: ast::PatWild, span: dummy_sp()};
-    do enter_match(bcx, dm, m, col, val) |p| {
+    enter_match(bcx, dm, m, col, val, |p| {
         match p.node {
             ast::PatStruct(_, ref fpats, _) => {
                 let mut pats = ~[];
@@ -766,7 +767,7 @@ fn enter_rec_or_struct<'r>(bcx: @mut Block,
                 Some(vec::from_elem(fields.len(), dummy))
             }
         }
-    }
+    })
 }
 
 fn enter_tup<'r>(bcx: @mut Block,
@@ -776,7 +777,7 @@ fn enter_tup<'r>(bcx: @mut Block,
                      val: ValueRef,
                      n_elts: uint)
                   -> ~[Match<'r>] {
-    debug2!("enter_tup(bcx={}, m={}, col={}, val={})",
+    debug!("enter_tup(bcx={}, m={}, col={}, val={})",
            bcx.to_str(),
            m.repr(bcx.tcx()),
            col,
@@ -784,7 +785,7 @@ fn enter_tup<'r>(bcx: @mut Block,
     let _indenter = indenter();
 
     let dummy = @ast::Pat {id: 0, node: ast::PatWild, span: dummy_sp()};
-    do enter_match(bcx, dm, m, col, val) |p| {
+    enter_match(bcx, dm, m, col, val, |p| {
         match p.node {
             ast::PatTup(ref elts) => Some((*elts).clone()),
             _ => {
@@ -792,7 +793,7 @@ fn enter_tup<'r>(bcx: @mut Block,
                 Some(vec::from_elem(n_elts, dummy))
             }
         }
-    }
+    })
 }
 
 fn enter_tuple_struct<'r>(bcx: @mut Block,
@@ -802,7 +803,7 @@ fn enter_tuple_struct<'r>(bcx: @mut Block,
                               val: ValueRef,
                               n_elts: uint)
                           -> ~[Match<'r>] {
-    debug2!("enter_tuple_struct(bcx={}, m={}, col={}, val={})",
+    debug!("enter_tuple_struct(bcx={}, m={}, col={}, val={})",
            bcx.to_str(),
            m.repr(bcx.tcx()),
            col,
@@ -810,7 +811,7 @@ fn enter_tuple_struct<'r>(bcx: @mut Block,
     let _indenter = indenter();
 
     let dummy = @ast::Pat {id: 0, node: ast::PatWild, span: dummy_sp()};
-    do enter_match(bcx, dm, m, col, val) |p| {
+    enter_match(bcx, dm, m, col, val, |p| {
         match p.node {
             ast::PatEnum(_, Some(ref elts)) => Some((*elts).clone()),
             _ => {
@@ -818,7 +819,7 @@ fn enter_tuple_struct<'r>(bcx: @mut Block,
                 Some(vec::from_elem(n_elts, dummy))
             }
         }
-    }
+    })
 }
 
 fn enter_box<'r>(bcx: @mut Block,
@@ -827,7 +828,7 @@ fn enter_box<'r>(bcx: @mut Block,
                      col: uint,
                      val: ValueRef)
                  -> ~[Match<'r>] {
-    debug2!("enter_box(bcx={}, m={}, col={}, val={})",
+    debug!("enter_box(bcx={}, m={}, col={}, val={})",
            bcx.to_str(),
            m.repr(bcx.tcx()),
            col,
@@ -835,7 +836,7 @@ fn enter_box<'r>(bcx: @mut Block,
     let _indenter = indenter();
 
     let dummy = @ast::Pat {id: 0, node: ast::PatWild, span: dummy_sp()};
-    do enter_match(bcx, dm, m, col, val) |p| {
+    enter_match(bcx, dm, m, col, val, |p| {
         match p.node {
             ast::PatBox(sub) => {
                 Some(~[sub])
@@ -845,7 +846,7 @@ fn enter_box<'r>(bcx: @mut Block,
                 Some(~[dummy])
             }
         }
-    }
+    })
 }
 
 fn enter_uniq<'r>(bcx: @mut Block,
@@ -854,7 +855,7 @@ fn enter_uniq<'r>(bcx: @mut Block,
                       col: uint,
                       val: ValueRef)
                   -> ~[Match<'r>] {
-    debug2!("enter_uniq(bcx={}, m={}, col={}, val={})",
+    debug!("enter_uniq(bcx={}, m={}, col={}, val={})",
            bcx.to_str(),
            m.repr(bcx.tcx()),
            col,
@@ -862,7 +863,7 @@ fn enter_uniq<'r>(bcx: @mut Block,
     let _indenter = indenter();
 
     let dummy = @ast::Pat {id: 0, node: ast::PatWild, span: dummy_sp()};
-    do enter_match(bcx, dm, m, col, val) |p| {
+    enter_match(bcx, dm, m, col, val, |p| {
         match p.node {
             ast::PatUniq(sub) => {
                 Some(~[sub])
@@ -872,7 +873,7 @@ fn enter_uniq<'r>(bcx: @mut Block,
                 Some(~[dummy])
             }
         }
-    }
+    })
 }
 
 fn enter_region<'r>(bcx: @mut Block,
@@ -881,7 +882,7 @@ fn enter_region<'r>(bcx: @mut Block,
                         col: uint,
                         val: ValueRef)
                     -> ~[Match<'r>] {
-    debug2!("enter_region(bcx={}, m={}, col={}, val={})",
+    debug!("enter_region(bcx={}, m={}, col={}, val={})",
            bcx.to_str(),
            m.repr(bcx.tcx()),
            col,
@@ -889,7 +890,7 @@ fn enter_region<'r>(bcx: @mut Block,
     let _indenter = indenter();
 
     let dummy = @ast::Pat { id: 0, node: ast::PatWild, span: dummy_sp() };
-    do enter_match(bcx, dm, m, col, val) |p| {
+    enter_match(bcx, dm, m, col, val, |p| {
         match p.node {
             ast::PatRegion(sub) => {
                 Some(~[sub])
@@ -899,7 +900,7 @@ fn enter_region<'r>(bcx: @mut Block,
                 Some(~[dummy])
             }
         }
-    }
+    })
 }
 
 // Returns the options in one column of matches. An option is something that
@@ -935,15 +936,15 @@ fn get_options(bcx: @mut Block, m: &[Match], col: uint) -> ~[Opt] {
             ast::PatLit(l) => {
                 add_to_set(ccx.tcx, &mut found, lit(ExprLit(l)));
             }
-            ast::PatIdent(*) => {
+            ast::PatIdent(..) => {
                 // This is one of: an enum variant, a unit-like struct, or a
                 // variable binding.
                 match ccx.tcx.def_map.find(&cur.id) {
-                    Some(&ast::DefVariant(*)) => {
+                    Some(&ast::DefVariant(..)) => {
                         add_to_set(ccx.tcx, &mut found,
                                    variant_opt(bcx, cur.id));
                     }
-                    Some(&ast::DefStruct(*)) => {
+                    Some(&ast::DefStruct(..)) => {
                         add_to_set(ccx.tcx, &mut found,
                                    lit(UnitLikeStructLit(cur.id)));
                     }
@@ -954,12 +955,12 @@ fn get_options(bcx: @mut Block, m: &[Match], col: uint) -> ~[Opt] {
                     _ => {}
                 }
             }
-            ast::PatEnum(*) | ast::PatStruct(*) => {
+            ast::PatEnum(..) | ast::PatStruct(..) => {
                 // This could be one of: a tuple-like enum variant, a
                 // struct-like enum variant, or a struct.
                 match ccx.tcx.def_map.find(&cur.id) {
-                    Some(&ast::DefFn(*)) |
-                    Some(&ast::DefVariant(*)) => {
+                    Some(&ast::DefFn(..)) |
+                    Some(&ast::DefVariant(..)) => {
                         add_to_set(ccx.tcx, &mut found,
                                    variant_opt(bcx, cur.id));
                     }
@@ -998,9 +999,9 @@ fn extract_variant_args(bcx: @mut Block,
                             val: ValueRef)
     -> ExtractedBlock {
     let _icx = push_ctxt("match::extract_variant_args");
-    let args = do vec::from_fn(adt::num_args(repr, disr_val)) |i| {
+    let args = vec::from_fn(adt::num_args(repr, disr_val), |i| {
         adt::trans_field_ptr(bcx, repr, val, disr_val, i)
-    };
+    });
 
     ExtractedBlock { vals: args, bcx: bcx }
 }
@@ -1025,11 +1026,10 @@ fn extract_vec_elems(bcx: @mut Block,
                       -> ExtractedBlock {
     let _icx = push_ctxt("match::extract_vec_elems");
     let vec_datum = match_datum(bcx, val, pat_id);
-    let (bcx, base, len) = vec_datum.get_vec_base_and_len(bcx, pat_span,
-                                                          pat_id, 0);
+    let (bcx, base, len) = vec_datum.get_vec_base_and_len(bcx, pat_span, pat_id, 0);
     let vt = tvec::vec_types(bcx, node_id_type(bcx, pat_id));
 
-    let mut elems = do vec::from_fn(elem_count) |i| {
+    let mut elems = vec::from_fn(elem_count, |i| {
         match slice {
             None => GEPi(bcx, base, [i]),
             Some(n) if i < n => GEPi(bcx, base, [i]),
@@ -1040,28 +1040,22 @@ fn extract_vec_elems(bcx: @mut Block,
             }
             _ => unsafe { llvm::LLVMGetUndef(vt.llunit_ty.to_ref()) }
         }
-    };
+    });
     if slice.is_some() {
         let n = slice.unwrap();
-        let slice_offset = Mul(bcx, vt.llunit_size,
-            C_int(bcx.ccx(), n as int)
-        );
-        let slice_begin = tvec::pointer_add(bcx, base, slice_offset);
-        let slice_len_offset = Mul(bcx, vt.llunit_size,
-            C_int(bcx.ccx(), (elem_count - 1u) as int)
-        );
+        let slice_byte_offset = Mul(bcx, vt.llunit_size, C_uint(bcx.ccx(), n));
+        let slice_begin = tvec::pointer_add_byte(bcx, base, slice_byte_offset);
+        let slice_len_offset = C_uint(bcx.ccx(), elem_count - 1u);
         let slice_len = Sub(bcx, len, slice_len_offset);
         let slice_ty = ty::mk_evec(bcx.tcx(),
             ty::mt {ty: vt.unit_ty, mutbl: ast::MutImmutable},
-            ty::vstore_slice(ty::re_static)
+            ty::vstore_slice(ty::ReStatic)
         );
         let scratch = scratch_datum(bcx, slice_ty, "", false);
         Store(bcx, slice_begin,
             GEPi(bcx, scratch.val, [0u, abi::slice_elt_base])
         );
-        Store(bcx, slice_len,
-            GEPi(bcx, scratch.val, [0u, abi::slice_elt_len])
-        );
+        Store(bcx, slice_len, GEPi(bcx, scratch.val, [0u, abi::slice_elt_len]));
         elems[n] = scratch.val;
         scratch.add_clean(bcx);
     }
@@ -1085,7 +1079,7 @@ fn collect_record_or_struct_fields(bcx: @mut Block,
         match br.pats[col].node {
           ast::PatStruct(_, ref fs, _) => {
             match ty::get(node_id_type(bcx, br.pats[col].id)).sty {
-              ty::ty_struct(*) => {
+              ty::ty_struct(..) => {
                    extend(&mut fields, *fs);
                    found = true;
               }
@@ -1115,11 +1109,11 @@ fn pats_require_rooting(bcx: @mut Block,
                             m: &[Match],
                             col: uint)
                          -> bool {
-    do m.iter().any |br| {
+    m.iter().any(|br| {
         let pat_id = br.pats[col].id;
         let key = root_map_key {id: pat_id, derefs: 0u };
         bcx.ccx().maps.root_map.contains_key(&key)
-    }
+    })
 }
 
 fn root_pats_as_necessary(mut bcx: @mut Block,
@@ -1144,12 +1138,12 @@ fn root_pats_as_necessary(mut bcx: @mut Block,
 // matches may be wildcards like _ or identifiers).
 macro_rules! any_pat (
     ($m:expr, $pattern:pat) => (
-        do ($m).iter().any |br| {
+        ($m).iter().any(|br| {
             match br.pats[col].node {
                 $pattern => true,
                 _ => false
             }
-        }
+        })
     )
 )
 
@@ -1170,19 +1164,19 @@ fn any_tup_pat(m: &[Match], col: uint) -> bool {
 }
 
 fn any_tuple_struct_pat(bcx: @mut Block, m: &[Match], col: uint) -> bool {
-    do m.iter().any |br| {
+    m.iter().any(|br| {
         let pat = br.pats[col];
         match pat.node {
             ast::PatEnum(_, Some(_)) => {
                 match bcx.tcx().def_map.find(&pat.id) {
-                    Some(&ast::DefFn(*)) |
-                    Some(&ast::DefStruct(*)) => true,
+                    Some(&ast::DefFn(..)) |
+                    Some(&ast::DefStruct(..)) => true,
                     _ => false
                 }
             }
             _ => false
         }
-    }
+    })
 }
 
 trait CustomFailureHandler {
@@ -1232,7 +1226,7 @@ impl FailureHandler {
     fn handle_fail(&self) -> BasicBlockRef {
         match *self {
             Infallible => {
-                fail2!("attempted to fail in infallible failure handler!")
+                fail!("attempted to fail in infallible failure handler!")
             }
             JumpToBasicBlock(basic_block) => basic_block,
             CustomFailureHandlerClass(custom_failure_handler) => {
@@ -1342,11 +1336,11 @@ fn store_non_ref_bindings(bcx: @mut Block,
                 let datum = Datum {val: llval, ty: binding_info.ty,
                                    mode: ByRef(ZeroMem)};
                 bcx = datum.store_to(bcx, INIT, lldest);
-                do opt_temp_cleanups.mutate |temp_cleanups| {
+                opt_temp_cleanups.mutate(|temp_cleanups| {
                     add_clean_temp_mem(bcx, lldest, binding_info.ty);
                     temp_cleanups.push(lldest);
                     temp_cleanups
-                };
+                });
             }
             TrByRef => {}
         }
@@ -1383,7 +1377,7 @@ fn insert_lllocals(bcx: @mut Block,
             }
         };
 
-        debug2!("binding {:?} to {}", binding_info.id, bcx.val_to_str(llval));
+        debug!("binding {:?} to {}", binding_info.id, bcx.val_to_str(llval));
         llmap.insert(binding_info.id, llval);
 
         if bcx.sess().opts.extra_debuginfo {
@@ -1404,7 +1398,7 @@ fn compile_guard(bcx: @mut Block,
                      vals: &[ValueRef],
                      chk: FailureHandler)
                   -> @mut Block {
-    debug2!("compile_guard(bcx={}, guard_expr={}, m={}, vals={})",
+    debug!("compile_guard(bcx={}, guard_expr={}, m={}, vals={})",
            bcx.to_str(),
            bcx.expr_to_str(guard_expr),
            m.repr(bcx.tcx()),
@@ -1419,10 +1413,9 @@ fn compile_guard(bcx: @mut Block,
     bcx = insert_lllocals(bcx, data.bindings_map, false);
 
     let val = unpack_result!(bcx, {
-        do with_scope_result(bcx, guard_expr.info(),
-                             "guard") |bcx| {
+        with_scope_result(bcx, guard_expr.info(), "guard", |bcx| {
             expr::trans_to_datum(bcx, guard_expr).to_result()
-        }
+        })
     });
     let val = bool_to_i1(bcx, val);
 
@@ -1431,13 +1424,13 @@ fn compile_guard(bcx: @mut Block,
         revoke_clean(bcx, *llval);
     }
 
-    return do with_cond(bcx, Not(bcx, val)) |bcx| {
+    return with_cond(bcx, Not(bcx, val), |bcx| {
         // Guard does not match: free the values we copied,
         // and remove all bindings from the lllocals table
         let bcx = drop_bindings(bcx, data);
         compile_submatch(bcx, m, vals, chk);
         bcx
-    };
+    });
 
     fn drop_bindings(bcx: @mut Block, data: &ArmData) -> @mut Block {
         let mut bcx = bcx;
@@ -1458,7 +1451,7 @@ fn compile_submatch(bcx: @mut Block,
                     m: &[Match],
                     vals: &[ValueRef],
                     chk: FailureHandler) {
-    debug2!("compile_submatch(bcx={}, m={}, vals={})",
+    debug!("compile_submatch(bcx={}, m={}, vals={})",
            bcx.to_str(),
            m.repr(bcx.tcx()),
            vec_map_to_str(vals, |v| bcx.val_to_str(*v)));
@@ -1537,7 +1530,7 @@ fn compile_submatch_continue(mut bcx: @mut Block,
         Some(ref rec_fields) => {
             let pat_ty = node_id_type(bcx, pat_id);
             let pat_repr = adt::represent_type(bcx.ccx(), pat_ty);
-            do expr::with_field_tys(tcx, pat_ty, None) |discr, field_tys| {
+            expr::with_field_tys(tcx, pat_ty, None, |discr, field_tys| {
                 let rec_vals = rec_fields.map(|field_name| {
                         let ix = ty::field_idx_strict(tcx, field_name.name, field_tys);
                         adt::trans_field_ptr(bcx, pat_repr, val, discr, ix)
@@ -1547,7 +1540,7 @@ fn compile_submatch_continue(mut bcx: @mut Block,
                         enter_rec_or_struct(bcx, dm, m, col, *rec_fields, val),
                         vec::append(rec_vals, vals_left),
                         chk);
-            }
+            });
             return;
         }
         None => {}
@@ -1560,9 +1553,9 @@ fn compile_submatch_continue(mut bcx: @mut Block,
           ty::ty_tup(ref elts) => elts.len(),
           _ => ccx.sess.bug("non-tuple type in tuple pattern")
         };
-        let tup_vals = do vec::from_fn(n_tup_elts) |i| {
+        let tup_vals = vec::from_fn(n_tup_elts, |i| {
             adt::trans_field_ptr(bcx, tup_repr, val, 0, i)
-        };
+        });
         compile_submatch(bcx, enter_tup(bcx, dm, m, col, val, n_tup_elts),
                          vec::append(tup_vals, vals_left), chk);
         return;
@@ -1582,9 +1575,9 @@ fn compile_submatch_continue(mut bcx: @mut Block,
         }
 
         let struct_repr = adt::represent_type(bcx.ccx(), struct_ty);
-        let llstructvals = do vec::from_fn(struct_element_count) |i| {
+        let llstructvals = vec::from_fn(struct_element_count, |i| {
             adt::trans_field_ptr(bcx, struct_repr, val, 0, i)
-        };
+        });
         compile_submatch(bcx,
                          enter_tuple_struct(bcx, dm, m, col, val,
                                             struct_element_count),
@@ -1607,7 +1600,7 @@ fn compile_submatch_continue(mut bcx: @mut Block,
         let pat_ty = node_id_type(bcx, pat_id);
         let llbox = Load(bcx, val);
         let unboxed = match ty::get(pat_ty).sty {
-            ty::ty_uniq(*) if !ty::type_contents(bcx.tcx(), pat_ty).contains_managed() => llbox,
+            ty::ty_uniq(..) if !ty::type_contents(bcx.tcx(), pat_ty).owns_managed() => llbox,
             _ => GEPi(bcx, llbox, [0u, abi::box_field_body])
         };
         compile_submatch(bcx, enter_uniq(bcx, dm, m, col, val),
@@ -1624,7 +1617,7 @@ fn compile_submatch_continue(mut bcx: @mut Block,
 
     // Decide what kind of branch we need
     let opts = get_options(bcx, m, col);
-    debug2!("options={:?}", opts);
+    debug!("options={:?}", opts);
     let mut kind = no_branch;
     let mut test_val = val;
     if opts.len() > 0u {
@@ -1644,13 +1637,11 @@ fn compile_submatch_continue(mut bcx: @mut Block,
                 test_val = Load(bcx, val);
                 kind = compare;
             },
-            vec_len(*) => {
+            vec_len(..) => {
                 let vt = tvec::vec_types(bcx, node_id_type(bcx, pat_id));
                 let unboxed = load_if_immediate(bcx, val, vt.vec_ty);
-                let (_, len) = tvec::get_base_and_len(
-                    bcx, unboxed, vt.vec_ty
-                );
-                test_val = SDiv(bcx, len, vt.llunit_size);
+                let (_, len) = tvec::get_base_and_len(bcx, unboxed, vt.vec_ty);
+                test_val = len;
                 kind = compare_vec_len;
             }
         }
@@ -1705,8 +1696,7 @@ fn compile_submatch_continue(mut bcx: @mut Block,
               compare => {
                   let t = node_id_type(bcx, pat_id);
                   let Result {bcx: after_cx, val: matches} = {
-                      do with_scope_result(bcx, None,
-                                           "compare_scope") |bcx| {
+                      with_scope_result(bcx, None, "compaReScope", |bcx| {
                           match trans_opt(bcx, opt) {
                               single_result(
                                   Result {bcx, val}) => {
@@ -1719,7 +1709,7 @@ fn compile_submatch_continue(mut bcx: @mut Block,
                                           t, ast::BiGe)
                               }
                               range_result(
-                                  Result {val: vbegin, _},
+                                  Result {val: vbegin, ..},
                                   Result {bcx, val: vend}) => {
                                   let Result {bcx, val: llge} =
                                       compare_scalar_types(
@@ -1732,15 +1722,17 @@ fn compile_submatch_continue(mut bcx: @mut Block,
                                   rslt(bcx, And(bcx, llge, llle))
                               }
                           }
-                      }
+                      })
                   };
                   bcx = sub_block(after_cx, "compare_next");
                   CondBr(after_cx, matches, opt_cx.llbb, bcx.llbb);
               }
               compare_vec_len => {
                   let Result {bcx: after_cx, val: matches} = {
-                      do with_scope_result(bcx, None,
-                                           "compare_vec_len_scope") |bcx| {
+                      with_scope_result(bcx,
+                                        None,
+                                        "compare_vec_len_scope",
+                                        |bcx| {
                           match trans_opt(bcx, opt) {
                               single_result(
                                   Result {bcx, val}) => {
@@ -1757,7 +1749,7 @@ fn compile_submatch_continue(mut bcx: @mut Block,
                                   rslt(bcx, value)
                               }
                               range_result(
-                                  Result {val: vbegin, _},
+                                  Result {val: vbegin, ..},
                                   Result {bcx, val: vend}) => {
                                   let llge =
                                       compare_scalar_values(
@@ -1770,7 +1762,7 @@ fn compile_submatch_continue(mut bcx: @mut Block,
                                   rslt(bcx, And(bcx, llge, llle))
                               }
                           }
-                      }
+                      })
                   };
                   bcx = sub_block(after_cx, "compare_vec_len_next");
 
@@ -1830,9 +1822,9 @@ pub fn trans_match(bcx: @mut Block,
                    arms: &[ast::Arm],
                    dest: Dest) -> @mut Block {
     let _icx = push_ctxt("match::trans_match");
-    do with_scope(bcx, match_expr.info(), "match") |bcx| {
+    with_scope(bcx, match_expr.info(), "match", |bcx| {
         trans_match_inner(bcx, discr_expr, arms, dest)
-    }
+    })
 }
 
 fn create_bindings_map(bcx: @mut Block, pat: @ast::Pat) -> BindingsMap {
@@ -1843,7 +1835,7 @@ fn create_bindings_map(bcx: @mut Block, pat: @ast::Pat) -> BindingsMap {
     let ccx = bcx.ccx();
     let tcx = bcx.tcx();
     let mut bindings_map = HashMap::new();
-    do pat_bindings(tcx.def_map, pat) |bm, p_id, span, path| {
+    pat_bindings(tcx.def_map, pat, |bm, p_id, span, path| {
         let ident = path_to_ident(path);
         let variable_ty = node_id_type(bcx, p_id);
         let llvariable_ty = type_of::type_of(ccx, variable_ty);
@@ -1851,7 +1843,7 @@ fn create_bindings_map(bcx: @mut Block, pat: @ast::Pat) -> BindingsMap {
         let llmatch;
         let trmode;
         match bm {
-            ast::BindInfer => {
+            ast::BindByValue(_) => {
                 // in this case, the final type of the variable will be T,
                 // but during matching we need to store a *T as explained
                 // above
@@ -1871,7 +1863,7 @@ fn create_bindings_map(bcx: @mut Block, pat: @ast::Pat) -> BindingsMap {
             span: span,
             ty: variable_ty
         });
-    }
+    });
     return bindings_map;
 }
 
@@ -1926,7 +1918,7 @@ fn trans_match_inner(scope_cx: @mut Block,
             Infallible
         }
     };
-    let lldiscr = discr_datum.to_zeroable_ref_llval(bcx);
+    let lldiscr = discr_datum.to_ref_llval(bcx);
     compile_submatch(bcx, matches, [lldiscr], chk);
 
     let mut arm_cxs = ~[];
@@ -1944,7 +1936,7 @@ fn trans_match_inner(scope_cx: @mut Block,
         // insert bindings into the lllocals map and add cleanups
         bcx = insert_lllocals(bcx, arm_data.bindings_map, true);
 
-        bcx = controlflow::trans_block(bcx, &arm_data.arm.body, dest);
+        bcx = controlflow::trans_block(bcx, arm_data.arm.body, dest);
         bcx = trans_block_cleanups(bcx, block_cleanups(arm_data.bodycx));
         arm_cxs.push(bcx);
     }
@@ -2005,7 +1997,7 @@ pub fn store_local(bcx: @mut Block,
                 if bcx.sess().asm_comments() {
                     add_comment(bcx, "creating zeroable ref llval");
                 }
-                let llptr = init_datum.to_zeroable_ref_llval(bcx);
+                let llptr = init_datum.to_ref_llval(bcx);
                 return bind_irrefutable_pat(bcx, pat, llptr, BindLocal);
             }
         }
@@ -2018,11 +2010,11 @@ pub fn store_local(bcx: @mut Block,
         // create dummy memory for the variables if we have no
         // value to store into them immediately
         let tcx = bcx.tcx();
-        do pat_bindings(tcx.def_map, pat) |_, p_id, _, path| {
+        pat_bindings(tcx.def_map, pat, |_, p_id, _, path| {
             bcx = mk_binding_alloca(
                 bcx, p_id, path, BindLocal,
                 |bcx, var_ty, llval| { zero_mem(bcx, llval, var_ty); bcx });
-        }
+        });
         bcx
     }
 }
@@ -2055,7 +2047,10 @@ pub fn store_arg(mut bcx: @mut Block,
     // Debug information (the llvm.dbg.declare intrinsic to be precise) always expects to get an
     // alloca, which only is the case on the general path, so lets disable the optimized path when
     // debug info is enabled.
-    let fast_path = !bcx.ccx().sess.opts.extra_debuginfo && simple_identifier(pat).is_some();
+    let arg_is_alloca = unsafe { llvm::LLVMIsAAllocaInst(llval) != ptr::null() };
+
+    let fast_path = (arg_is_alloca || !bcx.ccx().sess.opts.extra_debuginfo)
+                    && simple_identifier(pat).is_some();
 
     if fast_path {
         // Optimized path for `x: T` case. This just adopts
@@ -2075,7 +2070,8 @@ fn mk_binding_alloca(mut bcx: @mut Block,
                      p_id: ast::NodeId,
                      path: &ast::Path,
                      binding_mode: IrrefutablePatternBindingMode,
-                     populate: &fn(@mut Block, ty::t, ValueRef) -> @mut Block) -> @mut Block {
+                     populate: |@mut Block, ty::t, ValueRef| -> @mut Block)
+                     -> @mut Block {
     let var_ty = node_id_type(bcx, p_id);
     let ident = ast_util::path_to_ident(path);
     let llval = alloc_ty(bcx, var_ty, bcx.ident(ident));
@@ -2113,7 +2109,7 @@ fn bind_irrefutable_pat(bcx: @mut Block,
      * - binding_mode: is this for an argument or a local variable?
      */
 
-    debug2!("bind_irrefutable_pat(bcx={}, pat={}, binding_mode={:?})",
+    debug!("bind_irrefutable_pat(bcx={}, pat={}, binding_mode={:?})",
            bcx.to_str(),
            pat.repr(bcx.tcx()),
            binding_mode);
@@ -2139,7 +2135,7 @@ fn bind_irrefutable_pat(bcx: @mut Block,
                     bcx, pat.id, path, binding_mode,
                     |bcx, variable_ty, llvariable_val| {
                         match pat_binding_mode {
-                            ast::BindInfer => {
+                            ast::BindByValue(_) => {
                                 // By value binding: move the value that `val`
                                 // points at into the binding's stack slot.
                                 let datum = Datum {val: val,
@@ -2180,8 +2176,8 @@ fn bind_irrefutable_pat(bcx: @mut Block,
                         }
                     }
                 }
-                Some(&ast::DefFn(*)) |
-                Some(&ast::DefStruct(*)) => {
+                Some(&ast::DefFn(..)) |
+                Some(&ast::DefStruct(..)) => {
                     match *sub_pats {
                         None => {
                             // This is a unit-like struct. Nothing to do here.
@@ -2209,14 +2205,14 @@ fn bind_irrefutable_pat(bcx: @mut Block,
             let tcx = bcx.tcx();
             let pat_ty = node_id_type(bcx, pat.id);
             let pat_repr = adt::represent_type(bcx.ccx(), pat_ty);
-            do expr::with_field_tys(tcx, pat_ty, None) |discr, field_tys| {
+            expr::with_field_tys(tcx, pat_ty, None, |discr, field_tys| {
                 for f in fields.iter() {
                     let ix = ty::field_idx_strict(tcx, f.ident.name, field_tys);
                     let fldptr = adt::trans_field_ptr(bcx, pat_repr, val,
                                                       discr, ix);
                     bcx = bind_irrefutable_pat(bcx, f.pat, fldptr, binding_mode);
                 }
-            }
+            })
         }
         ast::PatTup(ref elems) => {
             let repr = adt::represent_node(bcx, pat.id);
@@ -2229,7 +2225,7 @@ fn bind_irrefutable_pat(bcx: @mut Block,
             let pat_ty = node_id_type(bcx, pat.id);
             let llbox = Load(bcx, val);
             let unboxed = match ty::get(pat_ty).sty {
-                ty::ty_uniq(*) if !ty::type_contents(bcx.tcx(), pat_ty).contains_managed() => llbox,
+                ty::ty_uniq(..) if !ty::type_contents(bcx.tcx(), pat_ty).owns_managed() => llbox,
                     _ => GEPi(bcx, llbox, [0u, abi::box_field_body])
             };
             bcx = bind_irrefutable_pat(bcx, inner, unboxed, binding_mode);
@@ -2238,19 +2234,19 @@ fn bind_irrefutable_pat(bcx: @mut Block,
             let loaded_val = Load(bcx, val);
             bcx = bind_irrefutable_pat(bcx, inner, loaded_val, binding_mode);
         }
-        ast::PatVec(*) => {
+        ast::PatVec(..) => {
             bcx.tcx().sess.span_bug(
                 pat.span,
                 format!("vector patterns are never irrefutable!"));
         }
-        ast::PatWild | ast::PatLit(_) | ast::PatRange(_, _) => ()
+        ast::PatWild | ast::PatWildMulti | ast::PatLit(_) | ast::PatRange(_, _) => ()
     }
     return bcx;
 }
 
 fn simple_identifier<'a>(pat: &'a ast::Pat) -> Option<&'a ast::Path> {
     match pat.node {
-        ast::PatIdent(ast::BindInfer, ref path, None) => {
+        ast::PatIdent(ast::BindByValue(_), ref path, None) => {
             Some(path)
         }
         _ => {

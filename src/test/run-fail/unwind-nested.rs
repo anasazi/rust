@@ -10,12 +10,14 @@
 
 // error-pattern:fail
 
+#[feature(managed_boxes)];
+
 fn main() {
     let _a = @0;
     {
         let _b = @0;
         {
-            fail2!();
+            fail!();
         }
     }
 }

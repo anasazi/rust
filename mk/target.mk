@@ -11,13 +11,13 @@
 # This is the compile-time target-triple for the compiler. For the compiler at
 # runtime, this should be considered the host-triple. More explanation for why
 # this exists can be found on issue #2400
-export CFG_COMPILER_TRIPLE
+export CFG_COMPILER
 
 # The standard libraries should be held up to a higher standard than any old
 # code, make sure that these common warnings are denied by default. These can
-# be overridden during development temporarily. For stage0, we allow all these
-# to suppress warnings which may be bugs in stage0 (should be fixed in stage1+)
-WFLAGS_ST0 = -A warnings
+# be overridden during development temporarily. For stage0, we allow warnings
+# which may be bugs in stage0 (should be fixed in stage1+)
+WFLAGS_ST0 = -W warnings
 WFLAGS_ST1 = -D warnings
 WFLAGS_ST2 = -D warnings
 
@@ -36,7 +36,7 @@ WFLAGS_ST2 = -D warnings
 # had its chance to clean it out; otherwise the other products will be
 # inadvertantly included in the clean out.
 
-SNAPSHOT_RUSTC_POST_CLEANUP=$(HBIN0_H_$(CFG_BUILD_TRIPLE))/rustc$(X_$(CFG_BUILD_TRIPLE))
+SNAPSHOT_RUSTC_POST_CLEANUP=$(HBIN0_H_$(CFG_BUILD))/rustc$(X_$(CFG_BUILD))
 
 define TARGET_STAGE_N
 
@@ -60,8 +60,10 @@ $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_STDLIB_$(2)): \
 		| $$(TLIB$(1)_T_$(2)_H_$(3))/
 	@$$(call E, compile_and_link: $$@)
 	$$(call REMOVE_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(STDLIB_GLOB_$(2)),$$(notdir $$@))
+	$$(call REMOVE_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(STDLIB_RGLOB_$(2)),$$(notdir $$@))
 	$$(STAGE$(1)_T_$(2)_H_$(3)) $$(WFLAGS_ST$(1)) --out-dir $$(@D) $$< && touch $$@
 	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(STDLIB_GLOB_$(2)),$$(notdir $$@))
+	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(STDLIB_RGLOB_$(2)),$$(notdir $$@))
 
 $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_EXTRALIB_$(2)): \
 		$$(EXTRALIB_CRATE) $$(EXTRALIB_INPUTS) \
@@ -70,22 +72,44 @@ $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_EXTRALIB_$(2)): \
 		| $$(TLIB$(1)_T_$(2)_H_$(3))/
 	@$$(call E, compile_and_link: $$@)
 	$$(call REMOVE_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(EXTRALIB_GLOB_$(2)),$$(notdir $$@))
+	$$(call REMOVE_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(EXTRALIB_RGLOB_$(2)),$$(notdir $$@))
 	$$(STAGE$(1)_T_$(2)_H_$(3)) $$(WFLAGS_ST$(1)) --out-dir $$(@D) $$< && touch $$@
 	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(EXTRALIB_GLOB_$(2)),$$(notdir $$@))
+	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(EXTRALIB_RGLOB_$(2)),$$(notdir $$@))
+
+$$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_LIBRUSTUV_$(2)): \
+		$$(LIBRUSTUV_CRATE) $$(LIBRUSTUV_INPUTS) \
+	        $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_STDLIB_$(2)) \
+		$$(TSREQ$(1)_T_$(2)_H_$(3)) \
+		$$(LIBUV_LIB_$(2)) \
+		$$(UV_SUPPORT_LIB_$(2)) \
+		| $$(TLIB$(1)_T_$(2)_H_$(3))/
+	@$$(call E, compile_and_link: $$@)
+	$$(call REMOVE_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBRUSTUV_GLOB_$(2)),$$(notdir $$@))
+	$$(call REMOVE_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBRUSTUV_RGLOB_$(2)),$$(notdir $$@))
+	$$(STAGE$(1)_T_$(2)_H_$(3)) $$(WFLAGS_ST$(1)) \
+		-L $$(UV_SUPPORT_DIR_$(2)) \
+		-L $$(dir $$(LIBUV_LIB_$(2))) \
+		--out-dir $$(@D) $$< && touch $$@
+	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBRUSTUV_GLOB_$(2)),$$(notdir $$@))
+	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBRUSTUV_RGLOB_$(2)),$$(notdir $$@))
 
 $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_LIBSYNTAX_$(3)): \
                 $$(LIBSYNTAX_CRATE) $$(LIBSYNTAX_INPUTS) \
 		$$(TSREQ$(1)_T_$(2)_H_$(3))			\
 		$$(TSTDLIB_DEFAULT$(1)_T_$(2)_H_$(3))      \
 		$$(TEXTRALIB_DEFAULT$(1)_T_$(2)_H_$(3)) \
+		$$(TLIBRUSTUV_DEFAULT$(1)_T_$(2)_H_$(3)) \
 		| $$(TLIB$(1)_T_$(2)_H_$(3))/
 	@$$(call E, compile_and_link: $$@)
 	$$(call REMOVE_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBSYNTAX_GLOB_$(2)),$$(notdir $$@))
+	$$(call REMOVE_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBSYNTAX_RGLOB_$(2)),$$(notdir $$@))
 	$$(STAGE$(1)_T_$(2)_H_$(3)) $$(WFLAGS_ST$(1)) $(BORROWCK) --out-dir $$(@D) $$< && touch $$@
 	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBSYNTAX_GLOB_$(2)),$$(notdir $$@))
+	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBSYNTAX_RGLOB_$(2)),$$(notdir $$@))
 
 # Only build the compiler for host triples
-ifneq ($$(findstring $(2),$$(CFG_HOST_TRIPLES)),)
+ifneq ($$(findstring $(2),$$(CFG_HOST)),)
 
 $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_RUSTLLVM_$(3)): \
 		$(2)/rustllvm/$(CFG_RUSTLLVM_$(3)) \
@@ -94,25 +118,33 @@ $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_RUSTLLVM_$(3)): \
 	@$$(call E, cp: $$@)
 	$$(Q)cp $$< $$@
 
-$$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_LIBRUSTC_$(3)): CFG_COMPILER_TRIPLE = $(2)
+$$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_LIBRUSTC_$(3)): CFG_COMPILER = $(2)
 $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_LIBRUSTC_$(3)):		\
 		$$(COMPILER_CRATE) $$(COMPILER_INPUTS)		\
+		$(S)src/librustc/lib/llvmdeps.rs		\
 		$$(TSREQ$(1)_T_$(2)_H_$(3)) \
                 $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_LIBSYNTAX_$(3)) \
                 $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_RUSTLLVM_$(3)) \
 		| $$(TLIB$(1)_T_$(2)_H_$(3))/
 	@$$(call E, compile_and_link: $$@)
 	$$(call REMOVE_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBRUSTC_GLOB_$(2)),$$(notdir $$@))
-	$$(STAGE$(1)_T_$(2)_H_$(3)) $$(WFLAGS_ST$(1)) --out-dir $$(@D) $$< && touch $$@
+	$$(call REMOVE_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBRUSTC_RGLOB_$(2)),$$(notdir $$@))
+	$$(STAGE$(1)_T_$(2)_H_$(3)) $$(WFLAGS_ST$(1)) \
+	    -L "$$(LLVM_LIBDIR_$(2))" \
+	    --out-dir $$(@D) $$< && touch $$@
 	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBRUSTC_GLOB_$(2)),$$(notdir $$@))
+	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBRUSTC_RGLOB_$(2)),$$(notdir $$@))
 
+# NOTE: after the next snapshot remove these '-L' flags
 $$(TBIN$(1)_T_$(2)_H_$(3))/rustc$$(X_$(3)):			\
 		$$(DRIVER_CRATE)				\
 		$$(TSREQ$(1)_T_$(2)_H_$(3)) \
 		$$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_LIBRUSTC_$(3)) \
 		| $$(TBIN$(1)_T_$(2)_H_$(3))/
 	@$$(call E, compile_and_link: $$@)
-	$$(STAGE$(1)_T_$(2)_H_$(3)) --cfg rustc -o $$@ $$<
+	$$(STAGE$(1)_T_$(2)_H_$(3)) --cfg rustc -o $$@ $$< \
+		-L $$(UV_SUPPORT_DIR_$(2)) \
+		-L $$(dir $$(LIBUV_LIB_$(2)))
 ifdef CFG_ENABLE_PAX_FLAGS
 	@$$(call E, apply PaX flags: $$@)
 	@"$(CFG_PAXCTL)" -cm "$$@"
@@ -131,8 +163,8 @@ endif
 endef
 
 # In principle, each host can build each target:
-$(foreach source,$(CFG_HOST_TRIPLES),				\
- $(foreach target,$(CFG_TARGET_TRIPLES),			\
+$(foreach source,$(CFG_HOST),				\
+ $(foreach target,$(CFG_TARGET),			\
   $(eval $(call TARGET_STAGE_N,0,$(target),$(source)))		\
   $(eval $(call TARGET_STAGE_N,1,$(target),$(source)))		\
   $(eval $(call TARGET_STAGE_N,2,$(target),$(source)))		\

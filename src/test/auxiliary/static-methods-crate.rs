@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[crate_id="static_methods_crate#0.1"];
+// NOTE: remove after the next snapshot
 #[link(name = "static_methods_crate",
        vers = "0.1")];
 
@@ -38,6 +40,6 @@ impl read for bool {
 pub fn read<T:read>(s: ~str) -> T {
     match read::readMaybe(s) {
       Some(x) => x,
-      _ => fail2!("read failed!")
+      _ => fail!("read failed!")
     }
 }

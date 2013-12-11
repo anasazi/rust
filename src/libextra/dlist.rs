@@ -48,15 +48,15 @@ struct Node<T> {
 
 /// Double-ended DList iterator
 #[deriving(Clone)]
-pub struct DListIterator<'self, T> {
-    priv head: &'self Link<T>,
+pub struct DListIterator<'a, T> {
+    priv head: &'a Link<T>,
     priv tail: Rawlink<Node<T>>,
     priv nelem: uint,
 }
 
 /// Double-ended mutable DList iterator
-pub struct MutDListIterator<'self, T> {
-    priv list: &'self mut DList<T>,
+pub struct MutDListIterator<'a, T> {
+    priv list: &'a mut DList<T>,
     priv head: Rawlink<Node<T>>,
     priv tail: Rawlink<Node<T>>,
     priv nelem: uint,
@@ -165,14 +165,14 @@ impl<T> DList<T> {
     /// Remove the first Node and return it, or None if the list is empty
     #[inline]
     fn pop_front_node(&mut self) -> Option<~Node<T>> {
-        do self.list_head.take().map |mut front_node| {
+        self.list_head.take().map(|mut front_node| {
             self.length -= 1;
             match front_node.next.take() {
                 Some(node) => self.list_head = link_with_prev(node, Rawlink::none()),
                 None => self.list_tail = Rawlink::none()
             }
             front_node
-        }
+        })
     }
 
     /// Add a Node last in the list
@@ -191,14 +191,14 @@ impl<T> DList<T> {
     /// Remove the last Node and return it, or None if the list is empty
     #[inline]
     fn pop_back_node(&mut self) -> Option<~Node<T>> {
-        do self.list_tail.resolve().map_default(None) |tail| {
+        self.list_tail.resolve().map_default(None, |tail| {
             self.length -= 1;
             self.list_tail = tail.prev;
             match tail.prev.resolve() {
                 None => self.list_head.take(),
                 Some(tail_prev) => tail_prev.next.take()
             }
-        }
+        })
     }
 }
 
@@ -225,8 +225,9 @@ impl<T> Deque<T> for DList<T> {
     /// Provide a mutable reference to the back element, or None if the list is empty
     #[inline]
     fn back_mut<'a>(&'a mut self) -> Option<&'a mut T> {
-        let mut tmp = self.list_tail.resolve(); // FIXME: #3511: shouldn't need variable
-        tmp.as_mut().map(|tail| &mut tail.value)
+        let tmp: Option<&'a mut Node<T>> =
+            self.list_tail.resolve(); // FIXME: #3511: shouldn't need variable
+        tmp.map(|tail| &mut tail.value)
     }
 
     /// Add an element first in the list
@@ -240,7 +241,7 @@ impl<T> Deque<T> for DList<T> {
     ///
     /// O(1)
     fn pop_front(&mut self) -> Option<T> {
-        self.pop_front_node().map(|~Node{value, _}| value)
+        self.pop_front_node().map(|~Node{value, ..}| value)
     }
 
     /// Add an element last in the list
@@ -254,7 +255,7 @@ impl<T> Deque<T> for DList<T> {
     ///
     /// O(1)
     fn pop_back(&mut self) -> Option<T> {
-        self.pop_back_node().map(|~Node{value, _}| value)
+        self.pop_back_node().map(|~Node{value, ..}| value)
     }
 }
 
@@ -270,9 +271,9 @@ impl<T> DList<T> {
     /// If the list is empty, do nothing.
     #[inline]
     pub fn rotate_forward(&mut self) {
-        do self.pop_back_node().map |tail| {
+        self.pop_back_node().map(|tail| {
             self.push_front_node(tail)
-        };
+        });
     }
 
     /// Move the first element to the back of the list.
@@ -280,9 +281,9 @@ impl<T> DList<T> {
     /// If the list is empty, do nothing.
     #[inline]
     pub fn rotate_backward(&mut self) {
-        do self.pop_front_node().map |head| {
+        self.pop_front_node().map(|head| {
             self.push_back_node(head)
-        };
+        });
     }
 
     /// Add all elements from `other` to the end of the list
@@ -320,7 +321,7 @@ impl<T> DList<T> {
     /// or at the end.
     ///
     /// O(N)
-    pub fn insert_when(&mut self, elt: T, f: &fn(&T, &T) -> bool) {
+    pub fn insert_when(&mut self, elt: T, f: |&T, &T| -> bool) {
         {
             let mut it = self.mut_iter();
             loop {
@@ -339,7 +340,7 @@ impl<T> DList<T> {
     /// put `a` in the result if `f(a, b)` is true, else `b`.
     ///
     /// O(max(N, M))
-    pub fn merge(&mut self, mut other: DList<T>, f: &fn(&T, &T) -> bool) {
+    pub fn merge(&mut self, mut other: DList<T>, f: |&T, &T| -> bool) {
         {
             let mut it = self.mut_iter();
             loop {
@@ -438,17 +439,17 @@ impl<T> Drop for DList<T> {
 }
 
 
-impl<'self, A> Iterator<&'self A> for DListIterator<'self, A> {
+impl<'a, A> Iterator<&'a A> for DListIterator<'a, A> {
     #[inline]
-    fn next(&mut self) -> Option<&'self A> {
+    fn next(&mut self) -> Option<&'a A> {
         if self.nelem == 0 {
             return None;
         }
-        do self.head.as_ref().map |head| {
+        self.head.as_ref().map(|head| {
             self.nelem -= 1;
             self.head = &head.next;
             &head.value
-        }
+        })
     }
 
     #[inline]
@@ -457,37 +458,37 @@ impl<'self, A> Iterator<&'self A> for DListIterator<'self, A> {
     }
 }
 
-impl<'self, A> DoubleEndedIterator<&'self A> for DListIterator<'self, A> {
+impl<'a, A> DoubleEndedIterator<&'a A> for DListIterator<'a, A> {
     #[inline]
-    fn next_back(&mut self) -> Option<&'self A> {
+    fn next_back(&mut self) -> Option<&'a A> {
         if self.nelem == 0 {
             return None;
         }
         let tmp = self.tail.resolve_immut(); // FIXME: #3511: shouldn't need variable
-        do tmp.as_ref().map |prev| {
+        tmp.as_ref().map(|prev| {
             self.nelem -= 1;
             self.tail = prev.prev;
             &prev.value
-        }
+        })
     }
 }
 
-impl<'self, A> ExactSize<&'self A> for DListIterator<'self, A> {}
+impl<'a, A> ExactSize<&'a A> for DListIterator<'a, A> {}
 
-impl<'self, A> Iterator<&'self mut A> for MutDListIterator<'self, A> {
+impl<'a, A> Iterator<&'a mut A> for MutDListIterator<'a, A> {
     #[inline]
-    fn next(&mut self) -> Option<&'self mut A> {
+    fn next(&mut self) -> Option<&'a mut A> {
         if self.nelem == 0 {
             return None;
         }
-        do self.head.resolve().map |next| {
+        self.head.resolve().map(|next| {
             self.nelem -= 1;
             self.head = match next.next {
                 Some(ref mut node) => Rawlink::some(&mut **node),
                 None => Rawlink::none(),
             };
             &mut next.value
-        }
+        })
     }
 
     #[inline]
@@ -496,21 +497,21 @@ impl<'self, A> Iterator<&'self mut A> for MutDListIterator<'self, A> {
     }
 }
 
-impl<'self, A> DoubleEndedIterator<&'self mut A> for MutDListIterator<'self, A> {
+impl<'a, A> DoubleEndedIterator<&'a mut A> for MutDListIterator<'a, A> {
     #[inline]
-    fn next_back(&mut self) -> Option<&'self mut A> {
+    fn next_back(&mut self) -> Option<&'a mut A> {
         if self.nelem == 0 {
             return None;
         }
-        do self.tail.resolve().map |prev| {
+        self.tail.resolve().map(|prev| {
             self.nelem -= 1;
             self.tail = prev.prev;
             &mut prev.value
-        }
+        })
     }
 }
 
-impl<'self, A> ExactSize<&'self mut A> for MutDListIterator<'self, A> {}
+impl<'a, A> ExactSize<&'a mut A> for MutDListIterator<'a, A> {}
 
 /// Allow mutating the DList while iterating
 pub trait ListInsertion<A> {
@@ -524,7 +525,7 @@ pub trait ListInsertion<A> {
 }
 
 // private methods for MutDListIterator
-impl<'self, A> MutDListIterator<'self, A> {
+impl<'a, A> MutDListIterator<'a, A> {
     fn insert_next_node(&mut self, mut ins_node: ~Node<A>) {
         // Insert before `self.head` so that it is between the
         // previously yielded element and self.head.
@@ -546,7 +547,7 @@ impl<'self, A> MutDListIterator<'self, A> {
     }
 }
 
-impl<'self, A> ListInsertion<A> for MutDListIterator<'self, A> {
+impl<'a, A> ListInsertion<A> for MutDListIterator<'a, A> {
     #[inline]
     fn insert_next(&mut self, elt: A) {
         self.insert_next_node(~Node::new(elt))
@@ -635,11 +636,11 @@ pub fn check_links<T>(list: &DList<T>) {
     loop {
         match (last_ptr, node_ptr.prev.resolve_immut()) {
             (None   , None      ) => {}
-            (None   , _         ) => fail2!("prev link for list_head"),
+            (None   , _         ) => fail!("prev link for list_head"),
             (Some(p), Some(pptr)) => {
                 assert_eq!(p as *Node<T>, pptr as *Node<T>);
             }
-            _ => fail2!("prev link is none, not good"),
+            _ => fail!("prev link is none, not good"),
         }
         match node_ptr.next {
             Some(ref next) => {
@@ -1031,11 +1032,11 @@ mod tests {
 
     #[test]
     fn test_fuzz() {
-        do 25.times {
+        25.times(|| {
             fuzz_test(3);
             fuzz_test(16);
             fuzz_test(189);
-        }
+        })
     }
 
     #[cfg(test)]
@@ -1078,43 +1079,43 @@ mod tests {
     #[bench]
     fn bench_collect_into(b: &mut test::BenchHarness) {
         let v = &[0, ..64];
-        do b.iter {
+        b.iter(|| {
             let _: DList<int> = v.iter().map(|x| *x).collect();
-        }
+        })
     }
 
     #[bench]
     fn bench_push_front(b: &mut test::BenchHarness) {
         let mut m: DList<int> = DList::new();
-        do b.iter {
+        b.iter(|| {
             m.push_front(0);
-        }
+        })
     }
 
     #[bench]
     fn bench_push_back(b: &mut test::BenchHarness) {
         let mut m: DList<int> = DList::new();
-        do b.iter {
+        b.iter(|| {
             m.push_back(0);
-        }
+        })
     }
 
     #[bench]
     fn bench_push_back_pop_back(b: &mut test::BenchHarness) {
         let mut m: DList<int> = DList::new();
-        do b.iter {
+        b.iter(|| {
             m.push_back(0);
             m.pop_back();
-        }
+        })
     }
 
     #[bench]
     fn bench_push_front_pop_front(b: &mut test::BenchHarness) {
         let mut m: DList<int> = DList::new();
-        do b.iter {
+        b.iter(|| {
             m.push_front(0);
             m.pop_front();
-        }
+        })
     }
 
     #[bench]
@@ -1122,9 +1123,9 @@ mod tests {
         let mut m: DList<int> = DList::new();
         m.push_front(0);
         m.push_front(1);
-        do b.iter {
+        b.iter(|| {
             m.rotate_forward();
-        }
+        })
     }
 
     #[bench]
@@ -1132,41 +1133,41 @@ mod tests {
         let mut m: DList<int> = DList::new();
         m.push_front(0);
         m.push_front(1);
-        do b.iter {
+        b.iter(|| {
             m.rotate_backward();
-        }
+        })
     }
 
     #[bench]
     fn bench_iter(b: &mut test::BenchHarness) {
         let v = &[0, ..128];
         let m: DList<int> = v.iter().map(|&x|x).collect();
-        do b.iter {
+        b.iter(|| {
             assert!(m.iter().len() == 128);
-        }
+        })
     }
     #[bench]
     fn bench_iter_mut(b: &mut test::BenchHarness) {
         let v = &[0, ..128];
         let mut m: DList<int> = v.iter().map(|&x|x).collect();
-        do b.iter {
+        b.iter(|| {
             assert!(m.mut_iter().len() == 128);
-        }
+        })
     }
     #[bench]
     fn bench_iter_rev(b: &mut test::BenchHarness) {
         let v = &[0, ..128];
         let m: DList<int> = v.iter().map(|&x|x).collect();
-        do b.iter {
+        b.iter(|| {
             assert!(m.rev_iter().len() == 128);
-        }
+        })
     }
     #[bench]
     fn bench_iter_mut_rev(b: &mut test::BenchHarness) {
         let v = &[0, ..128];
         let mut m: DList<int> = v.iter().map(|&x|x).collect();
-        do b.iter {
+        b.iter(|| {
             assert!(m.mut_rev_iter().len() == 128);
-        }
+        })
     }
 }

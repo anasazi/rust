@@ -8,20 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-
-
-
-// -*- rust -*-
+#[feature(managed_boxes)];
 
 // Tests for match as expressions resulting in boxed types
 fn test_box() {
-    let res = match true { true => { @100 } _ => fail2!("wat") };
+    let res = match true { true => { @100 } _ => fail!("wat") };
     assert_eq!(*res, 100);
 }
 
 fn test_str() {
     let res = match true { true => { ~"happy" },
-                         _ => fail2!("not happy at all") };
+                         _ => fail!("not happy at all") };
     assert_eq!(res, ~"happy");
 }
 

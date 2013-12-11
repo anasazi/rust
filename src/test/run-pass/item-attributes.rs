@@ -16,6 +16,8 @@
 #[attr3];
 #[attr4(attr5)];
 
+#[crate_id="extra#0.1"];
+// NOTE: remove after the next snapshot
 // Special linkage attributes for the crate
 #[link(name = "extra",
        vers = "0.1",
@@ -174,7 +176,9 @@ mod test_foreign_items {
     }
 }
 
-mod test_literals {
+
+// FIXME #623 - these aren't supported yet
+/*mod test_literals {
     #[str = "s"];
     #[char = 'c'];
     #[int = 100];
@@ -185,7 +189,7 @@ mod test_literals {
     #[nil = ()];
     #[bool = true];
     mod m {}
-}
+}*/
 
 fn test_fn_inner() {
     #[inner_fn_attr];

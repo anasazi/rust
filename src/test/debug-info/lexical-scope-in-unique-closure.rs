@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// xfail-android: FIXME(#10381)
+
 // compile-flags:-Z extra-debug-info
 // debugger:rbreak zzz
 // debugger:run
@@ -49,7 +51,7 @@ fn main() {
     zzz();
     sentinel();
 
-    let unique_closure: ~fn(int) = |x| {
+    let unique_closure: proc(int) = proc(x) {
         zzz();
         sentinel();
 

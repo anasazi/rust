@@ -8,33 +8,39 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use libc;
-use option::{Some, None};
-use cell::Cell;
+use io::net::ip::{SocketAddr, Ipv4Addr, Ipv6Addr};
+
 use clone::Clone;
 use container::Container;
 use iter::{Iterator, range};
-use super::io::net::ip::{SocketAddr, Ipv4Addr, Ipv6Addr};
-use vec::{OwnedVector, MutableVector, ImmutableVector};
+use option::{Some, None};
+use os;
 use path::GenericPath;
-use rt::sched::Scheduler;
-use unstable::{run_in_bare_thread};
-use rt::thread::Thread;
-use rt::task::Task;
-use rt::uv::uvio::UvEventLoop;
-use rt::work_queue::WorkQueue;
-use rt::sleeper_list::SleeperList;
-use rt::comm::oneshot;
+use path::Path;
+use rand::Rng;
+use rand;
 use result::{Result, Ok, Err};
+use rt::basic;
+use rt::deque::BufferPool;
+use comm::Chan;
+use rt::new_event_loop;
+use rt::sched::Scheduler;
+use rt::sleeper_list::SleeperList;
+use rt::task::Task;
+use rt::thread::Thread;
+use task::TaskResult;
+use unstable::{run_in_bare_thread};
+use vec;
+use vec::{OwnedVector, MutableVector, ImmutableVector};
 
 pub fn new_test_uv_sched() -> Scheduler {
 
-    let queue = WorkQueue::new();
-    let queues = ~[queue.clone()];
+    let mut pool = BufferPool::new();
+    let (worker, stealer) = pool.deque();
 
-    let mut sched = Scheduler::new(~UvEventLoop::new(),
-                                   queue,
-                                   queues,
+    let mut sched = Scheduler::new(new_event_loop(),
+                                   worker,
+                                   ~[stealer],
                                    SleeperList::new());
 
     // Don't wait for the Shutdown message
@@ -43,23 +49,60 @@ pub fn new_test_uv_sched() -> Scheduler {
 
 }
 
-pub fn run_in_newsched_task(f: ~fn()) {
-    let f = Cell::new(f);
+pub fn new_test_sched() -> Scheduler {
+    let mut pool = BufferPool::new();
+    let (worker, stealer) = pool.deque();
+
+    let mut sched = Scheduler::new(basic::event_loop(),
+                                   worker,
+                                   ~[stealer],
+                                   SleeperList::new());
+
+    // Don't wait for the Shutdown message
+    sched.no_sleep = true;
+    return sched;
+}
+
+pub fn run_in_uv_task(f: proc()) {
     do run_in_bare_thread {
-        run_in_newsched_task_core(f.take());
+        run_in_uv_task_core(f);
     }
 }
 
-pub fn run_in_newsched_task_core(f: ~fn()) {
+pub fn run_in_newsched_task(f: proc()) {
+    do run_in_bare_thread {
+        run_in_newsched_task_core(f);
+    }
+}
+
+pub fn run_in_uv_task_core(f: proc()) {
 
     use rt::sched::Shutdown;
 
     let mut sched = ~new_test_uv_sched();
-    let exit_handle = Cell::new(sched.make_handle());
+    let exit_handle = sched.make_handle();
 
-    let on_exit: ~fn(bool) = |exit_status| {
-        exit_handle.take().send(Shutdown);
-        rtassert!(exit_status);
+    let on_exit: proc(TaskResult) = proc(exit_status: TaskResult) {
+        let mut exit_handle = exit_handle;
+        exit_handle.send(Shutdown);
+        rtassert!(exit_status.is_ok());
+    };
+    let mut task = ~Task::new_root(&mut sched.stack_pool, None, f);
+    task.death.on_exit = Some(on_exit);
+
+    sched.bootstrap(task);
+}
+
+pub fn run_in_newsched_task_core(f: proc()) {
+    use rt::sched::Shutdown;
+
+    let mut sched = ~new_test_sched();
+    let exit_handle = sched.make_handle();
+
+    let on_exit: proc(TaskResult) = proc(exit_status: TaskResult) {
+        let mut exit_handle = exit_handle;
+        exit_handle.send(Shutdown);
+        rtassert!(exit_status.is_ok());
     };
     let mut task = ~Task::new_root(&mut sched.stack_pool, None, f);
     task.death.on_exit = Some(on_exit);
@@ -98,12 +141,10 @@ mod darwin_fd_limit {
     static RLIMIT_NOFILE: libc::c_int = 8;
 
     pub unsafe fn raise_fd_limit() {
-        #[fixed_stack_segment]; #[inline(never)];
-
         // The strategy here is to fetch the current resource limits, read the kern.maxfilesperproc
         // sysctl value, and bump the soft resource limit for maxfiles up to the sysctl value.
         use ptr::{to_unsafe_ptr, to_mut_unsafe_ptr, mut_null};
-        use sys::size_of_val;
+        use mem::size_of_val;
         use os::last_os_error;
 
         // Fetch the kern.maxfilesperproc value
@@ -115,7 +156,7 @@ mod darwin_fd_limit {
                   to_mut_unsafe_ptr(&mut size),
                   mut_null(), 0) != 0 {
             let err = last_os_error();
-            error2!("raise_fd_limit: error calling sysctl: {}", err);
+            error!("raise_fd_limit: error calling sysctl: {}", err);
             return;
         }
 
@@ -123,7 +164,7 @@ mod darwin_fd_limit {
         let mut rlim = rlimit{rlim_cur: 0, rlim_max: 0};
         if getrlimit(RLIMIT_NOFILE, to_mut_unsafe_ptr(&mut rlim)) != 0 {
             let err = last_os_error();
-            error2!("raise_fd_limit: error calling getrlimit: {}", err);
+            error!("raise_fd_limit: error calling getrlimit: {}", err);
             return;
         }
 
@@ -133,7 +174,7 @@ mod darwin_fd_limit {
         // Set our newly-increased resource limit
         if setrlimit(RLIMIT_NOFILE, to_unsafe_ptr(&rlim)) != 0 {
             let err = last_os_error();
-            error2!("raise_fd_limit: error calling setrlimit: {}", err);
+            error!("raise_fd_limit: error calling setrlimit: {}", err);
             return;
         }
     }
@@ -153,7 +194,7 @@ pub fn prepare_for_lots_of_tests() {
 /// Create more than one scheduler and run a function in a task
 /// in one of the schedulers. The schedulers will stay alive
 /// until the function `f` returns.
-pub fn run_in_mt_newsched_task(f: ~fn()) {
+pub fn run_in_mt_newsched_task(f: proc()) {
     use os;
     use from_str::FromStr;
     use rt::sched::Shutdown;
@@ -161,8 +202,6 @@ pub fn run_in_mt_newsched_task(f: ~fn()) {
 
     // see comment in other function (raising fd limits)
     prepare_for_lots_of_tests();
-
-    let f = Cell::new(f);
 
     do run_in_bare_thread {
         let nthreads = match os::getenv("RUST_RT_TEST_THREADS") {
@@ -183,18 +222,16 @@ pub fn run_in_mt_newsched_task(f: ~fn()) {
 
         let mut handles = ~[];
         let mut scheds = ~[];
-        let mut work_queues = ~[];
 
-        for _ in range(0u, nthreads) {
-            let work_queue = WorkQueue::new();
-            work_queues.push(work_queue);
-        }
+        let mut pool = BufferPool::<~Task>::new();
+        let workers = range(0, nthreads).map(|_| pool.deque());
+        let (workers, stealers) = vec::unzip(workers);
 
-        for i in range(0u, nthreads) {
-            let loop_ = ~UvEventLoop::new();
+        for worker in workers.move_iter() {
+            let loop_ = new_event_loop();
             let mut sched = ~Scheduler::new(loop_,
-                                            work_queues[i].clone(),
-                                            work_queues.clone(),
+                                            worker,
+                                            stealers.clone(),
                                             sleepers.clone());
             let handle = sched.make_handle();
 
@@ -202,28 +239,28 @@ pub fn run_in_mt_newsched_task(f: ~fn()) {
             scheds.push(sched);
         }
 
-        let handles = Cell::new(handles);
-        let on_exit: ~fn(bool) = |exit_status| {
-            let mut handles = handles.take();
+        let handles = handles;  // Work around not being able to capture mut
+        let on_exit: proc(TaskResult) = proc(exit_status: TaskResult) {
             // Tell schedulers to exit
+            let mut handles = handles;
             for handle in handles.mut_iter() {
                 handle.send(Shutdown);
             }
 
-            rtassert!(exit_status);
+            rtassert!(exit_status.is_ok());
         };
-        let mut main_task = ~Task::new_root(&mut scheds[0].stack_pool, None, f.take());
+        let mut main_task = ~Task::new_root(&mut scheds[0].stack_pool,
+                                            None,
+                                            f);
         main_task.death.on_exit = Some(on_exit);
 
         let mut threads = ~[];
-        let main_task = Cell::new(main_task);
 
         let main_thread = {
             let sched = scheds.pop();
-            let sched_cell = Cell::new(sched);
+            let main_task = main_task;
             do Thread::start {
-                let sched = sched_cell.take();
-                sched.bootstrap(main_task.take());
+                sched.bootstrap(main_task);
             }
         };
         threads.push(main_thread);
@@ -233,11 +270,9 @@ pub fn run_in_mt_newsched_task(f: ~fn()) {
             let bootstrap_task = ~do Task::new_root(&mut sched.stack_pool, None) || {
                 rtdebug!("bootstrapping non-primary scheduler");
             };
-            let bootstrap_task_cell = Cell::new(bootstrap_task);
-            let sched_cell = Cell::new(sched);
+            let sched = sched;
             let thread = do Thread::start {
-                let sched = sched_cell.take();
-                sched.bootstrap(bootstrap_task_cell.take());
+                sched.bootstrap(bootstrap_task);
             };
 
             threads.push(thread);
@@ -252,16 +287,16 @@ pub fn run_in_mt_newsched_task(f: ~fn()) {
 }
 
 /// Test tasks will abort on failure instead of unwinding
-pub fn spawntask(f: ~fn()) {
+pub fn spawntask(f: proc()) {
     Scheduler::run_task(Task::build_child(None, f));
 }
 
 /// Create a new task and run it right now. Aborts on failure
-pub fn spawntask_later(f: ~fn()) {
+pub fn spawntask_later(f: proc()) {
     Scheduler::run_task_later(Task::build_child(None, f));
 }
 
-pub fn spawntask_random(f: ~fn()) {
+pub fn spawntask_random(f: proc()) {
     use rand::{Rand, rng};
 
     let mut rng = rng();
@@ -274,11 +309,12 @@ pub fn spawntask_random(f: ~fn()) {
     }
 }
 
-pub fn spawntask_try(f: ~fn()) -> Result<(),()> {
+pub fn spawntask_try(f: proc()) -> Result<(),()> {
 
-    let (port, chan) = oneshot();
-    let chan = Cell::new(chan);
-    let on_exit: ~fn(bool) = |exit_status| chan.take().send(exit_status);
+    let (port, chan) = Chan::new();
+    let on_exit: proc(TaskResult) = proc(exit_status) {
+        chan.send(exit_status)
+    };
 
     let mut new_task = Task::build_root(None, f);
     new_task.death.on_exit = Some(on_exit);
@@ -286,27 +322,26 @@ pub fn spawntask_try(f: ~fn()) -> Result<(),()> {
     Scheduler::run_task(new_task);
 
     let exit_status = port.recv();
-    if exit_status { Ok(()) } else { Err(()) }
+    if exit_status.is_ok() { Ok(()) } else { Err(()) }
 
 }
 
 /// Spawn a new task in a new scheduler and return a thread handle.
-pub fn spawntask_thread(f: ~fn()) -> Thread {
-
-    let f = Cell::new(f);
-
+pub fn spawntask_thread(f: proc()) -> Thread<()> {
     let thread = do Thread::start {
-        run_in_newsched_task_core(f.take());
+        run_in_newsched_task_core(f);
     };
 
     return thread;
 }
 
 /// Get a ~Task for testing purposes other than actually scheduling it.
-pub fn with_test_task(blk: ~fn(~Task) -> ~Task) {
+pub fn with_test_task(blk: proc(~Task) -> ~Task) {
     do run_in_bare_thread {
-        let mut sched = ~new_test_uv_sched();
-        let task = blk(~Task::new_root(&mut sched.stack_pool, None, ||{}));
+        let mut sched = ~new_test_sched();
+        let task = blk(~Task::new_root(&mut sched.stack_pool,
+                                       None,
+                                       proc() {}));
         cleanup_task(task);
     }
 }
@@ -317,13 +352,26 @@ pub fn cleanup_task(mut task: ~Task) {
 }
 
 /// Get a port number, starting at 9600, for use in tests
-#[fixed_stack_segment] #[inline(never)]
 pub fn next_test_port() -> u16 {
+    use unstable::mutex::{Mutex, MUTEX_INIT};
+    static mut lock: Mutex = MUTEX_INIT;
+    static mut next_offset: u16 = 0;
     unsafe {
-        return rust_dbg_next_port(base_port() as libc::uintptr_t) as u16;
+        let base = base_port();
+        lock.lock();
+        let ret = base + next_offset;
+        next_offset += 1;
+        lock.unlock();
+        return ret;
     }
-    extern {
-        fn rust_dbg_next_port(base: libc::uintptr_t) -> libc::uintptr_t;
+}
+
+/// Get a temporary path which could be the location of a unix socket
+pub fn next_test_unix() -> Path {
+    if cfg!(unix) {
+        os::tmpdir().join(rand::task_rng().gen_ascii_str(20))
+    } else {
+        Path::new(r"\\.\pipe\" + rand::task_rng().gen_ascii_str(20))
     }
 }
 
@@ -344,13 +392,13 @@ The bots run multiple builds at the same time, and these builds
 all want to use ports. This function figures out which workspace
 it is running in and assigns a port range based on it.
 */
-fn base_port() -> uint {
+fn base_port() -> u16 {
     use os;
     use str::StrSlice;
     use vec::ImmutableVector;
 
-    let base = 9600u;
-    let range = 1000;
+    let base = 9600u16;
+    let range = 1000u16;
 
     let bases = [
         ("32-opt", base + range * 1),

@@ -13,12 +13,12 @@
 mod rustrt {
     use std::libc;
 
+    #[link(name = "rustrt")]
     extern {
         pub fn rust_get_test_int() -> libc::intptr_t;
     }
 }
 
-#[fixed_stack_segment] #[inline(never)]
 pub fn main() {
     unsafe {
         rustrt::rust_get_test_int();

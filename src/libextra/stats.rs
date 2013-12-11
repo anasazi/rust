@@ -8,11 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#[allow(missing_doc)];
+
 use sort;
 use std::cmp;
 use std::hashmap;
 use std::io;
 use std::num;
+use std::util;
 
 // NB: this can probably be rewritten in terms of num::Num
 // to be less f64-specific.
@@ -21,6 +24,12 @@ use std::num;
 pub trait Stats {
 
     /// Sum of the samples.
+    ///
+    /// Note: this method sacrifices performance at the altar of accuracy
+    /// Depends on IEEE-754 arithmetic guarantees. See proof of correctness at:
+    /// ["Adaptive Precision Floating-Point Arithmetic and Fast Robust Geometric Predicates"]
+    /// (http://www.cs.cmu.edu/~quake-papers/robust-arithmetic.ps)
+    /// *Discrete & Computational Geometry 18*, 3 (Oct 1997), 305-363, Shewchuk J.R.
     fn sum(self) -> f64;
 
     /// Minimum value of the samples.
@@ -138,10 +147,39 @@ impl Summary {
     }
 }
 
-impl<'self> Stats for &'self [f64] {
+impl<'a> Stats for &'a [f64] {
 
+    // FIXME #11059 handle NaN, inf and overflow
     fn sum(self) -> f64 {
-        self.iter().fold(0.0, |p,q| p + *q)
+        let mut partials : ~[f64] = ~[];
+
+        for &mut x in self.iter() {
+            let mut j = 0;
+            // This inner loop applies `hi`/`lo` summation to each
+            // partial so that the list of partial sums remains exact.
+            for i in range(0, partials.len()) {
+                let mut y = partials[i];
+                if num::abs(x) < num::abs(y) {
+                    util::swap(&mut x, &mut y);
+                }
+                // Rounded `x+y` is stored in `hi` with round-off stored in
+                // `lo`. Together `hi+lo` are exactly equal to `x+y`.
+                let hi = x + y;
+                let lo = y - (hi - x);
+                if lo != 0f64 {
+                    partials[j] = lo;
+                    j += 1;
+                }
+                x = hi;
+            }
+            if j >= partials.len() {
+                partials.push(x);
+            } else {
+                partials[j] = x;
+                partials.truncate(j+1);
+            }
+        }
+        partials.iter().fold(0.0, |p, q| p + *q)
     }
 
     fn min(self) -> f64 {
@@ -266,14 +304,14 @@ pub fn winsorize(samples: &mut [f64], pct: f64) {
 }
 
 /// Render writes the min, max and quartiles of the provided `Summary` to the provided `Writer`.
-pub fn write_5_number_summary(w: @io::Writer, s: &Summary) {
+pub fn write_5_number_summary(w: &mut io::Writer, s: &Summary) {
     let (q1,q2,q3) = s.quartiles;
-    w.write_str(format!("(min={}, q1={}, med={}, q3={}, max={})",
+    write!(w, "(min={}, q1={}, med={}, q3={}, max={})",
                      s.min,
                      q1,
                      q2,
                      q3,
-                     s.max));
+                     s.max);
 }
 
 /// Render a boxplot to the provided writer. The boxplot shows the min, max and quartiles of the
@@ -288,7 +326,7 @@ pub fn write_5_number_summary(w: @io::Writer, s: &Summary) {
 ///   10 |        [--****#******----------]          | 40
 /// ~~~~
 
-pub fn write_boxplot(w: @io::Writer, s: &Summary, width_hint: uint) {
+pub fn write_boxplot(w: &mut io::Writer, s: &Summary, width_hint: uint) {
 
     let (q1,q2,q3) = s.quartiles;
 
@@ -318,52 +356,48 @@ pub fn write_boxplot(w: @io::Writer, s: &Summary, width_hint: uint) {
     let range_width = width_hint - overhead_width;;
     let char_step = range / (range_width as f64);
 
-    w.write_str(lostr);
-    w.write_char(' ');
-    w.write_char('|');
+    write!(w, "{} |", lostr);
 
     let mut c = 0;
     let mut v = lo;
 
     while c < range_width && v < s.min {
-        w.write_char(' ');
+        write!(w, " ");
         v += char_step;
         c += 1;
     }
-    w.write_char('[');
+    write!(w, "[");
     c += 1;
     while c < range_width && v < q1 {
-        w.write_char('-');
+        write!(w, "-");
         v += char_step;
         c += 1;
     }
     while c < range_width && v < q2 {
-        w.write_char('*');
+        write!(w, "*");
         v += char_step;
         c += 1;
     }
-    w.write_char('#');
+    write!(w, r"\#");
     c += 1;
     while c < range_width && v < q3 {
-        w.write_char('*');
+        write!(w, "*");
         v += char_step;
         c += 1;
     }
     while c < range_width && v < s.max {
-        w.write_char('-');
+        write!(w, "-");
         v += char_step;
         c += 1;
     }
-    w.write_char(']');
+    write!(w, "]");
     while c < range_width {
-        w.write_char(' ');
+        write!(w, " ");
         v += char_step;
         c += 1;
     }
 
-    w.write_char('|');
-    w.write_char(' ');
-    w.write_str(histr);
+    write!(w, "| {}", histr);
 }
 
 /// Returns a HashMap with the number of occurrences of every element in the
@@ -386,17 +420,19 @@ mod tests {
     use stats::write_5_number_summary;
     use stats::write_boxplot;
     use std::io;
+    use std::str;
 
     fn check(samples: &[f64], summ: &Summary) {
 
         let summ2 = Summary::new(samples);
 
-        let w = io::stdout();
-        w.write_char('\n');
+        let mut w = io::stdout();
+        let w = &mut w as &mut io::Writer;
+        write!(w, "\n");
         write_5_number_summary(w, &summ2);
-        w.write_char('\n');
+        write!(w, "\n");
         write_boxplot(w, &summ2, 50);
-        w.write_char('\n');
+        write!(w, "\n");
 
         assert_eq!(summ.sum, summ2.sum);
         assert_eq!(summ.min, summ2.min);
@@ -937,10 +973,11 @@ mod tests {
     #[test]
     fn test_boxplot_nonpositive() {
         fn t(s: &Summary, expected: ~str) {
-            let out = do io::with_str_writer |w|  {
-                write_boxplot(w, s, 30)
-            };
-
+            use std::io::mem::MemWriter;
+            use std::io::Decorator;
+            let mut m = MemWriter::new();
+            write_boxplot(&mut m as &mut io::Writer, s, 30);
+            let out = str::from_utf8_owned(m.inner());
             assert_eq!(out, expected);
         }
 
@@ -949,5 +986,34 @@ mod tests {
         t(&Summary::new([-2.0, 0.0]), ~"-2 |[------******#******---]| 0");
 
     }
+    #[test]
+    fn test_sum_f64s() {
+        assert_eq!([0.5, 3.2321, 1.5678].sum(), 5.2999);
+    }
+    #[test]
+    fn test_sum_f64_between_ints_that_sum_to_0() {
+        assert_eq!([1e30, 1.2, -1e30].sum(), 1.2);
+    }
+}
 
+#[cfg(test)]
+mod bench {
+    use extra::test::BenchHarness;
+    use std::vec;
+
+    #[bench]
+    fn sum_three_items(bh: &mut BenchHarness) {
+        bh.iter(|| {
+            [1e20, 1.5, -1e20].sum();
+        })
+    }
+    #[bench]
+    fn sum_many_f64(bh: &mut BenchHarness) {
+        let nums = [-1e30, 1e60, 1e30, 1.0, -1e60];
+        let v = vec::from_fn(500, |i| nums[i%5]);
+
+        bh.iter(|| {
+            v.sum();
+        })
+    }
 }

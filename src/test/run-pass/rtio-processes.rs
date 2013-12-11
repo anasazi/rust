@@ -23,12 +23,13 @@
 //
 // See #9341
 
-use std::rt::io::process::{Process, ProcessConfig, CreatePipe, Ignored};
-use std::rt::io::{Reader, Writer};
-use std::rt::io::pipe::PipeStream;
+use std::io;
+use std::io::process;
+use std::io::process::{Process, ProcessConfig, CreatePipe, Ignored};
 use std::str;
 
 #[test]
+// FIXME(#10380)
 #[cfg(unix, not(target_os="android"))]
 fn smoke() {
     let io = ~[];
@@ -42,10 +43,11 @@ fn smoke() {
     let p = Process::new(args);
     assert!(p.is_some());
     let mut p = p.unwrap();
-    assert_eq!(p.wait(), 0);
+    assert!(p.wait().success());
 }
 
 #[test]
+// FIXME(#10380)
 #[cfg(unix, not(target_os="android"))]
 fn smoke_failure() {
     let io = ~[];
@@ -56,13 +58,14 @@ fn smoke_failure() {
         cwd: None,
         io: io,
     };
-    let p = Process::new(args);
-    assert!(p.is_some());
-    let mut p = p.unwrap();
-    assert!(p.wait() != 0);
+    match io::result(|| Process::new(args)) {
+        Ok(..) => fail!(),
+        Err(..) => {}
+    }
 }
 
 #[test]
+// FIXME(#10380)
 #[cfg(unix, not(target_os="android"))]
 fn exit_reported_right() {
     let io = ~[];
@@ -76,7 +79,27 @@ fn exit_reported_right() {
     let p = Process::new(args);
     assert!(p.is_some());
     let mut p = p.unwrap();
-    assert_eq!(p.wait(), 1);
+    assert!(p.wait().matches_exit_status(1));
+}
+
+#[test]
+#[cfg(unix, not(target_os="android"))]
+fn signal_reported_right() {
+    let io = ~[];
+    let args = ProcessConfig {
+        program: "/bin/sh",
+        args: [~"-c", ~"kill -1 $$"],
+        env: None,
+        cwd: None,
+        io: io,
+    };
+    let p = Process::new(args);
+    assert!(p.is_some());
+    let mut p = p.unwrap();
+    match p.wait() {
+        process::ExitSignal(1) => {},
+        result => fail!("not terminated by signal 1 (instead, {})", result),
+    }
 }
 
 fn read_all(input: &mut Reader) -> ~str {
@@ -85,7 +108,7 @@ fn read_all(input: &mut Reader) -> ~str {
     loop {
         match input.read(buf) {
             None => { break }
-            Some(n) => { ret = ret + str::from_utf8(buf.slice_to(n)); }
+            Some(n) => { ret.push_str(str::from_utf8(buf.slice_to(n))); }
         }
     }
     return ret;
@@ -98,15 +121,15 @@ fn run_output(args: ProcessConfig) -> ~str {
     assert!(p.io[0].is_none());
     assert!(p.io[1].is_some());
     let ret = read_all(p.io[1].get_mut_ref() as &mut Reader);
-    assert_eq!(p.wait(), 0);
+    assert!(p.wait().success());
     return ret;
 }
 
 #[test]
+// FIXME(#10380)
 #[cfg(unix, not(target_os="android"))]
 fn stdout_works() {
-    let pipe = PipeStream::new().unwrap();
-    let io = ~[Ignored, CreatePipe(pipe, false, true)];
+    let io = ~[Ignored, CreatePipe(false, true)];
     let args = ProcessConfig {
         program: "/bin/sh",
         args: [~"-c", ~"echo foobar"],
@@ -118,10 +141,10 @@ fn stdout_works() {
 }
 
 #[test]
+// FIXME(#10380)
 #[cfg(unix, not(target_os="android"))]
 fn set_cwd_works() {
-    let pipe = PipeStream::new().unwrap();
-    let io = ~[Ignored, CreatePipe(pipe, false, true)];
+    let io = ~[Ignored, CreatePipe(false, true)];
     let cwd = Some("/");
     let args = ProcessConfig {
         program: "/bin/sh",
@@ -134,12 +157,11 @@ fn set_cwd_works() {
 }
 
 #[test]
+// FIXME(#10380)
 #[cfg(unix, not(target_os="android"))]
 fn stdin_works() {
-    let input = PipeStream::new().unwrap();
-    let output = PipeStream::new().unwrap();
-    let io = ~[CreatePipe(input, true, false),
-               CreatePipe(output, false, true)];
+    let io = ~[CreatePipe(true, false),
+               CreatePipe(false, true)];
     let args = ProcessConfig {
         program: "/bin/sh",
         args: [~"-c", ~"read line; echo $line"],
@@ -151,6 +173,6 @@ fn stdin_works() {
     p.io[0].get_mut_ref().write("foobar".as_bytes());
     p.io[0] = None; // close stdin;
     let out = read_all(p.io[1].get_mut_ref() as &mut Reader);
-    assert_eq!(p.wait(), 0);
+    assert!(p.wait().success());
     assert_eq!(out, ~"foobar\n");
 }

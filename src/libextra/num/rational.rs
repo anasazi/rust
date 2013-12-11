@@ -20,8 +20,8 @@ use super::bigint::BigInt;
 #[deriving(Clone)]
 #[allow(missing_doc)]
 pub struct Ratio<T> {
-    numer: T,
-    denom: T
+    priv numer: T,
+    priv denom: T
 }
 
 /// Alias for a `Ratio` of machine-sized integers.
@@ -50,11 +50,35 @@ impl<T: Clone + Integer + Ord>
     #[inline]
     pub fn new(numer: T, denom: T) -> Ratio<T> {
         if denom == Zero::zero() {
-            fail2!("denominator == 0");
+            fail!("denominator == 0");
         }
         let mut ret = Ratio::new_raw(numer, denom);
         ret.reduce();
         ret
+    }
+
+    /// Convert to an integer.
+    #[inline]
+    pub fn to_integer(&self) -> T {
+        self.trunc().numer
+    }
+
+    /// Gets an immutable reference to the numerator.
+    #[inline]
+    pub fn numer<'a>(&'a self) -> &'a T {
+        &self.numer
+    }
+
+    /// Gets an immutable reference to the denominator.
+    #[inline]
+    pub fn denom<'a>(&'a self) -> &'a T {
+        &self.denom
+    }
+
+    /// Return true if the rational number is an integer (denominator is 1).
+    #[inline]
+    pub fn is_integer(&self) -> bool {
+        self.denom == One::one()
     }
 
     /// Put self into lowest terms, with denom > 0.
@@ -76,7 +100,7 @@ impl<T: Clone + Integer + Ord>
     }
 
     /// Return a `reduce`d copy of self.
-    fn reduced(&self) -> Ratio<T> {
+    pub fn reduced(&self) -> Ratio<T> {
         let mut ret = self.clone();
         ret.reduce();
         ret
@@ -268,36 +292,36 @@ impl<T: FromStr + Clone + Integer + Ord>
     FromStr for Ratio<T> {
     /// Parses `numer/denom`.
     fn from_str(s: &str) -> Option<Ratio<T>> {
-        let split: ~[&str] = s.splitn_iter('/', 1).collect();
+        let split: ~[&str] = s.splitn('/', 1).collect();
         if split.len() < 2 {
             return None
         }
         let a_option: Option<T> = FromStr::from_str(split[0]);
-        do a_option.and_then |a| {
+        a_option.and_then(|a| {
             let b_option: Option<T> = FromStr::from_str(split[1]);
-            do b_option.and_then |b| {
+            b_option.and_then(|b| {
                 Some(Ratio::new(a.clone(), b.clone()))
-            }
-        }
+            })
+        })
     }
 }
 impl<T: FromStrRadix + Clone + Integer + Ord>
     FromStrRadix for Ratio<T> {
     /// Parses `numer/denom` where the numbers are in base `radix`.
     fn from_str_radix(s: &str, radix: uint) -> Option<Ratio<T>> {
-        let split: ~[&str] = s.splitn_iter('/', 1).collect();
+        let split: ~[&str] = s.splitn('/', 1).collect();
         if split.len() < 2 {
             None
         } else {
             let a_option: Option<T> = FromStrRadix::from_str_radix(split[0],
                                                                    radix);
-            do a_option.and_then |a| {
+            a_option.and_then(|a| {
                 let b_option: Option<T> =
                     FromStrRadix::from_str_radix(split[1], radix);
-                do b_option.and_then |b| {
+                b_option.and_then(|b| {
                     Some(Ratio::new(a.clone(), b.clone()))
-                }
-            }
+                })
+            })
         }
     }
 }
@@ -359,6 +383,48 @@ mod test {
 
         assert!(_0 >= _0 && _1 >= _1);
         assert!(_1 >= _0 && !(_0 >= _1));
+    }
+
+
+    #[test]
+    fn test_to_integer() {
+        assert_eq!(_0.to_integer(), 0);
+        assert_eq!(_1.to_integer(), 1);
+        assert_eq!(_2.to_integer(), 2);
+        assert_eq!(_1_2.to_integer(), 0);
+        assert_eq!(_3_2.to_integer(), 1);
+        assert_eq!(_neg1_2.to_integer(), 0);
+    }
+
+
+    #[test]
+    fn test_numer() {
+        assert_eq!(_0.numer(), &0);
+        assert_eq!(_1.numer(), &1);
+        assert_eq!(_2.numer(), &2);
+        assert_eq!(_1_2.numer(), &1);
+        assert_eq!(_3_2.numer(), &3);
+        assert_eq!(_neg1_2.numer(), &(-1));
+    }
+    #[test]
+    fn test_denom() {
+        assert_eq!(_0.denom(), &1);
+        assert_eq!(_1.denom(), &1);
+        assert_eq!(_2.denom(), &1);
+        assert_eq!(_1_2.denom(), &2);
+        assert_eq!(_3_2.denom(), &2);
+        assert_eq!(_neg1_2.denom(), &2);
+    }
+
+
+    #[test]
+    fn test_is_integer() {
+        assert!(_0.is_integer());
+        assert!(_1.is_integer());
+        assert!(_2.is_integer());
+        assert!(!_1_2.is_integer());
+        assert!(!_3_2.is_integer());
+        assert!(!_neg1_2.is_integer());
     }
 
 

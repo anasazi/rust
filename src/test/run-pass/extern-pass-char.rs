@@ -10,11 +10,11 @@
 
 // Test a function that takes/returns a u8.
 
+#[link(name = "rustrt")]
 extern {
     pub fn rust_dbg_extern_identity_u8(v: u8) -> u8;
 }
 
-#[fixed_stack_segment] #[inline(never)]
 pub fn main() {
     unsafe {
         assert_eq!(22_u8, rust_dbg_extern_identity_u8(22_u8));

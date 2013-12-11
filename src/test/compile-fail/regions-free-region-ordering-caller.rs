@@ -12,13 +12,7 @@
 // than the thing it points at and ensure that they result in
 // errors. See also regions-free-region-ordering-callee.rs
 
-struct Paramd<'self> { x: &'self uint }
-
-fn call1<'a>(x: &'a uint) {
-    let y: uint = 3;
-    let z: &'a &'blk uint = &(&y);
-    //~^ ERROR pointer has a longer lifetime than the data it references
-}
+struct Paramd<'a> { x: &'a uint }
 
 fn call2<'a, 'b>(a: &'a uint, b: &'b uint) {
     let z: Option<&'b &'a uint> = None;
@@ -32,7 +26,7 @@ fn call3<'a, 'b>(a: &'a uint, b: &'b uint) {
 }
 
 fn call4<'a, 'b>(a: &'a uint, b: &'b uint) {
-    let z: Option<&fn(&'a &'b uint)> = None;
+    let z: Option<|&'a &'b uint|> = None;
     //~^ ERROR pointer has a longer lifetime than the data it references
 }
 

@@ -29,9 +29,10 @@ use time::precise_time_ns;
 use treemap::TreeMap;
 
 use std::clone::Clone;
-use std::comm::{stream, SharedChan, GenericPort, GenericChan};
 use std::io;
-use std::result;
+use std::io::File;
+use std::io::Writer;
+use std::io::stdio::StdWriter;
 use std::task;
 use std::to_str::ToStr;
 use std::f64;
@@ -74,6 +75,11 @@ impl TestDesc {
     }
 }
 
+/// Represents a benchmark function.
+pub trait TDynBenchFn {
+    fn run(&self, harness: &mut BenchHarness);
+}
+
 // A function that runs a test. If the function returns successfully,
 // the test succeeds; if the function fails then the test fails. We
 // may need to come up with a more clever definition of test in order
@@ -81,30 +87,30 @@ impl TestDesc {
 pub enum TestFn {
     StaticTestFn(extern fn()),
     StaticBenchFn(extern fn(&mut BenchHarness)),
-    StaticMetricFn(~fn(&mut MetricMap)),
-    DynTestFn(~fn()),
-    DynMetricFn(~fn(&mut MetricMap)),
-    DynBenchFn(~fn(&mut BenchHarness))
+    StaticMetricFn(proc(&mut MetricMap)),
+    DynTestFn(proc()),
+    DynMetricFn(proc(&mut MetricMap)),
+    DynBenchFn(~TDynBenchFn)
 }
 
 impl TestFn {
     fn padding(&self) -> NamePadding {
         match self {
-            &StaticTestFn(*)   => PadNone,
-            &StaticBenchFn(*)  => PadOnRight,
-            &StaticMetricFn(*) => PadOnRight,
-            &DynTestFn(*)      => PadNone,
-            &DynMetricFn(*)    => PadOnRight,
-            &DynBenchFn(*)     => PadOnRight,
+            &StaticTestFn(..)   => PadNone,
+            &StaticBenchFn(..)  => PadOnRight,
+            &StaticMetricFn(..) => PadOnRight,
+            &DynTestFn(..)      => PadNone,
+            &DynMetricFn(..)    => PadOnRight,
+            &DynBenchFn(..)     => PadOnRight,
         }
     }
 }
 
 // Structure passed to BenchFns
 pub struct BenchHarness {
-    iterations: u64,
-    ns_start: u64,
-    ns_end: u64,
+    priv iterations: u64,
+    priv ns_start: u64,
+    priv ns_end: u64,
     bytes: u64
 }
 
@@ -124,8 +130,8 @@ pub struct TestDescAndFn {
 
 #[deriving(Clone, Encodable, Decodable, Eq)]
 pub struct Metric {
-    value: f64,
-    noise: f64
+    priv value: f64,
+    priv noise: f64
 }
 
 #[deriving(Eq)]
@@ -155,10 +161,10 @@ pub fn test_main(args: &[~str], tests: ~[TestDescAndFn]) {
     let opts =
         match parse_opts(args) {
             Some(Ok(o)) => o,
-            Some(Err(msg)) => fail2!("{}", msg),
+            Some(Err(msg)) => fail!("{}", msg),
             None => return
         };
-    if !run_tests_console(&opts, tests) { fail2!("Some tests failed"); }
+    if !run_tests_console(&opts, tests) { fail!("Some tests failed"); }
 }
 
 // A variant optimized for invocation with a static test vector.
@@ -169,7 +175,7 @@ pub fn test_main(args: &[~str], tests: ~[TestDescAndFn]) {
 // semantics into parallel test runners, which in turn requires a ~[]
 // rather than a &[].
 pub fn test_main_static(args: &[~str], tests: &[TestDescAndFn]) {
-    let owned_tests = do tests.map |t| {
+    let owned_tests = tests.map(|t| {
         match t.testfn {
             StaticTestFn(f) =>
             TestDescAndFn { testfn: StaticTestFn(f), desc: t.desc.clone() },
@@ -178,10 +184,10 @@ pub fn test_main_static(args: &[~str], tests: &[TestDescAndFn]) {
             TestDescAndFn { testfn: StaticBenchFn(f), desc: t.desc.clone() },
 
             _ => {
-                fail2!("non-static tests passed to test::test_main_static");
+                fail!("non-static tests passed to test::test_main_static");
             }
         }
-    };
+    });
     test_main(args, owned_tests)
 }
 
@@ -220,8 +226,6 @@ fn optgroups() -> ~[getopts::groups::OptGroup] {
 }
 
 fn usage(binary: &str, helpstr: &str) {
-    #[fixed_stack_segment]; #[inline(never)];
-
     let message = format!("Usage: {} [OPTIONS] [FILTER]", binary);
     println(groups::usage(message, optgroups()));
     println("");
@@ -240,7 +244,7 @@ Test Attributes:
     #[bench]       - Indicates a function is a benchmark to be run. This
                      function takes one argument (extra::test::BenchHarness).
     #[should_fail] - This function (also labeled with #[test]) will only pass if
-                     the code causes a failure (an assertion failure or fail2!)
+                     the code causes a failure (an assertion failure or fail!)
     #[ignore]      - When applied to a function which is already attributed as a
                      test, then the test runner will ignore these tests during
                      normal test runs. Running with --ignored will run these
@@ -308,7 +312,7 @@ pub fn opt_shard(maybestr: Option<~str>) -> Option<(uint,uint)> {
     match maybestr {
         None => None,
         Some(s) => {
-            match s.split_iter('.').to_owned_vec() {
+            match s.split('.').to_owned_vec() {
                 [a, b] => match (from_str::<uint>(a), from_str::<uint>(b)) {
                     (Some(a), Some(b)) => Some((a,b)),
                     _ => None
@@ -322,8 +326,8 @@ pub fn opt_shard(maybestr: Option<~str>) -> Option<(uint,uint)> {
 
 #[deriving(Clone, Eq)]
 pub struct BenchSamples {
-    ns_iter_summ: stats::Summary,
-    mb_s: uint
+    priv ns_iter_summ: stats::Summary,
+    priv mb_s: uint
 }
 
 #[deriving(Clone, Eq)]
@@ -335,10 +339,9 @@ pub enum TestResult {
     TrBench(BenchSamples),
 }
 
-struct ConsoleTestState {
-    out: @io::Writer,
-    log_out: Option<@io::Writer>,
-    term: Option<term::Terminal>,
+struct ConsoleTestState<T> {
+    log_out: Option<File>,
+    out: Either<term::Terminal<T>, T>,
     use_color: bool,
     total: uint,
     passed: uint,
@@ -350,29 +353,20 @@ struct ConsoleTestState {
     max_name_len: uint, // number of columns to fill when aligning names
 }
 
-impl ConsoleTestState {
-    pub fn new(opts: &TestOpts) -> ConsoleTestState {
+impl<T: Writer> ConsoleTestState<T> {
+    pub fn new(opts: &TestOpts, _: Option<T>) -> ConsoleTestState<StdWriter> {
         let log_out = match opts.logfile {
-            Some(ref path) => match io::file_writer(path,
-                                                    [io::Create,
-                                                     io::Truncate]) {
-                result::Ok(w) => Some(w),
-                result::Err(ref s) => {
-                    fail2!("can't open output file: {}", *s)
-                }
-            },
+            Some(ref path) => File::create(path),
             None => None
         };
-        let out = io::stdout();
-        let term = match term::Terminal::new(out) {
-            Err(_) => None,
-            Ok(t) => Some(t)
+        let out = match term::Terminal::new(io::stdout()) {
+            Err(_) => Right(io::stdout()),
+            Ok(t) => Left(t)
         };
         ConsoleTestState {
             out: out,
             log_out: log_out,
             use_color: use_color(),
-            term: term,
             total: 0u,
             passed: 0u,
             failed: 0u,
@@ -384,116 +378,123 @@ impl ConsoleTestState {
         }
     }
 
-    pub fn write_ok(&self) {
+    pub fn write_ok(&mut self) {
         self.write_pretty("ok", term::color::GREEN);
     }
 
-    pub fn write_failed(&self) {
+    pub fn write_failed(&mut self) {
         self.write_pretty("FAILED", term::color::RED);
     }
 
-    pub fn write_ignored(&self) {
+    pub fn write_ignored(&mut self) {
         self.write_pretty("ignored", term::color::YELLOW);
     }
 
-    pub fn write_metric(&self) {
+    pub fn write_metric(&mut self) {
         self.write_pretty("metric", term::color::CYAN);
     }
 
-    pub fn write_bench(&self) {
+    pub fn write_bench(&mut self) {
         self.write_pretty("bench", term::color::CYAN);
     }
 
-    pub fn write_added(&self) {
+    pub fn write_added(&mut self) {
         self.write_pretty("added", term::color::GREEN);
     }
 
-    pub fn write_improved(&self) {
+    pub fn write_improved(&mut self) {
         self.write_pretty("improved", term::color::GREEN);
     }
 
-    pub fn write_removed(&self) {
+    pub fn write_removed(&mut self) {
         self.write_pretty("removed", term::color::YELLOW);
     }
 
-    pub fn write_regressed(&self) {
+    pub fn write_regressed(&mut self) {
         self.write_pretty("regressed", term::color::RED);
     }
 
-    pub fn write_pretty(&self,
+    pub fn write_pretty(&mut self,
                         word: &str,
                         color: term::color::Color) {
-        match self.term {
-            None => self.out.write_str(word),
-            Some(ref t) => {
+        match self.out {
+            Left(ref mut term) => {
                 if self.use_color {
-                    t.fg(color);
+                    term.fg(color);
                 }
-                self.out.write_str(word);
+                term.write(word.as_bytes());
                 if self.use_color {
-                    t.reset();
+                    term.reset();
                 }
             }
+            Right(ref mut stdout) => stdout.write(word.as_bytes())
+        }
+    }
+
+    pub fn write_plain(&mut self, s: &str) {
+        match self.out {
+            Left(ref mut term) => term.write(s.as_bytes()),
+            Right(ref mut stdout) => stdout.write(s.as_bytes())
         }
     }
 
     pub fn write_run_start(&mut self, len: uint) {
         self.total = len;
         let noun = if len != 1 { &"tests" } else { &"test" };
-        self.out.write_line(format!("\nrunning {} {}", len, noun));
+        self.write_plain(format!("\nrunning {} {}\n", len, noun));
     }
 
-    pub fn write_test_start(&self, test: &TestDesc, align: NamePadding) {
+    pub fn write_test_start(&mut self, test: &TestDesc, align: NamePadding) {
         let name = test.padded_name(self.max_name_len, align);
-        self.out.write_str(format!("test {} ... ", name));
+        self.write_plain(format!("test {} ... ", name));
     }
 
-    pub fn write_result(&self, result: &TestResult) {
+    pub fn write_result(&mut self, result: &TestResult) {
         match *result {
             TrOk => self.write_ok(),
             TrFailed => self.write_failed(),
             TrIgnored => self.write_ignored(),
             TrMetrics(ref mm) => {
                 self.write_metric();
-                self.out.write_str(": " + fmt_metrics(mm));
+                self.write_plain(format!(": {}", fmt_metrics(mm)));
             }
             TrBench(ref bs) => {
                 self.write_bench();
-                self.out.write_str(": " + fmt_bench_samples(bs))
+                self.write_plain(format!(": {}", fmt_bench_samples(bs)));
             }
         }
-        self.out.write_str(&"\n");
+        self.write_plain("\n");
     }
 
-    pub fn write_log(&self, test: &TestDesc, result: &TestResult) {
+    pub fn write_log(&mut self, test: &TestDesc, result: &TestResult) {
         match self.log_out {
             None => (),
-            Some(out) => {
-                out.write_line(format!("{} {}",
-                                    match *result {
-                                        TrOk => ~"ok",
-                                        TrFailed => ~"failed",
-                                        TrIgnored => ~"ignored",
-                                        TrMetrics(ref mm) => fmt_metrics(mm),
-                                        TrBench(ref bs) => fmt_bench_samples(bs)
-                                    }, test.name.to_str()));
+            Some(ref mut o) => {
+                let s = format!("{} {}", match *result {
+                        TrOk => ~"ok",
+                        TrFailed => ~"failed",
+                        TrIgnored => ~"ignored",
+                        TrMetrics(ref mm) => fmt_metrics(mm),
+                        TrBench(ref bs) => fmt_bench_samples(bs)
+                    }, test.name.to_str());
+                o.write(s.as_bytes());
             }
         }
     }
 
-    pub fn write_failures(&self) {
-        self.out.write_line("\nfailures:");
+    pub fn write_failures(&mut self) {
+        self.write_plain("\nfailures:\n");
         let mut failures = ~[];
         for f in self.failures.iter() {
             failures.push(f.name.to_str());
         }
         sort::tim_sort(failures);
         for name in failures.iter() {
-            self.out.write_line(format!("    {}", name.to_str()));
+            self.write_plain(format!("    {}\n", name.to_str()));
         }
     }
 
-    pub fn write_metric_diff(&self, diff: &MetricDiff) {
+    pub fn write_metric_diff(&mut self, diff: &MetricDiff) {
         let mut noise = 0;
         let mut improved = 0;
         let mut regressed = 0;
@@ -506,40 +507,38 @@ impl ConsoleTestState {
                 MetricAdded => {
                     added += 1;
                     self.write_added();
-                    self.out.write_line(format!(": {}", *k));
+                    self.write_plain(format!(": {}\n", *k));
                 }
                 MetricRemoved => {
                     removed += 1;
                     self.write_removed();
-                    self.out.write_line(format!(": {}", *k));
+                    self.write_plain(format!(": {}\n", *k));
                 }
                 Improvement(pct) => {
                     improved += 1;
-                    self.out.write_str(*k);
-                    self.out.write_str(": ");
+                    self.write_plain(format!(": {}", *k));
                     self.write_improved();
-                    self.out.write_line(format!(" by {:.2f}%", pct as f64))
+                    self.write_plain(format!(" by {:.2f}%\n", pct as f64));
                 }
                 Regression(pct) => {
                     regressed += 1;
-                    self.out.write_str(*k);
-                    self.out.write_str(": ");
+                    self.write_plain(format!(": {}", *k));
                     self.write_regressed();
-                    self.out.write_line(format!(" by {:.2f}%", pct as f64))
+                    self.write_plain(format!(" by {:.2f}%\n", pct as f64));
                 }
             }
         }
-        self.out.write_line(format!("result of ratchet: {} matrics added, {} removed, \
-                                  {} improved, {} regressed, {} noise",
+        self.write_plain(format!("result of ratchet: {} matrics added, {} removed, \
+                                  {} improved, {} regressed, {} noise\n",
                                  added, removed, improved, regressed, noise));
         if regressed == 0 {
-            self.out.write_line("updated ratchet file")
+            self.write_plain("updated ratchet file\n");
         } else {
-            self.out.write_line("left ratchet file untouched")
+            self.write_plain("left ratchet file untouched\n");
         }
     }
 
-    pub fn write_run_finish(&self,
+    pub fn write_run_finish(&mut self,
                             ratchet_metrics: &Option<Path>,
                             ratchet_pct: Option<f64>) -> bool {
         assert!(self.passed + self.failed + self.ignored + self.measured == self.total);
@@ -547,12 +546,12 @@ impl ConsoleTestState {
         let ratchet_success = match *ratchet_metrics {
             None => true,
             Some(ref pth) => {
-                self.out.write_str(format!("\nusing metrics ratchet: {}\n", pth.display()));
+                self.write_plain(format!("\nusing metrics ratcher: {}\n", pth.display()));
                 match ratchet_pct {
                     None => (),
                     Some(pct) =>
-                    self.out.write_str(format!("with noise-tolerance forced to: {}%%\n",
-                                            pct as f64))
+                        self.write_plain(format!("with noise-tolerance forced to: {}%\n",
+                                                 pct))
                 }
                 let (diff, ok) = self.metrics.ratchet(pth, ratchet_pct);
                 self.write_metric_diff(&diff);
@@ -567,15 +566,16 @@ impl ConsoleTestState {
 
         let success = ratchet_success && test_success;
 
-        self.out.write_str("\ntest result: ");
+        self.write_plain("\ntest result: ");
         if success {
             // There's no parallelism at this point so it's safe to use color
             self.write_ok();
         } else {
             self.write_failed();
         }
-        self.out.write_str(format!(". {} passed; {} failed; {} ignored; {} measured\n\n",
-                                self.passed, self.failed, self.ignored, self.measured));
+        let s = format!(". {} passed; {} failed; {} ignored; {} measured\n\n",
+                        self.passed, self.failed, self.ignored, self.measured);
+        self.write_plain(s);
         return success;
     }
 }
@@ -606,8 +606,8 @@ pub fn fmt_bench_samples(bs: &BenchSamples) -> ~str {
 // A simple console test runner
 pub fn run_tests_console(opts: &TestOpts,
                          tests: ~[TestDescAndFn]) -> bool {
-    fn callback(event: &TestEvent, st: &mut ConsoleTestState) {
-        debug2!("callback(event={:?})", event);
+    fn callback<T: Writer>(event: &TestEvent, st: &mut ConsoleTestState<T>) {
+        debug!("callback(event={:?})", event);
         match (*event).clone() {
             TeFiltered(ref filtered_tests) => st.write_run_start(filtered_tests.len()),
             TeWait(ref test, padding) => st.write_test_start(test, padding),
@@ -639,7 +639,7 @@ pub fn run_tests_console(opts: &TestOpts,
             }
         }
     }
-    let st = @mut ConsoleTestState::new(opts);
+    let mut st = ConsoleTestState::new(opts, None::<StdWriter>);
     fn len_if_padded(t: &TestDescAndFn) -> uint {
         match t.testfn.padding() {
             PadNone => 0u,
@@ -649,17 +649,17 @@ pub fn run_tests_console(opts: &TestOpts,
     match tests.iter().max_by(|t|len_if_padded(*t)) {
         Some(t) => {
             let n = t.desc.name.to_str();
-            debug2!("Setting max_name_len from: {}", n);
+            debug!("Setting max_name_len from: {}", n);
             st.max_name_len = n.len();
         },
         None => {}
     }
-    run_tests(opts, tests, |x| callback(&x, st));
+    run_tests(opts, tests, |x| callback(&x, &mut st));
     match opts.save_metrics {
         None => (),
         Some(ref pth) => {
             st.metrics.save(pth);
-            st.out.write_str(format!("\nmetrics saved to: {}", pth.display()));
+            st.write_plain(format!("\nmetrics saved to: {}", pth.display()));
         }
     }
     return st.write_run_finish(&opts.ratchet_metrics, opts.ratchet_noise_percent);
@@ -667,37 +667,40 @@ pub fn run_tests_console(opts: &TestOpts,
 
 #[test]
 fn should_sort_failures_before_printing_them() {
-    fn dummy() {}
+    use std::io::Decorator;
+    use std::io::mem::MemWriter;
+    use std::str;
 
-    let s = do io::with_str_writer |wr| {
-        let test_a = TestDesc {
-            name: StaticTestName("a"),
-            ignore: false,
-            should_fail: false
-        };
+    let test_a = TestDesc {
+        name: StaticTestName("a"),
+        ignore: false,
+        should_fail: false
+    };
 
-        let test_b = TestDesc {
-            name: StaticTestName("b"),
-            ignore: false,
-            should_fail: false
-        };
+    let test_b = TestDesc {
+        name: StaticTestName("b"),
+        ignore: false,
+        should_fail: false
+    };
 
-        let st = @ConsoleTestState {
-            out: wr,
-            log_out: None,
-            term: None,
-            use_color: false,
-            total: 0u,
-            passed: 0u,
-            failed: 0u,
-            ignored: 0u,
-            measured: 0u,
-            metrics: MetricMap::new(),
-            failures: ~[test_b, test_a],
-            max_name_len: 0u,
-        };
+    let mut st = ConsoleTestState {
+        log_out: None,
+        out: Right(MemWriter::new()),
+        use_color: false,
+        total: 0u,
+        passed: 0u,
+        failed: 0u,
+        ignored: 0u,
+        measured: 0u,
+        max_name_len: 10u,
+        metrics: MetricMap::new(),
+        failures: ~[test_b, test_a]
+    };
 
-        st.write_failures();
+    st.write_failures();
+    let s = match st.out {
+        Right(ref m) => str::from_utf8(*m.inner_ref()),
+        Left(_) => unreachable!()
     };
 
     let apos = s.find_str("a").unwrap();
@@ -718,32 +721,30 @@ type MonitorMsg = (TestDesc, TestResult);
 
 fn run_tests(opts: &TestOpts,
              tests: ~[TestDescAndFn],
-             callback: &fn(e: TestEvent)) {
-
+             callback: |e: TestEvent|) {
     let filtered_tests = filter_tests(opts, tests);
     let filtered_descs = filtered_tests.map(|t| t.desc.clone());
 
     callback(TeFiltered(filtered_descs));
 
     let (filtered_tests, filtered_benchs_and_metrics) =
-        do filtered_tests.partition |e| {
-        match e.testfn {
-            StaticTestFn(_) | DynTestFn(_) => true,
-            _ => false
-        }
-    };
+        filtered_tests.partition(|e| {
+            match e.testfn {
+                StaticTestFn(_) | DynTestFn(_) => true,
+                _ => false
+            }
+        });
 
     // It's tempting to just spawn all the tests at once, but since we have
     // many tests that run in other processes we would be making a big mess.
     let concurrency = get_concurrency();
-    debug2!("using {} test tasks", concurrency);
+    debug!("using {} test tasks", concurrency);
 
     let mut remaining = filtered_tests;
     remaining.reverse();
     let mut pending = 0;
 
-    let (p, ch) = stream();
-    let ch = SharedChan::new(ch);
+    let (p, ch) = SharedChan::new();
 
     while pending > 0 || !remaining.is_empty() {
         while pending < concurrency && !remaining.is_empty() {
@@ -783,7 +784,7 @@ fn get_concurrency() -> uint {
             let opt_n: Option<uint> = FromStr::from_str(s);
             match opt_n {
                 Some(n) if n > 0 => n,
-                _ => fail2!("RUST_TEST_TASKS is `{}`, should be a positive integer.", s)
+                _ => fail!("RUST_TEST_TASKS is `{}`, should be a positive integer.", s)
             }
         }
         None => {
@@ -867,26 +868,25 @@ pub fn run_test(force_ignore: bool,
 
     fn run_test_inner(desc: TestDesc,
                       monitor_ch: SharedChan<MonitorMsg>,
-                      testfn: ~fn()) {
-        let testfn_cell = ::std::cell::Cell::new(testfn);
-        do task::spawn {
-            let mut result_future = None; // task::future_result(builder);
-
+                      testfn: proc()) {
+        do spawn {
             let mut task = task::task();
-            task.unlinked();
-            task.future_result(|r| { result_future = Some(r) });
-            task.spawn(testfn_cell.take());
+            task.name(match desc.name {
+                DynTestName(ref name) => SendStrOwned(name.clone()),
+                StaticTestName(name) => SendStrStatic(name),
+            });
+            let result_future = task.future_result();
+            task.spawn(testfn);
 
-            let task_result = result_future.unwrap().recv();
-            let test_result = calc_result(&desc,
-                                          task_result == task::Success);
+            let task_result = result_future.recv();
+            let test_result = calc_result(&desc, task_result.is_ok());
             monitor_ch.send((desc.clone(), test_result));
         }
     }
 
     match testfn {
-        DynBenchFn(benchfn) => {
-            let bs = ::test::bench::benchmark(benchfn);
+        DynBenchFn(bencher) => {
+            let bs = ::test::bench::benchmark(|harness| bencher.run(harness));
             monitor_ch.send((desc, TrBench(bs)));
             return;
         }
@@ -908,7 +908,7 @@ pub fn run_test(force_ignore: bool,
             return;
         }
         DynTestFn(f) => run_test_inner(desc, monitor_ch, f),
-        StaticTestFn(f) => run_test_inner(desc, monitor_ch, || f())
+        StaticTestFn(f) => run_test_inner(desc, monitor_ch, proc() f())
     }
 }
 
@@ -940,16 +940,16 @@ impl MetricMap {
 
     /// Load MetricDiff from a file.
     pub fn load(p: &Path) -> MetricMap {
-        assert!(os::path_exists(p));
-        let f = io::file_reader(p).unwrap();
-        let mut decoder = json::Decoder(json::from_reader(f).unwrap());
+        assert!(p.exists());
+        let mut f = File::open(p);
+        let value = json::from_reader(&mut f as &mut io::Reader).unwrap();
+        let mut decoder = json::Decoder::new(value);
         MetricMap(Decodable::decode(&mut decoder))
     }
 
     /// Write MetricDiff to a file.
     pub fn save(&self, p: &Path) {
-        let f = io::file_writer(p, [io::Create, io::Truncate]).unwrap();
-        self.to_json().to_pretty_writer(f);
+        self.to_json().to_pretty_writer(@mut File::create(p) as @mut io::Writer);
     }
 
     /// Compare against another MetricMap. Optionally compare all
@@ -1034,22 +1034,22 @@ impl MetricMap {
     /// `MetricChange`s are `Regression`. Returns the diff as well
     /// as a boolean indicating whether the ratchet succeeded.
     pub fn ratchet(&self, p: &Path, pct: Option<f64>) -> (MetricDiff, bool) {
-        let old = if os::path_exists(p) {
+        let old = if p.exists() {
             MetricMap::load(p)
         } else {
             MetricMap::new()
         };
 
         let diff : MetricDiff = self.compare_to_old(&old, pct);
-        let ok = do diff.iter().all() |(_, v)| {
+        let ok = diff.iter().all(|(_, v)| {
             match *v {
                 Regression(_) => false,
                 _ => true
             }
-        };
+        });
 
         if ok {
-            debug2!("rewriting file '{:?}' with updated metrics", p);
+            debug!("rewriting file '{:?}' with updated metrics", p);
             self.save(p);
         }
         return (diff, ok)
@@ -1061,7 +1061,7 @@ impl MetricMap {
 
 impl BenchHarness {
     /// Callback for benchmark functions to run in their body.
-    pub fn iter(&mut self, inner:&fn()) {
+    pub fn iter(&mut self, inner: ||) {
         self.ns_start = precise_time_ns();
         let k = self.iterations;
         for _ in range(0u64, k) {
@@ -1086,15 +1086,15 @@ impl BenchHarness {
         }
     }
 
-    pub fn bench_n(&mut self, n: u64, f: &fn(&mut BenchHarness)) {
+    pub fn bench_n(&mut self, n: u64, f: |&mut BenchHarness|) {
         self.iterations = n;
-        debug2!("running benchmark for {} iterations",
+        debug!("running benchmark for {} iterations",
                n as uint);
         f(self);
     }
 
     // This is a more statistics-driven benchmark algorithm
-    pub fn auto_bench(&mut self, f: &fn(&mut BenchHarness)) -> stats::Summary {
+    pub fn auto_bench(&mut self, f: |&mut BenchHarness|) -> stats::Summary {
 
         // Initial bench run to get ballpark figure.
         let mut n = 1_u64;
@@ -1107,6 +1107,15 @@ impl BenchHarness {
         } else {
             n = 1_000_000 / self.ns_per_iter().max(&1);
         }
+        // if the first run took more than 1ms we don't want to just
+        // be left doing 0 iterations on every loop. The unfortunate
+        // side effect of not being able to do as many runs is
+        // automatically handled by the statistical analysis below
+        // (i.e. larger error bars).
+        if n == 0 { n = 1; }
+
+        debug!("Initial run took {} ns, iter count that takes 1ms estimated as {}",
+               self.ns_per_iter(), n);
 
         let mut total_run = 0;
         let samples : &mut [f64] = [0.0_f64, ..50];
@@ -1129,7 +1138,7 @@ impl BenchHarness {
             stats::winsorize(samples, 5.0);
             let summ5 = stats::Summary::new(samples);
 
-            debug2!("{} samples, median {}, MAD={}, MADP={}",
+            debug!("{} samples, median {}, MAD={}, MADP={}",
                    samples.len(),
                    summ.median as f64,
                    summ.median_abs_dev as f64,
@@ -1138,7 +1147,7 @@ impl BenchHarness {
             let now = precise_time_ns();
             let loop_run = now - loop_start;
 
-            // If we've run for 100ms an seem to have converged to a
+            // If we've run for 100ms and seem to have converged to a
             // stable median.
             if loop_run > 100_000_000 &&
                 summ.median_abs_dev_pct < 1.0 &&
@@ -1164,8 +1173,7 @@ impl BenchHarness {
 pub mod bench {
     use test::{BenchHarness, BenchSamples};
 
-    pub fn benchmark(f: &fn(&mut BenchHarness)) -> BenchSamples {
-
+    pub fn benchmark(f: |&mut BenchHarness|) -> BenchSamples {
         let mut bs = BenchHarness {
             iterations: 0,
             ns_start: 0,
@@ -1195,22 +1203,20 @@ mod tests {
                StaticTestName, DynTestName, DynTestFn};
     use test::{TestOpts, run_test};
 
-    use std::comm::{stream, SharedChan};
     use tempfile::TempDir;
 
     #[test]
     pub fn do_not_run_ignored_tests() {
-        fn f() { fail2!(); }
+        fn f() { fail!(); }
         let desc = TestDescAndFn {
             desc: TestDesc {
                 name: StaticTestName("whatever"),
                 ignore: true,
                 should_fail: false
             },
-            testfn: DynTestFn(|| f()),
+            testfn: DynTestFn(proc() f()),
         };
-        let (p, ch) = stream();
-        let ch = SharedChan::new(ch);
+        let (p, ch) = SharedChan::new();
         run_test(false, desc, ch);
         let (_, res) = p.recv();
         assert!(res != TrOk);
@@ -1225,10 +1231,9 @@ mod tests {
                 ignore: true,
                 should_fail: false
             },
-            testfn: DynTestFn(|| f()),
+            testfn: DynTestFn(proc() f()),
         };
-        let (p, ch) = stream();
-        let ch = SharedChan::new(ch);
+        let (p, ch) = SharedChan::new();
         run_test(false, desc, ch);
         let (_, res) = p.recv();
         assert_eq!(res, TrIgnored);
@@ -1236,17 +1241,16 @@ mod tests {
 
     #[test]
     fn test_should_fail() {
-        fn f() { fail2!(); }
+        fn f() { fail!(); }
         let desc = TestDescAndFn {
             desc: TestDesc {
                 name: StaticTestName("whatever"),
                 ignore: false,
                 should_fail: true
             },
-            testfn: DynTestFn(|| f()),
+            testfn: DynTestFn(proc() f()),
         };
-        let (p, ch) = stream();
-        let ch = SharedChan::new(ch);
+        let (p, ch) = SharedChan::new();
         run_test(false, desc, ch);
         let (_, res) = p.recv();
         assert_eq!(res, TrOk);
@@ -1261,10 +1265,9 @@ mod tests {
                 ignore: false,
                 should_fail: true
             },
-            testfn: DynTestFn(|| f()),
+            testfn: DynTestFn(proc() f()),
         };
-        let (p, ch) = stream();
-        let ch = SharedChan::new(ch);
+        let (p, ch) = SharedChan::new();
         run_test(false, desc, ch);
         let (_, res) = p.recv();
         assert_eq!(res, TrFailed);
@@ -1275,7 +1278,7 @@ mod tests {
         let args = ~[~"progname", ~"filter"];
         let opts = match parse_opts(args) {
             Some(Ok(o)) => o,
-            _ => fail2!("Malformed arg in first_free_arg_should_be_a_filter")
+            _ => fail!("Malformed arg in first_free_arg_should_be_a_filter")
         };
         assert!("filter" == opts.filter.clone().unwrap());
     }
@@ -1285,15 +1288,13 @@ mod tests {
         let args = ~[~"progname", ~"filter", ~"--ignored"];
         let opts = match parse_opts(args) {
             Some(Ok(o)) => o,
-            _ => fail2!("Malformed arg in parse_ignored_flag")
+            _ => fail!("Malformed arg in parse_ignored_flag")
         };
         assert!((opts.run_ignored));
     }
 
     #[test]
     pub fn filter_for_ignored_option() {
-        fn dummy() {}
-
         // When we run ignored tests the test filter should filter out all the
         // unignored tests and flip the ignore flag on the rest to false
 
@@ -1316,7 +1317,7 @@ mod tests {
                     ignore: true,
                     should_fail: false,
                 },
-                testfn: DynTestFn(|| {}),
+                testfn: DynTestFn(proc() {}),
             },
             TestDescAndFn {
                 desc: TestDesc {
@@ -1324,7 +1325,7 @@ mod tests {
                     ignore: false,
                     should_fail: false
                 },
-                testfn: DynTestFn(|| {}),
+                testfn: DynTestFn(proc() {}),
             },
         ];
         let filtered = filter_tests(&opts, tests);
@@ -1437,6 +1438,7 @@ mod tests {
         assert_eq!(diff2.len(), 7);
     }
 
+    #[test]
     pub fn ratchet_test() {
 
         let dpth = TempDir::new("test-ratchet").expect("missing test for ratchet");

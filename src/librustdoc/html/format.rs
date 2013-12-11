@@ -17,7 +17,7 @@
 
 use std::fmt;
 use std::local_data;
-use std::rt::io;
+use std::io;
 
 use syntax::ast;
 use syntax::ast_util;
@@ -33,7 +33,7 @@ pub struct VisSpace(Option<ast::visibility>);
 /// space after it.
 pub struct PuritySpace(ast::purity);
 /// Wrapper struct for properly emitting a method declaration.
-pub struct Method<'self>(&'self clean::SelfTy, &'self clean::FnDecl);
+pub struct Method<'a>(&'a clean::SelfTy, &'a clean::FnDecl);
 
 impl fmt::Default for clean::Generics {
     fn fmt(g: &clean::Generics, f: &mut fmt::Formatter) {
@@ -92,16 +92,17 @@ impl fmt::Default for clean::Path {
             if i > 0 { f.buf.write("::".as_bytes()) }
             f.buf.write(seg.name.as_bytes());
 
-            if seg.lifetime.is_some() || seg.types.len() > 0 {
+            if seg.lifetimes.len() > 0 || seg.types.len() > 0 {
                 f.buf.write("&lt;".as_bytes());
-                match seg.lifetime {
-                    Some(ref lifetime) => write!(f.buf, "{}", *lifetime),
-                    None => {}
+                let mut comma = false;
+                for lifetime in seg.lifetimes.iter() {
+                    if comma { f.buf.write(", ".as_bytes()); }
+                    comma = true;
+                    write!(f.buf, "{}", *lifetime);
                 }
-                for (i, ty) in seg.types.iter().enumerate() {
-                    if i > 0 || seg.lifetime.is_some() {
-                        f.buf.write(", ".as_bytes());
-                    }
+                for ty in seg.types.iter() {
+                    if comma { f.buf.write(", ".as_bytes()); }
+                    comma = true;
                     write!(f.buf, "{}", *ty);
                 }
                 f.buf.write("&gt;".as_bytes());
@@ -115,12 +116,7 @@ impl fmt::Default for clean::Path {
 fn resolved_path(w: &mut io::Writer, id: ast::NodeId, p: &clean::Path,
                  print_all: bool) {
     path(w, p, print_all,
-        |_cache, loc| {
-            match p.segments[0].name.as_slice() {
-                "super" => Some("../".repeat(loc.len() - 1)),
-                _ => Some("../".repeat(loc.len())),
-            }
-        },
+        |_cache, loc| { Some("../".repeat(loc.len())) },
         |cache| {
             match cache.paths.find(&id) {
                 None => None,
@@ -152,98 +148,98 @@ fn external_path(w: &mut io::Writer, p: &clean::Path, print_all: bool,
 }
 
 fn path(w: &mut io::Writer, path: &clean::Path, print_all: bool,
-        root: &fn(&render::Cache, &[~str]) -> Option<~str>,
-        info: &fn(&render::Cache) -> Option<(~[~str], &'static str)>) {
+        root: |&render::Cache, &[~str]| -> Option<~str>,
+        info: |&render::Cache| -> Option<(~[~str], &'static str)>) {
     // The generics will get written to both the title and link
     let mut generics = ~"";
     let last = path.segments.last();
-    if last.lifetime.is_some() || last.types.len() > 0 {
+    if last.lifetimes.len() > 0 || last.types.len() > 0 {
+        let mut counter = 0;
         generics.push_str("&lt;");
-        match last.lifetime {
-            Some(ref lifetime) => generics.push_str(format!("{}", *lifetime)),
-            None => {}
+        for lifetime in last.lifetimes.iter() {
+            if counter > 0 { generics.push_str(", "); }
+            counter += 1;
+            generics.push_str(format!("{}", *lifetime));
         }
-        for (i, ty) in last.types.iter().enumerate() {
-            if i > 0 || last.lifetime.is_some() {
-                generics.push_str(", ");
-            }
+        for ty in last.types.iter() {
+            if counter > 0 { generics.push_str(", "); }
+            counter += 1;
             generics.push_str(format!("{}", *ty));
         }
         generics.push_str("&gt;");
     }
 
     // Did someone say rightward-drift?
-    do local_data::get(current_location_key) |loc| {
+    local_data::get(current_location_key, |loc| {
         let loc = loc.unwrap();
 
-        do local_data::get(cache_key) |cache| {
-            do cache.unwrap().read |cache| {
-                let abs_root = root(cache, loc.as_slice());
-                let rel_root = match path.segments[0].name.as_slice() {
-                    "self" => Some(~"./"),
-                    _ => None,
-                };
+        local_data::get(cache_key, |cache| {
+            let cache = cache.unwrap().get();
+            let abs_root = root(cache, loc.as_slice());
+            let rel_root = match path.segments[0].name.as_slice() {
+                "self" => Some(~"./"),
+                _ => None,
+            };
 
-                if print_all {
-                    let amt = path.segments.len() - 1;
-                    match rel_root {
-                        Some(root) => {
-                            let mut root = root;
-                            for seg in path.segments.slice_to(amt).iter() {
-                                if "super" == seg.name || "self" == seg.name {
-                                    write!(w, "{}::", seg.name);
-                                } else {
-                                    root.push_str(seg.name);
-                                    root.push_str("/");
-                                    write!(w, "<a class='mod'
-                                                  href='{}index.html'>{}</a>::",
-                                           root,
-                                           seg.name);
-                                }
-                            }
-                        }
-                        None => {
-                            for seg in path.segments.slice_to(amt).iter() {
+            if print_all {
+                let amt = path.segments.len() - 1;
+                match rel_root {
+                    Some(root) => {
+                        let mut root = root;
+                        for seg in path.segments.slice_to(amt).iter() {
+                            if "super" == seg.name || "self" == seg.name {
                                 write!(w, "{}::", seg.name);
+                            } else {
+                                root.push_str(seg.name);
+                                root.push_str("/");
+                                write!(w, "<a class='mod'
+                                              href='{}index.html'>{}</a>::",
+                                       root,
+                                       seg.name);
                             }
+                        }
+                    }
+                    None => {
+                        for seg in path.segments.slice_to(amt).iter() {
+                            write!(w, "{}::", seg.name);
                         }
                     }
                 }
-
-                match info(cache) {
-                    // This is a documented path, link to it!
-                    Some((ref fqp, shortty)) if abs_root.is_some() => {
-                        let mut url = abs_root.unwrap();
-                        let to_link = fqp.slice_to(fqp.len() - 1);
-                        for component in to_link.iter() {
-                            url.push_str(*component);
-                            url.push_str("/");
-                        }
-                        match shortty {
-                            "mod" => {
-                                url.push_str(*fqp.last());
-                                url.push_str("/index.html");
-                            }
-                            _ => {
-                                url.push_str(shortty);
-                                url.push_str(".");
-                                url.push_str(*fqp.last());
-                                url.push_str(".html");
-                            }
-                        }
-
-                        write!(w, "<a class='{}' href='{}' title='{}'>{}</a>",
-                               shortty, url, fqp.connect("::"), last.name);
-                    }
-
-                    _ => {
-                        write!(w, "{}", last.name);
-                    }
-                }
-                write!(w, "{}", generics);
             }
-        }
-    }
+
+            match info(cache) {
+                // This is a documented path, link to it!
+                Some((ref fqp, shortty)) if abs_root.is_some() => {
+                    let mut url = abs_root.unwrap();
+                    let to_link = fqp.slice_to(fqp.len() - 1);
+                    for component in to_link.iter() {
+                        url.push_str(*component);
+                        url.push_str("/");
+                    }
+                    match shortty {
+                        "mod" => {
+                            url.push_str(*fqp.last());
+                            url.push_str("/index.html");
+                        }
+                        _ => {
+                            url.push_str(shortty);
+                            url.push_str(".");
+                            url.push_str(*fqp.last());
+                            url.push_str(".html");
+                        }
+                    }
+
+                    write!(w, "<a class='{}' href='{}' title='{}'>{}</a>",
+                           shortty, url, fqp.connect("::"), last.name);
+                }
+
+                _ => {
+                    write!(w, "{}", last.name);
+                }
+            }
+            write!(w, "{}", generics);
+        })
+    })
 }
 
 /// Helper to render type parameters
@@ -265,11 +261,10 @@ impl fmt::Default for clean::Type {
     fn fmt(g: &clean::Type, f: &mut fmt::Formatter) {
         match *g {
             clean::TyParamBinder(id) | clean::Generic(id) => {
-                do local_data::get(cache_key) |cache| {
-                    do cache.unwrap().read |m| {
-                        f.buf.write(m.typarams.get(&id).as_bytes());
-                    }
-                }
+                local_data::get(cache_key, |cache| {
+                    let m = cache.unwrap().get();
+                    f.buf.write(m.typarams.get(&id).as_bytes());
+                })
             }
             clean::ResolvedPath{id, typarams: ref tp, path: ref path} => {
                 resolved_path(f.buf, id, path, false);
@@ -280,7 +275,7 @@ impl fmt::Default for clean::Type {
                 external_path(f.buf, path, false, fqn.as_slice(), kind, crate);
                 typarams(f.buf, tp);
             }
-            clean::Self(*) => f.buf.write("Self".as_bytes()),
+            clean::Self(..) => f.buf.write("Self".as_bytes()),
             clean::Primitive(prim) => {
                 let s = match prim {
                     ast::ty_int(ast::ty_i) => "int",
@@ -302,22 +297,20 @@ impl fmt::Default for clean::Type {
                 f.buf.write(s.as_bytes());
             }
             clean::Closure(ref decl) => {
-                f.buf.write(match decl.sigil {
-                    ast::BorrowedSigil => "&amp;",
-                    ast::ManagedSigil => "@",
-                    ast::OwnedSigil => "~",
-                }.as_bytes());
-                match decl.region {
-                    Some(ref region) => write!(f.buf, "{} ", *region),
-                    None => {}
-                }
-                write!(f.buf, "{}{}fn{}",
+                let region = match decl.region {
+                    Some(ref region) => format!("{} ", *region),
+                    None => ~"",
+                };
+
+                write!(f.buf, "{}{}{arrow, select, yes{ -&gt; {ret}} other{}}",
                        PuritySpace(decl.purity),
-                       match decl.onceness {
-                           ast::Once => "once ",
-                           ast::Many => "",
+                       match decl.sigil {
+                           ast::OwnedSigil => format!("proc({})", decl.decl.inputs),
+                           ast::BorrowedSigil => format!("{}|{}|", region, decl.decl.inputs),
+                           ast::ManagedSigil => format!("@{}fn({})", region, decl.decl.inputs),
                        },
-                       decl.decl);
+                       arrow = match decl.decl.output { clean::Unit => "no", _ => "yes" },
+                       ret = decl.decl.output);
                 // XXX: where are bounds and lifetimes printed?!
             }
             clean::BareFunction(ref decl) => {
@@ -377,23 +370,29 @@ impl fmt::Default for clean::Type {
 
 impl fmt::Default for clean::FnDecl {
     fn fmt(d: &clean::FnDecl, f: &mut fmt::Formatter) {
+        write!(f.buf, "({args}){arrow, select, yes{ -&gt; {ret}} other{}}",
+               args = d.inputs,
+               arrow = match d.output { clean::Unit => "no", _ => "yes" },
+               ret = d.output);
+    }
+}
+
+impl fmt::Default for ~[clean::Argument] {
+    fn fmt(inputs: &~[clean::Argument], f: &mut fmt::Formatter) {
         let mut args = ~"";
-        for (i, input) in d.inputs.iter().enumerate() {
+        for (i, input) in inputs.iter().enumerate() {
             if i > 0 { args.push_str(", "); }
             if input.name.len() > 0 {
                 args.push_str(format!("{}: ", input.name));
             }
             args.push_str(format!("{}", input.type_));
         }
-        write!(f.buf, "({args}){arrow, select, yes{ -&gt; {ret}} other{}}",
-               args = args,
-               arrow = match d.output { clean::Unit => "no", _ => "yes" },
-               ret = d.output);
+        f.buf.write(args.as_bytes());
     }
 }
 
-impl<'self> fmt::Default for Method<'self> {
-    fn fmt(m: &Method<'self>, f: &mut fmt::Formatter) {
+impl<'a> fmt::Default for Method<'a> {
+    fn fmt(m: &Method<'a>, f: &mut fmt::Formatter) {
         let Method(selfty, d) = *m;
         let mut args = ~"";
         match *selfty {
@@ -500,7 +499,7 @@ impl fmt::Default for clean::ViewListIdent {
                     global: false,
                     segments: ~[clean::PathSegment {
                         name: v.name.clone(),
-                        lifetime: None,
+                        lifetimes: ~[],
                         types: ~[],
                     }]
                 };

@@ -10,10 +10,13 @@
 
 // error-pattern:task 'owned name' failed at 'test'
 
+use std::task;
+
 fn main() {
-    let mut t = ::std::task::task();
+    let mut t = task::task();
     t.name(~"owned name");
-    do t.spawn {
-        fail2!("test");
-    }
+    do t.try {
+        fail!("test");
+        1
+    }.unwrap()
 }

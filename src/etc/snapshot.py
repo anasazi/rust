@@ -25,39 +25,14 @@ download_dir_base = "dl"
 download_unpack_base = os.path.join(download_dir_base, "unpack")
 
 snapshot_files = {
-    "linux": ["bin/rustc",
-              "lib/libstd-*.so",
-              "lib/libextra-*.so",
-              "lib/librustc-*.so",
-              "lib/libsyntax-*.so",
-              "lib/librustrt.so",
-              "lib/librustllvm.so"],
-    "macos": ["bin/rustc",
-              "lib/libstd-*.dylib",
-              "lib/libextra-*.dylib",
-              "lib/librustc-*.dylib",
-              "lib/libsyntax-*.dylib",
-              "lib/librustrt.dylib",
-              "lib/librustllvm.dylib"],
-    "winnt": ["bin/rustc.exe",
-              "bin/std-*.dll",
-              "bin/extra-*.dll",
-              "bin/rustc-*.dll",
-              "bin/syntax-*.dll",
-              "bin/rustrt.dll",
-              "bin/rustllvm.dll"],
-    "freebsd": ["bin/rustc",
-                "lib/libstd-*.so",
-                "lib/libextra-*.so",
-                "lib/librustc-*.so",
-                "lib/libsyntax-*.so",
-                "lib/librustrt.so",
-                "lib/librustllvm.so"]
+    "linux": ["bin/rustc"],
+    "macos": ["bin/rustc"],
+    "winnt": ["bin/rustc.exe"],
+    "freebsd": ["bin/rustc"],
     }
 
 winnt_runtime_deps = ["libgcc_s_dw2-1.dll",
-                      "libstdc++-6.dll",
-                      "libpthread-2.dll"]
+                      "libstdc++-6.dll"]
 
 def parse_line(n, line):
   global snapshotfile
@@ -144,8 +119,11 @@ def get_url_to_file(u,f):
         returncode = subprocess.call(["wget", "-O", tmpf, u])
 
     if returncode != 0:
-        os.unlink(tmpf)
-        raise
+        try:
+            os.unlink(tmpf)
+        except OSError as e:
+            pass
+        raise Exception("failed to fetch url")
     os.rename(tmpf, f)
 
 def snap_filename_hash_part(snap):

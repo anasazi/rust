@@ -43,7 +43,7 @@ pub fn construct(tcx: ty::ctxt,
     };
     let entry = cfg_builder.add_node(0, []);
     let exit = cfg_builder.block(blk, entry);
-    let CFGBuilder {exit_map, graph, _} = cfg_builder;
+    let CFGBuilder {exit_map, graph, ..} = cfg_builder;
     CFG {exit_map: exit_map,
          graph: graph,
          entry: entry,
@@ -72,7 +72,7 @@ impl CFGBuilder {
                 self.expr(expr, pred)
             }
 
-            ast::StmtMac(*) => {
+            ast::StmtMac(..) => {
                 self.tcx.sess.span_bug(stmt.span, "unexpanded macro");
             }
         }
@@ -95,9 +95,9 @@ impl CFGBuilder {
         match pat.node {
             ast::PatIdent(_, _, None) |
             ast::PatEnum(_, None) |
-            ast::PatLit(*) |
-            ast::PatRange(*) |
-            ast::PatWild => {
+            ast::PatLit(..) |
+            ast::PatRange(..) |
+            ast::PatWild | ast::PatWildMulti => {
                 self.add_node(pat.id, [pred])
             }
 
@@ -161,12 +161,12 @@ impl CFGBuilder {
 
     fn expr(&mut self, expr: @ast::Expr, pred: CFGIndex) -> CFGIndex {
         match expr.node {
-            ast::ExprBlock(ref blk) => {
+            ast::ExprBlock(blk) => {
                 let blk_exit = self.block(blk, pred);
                 self.add_node(expr.id, [blk_exit])
             }
 
-            ast::ExprIf(cond, ref then, None) => {
+            ast::ExprIf(cond, then, None) => {
                 //
                 //     [pred]
                 //       |
@@ -186,7 +186,7 @@ impl CFGBuilder {
                 self.add_node(expr.id, [cond_exit, then_exit])        // 3,4
             }
 
-            ast::ExprIf(cond, ref then, Some(otherwise)) => {
+            ast::ExprIf(cond, then, Some(otherwise)) => {
                 //
                 //     [pred]
                 //       |
@@ -207,7 +207,7 @@ impl CFGBuilder {
                 self.add_node(expr.id, [then_exit, else_exit])        // 4, 5
             }
 
-            ast::ExprWhile(cond, ref body) => {
+            ast::ExprWhile(cond, body) => {
                 //
                 //         [pred]
                 //           |
@@ -239,9 +239,9 @@ impl CFGBuilder {
                 expr_exit
             }
 
-            ast::ExprForLoop(*) => fail2!("non-desugared expr_for_loop"),
+            ast::ExprForLoop(..) => fail!("non-desugared expr_for_loop"),
 
-            ast::ExprLoop(ref body, _) => {
+            ast::ExprLoop(body, _) => {
                 //
                 //     [pred]
                 //       |
@@ -300,7 +300,7 @@ impl CFGBuilder {
                 for arm in arms.iter() {
                     guard_exit = self.opt_expr(arm.guard, guard_exit); // 2
                     let pats_exit = self.pats_any(arm.pats, guard_exit); // 3
-                    let body_exit = self.block(&arm.body, pats_exit);    // 4
+                    let body_exit = self.block(arm.body, pats_exit);    // 4
                     self.add_contained_edge(body_exit, expr_exit);       // 5
                 }
                 expr_exit
@@ -405,12 +405,13 @@ impl CFGBuilder {
             }
 
             ast::ExprLogLevel |
-            ast::ExprMac(*) |
-            ast::ExprInlineAsm(*) |
+            ast::ExprMac(..) |
+            ast::ExprInlineAsm(..) |
             ast::ExprSelf |
-            ast::ExprFnBlock(*) |
-            ast::ExprLit(*) |
-            ast::ExprPath(*) => {
+            ast::ExprFnBlock(..) |
+            ast::ExprProc(..) |
+            ast::ExprLit(..) |
+            ast::ExprPath(..) => {
                 self.straightline(expr, pred, [])
             }
         }

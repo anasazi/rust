@@ -18,6 +18,7 @@ use std::task;
 mod rustrt {
     use std::libc;
 
+    #[link(name = "rustrt")]
     extern {
         pub fn rust_dbg_call(cb: extern "C" fn(libc::uintptr_t) -> libc::uintptr_t,
                              data: libc::uintptr_t)
@@ -33,10 +34,9 @@ extern fn cb(data: libc::uintptr_t) -> libc::uintptr_t {
     }
 }
 
-#[fixed_stack_segment] #[inline(never)]
 fn count(n: uint) -> uint {
     unsafe {
-        info2!("n = {}", n);
+        info!("n = {}", n);
         rustrt::rust_dbg_call(cb, n)
     }
 }
@@ -46,7 +46,7 @@ pub fn main() {
     // has a large stack)
     do task::spawn {
         let result = count(12u);
-        info2!("result = {}", result);
+        info!("result = {}", result);
         assert_eq!(result, 2048u);
     };
 }

@@ -31,6 +31,12 @@ mod bar {
         fn bar2(&self) {}
     }
 
+    trait B {
+        fn foo() -> Self;
+    }
+
+    impl B for int { fn foo() -> int { 3 } }
+
     pub enum Enum {
         priv Priv,
         Pub
@@ -100,11 +106,18 @@ mod foo {
         ::bar::A::bar();        //~ ERROR: method `bar` is private
         ::bar::A.foo2();
         ::bar::A.bar2();        //~ ERROR: method `bar2` is private
-        ::bar::baz::A::foo();   //~ ERROR: method `foo` is private
+        ::bar::baz::A::foo();   //~ ERROR: method `foo` is inaccessible
+                                //~^ NOTE: module `baz` is private
         ::bar::baz::A::bar();   //~ ERROR: method `bar` is private
-        ::bar::baz::A.foo2();   //~ ERROR: struct `A` is private
-        ::bar::baz::A.bar2();   //~ ERROR: struct `A` is private
+        ::bar::baz::A.foo2();   //~ ERROR: struct `A` is inaccessible
+                                //~^ NOTE: module `baz` is private
+        ::bar::baz::A.bar2();   //~ ERROR: struct `A` is inaccessible
                                 //~^ ERROR: method `bar2` is private
+                                //~^^ NOTE: module `baz` is private
+
+        let _: int =
+        ::bar::B::foo();        //~ ERROR: method `foo` is inaccessible
+                                //~^ NOTE: trait `B` is private
         ::lol();
 
         ::bar::Priv; //~ ERROR: variant `Priv` is private
@@ -120,13 +133,14 @@ mod foo {
 
         ::bar::gpub();
 
-        ::bar::baz::foo(); //~ ERROR: function `foo` is private
+        ::bar::baz::foo(); //~ ERROR: function `foo` is inaccessible
+                           //~^ NOTE: module `baz` is private
         ::bar::baz::bar(); //~ ERROR: function `bar` is private
     }
 
     fn test2() {
         use bar::baz::{foo, bar};
-        //~^ ERROR: function `foo` is private
+        //~^ ERROR: function `foo` is inaccessible
         //~^^ ERROR: function `bar` is private
         foo();
         bar();
@@ -148,6 +162,9 @@ mod foo {
         bar::foo();
         bar::bar();
     }
+
+    impl ::bar::B for f32 { fn foo() -> f32 { 1.0 } }
+    //~^ ERROR: trait `B` is private
 }
 
 pub mod mytest {
@@ -155,7 +172,8 @@ pub mod mytest {
     // external crates through `foo::foo`, it should not be accessible through
     // its definition path (which has the private `i` module).
     use self::foo::foo;
-    use self::foo::i::A; //~ ERROR: type `A` is private
+    use self::foo::i::A; //~ ERROR: type `A` is inaccessible
+                         //~^ NOTE: module `i` is private
 
     pub mod foo {
         pub use foo = self::i::A;

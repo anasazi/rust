@@ -16,14 +16,13 @@ The `ToBytes` and `IterBytes` traits
 
 use cast;
 use container::Container;
-use io;
-use io::Writer;
 use iter::Iterator;
 use option::{None, Option, Some};
+use rc::Rc;
 use str::{Str, StrSlice};
 use vec::{Vector, ImmutableVector};
 
-pub type Cb<'self> = &'self fn(buf: &[u8]) -> bool;
+pub type Cb<'a> = 'a |buf: &[u8]| -> bool;
 
 ///
 /// A trait to implement in order to make a type hashable;
@@ -220,7 +219,7 @@ impl IterBytes for f64 {
     }
 }
 
-impl<'self,A:IterBytes> IterBytes for &'self [A] {
+impl<'a,A:IterBytes> IterBytes for &'a [A] {
     #[inline]
     fn iter_bytes(&self, lsb0: bool, f: Cb) -> bool {
         self.len().iter_bytes(lsb0, |b| f(b)) &&
@@ -274,7 +273,7 @@ impl<A:IterBytes> IterBytes for @[A] {
     }
 }
 
-impl<'self> IterBytes for &'self str {
+impl<'a> IterBytes for &'a str {
     #[inline]
     fn iter_bytes(&self, _lsb0: bool, f: Cb) -> bool {
         // Terminate the string with a byte that does not appear in UTF-8
@@ -306,7 +305,7 @@ impl<A:IterBytes> IterBytes for Option<A> {
     }
 }
 
-impl<'self,A:IterBytes> IterBytes for &'self A {
+impl<'a,A:IterBytes> IterBytes for &'a A {
     #[inline]
     fn iter_bytes(&self, lsb0: bool, f: Cb) -> bool {
         (**self).iter_bytes(lsb0, f)
@@ -324,6 +323,13 @@ impl<A:IterBytes> IterBytes for @mut A {
     #[inline]
     fn iter_bytes(&self, lsb0: bool, f: Cb) -> bool {
         (**self).iter_bytes(lsb0, f)
+    }
+}
+
+impl<A:IterBytes> IterBytes for Rc<A> {
+    #[inline]
+    fn iter_bytes(&self, lsb0: bool, f: Cb) -> bool {
+        self.borrow().iter_bytes(lsb0, f)
     }
 }
 
@@ -360,12 +366,15 @@ pub trait ToBytes {
 
 impl<A:IterBytes> ToBytes for A {
     fn to_bytes(&self, lsb0: bool) -> ~[u8] {
-        do io::with_bytes_writer |wr| {
-            do self.iter_bytes(lsb0) |bytes| {
+        use io::mem;
+        use io::Writer;
+
+        mem::with_mem_writer(|wr| {
+            self.iter_bytes(lsb0, |bytes| {
                 wr.write(bytes);
                 true
-            };
-        }
+            });
+        })
     }
 }
 

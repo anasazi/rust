@@ -16,20 +16,20 @@
 define DEF_HOST_VAR
   HOST_$(1) = $(subst i686,i386,$(word 1,$(subst -, ,$(1))))
 endef
-$(foreach t,$(CFG_TARGET_TRIPLES),$(eval $(call DEF_HOST_VAR,$(t))))
-$(foreach t,$(CFG_TARGET_TRIPLES),$(info cfg: host for $(t) is $(HOST_$(t))))
+$(foreach t,$(CFG_TARGET),$(eval $(call DEF_HOST_VAR,$(t))))
+$(foreach t,$(CFG_TARGET),$(info cfg: host for $(t) is $(HOST_$(t))))
 
 # Ditto for OSTYPE
 define DEF_OSTYPE_VAR
   OSTYPE_$(1) = $(subst $(firstword $(subst -, ,$(1)))-,,$(1))
 endef
-$(foreach t,$(CFG_TARGET_TRIPLES),$(eval $(call DEF_OSTYPE_VAR,$(t))))
-$(foreach t,$(CFG_TARGET_TRIPLES),$(info cfg: os for $(t) is $(OSTYPE_$(t))))
+$(foreach t,$(CFG_TARGET),$(eval $(call DEF_OSTYPE_VAR,$(t))))
+$(foreach t,$(CFG_TARGET),$(info cfg: os for $(t) is $(OSTYPE_$(t))))
 
 # FIXME: no-omit-frame-pointer is just so that task_start_wrapper
 # has a frame pointer and the stack walker can understand it. Turning off
 # frame pointers everywhere is overkill
-CFG_GCCISH_CFLAGS += -fno-omit-frame-pointer -DUSE_UTF8
+CFG_GCCISH_CFLAGS += -fno-omit-frame-pointer
 
 # On Darwin, we need to run dsymutil so the debugging information ends
 # up in the right place.  On other platforms, it automatically gets
@@ -88,14 +88,15 @@ AR := ar
 
 CFG_INFO := $(info cfg: using $(CFG_C_COMPILER))
 ifeq ($(CFG_C_COMPILER),clang)
+  # The -Qunused-arguments sidesteps spurious warnings from clang
   ifeq ($(origin CC),default)
-    CC=clang
+    CC=clang -Qunused-arguments
   endif
   ifeq ($(origin CXX),default)
-    CXX=clang++
+    CXX=clang++ -Qunused-arguments
   endif
   ifeq ($(origin CPP),default)
-    CPP=clang
+    CPP=clang -Qunused-arguments
   endif
 else
 ifeq ($(CFG_C_COMPILER),gcc)
@@ -138,6 +139,7 @@ endif
 endif
 endif
 
+CFG_RLIB_GLOB=lib$(1)-*.rlib
 
 # x86_64-unknown-linux-gnu configuration
 CC_x86_64-unknown-linux-gnu=$(CC)
@@ -193,6 +195,35 @@ CFG_LDPATH_i686-unknown-linux-gnu :=
 CFG_RUN_i686-unknown-linux-gnu=$(2)
 CFG_RUN_TARG_i686-unknown-linux-gnu=$(call CFG_RUN_i686-unknown-linux-gnu,,$(2))
 
+# arm-apple-darwin configuration
+ifeq ($(CFG_OSTYPE),apple-darwin)
+CFG_IOS_SDK = $(shell xcrun --show-sdk-path -sdk iphoneos 2>/dev/null)
+CFG_IOS_FLAGS = -target arm-apple-darwin -isysroot $(CFG_IOS_SDK) -I$(CFG_IOS_SDK)/usr/include -I$(CFG_IOS_SDK)/usr/include/c++/4.2.1
+CC_arm-apple-darwin = $(shell xcrun -find -sdk iphoneos clang)
+CXX_arm-apple-darwin = $(shell xcrun -find -sdk iphoneos clang++)
+CPP_arm-apple-darwin = $(shell xcrun -find -sdk iphoneos clang++)
+AR_arm-apple-darwin = $(shell xcrun -find -sdk iphoneos ar)
+CFG_LIB_NAME_arm-apple-darwin = lib$(1).dylib
+CFG_LIB_GLOB_arm-apple-darwin = lib$(1)-*.dylib
+CFG_LIB_DSYM_GLOB_arm-apple-darwin = lib$(1)-*.dylib.dSYM
+CFG_GCCISH_CFLAGS_arm-apple-darwin := -Wall -Werror -g -fPIC $(CFG_IOS_FLAGS)
+CFG_GCCISH_CXXFLAGS_arm-apple-darwin := -fno-rtti $(CFG_IOS_FLAGS)
+CFG_GCCISH_LINK_FLAGS_arm-apple-darwin := -dynamiclib -lpthread -framework CoreServices -Wl,-no_compact_unwind
+CFG_GCCISH_DEF_FLAG_arm-apple-darwin := -Wl,-exported_symbols_list,
+CFG_GCCISH_PRE_LIB_FLAGS_arm-apple-darwin :=
+CFG_GCCISH_POST_LIB_FLAGS_arm-apple-darwin :=
+CFG_DEF_SUFFIX_arm-apple-darwin := .darwin.def
+CFG_INSTALL_NAME_arm-apple-darwin = -Wl,-install_name,@rpath/$(1)
+CFG_LIBUV_LINK_FLAGS_arm-apple-darwin =
+CFG_EXE_SUFFIX_arm-apple-darwin :=
+CFG_WINDOWSY_arm-apple-darwin :=
+CFG_UNIXY_arm-apple-darwin := 1
+CFG_PATH_MUNGE_arm-apple-darwin := true
+CFG_LDPATH_arm-apple-darwin :=
+CFG_RUN_arm-apple-darwin = $(2)
+CFG_RUN_TARG_arm-apple-darwin = $(call CFG_RUN_arm-apple-darwin,,$(2))
+endif
+
 # x86_64-apple-darwin configuration
 CC_x86_64-apple-darwin=$(CC)
 CXX_x86_64-apple-darwin=$(CXX)
@@ -204,7 +235,7 @@ CFG_LIB_GLOB_x86_64-apple-darwin=lib$(1)-*.dylib
 CFG_LIB_DSYM_GLOB_x86_64-apple-darwin=lib$(1)-*.dylib.dSYM
 CFG_GCCISH_CFLAGS_x86_64-apple-darwin := -Wall -Werror -g -fPIC -m64 -arch x86_64
 CFG_GCCISH_CXXFLAGS_x86_64-apple-darwin := -fno-rtti
-CFG_GCCISH_LINK_FLAGS_x86_64-apple-darwin := -dynamiclib -pthread  -framework CoreServices -Wl,-no_compact_unwind -m64
+CFG_GCCISH_LINK_FLAGS_x86_64-apple-darwin := -dynamiclib -pthread  -framework CoreServices -m64
 CFG_GCCISH_DEF_FLAG_x86_64-apple-darwin := -Wl,-exported_symbols_list,
 CFG_GCCISH_PRE_LIB_FLAGS_x86_64-apple-darwin :=
 CFG_GCCISH_POST_LIB_FLAGS_x86_64-apple-darwin :=
@@ -230,7 +261,7 @@ CFG_LIB_GLOB_i686-apple-darwin=lib$(1)-*.dylib
 CFG_LIB_DSYM_GLOB_i686-apple-darwin=lib$(1)-*.dylib.dSYM
 CFG_GCCISH_CFLAGS_i686-apple-darwin := -Wall -Werror -g -fPIC -m32 -arch i386
 CFG_GCCISH_CXXFLAGS_i686-apple-darwin := -fno-rtti
-CFG_GCCISH_LINK_FLAGS_i686-apple-darwin := -dynamiclib -pthread  -framework CoreServices -Wl,-no_compact_unwind -m32
+CFG_GCCISH_LINK_FLAGS_i686-apple-darwin := -dynamiclib -pthread  -framework CoreServices -m32
 CFG_GCCISH_DEF_FLAG_i686-apple-darwin := -Wl,-exported_symbols_list,
 CFG_GCCISH_PRE_LIB_FLAGS_i686-apple-darwin :=
 CFG_GCCISH_POST_LIB_FLAGS_i686-apple-darwin :=
@@ -256,7 +287,7 @@ CFG_LIB_GLOB_arm-linux-androideabi=lib$(1)-*.so
 CFG_LIB_DSYM_GLOB_arm-linux-androideabi=lib$(1)-*.dylib.dSYM
 CFG_GCCISH_CFLAGS_arm-linux-androideabi := -Wall -g -fPIC -D__arm__ -DANDROID -D__ANDROID__
 CFG_GCCISH_CXXFLAGS_arm-linux-androideabi := -fno-rtti
-CFG_GCCISH_LINK_FLAGS_arm-linux-androideabi := -shared -fPIC -ldl -g -lm -lsupc++ -lgnustl_shared
+CFG_GCCISH_LINK_FLAGS_arm-linux-androideabi := -shared -fPIC -ldl -g -lm -lsupc++
 CFG_GCCISH_DEF_FLAG_arm-linux-androideabi := -Wl,--export-dynamic,--dynamic-list=
 CFG_GCCISH_PRE_LIB_FLAGS_arm-linux-androideabi := -Wl,-whole-archive
 CFG_GCCISH_POST_LIB_FLAGS_arm-linux-androideabi := -Wl,-no-whole-archive
@@ -271,12 +302,14 @@ CFG_LDPATH_arm-linux-androideabi :=
 CFG_RUN_arm-linux-androideabi=
 CFG_RUN_TARG_arm-linux-androideabi=
 RUSTC_FLAGS_arm-linux-androideabi :=--android-cross-path=$(CFG_ANDROID_CROSS_PATH)
+RUSTC_CROSS_FLAGS_arm-linux-androideabi :=--android-cross-path=$(CFG_ANDROID_CROSS_PATH)
 
 # arm-unknown-linux-gnueabihf configuration
-CC_arm-unknown-linux-gnueabihf=arm-linux-gnueabihf-gcc
-CXX_arm-unknown-linux-gnueabihf=arm-linux-gnueabihf-g++
-CPP_arm-unknown-linux-gnueabihf=arm-linux-gnueabihf-gcc -E
-AR_arm-unknown-linux-gnueabihf=arm-linux-gnueabihf-ar
+CROSS_PREFIX_arm-unknown-linux-gnueabihf=arm-linux-gnueabihf-
+CC_arm-unknown-linux-gnueabihf=gcc
+CXX_arm-unknown-linux-gnueabihf=g++
+CPP_arm-unknown-linux-gnueabihf=gcc -E
+AR_arm-unknown-linux-gnueabihf=ar
 CFG_LIB_NAME_arm-unknown-linux-gnueabihf=lib$(1).so
 CFG_STATIC_LIB_NAME_arm-unknown-linux-gnueabihf=lib$(1).a
 CFG_LIB_GLOB_arm-unknown-linux-gnueabihf=lib$(1)-*.so
@@ -295,15 +328,17 @@ CFG_WINDOWSY_arm-unknown-linux-gnueabihf :=
 CFG_UNIXY_arm-unknown-linux-gnueabihf := 1
 CFG_PATH_MUNGE_arm-unknown-linux-gnueabihf := true
 CFG_LDPATH_arm-unknown-linux-gnueabihf :=
-CFG_RUN_arm-unknown-linux-gnueabihf=
-CFG_RUN_TARG_arm-unknown-linux-gnueabihf=
-RUSTC_FLAGS_arm-unknown-linux-gnueabihf := --linker=$(CC_arm-unknown-linux-gnueabihf)
+CFG_RUN_arm-unknown-linux-gnueabihf=$(2)
+CFG_RUN_TARG_arm-unknown-linux-gnueabihf=$(call CFG_RUN_arm-unknown-linux-gnueabihf,,$(2))
+RUSTC_FLAGS_arm-unknown-linux-gnueabihf :=
+RUSTC_CROSS_FLAGS_arm-unknown-linux-gnueabihf := --linker=$(CROSS_PREFIX_arm-unknown-linux-gnueabihf)$(CXX_arm-unknown-linux-gnueabihf)
 
 # arm-unknown-linux-gnueabi configuration
-CC_arm-unknown-linux-gnueabi=arm-linux-gnueabi-gcc
-CXX_arm-unknown-linux-gnueabi=arm-linux-gnueabi-g++
-CPP_arm-unknown-linux-gnueabi=arm-linux-gnueabi-gcc -E
-AR_arm-unknown-linux-gnueabi=arm-linux-gnueabi-ar
+CROSS_PREFIX_arm-unknown-linux-gnueabi=arm-linux-gnueabi-
+CC_arm-unknown-linux-gnueabi=gcc
+CXX_arm-unknown-linux-gnueabi=g++
+CPP_arm-unknown-linux-gnueabi=gcc -E
+AR_arm-unknown-linux-gnueabi=ar
 CFG_LIB_NAME_arm-unknown-linux-gnueabi=lib$(1).so
 CFG_STATIC_LIB_NAME_arm-unknown-linux-gnueabi=lib$(1).a
 CFG_LIB_GLOB_arm-unknown-linux-gnueabi=lib$(1)-*.so
@@ -315,16 +350,17 @@ CFG_GCCISH_DEF_FLAG_arm-unknown-linux-gnueabi := -Wl,--export-dynamic,--dynamic-
 CFG_GCCISH_PRE_LIB_FLAGS_arm-unknown-linux-gnueabi := -Wl,-whole-archive
 CFG_GCCISH_POST_LIB_FLAGS_arm-unknown-linux-gnueabi := -Wl,-no-whole-archive
 CFG_DEF_SUFFIX_arm-unknown-linux-gnueabi := .linux.def
-CFG_INSTALL_NAME_ar,-unknown-linux-gnueabi =
+CFG_INSTALL_NAME_arm-unknown-linux-gnueabi =
 CFG_LIBUV_LINK_FLAGS_arm-unknown-linux-gnueabi =
 CFG_EXE_SUFFIX_arm-unknown-linux-gnueabi :=
 CFG_WINDOWSY_arm-unknown-linux-gnueabi :=
 CFG_UNIXY_arm-unknown-linux-gnueabi := 1
 CFG_PATH_MUNGE_arm-unknown-linux-gnueabi := true
 CFG_LDPATH_arm-unknown-linux-gnueabi :=
-CFG_RUN_arm-unknown-linux-gnueabi=
-CFG_RUN_TARG_arm-unknown-linux-gnueabi=
-RUSTC_FLAGS_arm-unknown-linux-gnueabi := --linker=$(CC_arm-unknown-linux-gnueabi)
+CFG_RUN_arm-unknown-linux-gnueabi=$(2)
+CFG_RUN_TARG_arm-unknown-linux-gnueabi=$(call CFG_RUN_arm-unknown-linux-gnueabi,,$(2))
+RUSTC_FLAGS_arm-unknown-linux-gnueabi :=
+RUSTC_CROSS_FLAGS_arm-unknown-linux-gnueabi := --linker=$(CROSS_PREFIX_arm-unknown-linux-gnueabi)$(CXX_arm-unknown-linux-gnueabi)
 
 # mips-unknown-linux-gnu configuration
 CC_mips-unknown-linux-gnu=mips-linux-gnu-gcc
@@ -370,7 +406,7 @@ CFG_GCCISH_PRE_LIB_FLAGS_i686-pc-mingw32 :=
 CFG_GCCISH_POST_LIB_FLAGS_i686-pc-mingw32 :=
 CFG_DEF_SUFFIX_i686-pc-mingw32 := .mingw32.def
 CFG_INSTALL_NAME_i686-pc-mingw32 =
-CFG_LIBUV_LINK_FLAGS_i686-pc-mingw32 := -lWs2_32 -lpsapi -liphlpapi
+CFG_LIBUV_LINK_FLAGS_i686-pc-mingw32 := -lws2_32 -lpsapi -liphlpapi
 CFG_LLVM_BUILD_ENV_i686-pc-mingw32 := CPATH=$(CFG_SRC_DIR)src/etc/mingw-fix-include
 CFG_EXE_SUFFIX_i686-pc-mingw32 := .exe
 CFG_WINDOWSY_i686-pc-mingw32 := 1
@@ -378,7 +414,7 @@ CFG_UNIXY_i686-pc-mingw32 :=
 CFG_PATH_MUNGE_i686-pc-mingw32 :=
 CFG_LDPATH_i686-pc-mingw32 :=$(CFG_LDPATH_i686-pc-mingw32):$(PATH)
 CFG_RUN_i686-pc-mingw32=PATH="$(CFG_LDPATH_i686-pc-mingw32):$(1)" $(2)
-CFG_RUN_TARG_i686-pc-mingw32=$(call CFG_RUN_i686-pc-mingw32,$(HLIB$(1)_H_$(CFG_BUILD_TRIPLE)),$(2))
+CFG_RUN_TARG_i686-pc-mingw32=$(call CFG_RUN_i686-pc-mingw32,$(HLIB$(1)_H_$(CFG_BUILD)),$(2))
 
 # i586-mingw32msvc configuration
 CC_i586-mingw32msvc=$(CFG_MINGW32_CROSS_PATH)/bin/i586-mingw32msvc-gcc
@@ -408,31 +444,61 @@ CFG_LDPATH_i586-mingw32msvc :=
 CFG_RUN_i586-mingw32msvc=
 CFG_RUN_TARG_i586-mingw32msvc=
 
+# i686-w64-mingw32 configuration
+CROSS_PREFIX_i686-w64-mingw32=i686-w64-mingw32-
+CC_i686-w64-mingw32=gcc
+CXX_i686-w64-mingw32=g++
+CPP_i686-w64-mingw32=gcc -E
+AR_i686-w64-mingw32=ar
+CFG_LIB_NAME_i686-w64-mingw32=$(1).dll
+CFG_STATIC_LIB_NAME_i686-w64-mingw32=$(1).lib
+CFG_LIB_GLOB_i686-w64-mingw32=$(1)-*.dll
+CFG_LIB_DSYM_GLOB_i686-w64-mingw32=$(1)-*.dylib.dSYM
+CFG_GCCISH_CFLAGS_i686-w64-mingw32 := -Wall -Werror -g -m32 -D_WIN32_WINNT=0x0600
+CFG_GCCISH_CXXFLAGS_i686-w64-mingw32 := -fno-rtti
+CFG_GCCISH_LINK_FLAGS_i686-w64-mingw32 := -shared -g -m32
+CFG_GCCISH_DEF_FLAG_i686-w64-mingw32 :=
+CFG_GCCISH_PRE_LIB_FLAGS_i686-w64-mingw32 :=
+CFG_GCCISH_POST_LIB_FLAGS_i686-w64-mingw32 :=
+CFG_DEF_SUFFIX_i686-w64-mingw32 := .mingw32.def
+CFG_INSTALL_NAME_i686-w64-mingw32 =
+CFG_LIBUV_LINK_FLAGS_i686-w64-mingw32 := -lws2_32 -lpsapi -liphlpapi
+CFG_EXE_SUFFIX_i686-w64-mingw32 := .exe
+CFG_WINDOWSY_i686-w64-mingw32 := 1
+CFG_UNIXY_i686-w64-mingw32 :=
+CFG_PATH_MUNGE_i686-w64-mingw32 :=
+CFG_LDPATH_i686-w64-mingw32 :=$(CFG_LDPATH_i686-w64-mingw32):$(PATH)
+CFG_RUN_i686-w64-mingw32=PATH="$(CFG_LDPATH_i686-w64-mingw32):$(1)" $(2)
+CFG_RUN_TARG_i686-w64-mingw32=$(call CFG_RUN_i686-w64-mingw32,$(HLIB$(1)_H_$(CFG_BUILD)),$(2))
+RUSTC_CROSS_FLAGS_i686-w64-mingw32 := --linker=$(CROSS_PREFIX_i686-w64-mingw32)$(CXX_i686-w64-mingw32)
+
 # x86_64-w64-mingw32 configuration
-CC_x86_64-w64-mingw32=$(CC)
-CXX_x86_64-w64-mingw32=$(CXX)
-CPP_x86_64-w64-mingw32=$(CPP)
-AR_x86_64-w64-mingw32=$(AR)
+CROSS_PREFIX_x86_64-w64-mingw32=x86_64-w64-mingw32-
+CC_x86_64-w64-mingw32=gcc
+CXX_x86_64-w64-mingw32=g++
+CPP_x86_64-w64-mingw32=gcc -E
+AR_x86_64-w64-mingw32=ar
 CFG_LIB_NAME_x86_64-w64-mingw32=$(1).dll
 CFG_STATIC_LIB_NAME_x86_64-w64-mingw32=$(1).lib
 CFG_LIB_GLOB_x86_64-w64-mingw32=$(1)-*.dll
 CFG_LIB_DSYM_GLOB_x86_64-w64-mingw32=$(1)-*.dylib.dSYM
 CFG_GCCISH_CFLAGS_x86_64-w64-mingw32 := -Wall -Werror -g -m64 -D_WIN32_WINNT=0x0600
 CFG_GCCISH_CXXFLAGS_x86_64-w64-mingw32 := -fno-rtti
-CFG_GCCISH_LINK_FLAGS_x86_64-w64-mingw32 := -shared -fPIC -g -m64
+CFG_GCCISH_LINK_FLAGS_x86_64-w64-mingw32 := -shared -g -m64
 CFG_GCCISH_DEF_FLAG_x86_64-w64-mingw32 :=
 CFG_GCCISH_PRE_LIB_FLAGS_x86_64-w64-mingw32 :=
 CFG_GCCISH_POST_LIB_FLAGS_x86_64-w64-mingw32 :=
 CFG_DEF_SUFFIX_x86_64-w64-mingw32 := .mingw32.def
 CFG_INSTALL_NAME_x86_64-w64-mingw32 =
-CFG_LIBUV_LINK_FLAGS_x86_64-w64-mingw32 := -lWs2_32 -lpsapi -liphlpapi
+CFG_LIBUV_LINK_FLAGS_x86_64-w64-mingw32 := -lws2_32 -lpsapi -liphlpapi
 CFG_EXE_SUFFIX_x86_64-w64-mingw32 := .exe
 CFG_WINDOWSY_x86_64-w64-mingw32 := 1
 CFG_UNIXY_x86_64-w64-mingw32 :=
 CFG_PATH_MUNGE_x86_64-w64-mingw32 :=
 CFG_LDPATH_x86_64-w64-mingw32 :=$(CFG_LDPATH_x86_64-w64-mingw32):$(PATH)
 CFG_RUN_x86_64-w64-mingw32=PATH="$(CFG_LDPATH_x86_64-w64-mingw32):$(1)" $(2)
-CFG_RUN_TARG_x86_64-w64-mingw32=$(call CFG_RUN_x86_64-w64-mingw32,$(HLIB$(1)_H_$(CFG_BUILD_TRIPLE)),$(2))
+CFG_RUN_TARG_x86_64-w64-mingw32=$(call CFG_RUN_x86_64-w64-mingw32,$(HLIB$(1)_H_$(CFG_BUILD)),$(2))
+RUSTC_CROSS_FLAGS_x86_64-w64-mingw32 := --linker=$(CROSS_PREFIX_x86_64-w64-mingw32)$(CXX_x86_64-w64-mingw32)
 
 # x86_64-unknown-freebsd configuration
 CC_x86_64-unknown-freebsd=$(CC)
@@ -470,6 +536,16 @@ ifdef CFG_CCACHE_BASEDIR
 endif
 
 define CFG_MAKE_TOOLCHAIN
+  # Prepend the tools with their prefix if cross compiling
+  ifneq ($(CFG_BUILD),$(1))
+	CC_$(1)=$(CROSS_PREFIX_$(1))$(CC_$(1))
+	CXX_$(1)=$(CROSS_PREFIX_$(1))$(CXX_$(1))
+	CPP_$(1)=$(CROSS_PREFIX_$(1))$(CPP_$(1))
+	AR_$(1)=$(CROSS_PREFIX_$(1))$(AR_$(1))
+
+	RUSTC_FLAGS_$(1)=$(RUSTC_CROSS_FLAGS_$(1))
+  endif
+
   CFG_COMPILE_C_$(1) = $$(CC_$(1))  \
         $$(CFG_GCCISH_CFLAGS)      \
         $$(CFG_GCCISH_CFLAGS_$(1)) \
@@ -477,7 +553,7 @@ define CFG_MAKE_TOOLCHAIN
         -c -o $$(1) $$(2)
   CFG_LINK_C_$(1) = $$(CC_$(1)) \
         $$(CFG_GCCISH_LINK_FLAGS) -o $$(1)          \
-        $$(CFG_GCCISH_LINK_FLAGS_$(1)))             \
+        $$(CFG_GCCISH_LINK_FLAGS_$(1))              \
         $$(CFG_GCCISH_DEF_FLAG_$(1))$$(3) $$(2)     \
         $$(call CFG_INSTALL_NAME_$(1),$$(4))
   CFG_COMPILE_CXX_$(1) = $$(CXX_$(1)) \
@@ -498,7 +574,7 @@ define CFG_MAKE_TOOLCHAIN
   # We're using llvm-mc as our assembler because it supports
   # .cfi pseudo-ops on mac
   CFG_ASSEMBLE_$(1)=$$(CPP_$(1)) -E $$(CFG_DEPEND_FLAGS) $$(2) | \
-                    $$(LLVM_MC_$$(CFG_BUILD_TRIPLE)) \
+                    $$(LLVM_MC_$$(CFG_BUILD)) \
                     -assemble \
                     -filetype=obj \
                     -triple=$(1) \
@@ -507,11 +583,12 @@ define CFG_MAKE_TOOLCHAIN
 
   # For the ARM and MIPS crosses, use the toolchain assembler
   # XXX: We should be able to use the LLVM assembler
-  CFG_ASSEMBLE_$(1)=$$(CC_$(1)) $$(CFG_DEPEND_FLAGS) $$(2) -c -o $$(1)
+  CFG_ASSEMBLE_$(1)=$$(CC_$(1)) $$(CFG_GCCISH_CFLAGS_$(1)) \
+		    $$(CFG_DEPEND_FLAGS) $$(2) -c -o $$(1)
 
   endif
 
 endef
 
-$(foreach target,$(CFG_TARGET_TRIPLES),\
+$(foreach target,$(CFG_TARGET),\
   $(eval $(call CFG_MAKE_TOOLCHAIN,$(target))))

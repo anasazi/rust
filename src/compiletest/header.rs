@@ -39,7 +39,7 @@ pub fn load_props(testfile: &Path) -> TestProps {
     let mut pp_exact = None;
     let mut debugger_cmds = ~[];
     let mut check_lines = ~[];
-    do iter_header(testfile) |ln| {
+    iter_header(testfile, |ln| {
         match parse_error_pattern(ln) {
           Some(ep) => error_patterns.push(ep),
           None => ()
@@ -74,7 +74,7 @@ pub fn load_props(testfile: &Path) -> TestProps {
         };
 
         true
-    };
+    });
     return TestProps {
         error_patterns: error_patterns,
         compile_flags: compile_flags,
@@ -91,28 +91,23 @@ pub fn is_test_ignored(config: &config, testfile: &Path) -> bool {
         ~"xfail-" + util::get_os(config.target)
     }
 
-    let val = do iter_header(testfile) |ln| {
+    let val = iter_header(testfile, |ln| {
         if parse_name_directive(ln, "xfail-test") { false }
         else if parse_name_directive(ln, xfail_target(config)) { false }
         else if config.mode == common::mode_pretty &&
             parse_name_directive(ln, "xfail-pretty") { false }
         else { true }
-    };
+    });
 
     !val
 }
 
-fn iter_header(testfile: &Path, it: &fn(&str) -> bool) -> bool {
-    use std::rt::io::Open;
-    use std::rt::io::file::FileInfo;
-    use std::rt::io::buffered::BufferedReader;
+fn iter_header(testfile: &Path, it: |&str| -> bool) -> bool {
+    use std::io::buffered::BufferedReader;
+    use std::io::File;
 
-    let mut rdr = BufferedReader::new(testfile.open_reader(Open).unwrap());
-    loop {
-        let ln = match rdr.read_line() {
-            Some(ln) => ln, None => break
-        };
-
+    let mut rdr = BufferedReader::new(File::open(testfile).unwrap());
+    for ln in rdr.lines() {
         // Assume that any directives will be found before the first
         // module or function. This doesn't seem to be an optimization
         // with a warm page cache. Maybe with a cold one.
@@ -144,9 +139,9 @@ fn parse_check_line(line: &str) -> Option<~str> {
 }
 
 fn parse_exec_env(line: &str) -> Option<(~str, ~str)> {
-    do parse_name_value_directive(line, ~"exec-env").map |nv| {
+    parse_name_value_directive(line, ~"exec-env").map(|nv| {
         // nv is either FOO or FOO=BAR
-        let mut strs: ~[~str] = nv.splitn_iter('=', 1).map(|s| s.to_owned()).collect();
+        let mut strs: ~[~str] = nv.splitn('=', 1).map(|s| s.to_owned()).collect();
 
         match strs.len() {
           1u => (strs.pop(), ~""),
@@ -154,9 +149,9 @@ fn parse_exec_env(line: &str) -> Option<(~str, ~str)> {
               let end = strs.pop();
               (strs.pop(), end)
           }
-          n => fail2!("Expected 1 or 2 strings, not {}", n)
+          n => fail!("Expected 1 or 2 strings, not {}", n)
         }
-    }
+    })
 }
 
 fn parse_pp_exact(line: &str, testfile: &Path) -> Option<Path> {
@@ -183,7 +178,7 @@ fn parse_name_value_directive(line: &str,
         Some(colon) => {
             let value = line.slice(colon + keycolon.len(),
                                    line.len()).to_owned();
-            debug2!("{}: {}", directive,  value);
+            debug!("{}: {}", directive,  value);
             Some(value)
         }
         None => None

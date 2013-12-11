@@ -15,8 +15,8 @@ use unstable::intrinsics::TyDesc;
 pub struct Box<T> {
     ref_count: uint,
     type_desc: *TyDesc,
-    prev: *Box<T>,
-    next: *Box<T>,
+    prev: *mut Box<T>,
+    next: *mut Box<T>,
     data: T
 }
 
@@ -53,8 +53,8 @@ pub trait Repr<T> {
     fn repr(&self) -> T { unsafe { cast::transmute_copy(self) } }
 }
 
-impl<'self, T> Repr<Slice<T>> for &'self [T] {}
-impl<'self> Repr<Slice<u8>> for &'self str {}
+impl<'a, T> Repr<Slice<T>> for &'a [T] {}
+impl<'a> Repr<Slice<u8>> for &'a str {}
 impl<T> Repr<*Box<T>> for @T {}
 impl<T> Repr<*Box<Vec<T>>> for @[T] {}
 impl Repr<*String> for ~str {}
@@ -62,3 +62,33 @@ impl Repr<*Box<String>> for @str {}
 
 // sure would be nice to have this
 // impl<T> Repr<*Vec<T>> for ~[T] {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use cast;
+
+    #[test]
+    fn synthesize_closure() {
+        unsafe {
+            let x = 10;
+            let f: |int| -> int = |y| x + y;
+
+            assert_eq!(f(20), 30);
+
+            let original_closure: Closure = cast::transmute(f);
+
+            let actual_function_pointer = original_closure.code;
+            let environment = original_closure.env;
+
+            let new_closure = Closure {
+                code: actual_function_pointer,
+                env: environment
+            };
+
+            let new_f: |int| -> int = cast::transmute(new_closure);
+            assert_eq!(new_f(20), 30);
+        }
+    }
+}
