@@ -31,13 +31,14 @@ this point a bit better.
 use middle::freevars::get_freevars;
 use middle::ty::{ReScope};
 use middle::ty;
+use middle::typeck::astconv::AstConv;
 use middle::typeck::check::FnCtxt;
 use middle::typeck::check::regionmanip::relate_nested_regions;
 use middle::typeck::infer::resolve_and_force_all_but_regions;
 use middle::typeck::infer::resolve_type;
 use middle::typeck::infer;
-use util::ppaux::{ty_to_str, region_to_str};
 use middle::pat_util;
+use util::ppaux::{ty_to_str, region_to_str, Repr};
 
 use syntax::ast::{ManagedSigil, OwnedSigil, BorrowedSigil};
 use syntax::ast::{DefArg, DefBinding, DefLocal, DefSelf, DefUpvar};
@@ -47,14 +48,14 @@ use syntax::visit;
 use syntax::visit::Visitor;
 
 pub struct Rcx {
-    fcx: @mut FnCtxt,
+    fcx: @FnCtxt,
     errors_reported: uint,
 
     // id of innermost fn or loop
     repeating_scope: ast::NodeId,
 }
 
-fn encl_region_of_def(fcx: @mut FnCtxt, def: ast::Def) -> ty::Region {
+fn encl_region_of_def(fcx: @FnCtxt, def: ast::Def) -> ty::Region {
     let tcx = fcx.tcx();
     match def {
         DefLocal(node_id, _) | DefArg(node_id, _) |
@@ -128,20 +129,22 @@ impl Rcx {
     }
 
     /// Try to resolve the type for the given node.
-    pub fn resolve_expr_type_adjusted(&mut self, expr: @ast::Expr) -> ty::t {
+    pub fn resolve_expr_type_adjusted(&mut self, expr: &ast::Expr) -> ty::t {
         let ty_unadjusted = self.resolve_node_type(expr.id);
         if ty::type_is_error(ty_unadjusted) || ty::type_is_bot(ty_unadjusted) {
             ty_unadjusted
         } else {
             let tcx = self.fcx.tcx();
-            let adjustments = self.fcx.inh.adjustments;
-            ty::adjust_ty(tcx, expr.span, ty_unadjusted,
-                          adjustments.find_copy(&expr.id))
+            let adjustment = {
+                let adjustments = self.fcx.inh.adjustments.borrow();
+                adjustments.get().find_copy(&expr.id)
+            };
+            ty::adjust_ty(tcx, expr.span, ty_unadjusted, adjustment)
         }
     }
 }
 
-pub fn regionck_expr(fcx: @mut FnCtxt, e: @ast::Expr) {
+pub fn regionck_expr(fcx: @FnCtxt, e: &ast::Expr) {
     let mut rcx = Rcx { fcx: fcx, errors_reported: 0,
                          repeating_scope: e.id };
     let rcx = &mut rcx;
@@ -152,7 +155,7 @@ pub fn regionck_expr(fcx: @mut FnCtxt, e: @ast::Expr) {
     fcx.infcx().resolve_regions();
 }
 
-pub fn regionck_fn(fcx: @mut FnCtxt, blk: ast::P<ast::Block>) {
+pub fn regionck_fn(fcx: @FnCtxt, blk: &ast::Block) {
     let mut rcx = Rcx { fcx: fcx, errors_reported: 0,
                          repeating_scope: blk.id };
     let rcx = &mut rcx;
@@ -172,24 +175,24 @@ impl Visitor<()> for Rcx {
     // hierarchy, and in particular the relationships between free
     // regions, until regionck, as described in #3238.
 
-    fn visit_item(&mut self, i:@ast::item, _:()) { visit_item(self, i); }
+    fn visit_item(&mut self, i: &ast::Item, _: ()) { visit_item(self, i); }
 
-    fn visit_expr(&mut self, ex:@ast::Expr, _:()) { visit_expr(self, ex); }
+    fn visit_expr(&mut self, ex: &ast::Expr, _: ()) { visit_expr(self, ex); }
 
-        //visit_pat: visit_pat, // (..) see above
+    //visit_pat: visit_pat, // (..) see above
 
-    fn visit_arm(&mut self, a:&ast::Arm, _:()) { visit_arm(self, a); }
+    fn visit_arm(&mut self, a: &ast::Arm, _: ()) { visit_arm(self, a); }
 
-    fn visit_local(&mut self, l:@ast::Local, _:()) { visit_local(self, l); }
+    fn visit_local(&mut self, l: &ast::Local, _: ()) { visit_local(self, l); }
 
-    fn visit_block(&mut self, b:ast::P<ast::Block>, _:()) { visit_block(self, b); }
+    fn visit_block(&mut self, b: &ast::Block, _: ()) { visit_block(self, b); }
 }
 
-fn visit_item(_rcx: &mut Rcx, _item: @ast::item) {
+fn visit_item(_rcx: &mut Rcx, _item: &ast::Item) {
     // Ignore items
 }
 
-fn visit_block(rcx: &mut Rcx, b: ast::P<ast::Block>) {
+fn visit_block(rcx: &mut Rcx, b: &ast::Block) {
     rcx.fcx.tcx().region_maps.record_cleanup_scope(b.id);
     visit::walk_block(rcx, b, ());
 }
@@ -203,13 +206,13 @@ fn visit_arm(rcx: &mut Rcx, arm: &ast::Arm) {
     visit::walk_arm(rcx, arm, ());
 }
 
-fn visit_local(rcx: &mut Rcx, l: @ast::Local) {
+fn visit_local(rcx: &mut Rcx, l: &ast::Local) {
     // see above
     constrain_bindings_in_pat(l.pat, rcx);
     visit::walk_local(rcx, l, ());
 }
 
-fn constrain_bindings_in_pat(pat: @ast::Pat, rcx: &mut Rcx) {
+fn constrain_bindings_in_pat(pat: &ast::Pat, rcx: &mut Rcx) {
     let tcx = rcx.fcx.tcx();
     debug!("regionck::visit_pat(pat={})", pat.repr(tcx));
     pat_util::pat_bindings(tcx.def_map, pat, |_, id, span, _| {
@@ -243,11 +246,14 @@ fn constrain_bindings_in_pat(pat: @ast::Pat, rcx: &mut Rcx) {
     })
 }
 
-fn visit_expr(rcx: &mut Rcx, expr: @ast::Expr) {
+fn visit_expr(rcx: &mut Rcx, expr: &ast::Expr) {
     debug!("regionck::visit_expr(e={}, repeating_scope={:?})",
            expr.repr(rcx.fcx.tcx()), rcx.repeating_scope);
 
-    let has_method_map = rcx.fcx.inh.method_map.contains_key(&expr.id);
+    let has_method_map = {
+        let method_map = rcx.fcx.inh.method_map;
+        method_map.get().contains_key(&expr.id)
+    };
 
     // Record cleanup scopes, which are used by borrowck to decide the
     // maximum lifetime of a temporary rvalue.  These were derived by
@@ -300,7 +306,8 @@ fn visit_expr(rcx: &mut Rcx, expr: @ast::Expr) {
 
     // Check any autoderefs or autorefs that appear.
     {
-        let r = rcx.fcx.inh.adjustments.find(&expr.id);
+        let adjustments = rcx.fcx.inh.adjustments.borrow();
+        let r = adjustments.get().find(&expr.id);
         for &adjustment in r.iter() {
             debug!("adjustment={:?}", adjustment);
             match *adjustment {
@@ -320,6 +327,25 @@ fn visit_expr(rcx: &mut Rcx, expr: @ast::Expr) {
                             rcx, expr.id, ty::ReScope(expr.id),
                             infer::AutoBorrow(expr.span));
                     }
+                }
+                @ty::AutoObject(ast::BorrowedSigil, Some(trait_region), _, _, _, _) => {
+                    // Determine if we are casting `expr` to an trait
+                    // instance.  If so, we have to be sure that the type of
+                    // the source obeys the trait's region bound.
+                    //
+                    // Note: there is a subtle point here concerning type
+                    // parameters.  It is possible that the type of `source`
+                    // contains type parameters, which in turn may contain
+                    // regions that are not visible to us (only the caller
+                    // knows about them).  The kind checker is ultimately
+                    // responsible for guaranteeing region safety in that
+                    // particular case.  There is an extensive comment on the
+                    // function check_cast_for_escaping_regions() in kind.rs
+                    // explaining how it goes about doing that.
+
+                    let source_ty = rcx.fcx.expr_ty(expr);
+                    constrain_regions_in_type(rcx, trait_region,
+                                              infer::RelateObjectBound(expr.span), source_ty);
                 }
                 _ => {}
             }
@@ -454,7 +480,7 @@ fn visit_expr(rcx: &mut Rcx, expr: @ast::Expr) {
 }
 
 fn check_expr_fn_block(rcx: &mut Rcx,
-                       expr: @ast::Expr) {
+                       expr: &ast::Expr) {
     let tcx = rcx.fcx.tcx();
     match expr.node {
         ast::ExprFnBlock(_, ref body) | ast::ExprProc(_, ref body) => {
@@ -497,8 +523,8 @@ fn check_expr_fn_block(rcx: &mut Rcx,
 
 fn constrain_callee(rcx: &mut Rcx,
                     callee_id: ast::NodeId,
-                    call_expr: @ast::Expr,
-                    callee_expr: @ast::Expr)
+                    call_expr: &ast::Expr,
+                    callee_expr: &ast::Expr)
 {
     let call_region = ty::ReScope(call_expr.id);
 
@@ -524,7 +550,7 @@ fn constrain_call(rcx: &mut Rcx,
                   // might be expr_call, expr_method_call, or an overloaded
                   // operator
                   callee_id: ast::NodeId,
-                  call_expr: @ast::Expr,
+                  call_expr: &ast::Expr,
                   receiver: Option<@ast::Expr>,
                   arg_exprs: &[@ast::Expr],
                   implicitly_ref_args: bool)
@@ -593,7 +619,7 @@ fn constrain_call(rcx: &mut Rcx,
 }
 
 fn constrain_derefs(rcx: &mut Rcx,
-                    deref_expr: @ast::Expr,
+                    deref_expr: &ast::Expr,
                     derefs: uint,
                     mut derefd_ty: ty::t)
 {
@@ -603,7 +629,6 @@ fn constrain_derefs(rcx: &mut Rcx,
      * pointer being derefenced, the lifetime of the pointer includes
      * the deref expr.
      */
-    let tcx = rcx.fcx.tcx();
     let r_deref_expr = ty::ReScope(deref_expr.id);
     for i in range(0u, derefs) {
         debug!("constrain_derefs(deref_expr=?, derefd_ty={}, derefs={:?}/{:?}",
@@ -619,7 +644,7 @@ fn constrain_derefs(rcx: &mut Rcx,
             _ => {}
         }
 
-        match ty::deref(tcx, derefd_ty, true) {
+        match ty::deref(derefd_ty, true) {
             Some(mt) => derefd_ty = mt.ty,
             /* if this type can't be dereferenced, then there's already an error
                in the session saying so. Just bail out for now */
@@ -638,7 +663,7 @@ pub fn mk_subregion_due_to_derefence(rcx: &mut Rcx,
 
 
 fn constrain_index(rcx: &mut Rcx,
-                   index_expr: @ast::Expr,
+                   index_expr: &ast::Expr,
                    indexed_ty: ty::t)
 {
     /*!
@@ -664,7 +689,7 @@ fn constrain_index(rcx: &mut Rcx,
 
 fn constrain_free_variables(rcx: &mut Rcx,
                             region: ty::Region,
-                            expr: @ast::Expr) {
+                            expr: &ast::Expr) {
     /*!
      * Make sure that all free variables referenced inside the closure
      * outlive the closure itself.
@@ -699,7 +724,10 @@ fn constrain_regions_in_type_of_node(
     // is going to fail anyway, so just stop here and let typeck
     // report errors later on in the writeback phase.
     let ty0 = rcx.resolve_node_type(id);
-    let adjustment = rcx.fcx.inh.adjustments.find_copy(&id);
+    let adjustment = {
+        let adjustments = rcx.fcx.inh.adjustments.borrow();
+        adjustments.get().find_copy(&id)
+    };
     let ty = ty::adjust_ty(tcx, origin.span(), ty0, adjustment);
     debug!("constrain_regions_in_type_of_node(\
             ty={}, ty0={}, id={}, minimum_lifetime={:?}, adjustment={:?})",
@@ -762,10 +790,10 @@ fn constrain_regions_in_type(
 pub mod guarantor {
     /*!
      * The routines in this module are aiming to deal with the case
-     * where a the contents of a borrowed pointer are re-borrowed.
-     * Imagine you have a borrowed pointer `b` with lifetime L1 and
+     * where a the contents of a reference are re-borrowed.
+     * Imagine you have a reference `b` with lifetime L1 and
      * you have an expression `&*b`.  The result of this borrow will
-     * be another borrowed pointer with lifetime L2 (which is an
+     * be another reference with lifetime L2 (which is an
      * inference variable).  The borrow checker is going to enforce
      * the constraint that L2 < L1, because otherwise you are
      * re-borrowing data for a lifetime larger than the original loan.
@@ -788,15 +816,15 @@ pub mod guarantor {
      * a borrow.
      *
      * The key point here is that when you are borrowing a value that
-     * is "guaranteed" by a borrowed pointer, you must link the
-     * lifetime of that borrowed pointer (L1, here) to the lifetime of
+     * is "guaranteed" by a reference, you must link the
+     * lifetime of that reference (L1, here) to the lifetime of
      * the borrow itself (L2).  What do I mean by "guaranteed" by a
-     * borrowed pointer? I mean any data that is reached by first
-     * dereferencing a borrowed pointer and then either traversing
+     * reference? I mean any data that is reached by first
+     * dereferencing a reference and then either traversing
      * interior offsets or owned pointers.  We say that the guarantor
-     * of such data it the region of the borrowed pointer that was
+     * of such data it the region of the reference that was
      * traversed.  This is essentially the same as the ownership
-     * relation, except that a borrowed pointer never owns its
+     * relation, except that a reference never owns its
      * contents.
      *
      * NB: I really wanted to use the `mem_categorization` code here
@@ -806,16 +834,16 @@ pub mod guarantor {
      * but more special purpose.
      */
 
-
+    use middle::typeck::astconv::AstConv;
     use middle::typeck::check::regionck::Rcx;
     use middle::typeck::check::regionck::mk_subregion_due_to_derefence;
     use middle::typeck::infer;
     use middle::ty;
     use syntax::ast;
     use syntax::codemap::Span;
-    use util::ppaux::{ty_to_str};
+    use util::ppaux::{ty_to_str, Repr};
 
-    pub fn for_addr_of(rcx: &mut Rcx, expr: @ast::Expr, base: @ast::Expr) {
+    pub fn for_addr_of(rcx: &mut Rcx, expr: &ast::Expr, base: &ast::Expr) {
         /*!
          * Computes the guarantor for an expression `&base` and then
          * ensures that the lifetime of the resulting pointer is linked
@@ -828,7 +856,7 @@ pub mod guarantor {
         link(rcx, expr.span, expr.id, guarantor);
     }
 
-    pub fn for_match(rcx: &mut Rcx, discr: @ast::Expr, arms: &[ast::Arm]) {
+    pub fn for_match(rcx: &mut Rcx, discr: &ast::Expr, arms: &[ast::Arm]) {
         /*!
          * Computes the guarantors for any ref bindings in a match and
          * then ensures that the lifetime of the resulting pointer is
@@ -846,7 +874,7 @@ pub mod guarantor {
     }
 
     pub fn for_autoref(rcx: &mut Rcx,
-                       expr: @ast::Expr,
+                       expr: &ast::Expr,
                        autoderefs: uint,
                        autoref: &ty::AutoRef) {
         /*!
@@ -886,7 +914,7 @@ pub mod guarantor {
 
         fn maybe_make_subregion(
             rcx: &mut Rcx,
-            expr: @ast::Expr,
+            expr: &ast::Expr,
             sub_region: ty::Region,
             sup_region: Option<ty::Region>)
         {
@@ -898,7 +926,7 @@ pub mod guarantor {
     }
 
     pub fn for_by_ref(rcx: &mut Rcx,
-                      expr: @ast::Expr,
+                      expr: &ast::Expr,
                       callee_scope: ast::NodeId) {
         /*!
          * Computes the guarantor for cases where the `expr` is
@@ -926,7 +954,7 @@ pub mod guarantor {
         guarantor: Option<ty::Region>) {
         /*!
          *
-         * Links the lifetime of the borrowed pointer resulting from a borrow
+         * Links the lifetime of the reference resulting from a borrow
          * to the lifetime of its guarantor (if any).
          */
 
@@ -977,7 +1005,7 @@ pub mod guarantor {
         ty: ty::t
     }
 
-    fn guarantor(rcx: &mut Rcx, expr: @ast::Expr) -> Option<ty::Region> {
+    fn guarantor(rcx: &mut Rcx, expr: &ast::Expr) -> Option<ty::Region> {
         /*!
          *
          * Computes the guarantor of `expr`, or None if `expr` is
@@ -1020,6 +1048,7 @@ pub mod guarantor {
             ast::ExprAddrOf(..) |
             ast::ExprBinary(..) |
             ast::ExprVstore(..) |
+            ast::ExprBox(..) |
             ast::ExprBreak(..) |
             ast::ExprAgain(..) |
             ast::ExprRet(..) |
@@ -1049,19 +1078,41 @@ pub mod guarantor {
         }
     }
 
-    fn categorize(rcx: &mut Rcx, expr: @ast::Expr) -> ExprCategorization {
+    fn categorize(rcx: &mut Rcx, expr: &ast::Expr) -> ExprCategorization {
         debug!("categorize()");
 
         let mut expr_ct = categorize_unadjusted(rcx, expr);
         debug!("before adjustments, cat={:?}", expr_ct.cat);
 
-        match rcx.fcx.inh.adjustments.find(&expr.id) {
+        let adjustments = rcx.fcx.inh.adjustments.borrow();
+        match adjustments.get().find(&expr.id) {
             Some(&@ty::AutoAddEnv(..)) => {
                 // This is basically an rvalue, not a pointer, no regions
                 // involved.
                 expr_ct.cat = ExprCategorization {
                     guarantor: None,
                     pointer: NotPointer
+                };
+            }
+
+            Some(&@ty::AutoObject(ast::BorrowedSigil, Some(region), _, _, _, _)) => {
+                expr_ct.cat = ExprCategorization {
+                    guarantor: None,
+                    pointer: BorrowedPointer(region)
+                };
+            }
+
+            Some(&@ty::AutoObject(ast::OwnedSigil, _, _, _, _, _)) => {
+                expr_ct.cat = ExprCategorization {
+                    guarantor: None,
+                    pointer: OwnedPointer
+                };
+            }
+
+            Some(&@ty::AutoObject(ast::ManagedSigil, _, _, _, _, _)) => {
+                expr_ct.cat = ExprCategorization {
+                    guarantor: None,
+                    pointer: OtherPointer
                 };
             }
 
@@ -1085,13 +1136,15 @@ pub mod guarantor {
                     Some(ty::AutoBorrowFn(r)) |
                     Some(ty::AutoBorrowObj(r, _)) => {
                         // If there is an autoref, then the result of this
-                        // expression will be some sort of borrowed pointer.
+                        // expression will be some sort of reference.
                         expr_ct.cat.guarantor = None;
                         expr_ct.cat.pointer = BorrowedPointer(r);
                         debug!("autoref, cat={:?}", expr_ct.cat);
                     }
                 }
             }
+
+            Some(..) => fail!("invalid or unhandled adjustment"),
 
             None => {}
         }
@@ -1101,12 +1154,13 @@ pub mod guarantor {
     }
 
     fn categorize_unadjusted(rcx: &mut Rcx,
-                             expr: @ast::Expr)
+                             expr: &ast::Expr)
                           -> ExprCategorizationType {
         debug!("categorize_unadjusted()");
 
         let guarantor = {
-            if rcx.fcx.inh.method_map.contains_key(&expr.id) {
+            let method_map = rcx.fcx.inh.method_map.borrow();
+            if method_map.get().contains_key(&expr.id) {
                 None
             } else {
                 guarantor(rcx, expr)
@@ -1125,7 +1179,7 @@ pub mod guarantor {
 
     fn apply_autoderefs(
         rcx: &mut Rcx,
-        expr: @ast::Expr,
+        expr: &ast::Expr,
         autoderefs: uint,
         ct: ExprCategorizationType)
      -> ExprCategorizationType {
@@ -1140,7 +1194,7 @@ pub mod guarantor {
         for _ in range(0u, autoderefs) {
             ct.cat.guarantor = guarantor_of_deref(&ct.cat);
 
-            match ty::deref(tcx, ct.ty, true) {
+            match ty::deref(ct.ty, true) {
                 Some(mt) => {
                     ct.ty = mt.ty;
                     ct.cat.pointer = pointer_categorize(ct.ty);
@@ -1203,7 +1257,7 @@ pub mod guarantor {
 
     fn link_ref_bindings_in_pat(
         rcx: &mut Rcx,
-        pat: @ast::Pat,
+        pat: &ast::Pat,
         guarantor: Option<ty::Region>) {
         /*!
          *

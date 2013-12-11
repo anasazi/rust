@@ -19,8 +19,9 @@
 
 
 use std::borrow;
-use std::unstable::sync::{Exclusive, UnsafeArc};
-use std::unstable::atomics;
+use std::unstable::sync::Exclusive;
+use std::sync::arc::UnsafeArc;
+use std::sync::atomics;
 use std::unstable::finally::Finally;
 use std::util;
 use std::util::NonCopyable;
@@ -78,7 +79,7 @@ impl WaitQueue {
 
     fn wait_end(&self) -> WaitEnd {
         let (wait_end, signal_end) = Chan::new();
-        self.tail.send_deferred(signal_end);
+        assert!(self.tail.try_send_deferred(signal_end));
         wait_end
     }
 }
@@ -106,7 +107,8 @@ impl<Q:Send> Sem<Q> {
     pub fn acquire(&self) {
         unsafe {
             let mut waiter_nobe = None;
-            (**self).with(|state| {
+            let Sem(ref lock) = *self;
+            lock.with(|state| {
                 state.count -= 1;
                 if state.count < 0 {
                     // Create waiter nobe, enqueue ourself, and tell
@@ -125,7 +127,8 @@ impl<Q:Send> Sem<Q> {
 
     pub fn release(&self) {
         unsafe {
-            (**self).with(|state| {
+            let Sem(ref lock) = *self;
+            lock.with(|state| {
                 state.count += 1;
                 if state.count <= 0 {
                     state.waiters.signal();
@@ -205,7 +208,8 @@ impl<'a> Condvar<'a> {
         let mut out_of_bounds = None;
         // Release lock, 'atomically' enqueuing ourselves in so doing.
         unsafe {
-            (**self.sem).with(|state| {
+            let Sem(ref queue) = *self.sem;
+            queue.with(|state| {
                 if condvar_id < state.blocked.len() {
                     // Drop the lock.
                     state.count += 1;
@@ -247,7 +251,8 @@ impl<'a> Condvar<'a> {
         unsafe {
             let mut out_of_bounds = None;
             let mut result = false;
-            (**self.sem).with(|state| {
+            let Sem(ref lock) = *self.sem;
+            lock.with(|state| {
                 if condvar_id < state.blocked.len() {
                     result = state.blocked[condvar_id].signal();
                 } else {
@@ -269,7 +274,8 @@ impl<'a> Condvar<'a> {
         let mut out_of_bounds = None;
         let mut queue = None;
         unsafe {
-            (**self.sem).with(|state| {
+            let Sem(ref lock) = *self.sem;
+            lock.with(|state| {
                 if condvar_id < state.blocked.len() {
                     // To avoid :broadcast_heavy, we make a new waitqueue,
                     // swap it out with the old one, and broadcast on the
@@ -335,7 +341,8 @@ pub struct Semaphore { priv sem: Sem<()> }
 impl Clone for Semaphore {
     /// Create a new handle to the semaphore.
     fn clone(&self) -> Semaphore {
-        Semaphore { sem: Sem((*self.sem).clone()) }
+        let Sem(ref lock) = self.sem;
+        Semaphore { sem: Sem(lock.clone()) }
     }
 }
 
@@ -377,7 +384,9 @@ impl Semaphore {
 pub struct Mutex { priv sem: Sem<~[WaitQueue]> }
 impl Clone for Mutex {
     /// Create a new handle to the mutex.
-    fn clone(&self) -> Mutex { Mutex { sem: Sem((*self.sem).clone()) } }
+    fn clone(&self) -> Mutex {
+        let Sem(ref queue) = self.sem;
+        Mutex { sem: Sem(queue.clone()) } }
 }
 
 impl Mutex {
@@ -422,7 +431,7 @@ struct RWLockInner {
     // (or reader/downgrader) race.
     // By the way, if we didn't care about the assert in the read unlock path,
     // we could instead store the mode flag in write_downgrade's stack frame,
-    // and have the downgrade tokens store a borrowed pointer to it.
+    // and have the downgrade tokens store a reference to it.
     read_mode:  bool,
     // The only way the count flag is ever accessed is with xadd. Since it is
     // a read-modify-write operation, multiple xadds on different cores will
@@ -466,8 +475,9 @@ impl RWLock {
 
     /// Create a new handle to the rwlock.
     pub fn clone(&self) -> RWLock {
+        let Sem(ref access_lock_queue) = self.access_lock;
         RWLock { order_lock:  (&(self.order_lock)).clone(),
-                 access_lock: Sem((*self.access_lock).clone()),
+                 access_lock: Sem(access_lock_queue.clone()),
                  state:       self.state.clone() }
     }
 
@@ -568,13 +578,16 @@ impl RWLock {
      * # Example
      *
      * ```rust
+     * use extra::sync::RWLock;
+     *
+     * let lock = RWLock::new();
      * lock.write_downgrade(|mut write_token| {
      *     write_token.write_cond(|condvar| {
-     *         ... exclusive access ...
+     *         // ... exclusive access ...
      *     });
      *     let read_token = lock.downgrade(write_token);
      *     read_token.read(|| {
-     *         ... shared access ...
+     *         // ... shared access ...
      *     })
      * })
      * ```
@@ -757,23 +770,21 @@ mod tests {
     fn test_sem_runtime_friendly_blocking() {
         // Force the runtime to schedule two threads on the same sched_loop.
         // When one blocks, it should schedule the other one.
-        do task::spawn_sched(task::SingleThreaded) {
-            let s = Semaphore::new(1);
-            let s2 = s.clone();
-            let (p, c) = Chan::new();
-            let mut child_data = Some((s2, c));
-            s.access(|| {
-                let (s2, c) = child_data.take_unwrap();
-                do task::spawn {
-                    c.send(());
-                    s2.access(|| { });
-                    c.send(());
-                }
-                let _ = p.recv(); // wait for child to come alive
-                5.times(|| { task::deschedule(); }); // let the child contend
-            });
-            let _ = p.recv(); // wait for child to be done
-        }
+        let s = Semaphore::new(1);
+        let s2 = s.clone();
+        let (p, c) = Chan::new();
+        let mut child_data = Some((s2, c));
+        s.access(|| {
+            let (s2, c) = child_data.take_unwrap();
+            do task::spawn {
+                c.send(());
+                s2.access(|| { });
+                c.send(());
+            }
+            let _ = p.recv(); // wait for child to come alive
+            5.times(|| { task::deschedule(); }); // let the child contend
+        });
+        let _ = p.recv(); // wait for child to be done
     }
     /************************************************************************
      * Mutex tests

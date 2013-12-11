@@ -18,6 +18,7 @@
  */
 
 use driver::session;
+use std::cell::RefCell;
 use std::hashmap::HashMap;
 use syntax::ast;
 use syntax::codemap::Span;
@@ -33,7 +34,7 @@ pub type NamedRegionMap = HashMap<ast::NodeId, ast::DefRegion>;
 
 struct LifetimeContext {
     sess: session::Session,
-    named_region_map: @mut NamedRegionMap,
+    named_region_map: @RefCell<NamedRegionMap>,
 }
 
 enum ScopeChain<'a> {
@@ -43,12 +44,11 @@ enum ScopeChain<'a> {
     RootScope
 }
 
-pub fn crate(sess: session::Session,
-             crate: &ast::Crate)
-             -> @mut NamedRegionMap {
+pub fn crate(sess: session::Session, crate: &ast::Crate)
+             -> @RefCell<NamedRegionMap> {
     let mut ctxt = LifetimeContext {
         sess: sess,
-        named_region_map: @mut HashMap::new()
+        named_region_map: @RefCell::new(HashMap::new())
     };
     visit::walk_crate(&mut ctxt, crate, &RootScope);
     sess.abort_if_errors();
@@ -57,21 +57,21 @@ pub fn crate(sess: session::Session,
 
 impl<'a> Visitor<&'a ScopeChain<'a>> for LifetimeContext {
     fn visit_item(&mut self,
-                  item: @ast::item,
+                  item: &ast::Item,
                   _: &'a ScopeChain<'a>) {
         let scope = match item.node {
-            ast::item_fn(..) | // fn lifetimes get added in visit_fn below
-            ast::item_mod(..) |
-            ast::item_mac(..) |
-            ast::item_foreign_mod(..) |
-            ast::item_static(..) => {
+            ast::ItemFn(..) | // fn lifetimes get added in visit_fn below
+            ast::ItemMod(..) |
+            ast::ItemMac(..) |
+            ast::ItemForeignMod(..) |
+            ast::ItemStatic(..) => {
                 RootScope
             }
-            ast::item_ty(_, ref generics) |
-            ast::item_enum(_, ref generics) |
-            ast::item_struct(_, ref generics) |
-            ast::item_impl(ref generics, _, _, _) |
-            ast::item_trait(ref generics, _, _) => {
+            ast::ItemTy(_, ref generics) |
+            ast::ItemEnum(_, ref generics) |
+            ast::ItemStruct(_, ref generics) |
+            ast::ItemImpl(ref generics, _, _, _) |
+            ast::ItemTrait(ref generics, _, _) => {
                 self.check_lifetime_names(&generics.lifetimes);
                 ItemScope(&generics.lifetimes)
             }
@@ -81,34 +81,29 @@ impl<'a> Visitor<&'a ScopeChain<'a>> for LifetimeContext {
         debug!("exiting scope {:?}", scope);
     }
 
-    fn visit_fn(&mut self,
-                fk: &visit::fn_kind,
-                fd: &ast::fn_decl,
-                b: ast::P<ast::Block>,
-                s: Span,
-                n: ast::NodeId,
+    fn visit_fn(&mut self, fk: &visit::FnKind, fd: &ast::FnDecl,
+                b: &ast::Block, s: Span, n: ast::NodeId,
                 scope: &'a ScopeChain<'a>) {
         match *fk {
-            visit::fk_item_fn(_, generics, _, _) |
-            visit::fk_method(_, generics, _) => {
+            visit::FkItemFn(_, generics, _, _) |
+            visit::FkMethod(_, generics, _) => {
                 let scope1 = FnScope(n, &generics.lifetimes, scope);
                 self.check_lifetime_names(&generics.lifetimes);
                 debug!("pushing fn scope id={} due to item/method", n);
                 visit::walk_fn(self, fk, fd, b, s, n, &scope1);
                 debug!("popping fn scope id={} due to item/method", n);
             }
-            visit::fk_fn_block(..) => {
+            visit::FkFnBlock(..) => {
                 visit::walk_fn(self, fk, fd, b, s, n, scope);
             }
         }
     }
 
-    fn visit_ty(&mut self,
-                ty: &ast::Ty,
+    fn visit_ty(&mut self, ty: &ast::Ty,
                 scope: &'a ScopeChain<'a>) {
         match ty.node {
-            ast::ty_closure(@ast::TyClosure { lifetimes: ref lifetimes, .. }) |
-            ast::ty_bare_fn(@ast::TyBareFn { lifetimes: ref lifetimes, .. }) => {
+            ast::TyClosure(@ast::ClosureTy { lifetimes: ref lifetimes, .. }) |
+            ast::TyBareFn(@ast::BareFnTy { lifetimes: ref lifetimes, .. }) => {
                 let scope1 = FnScope(ty.id, lifetimes, scope);
                 self.check_lifetime_names(lifetimes);
                 debug!("pushing fn scope id={} due to type", ty.id);
@@ -132,7 +127,7 @@ impl<'a> Visitor<&'a ScopeChain<'a>> for LifetimeContext {
     }
 
     fn visit_block(&mut self,
-                   b: ast::P<ast::Block>,
+                   b: &ast::Block,
                    scope: &'a ScopeChain<'a>) {
         let scope1 = BlockScope(b.id, scope);
         debug!("pushing block scope {}", b.id);
@@ -305,7 +300,8 @@ impl LifetimeContext {
                                 self.sess.intr()),
                 lifetime_ref.id,
                 def);
-        self.named_region_map.insert(lifetime_ref.id, def);
+        let mut named_region_map = self.named_region_map.borrow_mut();
+        named_region_map.get().insert(lifetime_ref.id, def);
     }
 }
 

@@ -394,6 +394,10 @@ impl CFGBuilder {
                 self.straightline(expr, pred, [l, r])
             }
 
+            ast::ExprBox(p, e) => {
+                self.straightline(expr, pred, [p, e])
+            }
+
             ast::ExprAddrOf(_, e) |
             ast::ExprDoBody(e) |
             ast::ExprCast(e, _) |
@@ -496,7 +500,8 @@ impl CFGBuilder {
             }
 
             Some(_) => {
-                match self.tcx.def_map.find(&expr.id) {
+                let def_map = self.tcx.def_map.borrow();
+                match def_map.get().find(&expr.id) {
                     Some(&ast::DefLabel(loop_id)) => {
                         for l in self.loop_scopes.iter() {
                             if l.loop_id == loop_id {
@@ -519,6 +524,7 @@ impl CFGBuilder {
     }
 
     fn is_method_call(&self, expr: &ast::Expr) -> bool {
-        self.method_map.contains_key(&expr.id)
+        let method_map = self.method_map.borrow();
+        method_map.get().contains_key(&expr.id)
     }
 }

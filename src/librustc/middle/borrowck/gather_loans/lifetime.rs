@@ -16,10 +16,9 @@
 use middle::borrowck::*;
 use mc = middle::mem_categorization;
 use middle::ty;
-use syntax::ast::{MutImmutable, MutMutable};
+use util::ppaux::Repr;
 use syntax::ast;
 use syntax::codemap::Span;
-use util::ppaux::{note_and_explain_region};
 
 type R = Result<(),()>;
 
@@ -89,12 +88,11 @@ impl<'a> GuaranteeLifetimeContext<'a> {
                 Ok(())
             }
 
-            mc::cat_deref(base, derefs, mc::gc_ptr(ptr_mutbl)) => {
+            mc::cat_deref(base, derefs, mc::gc_ptr) => {
                 let base_scope = self.scope(base);
 
                 // L-Deref-Managed-Imm-User-Root
                 let omit_root = (
-                    ptr_mutbl == MutImmutable &&
                     self.bccx.is_subregion_of(self.loan_region, base_scope) &&
                     self.is_rvalue_or_immutable(base) &&
                     !self.is_moved(base)
@@ -103,7 +101,7 @@ impl<'a> GuaranteeLifetimeContext<'a> {
                 if !omit_root {
                     // L-Deref-Managed-Imm-Compiler-Root
                     // L-Deref-Managed-Mut-Compiler-Root
-                    self.check_root(cmt, base, derefs, ptr_mutbl, discr_scope)
+                    self.check_root(cmt, base, derefs, discr_scope)
                 } else {
                     debug!("omitting root, base={}, base_scope={:?}",
                            base.repr(self.tcx()), base_scope);
@@ -192,14 +190,12 @@ impl<'a> GuaranteeLifetimeContext<'a> {
                   cmt_deref: mc::cmt,
                   cmt_base: mc::cmt,
                   derefs: uint,
-                  ptr_mutbl: ast::Mutability,
                   discr_scope: Option<ast::NodeId>) -> R {
-        debug!("check_root(cmt_deref={}, cmt_base={}, derefs={:?}, ptr_mutbl={:?}, \
+        debug!("check_root(cmt_deref={}, cmt_base={}, derefs={:?}, \
                 discr_scope={:?})",
                cmt_deref.repr(self.tcx()),
                cmt_base.repr(self.tcx()),
                derefs,
-               ptr_mutbl,
                discr_scope);
 
         // Make sure that the loan does not exceed the maximum time
@@ -235,19 +231,6 @@ impl<'a> GuaranteeLifetimeContext<'a> {
             }
         };
 
-        // If we are borrowing the inside of an `@mut` box,
-        // we need to dynamically mark it to prevent incompatible
-        // borrows from happening later.
-        let opt_dyna = match ptr_mutbl {
-            MutImmutable => None,
-            MutMutable => {
-                match self.loan_mutbl {
-                    MutableMutability => Some(DynaMut),
-                    ImmutableMutability | ConstMutability => Some(DynaImm)
-                }
-            }
-        };
-
         // FIXME(#3511) grow to the nearest cleanup scope---this can
         // cause observable errors if freezing!
         if !self.bccx.tcx.region_maps.is_cleanup_scope(root_scope) {
@@ -256,30 +239,15 @@ impl<'a> GuaranteeLifetimeContext<'a> {
             let cleanup_scope =
                 self.bccx.tcx.region_maps.cleanup_scope(root_scope);
 
-            if opt_dyna.is_some() {
-                self.tcx().sess.span_warn(
-                    self.span,
-                    format!("Dynamic freeze scope artifically extended \
-                          (see Issue \\#6248)"));
-                note_and_explain_region(
-                    self.bccx.tcx,
-                    "managed value only needs to be frozen for ",
-                    ty::ReScope(root_scope),
-                    "...");
-                note_and_explain_region(
-                    self.bccx.tcx,
-                    "...but due to Issue #6248, it will be frozen for ",
-                    ty::ReScope(cleanup_scope),
-                    "");
-            }
-
             root_scope = cleanup_scope;
         }
 
         // Add a record of what is required
         let rm_key = root_map_key {id: cmt_deref.id, derefs: derefs};
-        let root_info = RootInfo {scope: root_scope, freeze: opt_dyna};
-        self.bccx.root_map.insert(rm_key, root_info);
+        let root_info = RootInfo {scope: root_scope};
+
+        let mut root_map = self.bccx.root_map.borrow_mut();
+        root_map.get().insert(rm_key, root_info);
 
         debug!("root_key: {:?} root_info: {:?}", rm_key, root_info);
         Ok(())
@@ -303,7 +271,10 @@ impl<'a> GuaranteeLifetimeContext<'a> {
             mc::cat_local(id) |
             mc::cat_self(id) |
             mc::cat_arg(id) => {
-                self.bccx.moved_variables_set.contains(&id)
+                let moved_variables_set = self.bccx
+                                              .moved_variables_set
+                                              .borrow();
+                moved_variables_set.get().contains(&id)
             }
             mc::cat_rvalue(..) |
             mc::cat_static_item |
@@ -352,7 +323,7 @@ impl<'a> GuaranteeLifetimeContext<'a> {
             }
             mc::cat_downcast(cmt) |
             mc::cat_deref(cmt, _, mc::uniq_ptr) |
-            mc::cat_deref(cmt, _, mc::gc_ptr(..)) |
+            mc::cat_deref(cmt, _, mc::gc_ptr) |
             mc::cat_interior(cmt, _) |
             mc::cat_stack_upvar(cmt) |
             mc::cat_discr(cmt, _) => {

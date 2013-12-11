@@ -10,7 +10,7 @@
 
 /*!
 
-Logging
+Utilities for program-wide and customizable logging
 
 This module is used by the compiler when emitting output for the logging family
 of macros. The methods of this module shouldn't necessarily be used directly,
@@ -78,7 +78,7 @@ error,hello=warn     // turn on global error logging and also warn for hello
 
 Each of these macros will expand to code similar to:
 
-```rust
+```rust,ignore
 if log_level <= my_module_log_level() {
     ::std::logging::log(log_level, format!(...));
 }
@@ -96,10 +96,15 @@ start, print out all modules registered for logging, and then exit.
 */
 
 use fmt;
-use option::*;
+use io::buffered::LineBufferedWriter;
+use io;
+use io::Writer;
+use ops::Drop;
+use option::{Some, None, Option};
+use prelude::drop;
 use rt::local::Local;
-use rt::logging::{Logger, StdErrLogger};
 use rt::task::Task;
+use util;
 
 /// Debug log level
 pub static DEBUG: u32 = 4;
@@ -110,6 +115,32 @@ pub static WARN: u32 = 2;
 /// Error log level
 pub static ERROR: u32 = 1;
 
+/// A trait used to represent an interface to a task-local logger. Each task
+/// can have its own custom logger which can respond to logging messages
+/// however it likes.
+pub trait Logger {
+    /// Logs a single message described by the `args` structure. The level is
+    /// provided in case you want to do things like color the message, etc.
+    fn log(&mut self, level: u32, args: &fmt::Arguments);
+}
+
+struct DefaultLogger {
+    handle: LineBufferedWriter<io::stdio::StdWriter>,
+}
+
+impl Logger for DefaultLogger {
+    // by default, just ignore the level
+    fn log(&mut self, _level: u32, args: &fmt::Arguments) {
+        fmt::writeln(&mut self.handle, args);
+    }
+}
+
+impl Drop for DefaultLogger {
+    fn drop(&mut self) {
+        self.handle.flush();
+    }
+}
+
 /// This function is called directly by the compiler when using the logging
 /// macros. This function does not take into account whether the log level
 /// specified is active or not, it will always log something if this method is
@@ -117,27 +148,32 @@ pub static ERROR: u32 = 1;
 ///
 /// It is not recommended to call this function directly, rather it should be
 /// invoked through the logging family of macros.
-pub fn log(_level: u32, args: &fmt::Arguments) {
-    unsafe {
-        let optional_task: Option<*mut Task> = Local::try_unsafe_borrow();
-        match optional_task {
-            Some(local) => {
-                // Lazily initialize the local task's logger
-                match (*local).logger {
-                    // Use the available logger if we have one
-                    Some(ref mut logger) => { logger.log(args); }
-                    None => {
-                        let mut logger = StdErrLogger::new();
-                        logger.log(args);
-                        (*local).logger = Some(logger);
-                    }
-                }
-            }
-            // If there's no local task, then always log to stderr
-            None => {
-                let mut logger = StdErrLogger::new();
-                logger.log(args);
-            }
-        }
+pub fn log(level: u32, args: &fmt::Arguments) {
+    // See io::stdio::with_task_stdout for why there's a few dances here. The
+    // gist of it is that arbitrary code can run during logging (and set an
+    // arbitrary logging handle into the task) so we need to be careful that the
+    // local task is in TLS while we're running arbitrary code.
+    let mut logger = {
+        let mut task = Local::borrow(None::<Task>);
+        task.get().logger.take()
+    };
+
+    if logger.is_none() {
+        logger = Some(~DefaultLogger {
+            handle: LineBufferedWriter::new(io::stderr()),
+        } as ~Logger);
     }
+    logger.get_mut_ref().log(level, args);
+
+    let mut task = Local::borrow(None::<Task>);
+    let prev = util::replace(&mut task.get().logger, logger);
+    drop(task);
+    drop(prev);
+}
+
+/// Replaces the task-local logger with the specified logger, returning the old
+/// logger.
+pub fn set_logger(logger: ~Logger) -> Option<~Logger> {
+    let mut task = Local::borrow(None::<Task>);
+    util::replace(&mut task.get().logger, Some(logger))
 }

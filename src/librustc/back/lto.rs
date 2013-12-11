@@ -19,8 +19,15 @@ use std::libc;
 
 pub fn run(sess: session::Session, llmod: ModuleRef,
            tm: TargetMachineRef, reachable: &[~str]) {
+    if sess.prefer_dynamic() {
+        sess.err("cannot prefer dynamic linking when performing LTO");
+        sess.note("only 'staticlib' and 'bin' outputs are supported with LTO");
+        sess.abort_if_errors();
+    }
+
     // Make sure we actually can run LTO
-    for output in sess.outputs.iter() {
+    let outputs = sess.outputs.borrow();
+    for output in outputs.get().iter() {
         match *output {
             session::OutputExecutable | session::OutputStaticlib => {}
             _ => {
@@ -33,9 +40,9 @@ pub fn run(sess: session::Session, llmod: ModuleRef,
     // For each of our upstream dependencies, find the corresponding rlib and
     // load the bitcode from the archive. Then merge it into the current LLVM
     // module that we've got.
-    let crates = cstore::get_used_crates(sess.cstore, cstore::RequireStatic);
+    let crates = sess.cstore.get_used_crates(cstore::RequireStatic);
     for (cnum, path) in crates.move_iter() {
-        let name = cstore::get_crate_data(sess.cstore, cnum).name;
+        let name = sess.cstore.get_crate_data(cnum).name;
         let path = match path {
             Some(p) => p,
             None => {

@@ -8,16 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use fmt;
+use container::Container;
 use from_str::from_str;
+use iter::Iterator;
 use libc::exit;
 use option::{Some, None, Option};
-use io;
-use io::stdio::StdWriter;
-use io::buffered::LineBufferedWriter;
 use rt::crate_map::{ModEntry, CrateMap, iter_crate_map, get_crate_map};
 use str::StrSlice;
-use vec::ImmutableVector;
+use vec::{ImmutableVector, MutableTotalOrdVector, OwnedVector};
 #[cfg(test)] use cast::transmute;
 
 struct LogDirective {
@@ -141,7 +139,14 @@ fn update_log_settings(crate_map: &CrateMap, settings: ~str) {
     if settings.len() > 0 {
         if settings == ~"::help" || settings == ~"?" {
             rterrln!("\nCrate log map:\n");
-            iter_crate_map(crate_map, |entry| rterrln!(" {}", entry.name));
+
+            let mut entries = ~[];
+            iter_crate_map(crate_map, |entry| entries.push(entry.name.to_owned()));
+            entries.sort();
+
+            for name in entries.iter() {
+                rterrln!(" {}", *name);
+            }
             unsafe { exit(1); }
         }
         dirs = parse_logging_spec(settings);
@@ -158,28 +163,6 @@ fn update_log_settings(crate_map: &CrateMap, settings: ~str) {
                   {} of them. You may have mistyped a RUST_LOG spec. \n\
                   Use RUST_LOG=::help to see the list of crates and modules.\n",
                  dirs.len(), n_matches);
-    }
-}
-
-pub trait Logger {
-    fn log(&mut self, args: &fmt::Arguments);
-}
-
-/// This logger emits output to the stderr of the process, and contains a lazily
-/// initialized event-loop driven handle to the stream.
-pub struct StdErrLogger {
-    priv handle: LineBufferedWriter<StdWriter>,
-}
-
-impl StdErrLogger {
-    pub fn new() -> StdErrLogger {
-        StdErrLogger { handle: LineBufferedWriter::new(io::stderr()) }
-    }
-}
-
-impl Logger for StdErrLogger {
-    fn log(&mut self, args: &fmt::Arguments) {
-        fmt::writeln(&mut self.handle as &mut io::Writer, args);
     }
 }
 

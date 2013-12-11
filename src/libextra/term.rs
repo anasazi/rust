@@ -13,8 +13,6 @@
 #[allow(missing_doc)];
 
 
-use std::io::{Decorator, Writer};
-
 use std::os;
 use terminfo::*;
 use terminfo::searcher::open;
@@ -113,7 +111,8 @@ impl<T: Writer> Terminal<T> {
             return Err(entry.unwrap_err());
         }
 
-        let ti = parse(entry.unwrap(), false);
+        let mut file = entry.unwrap();
+        let ti = parse(&mut file, false);
         if ti.is_err() {
             return Err(ti.unwrap_err());
         }
@@ -121,7 +120,7 @@ impl<T: Writer> Terminal<T> {
         let inf = ti.unwrap();
         let nc = if inf.strings.find_equiv(&("setaf")).is_some()
                  && inf.strings.find_equiv(&("setab")).is_some() {
-                     inf.numbers.find_equiv(&("colors")).map_default(0, |&n| n)
+                     inf.numbers.find_equiv(&("colors")).map_or(0, |&n| n)
                  } else { 0 };
 
         return Ok(Terminal {out: out, ti: inf, num_colors: nc});
@@ -214,7 +213,7 @@ impl<T: Writer> Terminal<T> {
                 cap = self.ti.strings.find_equiv(&("op"));
             }
         }
-        let s = cap.map_default(Err(~"can't find terminfo capability `sgr0`"), |op| {
+        let s = cap.map_or(Err(~"can't find terminfo capability `sgr0`"), |op| {
             expand(*op, [], &mut Variables::new())
         });
         if s.is_ok() {
@@ -233,20 +232,12 @@ impl<T: Writer> Terminal<T> {
             color-8
         } else { color }
     }
-}
 
-impl<T: Writer> Decorator<T> for Terminal<T> {
-    fn inner(self) -> T {
-        self.out
-    }
+    pub fn unwrap(self) -> T { self.out }
 
-    fn inner_ref<'a>(&'a self) -> &'a T {
-        &self.out
-    }
+    pub fn get_ref<'a>(&'a self) -> &'a T { &self.out }
 
-    fn inner_mut_ref<'a>(&'a mut self) -> &'a mut T {
-        &mut self.out
-    }
+    pub fn get_mut<'a>(&'a mut self) -> &'a mut T { &mut self.out }
 }
 
 impl<T: Writer> Writer for Terminal<T> {

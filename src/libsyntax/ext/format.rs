@@ -28,8 +28,13 @@ enum ArgumentType {
     String,
 }
 
-struct Context {
-    ecx: @ExtCtxt,
+enum Position {
+    Exact(uint),
+    Named(@str),
+}
+
+struct Context<'a> {
+    ecx: &'a mut ExtCtxt,
     fmtsp: Span,
 
     // Parsed argument expressions and the types that we've found so far for
@@ -43,21 +48,21 @@ struct Context {
     // Collection of the compiled `rt::Piece` structures
     pieces: ~[@ast::Expr],
     name_positions: HashMap<@str, uint>,
-    method_statics: ~[@ast::item],
+    method_statics: ~[@ast::Item],
 
     // Updated as arguments are consumed or methods are entered
     nest_level: uint,
     next_arg: uint,
 }
 
-impl Context {
+impl<'a> Context<'a> {
     /// Parses the arguments from the given list of tokens, returning None if
     /// there's a parse error so we can continue parsing other format! expressions.
-    fn parse_args(&mut self, sp: Span,
-                  tts: &[ast::token_tree]) -> (@ast::Expr, Option<@ast::Expr>) {
-        let p = rsparse::new_parser_from_tts(self.ecx.parse_sess(),
-                                             self.ecx.cfg(),
-                                             tts.to_owned());
+    fn parse_args(&mut self, sp: Span, tts: &[ast::TokenTree])
+                  -> (@ast::Expr, Option<@ast::Expr>) {
+        let mut p = rsparse::new_parser_from_tts(self.ecx.parse_sess(),
+                                                 self.ecx.cfg(),
+                                                 tts.to_owned());
         // Parse the leading function expression (maybe a block, maybe a path)
         let extra = p.parse_expr();
         if !p.eat(&token::COMMA) {
@@ -65,34 +70,34 @@ impl Context {
             return (extra, None);
         }
 
-        if *p.token == token::EOF {
+        if p.token == token::EOF {
             self.ecx.span_err(sp, "requires at least a format string argument");
             return (extra, None);
         }
         let fmtstr = p.parse_expr();
         let mut named = false;
-        while *p.token != token::EOF {
+        while p.token != token::EOF {
             if !p.eat(&token::COMMA) {
                 self.ecx.span_err(sp, "expected token: `,`");
                 return (extra, None);
             }
-            if *p.token == token::EOF { break } // accept trailing commas
-            if named || (token::is_ident(p.token) &&
+            if p.token == token::EOF { break } // accept trailing commas
+            if named || (token::is_ident(&p.token) &&
                          p.look_ahead(1, |t| *t == token::EQ)) {
                 named = true;
-                let ident = match *p.token {
+                let ident = match p.token {
                     token::IDENT(i, _) => {
                         p.bump();
                         i
                     }
                     _ if named => {
-                        self.ecx.span_err(*p.span,
+                        self.ecx.span_err(p.span,
                                           "expected ident, positional arguments \
                                            cannot follow named arguments");
                         return (extra, None);
                     }
                     _ => {
-                        self.ecx.span_err(*p.span,
+                        self.ecx.span_err(p.span,
                                           format!("expected ident for named \
                                                 argument, but found `{}`",
                                                p.this_token_to_str()));
@@ -148,10 +153,10 @@ impl Context {
                         if self.check_positional_ok() {
                             self.next_arg += 1;
                         }
-                        Left(i)
+                        Exact(i)
                     }
-                    parse::ArgumentIs(i) => Left(i),
-                    parse::ArgumentNamed(s) => Right(s.to_managed()),
+                    parse::ArgumentIs(i) => Exact(i),
+                    parse::ArgumentNamed(s) => Named(s.to_managed()),
                 };
 
                 // and finally the method being applied
@@ -176,14 +181,14 @@ impl Context {
         match c {
             parse::CountImplied | parse::CountIs(..) => {}
             parse::CountIsParam(i) => {
-                self.verify_arg_type(Left(i), Unsigned);
+                self.verify_arg_type(Exact(i), Unsigned);
             }
             parse::CountIsName(s) => {
-                self.verify_arg_type(Right(s.to_managed()), Unsigned);
+                self.verify_arg_type(Named(s.to_managed()), Unsigned);
             }
             parse::CountIsNextParam => {
                 if self.check_positional_ok() {
-                    self.verify_arg_type(Left(self.next_arg), Unsigned);
+                    self.verify_arg_type(Exact(self.next_arg), Unsigned);
                     self.next_arg += 1;
                 }
             }
@@ -200,7 +205,7 @@ impl Context {
         }
     }
 
-    fn verify_method(&mut self, pos: Either<uint, @str>, m: &parse::Method) {
+    fn verify_method(&mut self, pos: Position, m: &parse::Method) {
         self.nest_level += 1;
         match *m {
             parse::Plural(_, ref arms, ref default) => {
@@ -209,12 +214,12 @@ impl Context {
                 for arm in arms.iter() {
                     if !seen_cases.insert(arm.selector) {
                         match arm.selector {
-                            Left(name) => {
+                            parse::Keyword(name) => {
                                 self.ecx.span_err(self.fmtsp,
                                                   format!("duplicate selector \
                                                            `{:?}`", name));
                             }
-                            Right(idx) => {
+                            parse::Literal(idx) => {
                                 self.ecx.span_err(self.fmtsp,
                                                   format!("duplicate selector \
                                                            `={}`", idx));
@@ -245,9 +250,9 @@ impl Context {
         self.nest_level -= 1;
     }
 
-    fn verify_arg_type(&mut self, arg: Either<uint, @str>, ty: ArgumentType) {
+    fn verify_arg_type(&mut self, arg: Position, ty: ArgumentType) {
         match arg {
-            Left(arg) => {
+            Exact(arg) => {
                 if arg < 0 || self.args.len() <= arg {
                     let msg = format!("invalid reference to argument `{}` (there \
                                     are {} arguments)", arg, self.args.len());
@@ -260,7 +265,7 @@ impl Context {
                 }
             }
 
-            Right(name) => {
+            Named(name) => {
                 let span = match self.names.find(&name) {
                     Some(e) => e.span,
                     None => {
@@ -434,18 +439,16 @@ impl Context {
                             self.trans_piece(p)
                         }).collect();
                         let (lr, selarg) = match arm.selector {
-                            Left(t) => {
+                            parse::Keyword(t) => {
                                 let p = ctpath(format!("{:?}", t));
                                 let p = self.ecx.path_global(sp, p);
-                                (self.ecx.ident_of("Left"),
-                                 self.ecx.expr_path(p))
+                                (rtpath("Keyword"), self.ecx.expr_path(p))
                             }
-                            Right(i) => {
-                                (self.ecx.ident_of("Right"),
-                                 self.ecx.expr_uint(sp, i))
+                            parse::Literal(i) => {
+                                (rtpath("Literal"), self.ecx.expr_uint(sp, i))
                             }
                         };
-                        let selector = self.ecx.expr_call_ident(sp,
+                        let selector = self.ecx.expr_call_global(sp,
                                 lr, ~[selarg]);
                         self.ecx.expr_struct(sp, p, ~[
                             self.ecx.field_imm(sp,
@@ -473,7 +476,7 @@ impl Context {
                 opt_vec::with(life),
                 ~[]
             ), None);
-            let st = ast::item_static(ty, ast::MutImmutable, method);
+            let st = ast::ItemStatic(ty, ast::MutImmutable, method);
             let static_name = self.ecx.ident_of(format!("__STATIC_METHOD_{}",
                                                      self.method_statics.len()));
             let item = self.ecx.item(sp, static_name, self.static_attrs(), st);
@@ -487,7 +490,7 @@ impl Context {
                                           ~[self.ecx.expr_str(sp, s.to_managed())])
             }
             parse::CurrentArgument => {
-                let nil = self.ecx.expr_lit(sp, ast::lit_nil);
+                let nil = self.ecx.expr_lit(sp, ast::LitNil);
                 self.ecx.expr_call_global(sp, rtpath("CurrentArgument"), ~[nil])
             }
             parse::Argument(ref arg) => {
@@ -519,7 +522,7 @@ impl Context {
 
                 // Translate the format
                 let fill = match arg.format.fill { Some(c) => c, None => ' ' };
-                let fill = self.ecx.expr_lit(sp, ast::lit_char(fill as u32));
+                let fill = self.ecx.expr_lit(sp, ast::LitChar(fill as u32));
                 let align = match arg.format.align {
                     parse::AlignLeft => {
                         self.ecx.path_global(sp, parsepath("AlignLeft"))
@@ -592,12 +595,12 @@ impl Context {
                     self.ecx.lifetime(self.fmtsp, self.ecx.ident_of("static"))),
                 ~[]
             ), None);
-        let ty = ast::ty_fixed_length_vec(
+        let ty = ast::TyFixedLengthVec(
             piece_ty,
             self.ecx.expr_uint(self.fmtsp, self.pieces.len())
         );
         let ty = self.ecx.ty(self.fmtsp, ty);
-        let st = ast::item_static(ty, ast::MutImmutable, fmt);
+        let st = ast::ItemStatic(ty, ast::MutImmutable, fmt);
         let static_name = self.ecx.ident_of("__STATIC_FMTSTR");
         let item = self.ecx.item(self.fmtsp, static_name,
                                  self.static_attrs(), st);
@@ -617,7 +620,7 @@ impl Context {
             let name = self.ecx.ident_of(format!("__arg{}", i));
             let e = self.ecx.expr_addr_of(e.span, e);
             lets.push(self.ecx.stmt_let(e.span, false, name, e));
-            locals.push(self.format_arg(e.span, Left(i),
+            locals.push(self.format_arg(e.span, Exact(i),
                                         self.ecx.expr_ident(e.span, name)));
         }
         for (&name, &e) in self.names.iter() {
@@ -627,7 +630,7 @@ impl Context {
             let e = self.ecx.expr_addr_of(e.span, e);
             lets.push(self.ecx.stmt_let(e.span, false, lname, e));
             names[*self.name_positions.get(&name)] =
-                Some(self.format_arg(e.span, Right(name),
+                Some(self.format_arg(e.span, Named(name),
                                      self.ecx.expr_ident(e.span, lname)));
         }
 
@@ -662,11 +665,11 @@ impl Context {
                                            Some(result)))
     }
 
-    fn format_arg(&self, sp: Span, argno: Either<uint, @str>,
+    fn format_arg(&self, sp: Span, argno: Position,
                   arg: @ast::Expr) -> @ast::Expr {
         let ty = match argno {
-            Left(i) => self.arg_types[i].unwrap(),
-            Right(s) => *self.name_types.get(&s)
+            Exact(i) => self.arg_types[i].unwrap(),
+            Named(s) => *self.name_types.get(&s)
         };
 
         let fmt_trait = match ty {
@@ -722,8 +725,8 @@ impl Context {
     }
 }
 
-pub fn expand_args(ecx: @ExtCtxt, sp: Span,
-                   tts: &[ast::token_tree]) -> base::MacResult {
+pub fn expand_args(ecx: &mut ExtCtxt, sp: Span,
+                   tts: &[ast::TokenTree]) -> base::MacResult {
     let mut cx = Context {
         ecx: ecx,
         args: ~[],
@@ -739,19 +742,20 @@ pub fn expand_args(ecx: @ExtCtxt, sp: Span,
     };
     let (extra, efmt) = match cx.parse_args(sp, tts) {
         (extra, Some(e)) => (extra, e),
-        (_, None) => { return MRExpr(ecx.expr_uint(sp, 2)); }
+        (_, None) => { return MRExpr(cx.ecx.expr_uint(sp, 2)); }
     };
     cx.fmtsp = efmt.span;
     // Be sure to recursively expand macros just in case the format string uses
     // a macro to build the format expression.
-    let (fmt, _) = expr_to_str(ecx, ecx.expand_expr(efmt),
+    let expr = cx.ecx.expand_expr(efmt);
+    let (fmt, _) = expr_to_str(cx.ecx, expr,
                                "format argument must be a string literal.");
 
     let mut err = false;
     parse::parse_error::cond.trap(|m| {
         if !err {
             err = true;
-            ecx.span_err(efmt.span, m);
+            cx.ecx.span_err(efmt.span, m);
         }
     }).inside(|| {
         for piece in parse::Parser::new(fmt) {
@@ -767,12 +771,12 @@ pub fn expand_args(ecx: @ExtCtxt, sp: Span,
     // Make sure that all arguments were used and all arguments have types.
     for (i, ty) in cx.arg_types.iter().enumerate() {
         if ty.is_none() {
-            ecx.span_err(cx.args[i].span, "argument never used");
+            cx.ecx.span_err(cx.args[i].span, "argument never used");
         }
     }
     for (name, e) in cx.names.iter() {
         if !cx.name_types.contains_key(name) {
-            ecx.span_err(e.span, "named argument never used");
+            cx.ecx.span_err(e.span, "named argument never used");
         }
     }
 

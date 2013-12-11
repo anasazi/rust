@@ -48,16 +48,6 @@ impl<R: Reader> Reader for Option<R> {
             }
         }
     }
-
-    fn eof(&mut self) -> bool {
-        match *self {
-            Some(ref mut reader) => reader.eof(),
-            None => {
-                io_error::cond.raise(prev_io_error());
-                true
-            }
-        }
-    }
 }
 
 impl<S: Seek> Seek for Option<S> {
@@ -104,55 +94,47 @@ impl<T, A: Acceptor<T>> Acceptor<T> for Option<A> {
 
 #[cfg(test)]
 mod test {
-    use option::*;
+    use prelude::*;
     use super::super::mem::*;
-    use rt::test::*;
     use super::super::{PreviousIoError, io_error};
 
     #[test]
     fn test_option_writer() {
-        do run_in_mt_newsched_task {
-            let mut writer: Option<MemWriter> = Some(MemWriter::new());
-            writer.write([0, 1, 2]);
-            writer.flush();
-            assert_eq!(writer.unwrap().inner(), ~[0, 1, 2]);
-        }
+        let mut writer: Option<MemWriter> = Some(MemWriter::new());
+        writer.write([0, 1, 2]);
+        writer.flush();
+        assert_eq!(writer.unwrap().unwrap(), ~[0, 1, 2]);
     }
 
     #[test]
     fn test_option_writer_error() {
-        do run_in_mt_newsched_task {
-            let mut writer: Option<MemWriter> = None;
+        let mut writer: Option<MemWriter> = None;
 
-            let mut called = false;
-            io_error::cond.trap(|err| {
-                assert_eq!(err.kind, PreviousIoError);
-                called = true;
-            }).inside(|| {
-                writer.write([0, 0, 0]);
-            });
-            assert!(called);
+        let mut called = false;
+        io_error::cond.trap(|err| {
+            assert_eq!(err.kind, PreviousIoError);
+            called = true;
+        }).inside(|| {
+            writer.write([0, 0, 0]);
+        });
+        assert!(called);
 
-            let mut called = false;
-            io_error::cond.trap(|err| {
-                assert_eq!(err.kind, PreviousIoError);
-                called = true;
-            }).inside(|| {
-                writer.flush();
-            });
-            assert!(called);
-        }
+        let mut called = false;
+        io_error::cond.trap(|err| {
+            assert_eq!(err.kind, PreviousIoError);
+            called = true;
+        }).inside(|| {
+            writer.flush();
+        });
+        assert!(called);
     }
 
     #[test]
     fn test_option_reader() {
-        do run_in_mt_newsched_task {
-            let mut reader: Option<MemReader> = Some(MemReader::new(~[0, 1, 2, 3]));
-            let mut buf = [0, 0];
-            reader.read(buf);
-            assert_eq!(buf, [0, 1]);
-            assert!(!reader.eof());
-        }
+        let mut reader: Option<MemReader> = Some(MemReader::new(~[0, 1, 2, 3]));
+        let mut buf = [0, 0];
+        reader.read(buf);
+        assert_eq!(buf, [0, 1]);
     }
 
     #[test]
@@ -166,15 +148,6 @@ mod test {
             called = true;
         }).inside(|| {
             reader.read(buf);
-        });
-        assert!(called);
-
-        let mut called = false;
-        io_error::cond.trap(|err| {
-            assert_eq!(err.kind, PreviousIoError);
-            called = true;
-        }).inside(|| {
-            assert!(reader.eof());
         });
         assert!(called);
     }

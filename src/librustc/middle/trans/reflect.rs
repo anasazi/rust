@@ -29,20 +29,20 @@ use std::option::{Some,None};
 use std::vec;
 use syntax::ast::DefId;
 use syntax::ast;
-use syntax::ast_map::path_name;
+use syntax::ast_map::PathName;
 use syntax::parse::token::special_idents;
 
 use middle::trans::type_::Type;
 
-pub struct Reflector {
+pub struct Reflector<'a> {
     visitor_val: ValueRef,
     visitor_methods: @~[@ty::Method],
-    final_bcx: @mut Block,
+    final_bcx: &'a Block<'a>,
     tydesc_ty: Type,
-    bcx: @mut Block
+    bcx: &'a Block<'a>
 }
 
-impl Reflector {
+impl<'a> Reflector<'a> {
     pub fn c_uint(&mut self, u: uint) -> ValueRef {
         C_uint(self.bcx.ccx(), u)
     }
@@ -158,18 +158,18 @@ impl Reflector {
           ty::ty_nil => self.leaf("nil"),
           ty::ty_bool => self.leaf("bool"),
           ty::ty_char => self.leaf("char"),
-          ty::ty_int(ast::ty_i) => self.leaf("int"),
-          ty::ty_int(ast::ty_i8) => self.leaf("i8"),
-          ty::ty_int(ast::ty_i16) => self.leaf("i16"),
-          ty::ty_int(ast::ty_i32) => self.leaf("i32"),
-          ty::ty_int(ast::ty_i64) => self.leaf("i64"),
-          ty::ty_uint(ast::ty_u) => self.leaf("uint"),
-          ty::ty_uint(ast::ty_u8) => self.leaf("u8"),
-          ty::ty_uint(ast::ty_u16) => self.leaf("u16"),
-          ty::ty_uint(ast::ty_u32) => self.leaf("u32"),
-          ty::ty_uint(ast::ty_u64) => self.leaf("u64"),
-          ty::ty_float(ast::ty_f32) => self.leaf("f32"),
-          ty::ty_float(ast::ty_f64) => self.leaf("f64"),
+          ty::ty_int(ast::TyI) => self.leaf("int"),
+          ty::ty_int(ast::TyI8) => self.leaf("i8"),
+          ty::ty_int(ast::TyI16) => self.leaf("i16"),
+          ty::ty_int(ast::TyI32) => self.leaf("i32"),
+          ty::ty_int(ast::TyI64) => self.leaf("i64"),
+          ty::ty_uint(ast::TyU) => self.leaf("uint"),
+          ty::ty_uint(ast::TyU8) => self.leaf("u8"),
+          ty::ty_uint(ast::TyU16) => self.leaf("u16"),
+          ty::ty_uint(ast::TyU32) => self.leaf("u32"),
+          ty::ty_uint(ast::TyU64) => self.leaf("u64"),
+          ty::ty_float(ast::TyF32) => self.leaf("f32"),
+          ty::ty_float(ast::TyF64) => self.leaf("f64"),
 
           ty::ty_unboxed_vec(ref mt) => {
               let values = self.c_mt(mt);
@@ -189,8 +189,11 @@ impl Reflector {
                   self.visit(~"evec_" + name, extra)
               }
           }
-          ty::ty_box(ref mt) => {
-              let extra = self.c_mt(mt);
+          ty::ty_box(typ) => {
+              let extra = self.c_mt(&ty::mt {
+                  ty: typ,
+                  mutbl: ast::MutImmutable,
+              });
               self.visit("box", extra)
           }
           ty::ty_uniq(ref mt) => {
@@ -287,7 +290,7 @@ impl Reflector {
                                                            mutbl: ast::MutImmutable });
 
             let make_get_disr = || {
-                let sub_path = bcx.fcx.path + &[path_name(special_idents::anon)];
+                let sub_path = bcx.fcx.path + &[PathName(special_idents::anon)];
                 let sym = mangle_internal_name_by_path_and_seq(ccx,
                                                                sub_path,
                                                                "get_disr");
@@ -298,6 +301,8 @@ impl Reflector {
                                       llfdecl,
                                       ty::mk_u64(),
                                       None);
+                init_function(&fcx, false, ty::mk_u64(), None, None);
+
                 let arg = unsafe {
                     //
                     // we know the return type of llfdecl is an int here, so
@@ -306,15 +311,15 @@ impl Reflector {
                     //
                     llvm::LLVMGetParam(llfdecl, fcx.arg_pos(0u) as c_uint)
                 };
-                let mut bcx = fcx.entry_bcx.unwrap();
+                let mut bcx = fcx.entry_bcx.get().unwrap();
                 let arg = BitCast(bcx, arg, llptrty);
                 let ret = adt::trans_get_discr(bcx, repr, arg, Some(Type::i64()));
-                Store(bcx, ret, fcx.llretptr.unwrap());
-                match fcx.llreturn {
+                Store(bcx, ret, fcx.llretptr.get().unwrap());
+                match fcx.llreturn.get() {
                     Some(llreturn) => cleanup_and_Br(bcx, bcx, llreturn),
                     None => bcx = cleanup_block(bcx, Some(bcx.llbb))
                 };
-                finish_fn(fcx, bcx);
+                finish_fn(&fcx, bcx);
                 llfdecl
             };
 
@@ -382,11 +387,12 @@ impl Reflector {
 }
 
 // Emit a sequence of calls to visit_ty::visit_foo
-pub fn emit_calls_to_trait_visit_ty(bcx: @mut Block,
+pub fn emit_calls_to_trait_visit_ty<'a>(
+                                    bcx: &'a Block<'a>,
                                     t: ty::t,
                                     visitor_val: ValueRef,
                                     visitor_trait_id: DefId)
-                                 -> @mut Block {
+                                    -> &'a Block<'a> {
     let final = sub_block(bcx, "final");
     let tydesc_ty = ty::get_tydesc_ty(bcx.ccx().tcx).unwrap();
     let tydesc_ty = type_of(bcx.ccx(), tydesc_ty);
@@ -410,10 +416,10 @@ pub fn ast_sigil_constant(sigil: ast::Sigil) -> uint {
     }
 }
 
-pub fn ast_purity_constant(purity: ast::purity) -> uint {
+pub fn ast_purity_constant(purity: ast::Purity) -> uint {
     match purity {
-        ast::unsafe_fn => 1u,
-        ast::impure_fn => 2u,
-        ast::extern_fn => 3u
+        ast::UnsafeFn => 1u,
+        ast::ImpureFn => 2u,
+        ast::ExternFn => 3u
     }
 }

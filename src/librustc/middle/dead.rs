@@ -15,7 +15,7 @@
 use middle::ty;
 use middle::typeck;
 use middle::privacy;
-use middle::lint::dead_code;
+use middle::lint::DeadCode;
 
 use std::hashmap::HashSet;
 use syntax::ast;
@@ -27,18 +27,20 @@ use syntax::visit::Visitor;
 use syntax::visit;
 
 // Any local node that may call something in its body block should be
-// explored. For example, if it's a live node_item that is a
+// explored. For example, if it's a live NodeItem that is a
 // function, then we should explore its block to check for codes that
 // may need to be marked as live.
 fn should_explore(tcx: ty::ctxt, def_id: ast::DefId) -> bool {
     if !is_local(def_id) {
         return false;
     }
-    match tcx.items.find(&def_id.node) {
-        Some(&ast_map::node_item(..))
-        | Some(&ast_map::node_method(..))
-        | Some(&ast_map::node_foreign_item(..))
-        | Some(&ast_map::node_trait_method(..)) => true,
+
+    let items = tcx.items.borrow();
+    match items.get().find(&def_id.node) {
+        Some(&ast_map::NodeItem(..))
+        | Some(&ast_map::NodeMethod(..))
+        | Some(&ast_map::NodeForeignItem(..))
+        | Some(&ast_map::NodeTraitMethod(..)) => true,
         _ => false
     }
 }
@@ -62,8 +64,16 @@ impl MarkSymbolVisitor {
         }
     }
 
+    fn check_def_id(&mut self, def_id: ast::DefId) {
+        if should_explore(self.tcx, def_id) {
+            self.worklist.push(def_id.node);
+        }
+        self.live_symbols.insert(def_id.node);
+    }
+
     fn lookup_and_handle_definition(&mut self, id: &ast::NodeId) {
-        let def = match self.tcx.def_map.find(id) {
+        let def_map = self.tcx.def_map.borrow();
+        let def = match def_map.get().find(id) {
             Some(&def) => def,
             None => return
         };
@@ -73,13 +83,44 @@ impl MarkSymbolVisitor {
             _ => Some(def_id_of_def(def)),
         };
         match def_id {
-            Some(def_id) => {
-                if should_explore(self.tcx, def_id) {
-                    self.worklist.push(def_id.node);
-                }
-                self.live_symbols.insert(def_id.node);
-            }
+            Some(def_id) => self.check_def_id(def_id),
             None => (),
+        }
+    }
+
+    fn lookup_and_handle_method(&mut self, id: &ast::NodeId,
+                                span: codemap::Span) {
+        let method_map = self.method_map.borrow();
+        match method_map.get().find(id) {
+            Some(&typeck::method_map_entry { origin, .. }) => {
+                match origin {
+                    typeck::method_static(def_id) => {
+                        match ty::provided_source(self.tcx, def_id) {
+                            Some(p_did) => self.check_def_id(p_did),
+                            None => self.check_def_id(def_id)
+                        }
+                    }
+                    typeck::method_param(typeck::method_param {
+                        trait_id: trait_id,
+                        method_num: index,
+                        ..
+                    })
+                    | typeck::method_object(typeck::method_object {
+                        trait_id: trait_id,
+                        method_num: index,
+                        ..
+                    }) => {
+                        let def_id = ty::trait_method(self.tcx,
+                                                      trait_id, index).def_id;
+                        self.check_def_id(def_id);
+                    }
+                }
+            }
+            None => {
+                self.tcx.sess.span_bug(span,
+                                       "method call expression not \
+                                        in method map?!")
+            }
         }
     }
 
@@ -91,7 +132,9 @@ impl MarkSymbolVisitor {
                 continue
             }
             scanned.insert(id);
-            match self.tcx.items.find(&id) {
+
+            let items = self.tcx.items.borrow();
+            match items.get().find(&id) {
                 Some(node) => {
                     self.live_symbols.insert(id);
                     self.visit_node(node);
@@ -101,27 +144,27 @@ impl MarkSymbolVisitor {
         }
     }
 
-    fn visit_node(&mut self, node: &ast_map::ast_node) {
+    fn visit_node(&mut self, node: &ast_map::Node) {
         match *node {
-            ast_map::node_item(item, _) => {
+            ast_map::NodeItem(item, _) => {
                 match item.node {
-                    ast::item_fn(..)
-                    | ast::item_ty(..)
-                    | ast::item_enum(..)
-                    | ast::item_struct(..)
-                    | ast::item_static(..) => {
+                    ast::ItemFn(..)
+                    | ast::ItemTy(..)
+                    | ast::ItemEnum(..)
+                    | ast::ItemStruct(..)
+                    | ast::ItemStatic(..) => {
                         visit::walk_item(self, item, ());
                     }
                     _ => ()
                 }
             }
-            ast_map::node_trait_method(trait_method, _, _) => {
+            ast_map::NodeTraitMethod(trait_method, _, _) => {
                 visit::walk_trait_method(self, trait_method, ());
             }
-            ast_map::node_method(method, _, _) => {
+            ast_map::NodeMethod(method, _, _) => {
                 visit::walk_block(self, method.body, ());
             }
-            ast_map::node_foreign_item(foreign_item, _, _, _) => {
+            ast_map::NodeForeignItem(foreign_item, _, _, _) => {
                 visit::walk_foreign_item(self, foreign_item, ());
             }
             _ => ()
@@ -131,26 +174,10 @@ impl MarkSymbolVisitor {
 
 impl Visitor<()> for MarkSymbolVisitor {
 
-    fn visit_expr(&mut self, expr: @ast::Expr, _: ()) {
+    fn visit_expr(&mut self, expr: &ast::Expr, _: ()) {
         match expr.node {
             ast::ExprMethodCall(..) => {
-                match self.method_map.find(&expr.id) {
-                    Some(&typeck::method_map_entry {
-                        origin: typeck::method_static(def_id),
-                        ..
-                    }) => {
-                        if should_explore(self.tcx, def_id) {
-                            self.worklist.push(def_id.node);
-                        }
-                        self.live_symbols.insert(def_id.node);
-                    }
-                    Some(_) => (),
-                    None => {
-                        self.tcx.sess.span_bug(expr.span,
-                                               "method call expression not \
-                                                in method map?!")
-                    }
-                }
+                self.lookup_and_handle_method(&expr.id, expr.span);
             }
             _ => ()
         }
@@ -163,7 +190,7 @@ impl Visitor<()> for MarkSymbolVisitor {
         visit::walk_path(self, path, ());
     }
 
-    fn visit_item(&mut self, _item: @ast::item, _: ()) {
+    fn visit_item(&mut self, _item: &ast::Item, _: ()) {
         // Do not recurse into items. These items will be added to the
         // worklist and recursed into manually if necessary.
     }
@@ -177,14 +204,14 @@ struct TraitMethodSeeder {
 }
 
 impl Visitor<()> for TraitMethodSeeder {
-    fn visit_item(&mut self, item: @ast::item, _: ()) {
+    fn visit_item(&mut self, item: &ast::Item, _: ()) {
         match item.node {
-            ast::item_impl(_, Some(ref _trait_ref), _, ref methods) => {
+            ast::ItemImpl(_, Some(ref _trait_ref), _, ref methods) => {
                 for method in methods.iter() {
                     self.worklist.push(method.id);
                 }
             }
-            ast::item_mod(..) | ast::item_fn(..) => {
+            ast::ItemMod(..) | ast::ItemFn(..) => {
                 visit::walk_item(self, item, ());
             }
             _ => ()
@@ -211,7 +238,7 @@ fn create_and_seed_worklist(tcx: ty::ctxt,
     }
 
     // Seed entry point
-    match *tcx.sess.entry_fn {
+    match tcx.sess.entry_fn.get() {
         Some((id, _)) => worklist.push(id),
         None => ()
     }
@@ -238,19 +265,19 @@ fn find_live(tcx: ty::ctxt,
     symbol_visitor.live_symbols
 }
 
-fn should_warn(item: @ast::item) -> bool {
+fn should_warn(item: &ast::Item) -> bool {
     match item.node {
-        ast::item_static(..)
-        | ast::item_fn(..)
-        | ast::item_enum(..)
-        | ast::item_struct(..) => true,
+        ast::ItemStatic(..)
+        | ast::ItemFn(..)
+        | ast::ItemEnum(..)
+        | ast::ItemStruct(..) => true,
         _ => false
     }
 }
 
-fn get_struct_ctor_id(item: &ast::item) -> Option<ast::NodeId> {
+fn get_struct_ctor_id(item: &ast::Item) -> Option<ast::NodeId> {
     match item.node {
-        ast::item_struct(struct_def, _) => struct_def.ctor_id,
+        ast::ItemStruct(struct_def, _) => struct_def.ctor_id,
         _ => None
     }
 }
@@ -273,8 +300,8 @@ impl DeadVisitor {
     fn symbol_is_live(&mut self, id: ast::NodeId,
                       ctor_id: Option<ast::NodeId>) -> bool {
         if self.live_symbols.contains(&id)
-           || ctor_id.map_default(false,
-                                  |ctor| self.live_symbols.contains(&ctor)) {
+           || ctor_id.map_or(false,
+                             |ctor| self.live_symbols.contains(&ctor)) {
             return true;
         }
         // If it's a type whose methods are live, then it's live, too.
@@ -282,10 +309,12 @@ impl DeadVisitor {
         // method of a private type is used, but the type itself is never
         // called directly.
         let def_id = local_def(id);
-        match self.tcx.inherent_impls.find(&def_id) {
+        let inherent_impls = self.tcx.inherent_impls.borrow();
+        match inherent_impls.get().find(&def_id) {
             None => (),
             Some(ref impl_list) => {
-                for impl_ in impl_list.iter() {
+                let impl_list = impl_list.borrow();
+                for impl_ in impl_list.get().iter() {
                     for method in impl_.methods.iter() {
                         if self.live_symbols.contains(&method.def_id.node) {
                             return true;
@@ -299,14 +328,14 @@ impl DeadVisitor {
 
     fn warn_dead_code(&mut self, id: ast::NodeId,
                       span: codemap::Span, ident: &ast::Ident) {
-        self.tcx.sess.add_lint(dead_code, id, span,
+        self.tcx.sess.add_lint(DeadCode, id, span,
                                format!("code is never used: `{}`",
                                        token::ident_to_str(ident)));
     }
 }
 
 impl Visitor<()> for DeadVisitor {
-    fn visit_item(&mut self, item: @ast::item, _: ()) {
+    fn visit_item(&mut self, item: &ast::Item, _: ()) {
         let ctor_id = get_struct_ctor_id(item);
         if !self.symbol_is_live(item.id, ctor_id) && should_warn(item) {
             self.warn_dead_code(item.id, item.span, &item.ident);
@@ -314,19 +343,19 @@ impl Visitor<()> for DeadVisitor {
         visit::walk_item(self, item, ());
     }
 
-    fn visit_foreign_item(&mut self, fi: @ast::foreign_item, _: ()) {
+    fn visit_foreign_item(&mut self, fi: &ast::ForeignItem, _: ()) {
         if !self.symbol_is_live(fi.id, None) {
             self.warn_dead_code(fi.id, fi.span, &fi.ident);
         }
         visit::walk_foreign_item(self, fi, ());
     }
 
-    fn visit_fn(&mut self, fk: &visit::fn_kind,
-                _: &ast::fn_decl, block: ast::P<ast::Block>,
+    fn visit_fn(&mut self, fk: &visit::FnKind,
+                _: &ast::FnDecl, block: &ast::Block,
                 span: codemap::Span, id: ast::NodeId, _: ()) {
-        // Have to warn method here because methods are not ast::item
+        // Have to warn method here because methods are not ast::Item
         match *fk {
-            visit::fk_method(..) => {
+            visit::FkMethod(..) => {
                 let ident = visit::name_of_fn(fk);
                 if !self.symbol_is_live(id, None) {
                     self.warn_dead_code(id, span, &ident);
@@ -338,10 +367,10 @@ impl Visitor<()> for DeadVisitor {
     }
 
     // Overwrite so that we don't warn the trait method itself.
-    fn visit_trait_method(&mut self, trait_method :&ast::trait_method, _: ()) {
+    fn visit_trait_method(&mut self, trait_method: &ast::TraitMethod, _: ()) {
         match *trait_method {
-            ast::provided(method) => visit::walk_block(self, method.body, ()),
-            ast::required(_) => ()
+            ast::Provided(method) => visit::walk_block(self, method.body, ()),
+            ast::Required(_) => ()
         }
     }
 }

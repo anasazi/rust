@@ -620,11 +620,10 @@ pub fn write_repr<T>(writer: &mut io::Writer, object: &T) {
 pub fn repr_to_str<T>(t: &T) -> ~str {
     use str;
     use io;
-    use io::Decorator;
 
     let mut result = io::mem::MemWriter::new();
     write_repr(&mut result as &mut io::Writer, t);
-    str::from_utf8_owned(result.inner())
+    str::from_utf8_owned(result.unwrap())
 }
 
 #[cfg(test)]
@@ -635,14 +634,13 @@ fn test_repr() {
     use prelude::*;
     use str;
     use str::Str;
-    use io::Decorator;
     use util::swap;
     use char::is_alphabetic;
 
     fn exact_test<T>(t: &T, e:&str) {
         let mut m = io::mem::MemWriter::new();
         write_repr(&mut m as &mut io::Writer, t);
-        let s = str::from_utf8_owned(m.inner());
+        let s = str::from_utf8_owned(m.unwrap());
         assert_eq!(s.as_slice(), e);
     }
 
@@ -655,13 +653,10 @@ fn test_repr() {
     exact_test(&(~"he\u10f3llo"), "~\"he\\u10f3llo\"");
 
     exact_test(&(@10), "@10");
-    exact_test(&(@mut 10), "@mut 10");
-    exact_test(&((@mut 10, 2)), "(@mut 10, 2)");
     exact_test(&(~10), "~10");
     exact_test(&(&10), "&10");
     let mut x = 10;
     exact_test(&(&mut x), "&mut 10");
-    exact_test(&(@mut [1, 2]), "@mut [1, 2]");
 
     exact_test(&(0 as *()), "(0x0 as *())");
     exact_test(&(0 as *mut ()), "(0x0 as *mut ())");

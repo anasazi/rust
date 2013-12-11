@@ -10,7 +10,7 @@
 
 /*!
 
-The `ToBytes` and `IterBytes` traits
+The `ToBytes` and `IterBytes` traits for converting to raw bytes
 
 */
 
@@ -313,13 +313,6 @@ impl<'a,A:IterBytes> IterBytes for &'a A {
 }
 
 impl<A:IterBytes> IterBytes for @A {
-    #[inline]
-    fn iter_bytes(&self, lsb0: bool, f: Cb) -> bool {
-        (**self).iter_bytes(lsb0, f)
-    }
-}
-
-impl<A:IterBytes> IterBytes for @mut A {
     #[inline]
     fn iter_bytes(&self, lsb0: bool, f: Cb) -> bool {
         (**self).iter_bytes(lsb0, f)

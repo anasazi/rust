@@ -33,7 +33,7 @@ use syntax::visit::Visitor;
 //  send: Things that can be sent on channels or included in spawned closures.
 //  freeze: Things thare are deeply immutable. They are guaranteed never to
 //    change, and can be safely shared without copying between tasks.
-//  'static: Things that do not contain borrowed pointers.
+//  'static: Things that do not contain references.
 //
 // Send includes scalar types as well as classes and unique types containing
 // only sendable types.
@@ -58,18 +58,19 @@ pub struct Context {
 
 impl Visitor<()> for Context {
 
-    fn visit_expr(&mut self, ex:@Expr, _:()) {
+    fn visit_expr(&mut self, ex: &Expr, _: ()) {
         check_expr(self, ex);
     }
 
-    fn visit_fn(&mut self, fk:&visit::fn_kind, fd:&fn_decl, b:P<Block>, s:Span, n:NodeId, _:()) {
+    fn visit_fn(&mut self, fk: &visit::FnKind, fd: &FnDecl,
+                b: &Block, s: Span, n: NodeId, _: ()) {
         check_fn(self, fk, fd, b, s, n);
     }
 
-    fn visit_ty(&mut self, t:&Ty, _:()) {
+    fn visit_ty(&mut self, t: &Ty, _: ()) {
         check_ty(self, t);
     }
-    fn visit_item(&mut self, i:@item, _:()) {
+    fn visit_item(&mut self, i: &Item, _: ()) {
         check_item(self, i);
     }
 }
@@ -115,12 +116,19 @@ fn check_struct_safe_for_destructor(cx: &mut Context,
     }
 }
 
-fn check_impl_of_trait(cx: &mut Context, it: @item, trait_ref: &trait_ref, self_type: &Ty) {
-    let ast_trait_def = cx.tcx.def_map.find(&trait_ref.ref_id)
-                            .expect("trait ref not in def map!");
+fn check_impl_of_trait(cx: &mut Context, it: &Item, trait_ref: &TraitRef, self_type: &Ty) {
+    let def_map = cx.tcx.def_map.borrow();
+    let ast_trait_def = def_map.get()
+                               .find(&trait_ref.ref_id)
+                               .expect("trait ref not in def map!");
     let trait_def_id = ast_util::def_id_of_def(*ast_trait_def);
-    let trait_def = cx.tcx.trait_defs.find(&trait_def_id)
-                        .expect("trait def not in trait-defs map!");
+    let trait_def;
+    {
+        let trait_defs = cx.tcx.trait_defs.borrow();
+        trait_def = *trait_defs.get()
+                               .find(&trait_def_id)
+                               .expect("trait def not in trait-defs map!");
+    }
 
     // If this trait has builtin-kind supertraits, meet them.
     let self_ty: ty::t = ty::node_id_to_type(cx.tcx, it.id);
@@ -137,9 +145,9 @@ fn check_impl_of_trait(cx: &mut Context, it: @item, trait_ref: &trait_ref, self_
     // If this is a destructor, check kinds.
     if cx.tcx.lang_items.drop_trait() == Some(trait_def_id) {
         match self_type.node {
-            ty_path(_, ref bounds, path_node_id) => {
+            TyPath(_, ref bounds, path_node_id) => {
                 assert!(bounds.is_none());
-                let struct_def = cx.tcx.def_map.get_copy(&path_node_id);
+                let struct_def = def_map.get().get_copy(&path_node_id);
                 let struct_did = ast_util::def_id_of_def(struct_def);
                 check_struct_safe_for_destructor(cx, self_type.span, struct_did);
             }
@@ -151,10 +159,10 @@ fn check_impl_of_trait(cx: &mut Context, it: @item, trait_ref: &trait_ref, self_
     }
 }
 
-fn check_item(cx: &mut Context, item: @item) {
+fn check_item(cx: &mut Context, item: &Item) {
     if !attr::contains_name(item.attrs, "unsafe_destructor") {
         match item.node {
-            item_impl(_, Some(ref trait_ref), self_type, _) => {
+            ItemImpl(_, Some(ref trait_ref), self_type, _) => {
                 check_impl_of_trait(cx, item, trait_ref, self_type);
             }
             _ => {}
@@ -238,9 +246,9 @@ fn with_appropriate_checker(cx: &Context,
 // to the copy/move kind bounds. Then recursively check the function body.
 fn check_fn(
     cx: &mut Context,
-    fk: &visit::fn_kind,
-    decl: &fn_decl,
-    body: P<Block>,
+    fk: &visit::FnKind,
+    decl: &FnDecl,
+    body: &Block,
     sp: Span,
     fn_id: NodeId) {
 
@@ -255,7 +263,7 @@ fn check_fn(
     visit::walk_fn(cx, fk, decl, body, sp, fn_id, ());
 }
 
-pub fn check_expr(cx: &mut Context, e: @Expr) {
+pub fn check_expr(cx: &mut Context, e: &Expr) {
     debug!("kind::check_expr({})", expr_to_str(e, cx.tcx.sess.intr()));
 
     // Handle any kind bounds on type parameters
@@ -264,11 +272,14 @@ pub fn check_expr(cx: &mut Context, e: @Expr) {
         None => e.id,
     };
     {
-        let r = cx.tcx.node_type_substs.find(&type_parameter_id);
+        let node_type_substs = cx.tcx.node_type_substs.borrow();
+        let r = node_type_substs.get().find(&type_parameter_id);
         for ts in r.iter() {
+            let def_map = cx.tcx.def_map.borrow();
             let type_param_defs = match e.node {
               ExprPath(_) => {
-                let did = ast_util::def_id_of_def(cx.tcx.def_map.get_copy(&e.id));
+                let did = ast_util::def_id_of_def(def_map.get()
+                                                         .get_copy(&e.id));
                 ty::lookup_item_type(cx.tcx, did).generics.type_param_defs
               }
               _ => {
@@ -296,19 +307,14 @@ pub fn check_expr(cx: &mut Context, e: @Expr) {
     }
 
     match e.node {
-        ExprUnary(_, UnBox(_), interior) => {
+        ExprUnary(_, UnBox, interior) => {
             let interior_type = ty::expr_ty(cx.tcx, interior);
             let _ = check_durable(cx.tcx, interior_type, interior.span);
         }
         ExprCast(source, _) => {
-            check_cast_for_escaping_regions(cx, source, e);
-            match ty::get(ty::expr_ty(cx.tcx, e)).sty {
-                ty::ty_trait(_, _, _, _, bounds) => {
-                    let source_ty = ty::expr_ty(cx.tcx, source);
-                    check_trait_cast_bounds(cx, e.span, source_ty, bounds)
-                }
-                _ => { }
-            }
+            let source_ty = ty::expr_ty(cx.tcx, source);
+            let target_ty = ty::expr_ty(cx.tcx, e);
+            check_trait_cast(cx, source_ty, target_ty, source.span);
         }
         ExprRepeat(element, count_expr, _) => {
             let count = ty::eval_repeat_count(&cx.tcx, count_expr);
@@ -320,23 +326,47 @@ pub fn check_expr(cx: &mut Context, e: @Expr) {
         }
         _ => {}
     }
+
+    // Search for auto-adjustments to find trait coercions.
+    let adjustments = cx.tcx.adjustments.borrow();
+    match adjustments.get().find(&e.id) {
+        Some(&@ty::AutoObject(..)) => {
+            let source_ty = ty::expr_ty(cx.tcx, e);
+            let target_ty = ty::expr_ty_adjusted(cx.tcx, e);
+            check_trait_cast(cx, source_ty, target_ty, e.span);
+        }
+        Some(&@ty::AutoAddEnv(..)) | Some(&@ty::AutoDerefRef(..)) | None => {}
+    }
+
     visit::walk_expr(cx, e, ());
+}
+
+fn check_trait_cast(cx: &mut Context, source_ty: ty::t, target_ty: ty::t, span: Span) {
+    check_cast_for_escaping_regions(cx, source_ty, target_ty, span);
+    match ty::get(target_ty).sty {
+        ty::ty_trait(_, _, _, _, bounds) => {
+            check_trait_cast_bounds(cx, span, source_ty, bounds);
+        }
+        _ => {}
+    }
 }
 
 fn check_ty(cx: &mut Context, aty: &Ty) {
     match aty.node {
-      ty_path(_, _, id) => {
-          let r = cx.tcx.node_type_substs.find(&id);
-          for ts in r.iter() {
-              let did = ast_util::def_id_of_def(cx.tcx.def_map.get_copy(&id));
-              let type_param_defs =
-                  ty::lookup_item_type(cx.tcx, did).generics.type_param_defs;
-              for (&ty, type_param_def) in ts.iter().zip(type_param_defs.iter()) {
-                  check_typaram_bounds(cx, aty.id, aty.span, ty, type_param_def)
-              }
-          }
-      }
-      _ => {}
+        TyPath(_, _, id) => {
+            let node_type_substs = cx.tcx.node_type_substs.borrow();
+            let r = node_type_substs.get().find(&id);
+            for ts in r.iter() {
+                let def_map = cx.tcx.def_map.borrow();
+                let did = ast_util::def_id_of_def(def_map.get().get_copy(&id));
+                let type_param_defs =
+                    ty::lookup_item_type(cx.tcx, did).generics.type_param_defs;
+                for (&ty, type_param_def) in ts.iter().zip(type_param_defs.iter()) {
+                    check_typaram_bounds(cx, aty.id, aty.span, ty, type_param_def)
+                }
+            }
+        }
+        _ => {}
     }
     visit::walk_ty(cx, aty, ());
 }
@@ -457,12 +487,11 @@ pub fn check_durable(tcx: ty::ctxt, ty: ty::t, sp: Span) -> bool {
     if !ty::type_is_static(tcx, ty) {
         match ty::get(ty).sty {
           ty::ty_param(..) => {
-            tcx.sess.span_err(sp, "value may contain borrowed \
-                                   pointers; add `'static` bound");
+            tcx.sess.span_err(sp, "value may contain references; \
+                                   add `'static` bound");
           }
           _ => {
-            tcx.sess.span_err(sp, "value may contain borrowed \
-                                   pointers");
+            tcx.sess.span_err(sp, "value may contain references");
           }
         }
         false
@@ -472,10 +501,10 @@ pub fn check_durable(tcx: ty::ctxt, ty: ty::t, sp: Span) -> bool {
 }
 
 /// This is rather subtle.  When we are casting a value to a instantiated
-/// trait like `a as trait<'r>`, regionck already ensures that any borrowed
-/// pointers that appear in the type of `a` are bounded by `'r` (ed.: rem
+/// trait like `a as trait<'r>`, regionck already ensures that any references
+/// that appear in the type of `a` are bounded by `'r` (ed.: rem
 /// FIXME(#5723)).  However, it is possible that there are *type parameters*
-/// in the type of `a`, and those *type parameters* may have borrowed pointers
+/// in the type of `a`, and those *type parameters* may have references
 /// within them.  We have to guarantee that the regions which appear in those
 /// type parameters are not obscured.
 ///
@@ -483,27 +512,27 @@ pub fn check_durable(tcx: ty::ctxt, ty: ty::t, sp: Span) -> bool {
 ///
 /// (1) The trait instance cannot escape the current fn.  This is
 /// guaranteed if the region bound `&r` is some scope within the fn
-/// itself.  This case is safe because whatever borrowed pointers are
+/// itself.  This case is safe because whatever references are
 /// found within the type parameter, they must enclose the fn body
 /// itself.
 ///
 /// (2) The type parameter appears in the type of the trait.  For
 /// example, if the type parameter is `T` and the trait type is
-/// `deque<T>`, then whatever borrowed ptrs may appear in `T` also
+/// `deque<T>`, then whatever references may appear in `T` also
 /// appear in `deque<T>`.
 ///
 /// (3) The type parameter is sendable (and therefore does not contain
-/// borrowed ptrs).
+/// references).
 ///
 /// FIXME(#5723)---This code should probably move into regionck.
 pub fn check_cast_for_escaping_regions(
     cx: &Context,
-    source: &Expr,
-    target: &Expr)
+    source_ty: ty::t,
+    target_ty: ty::t,
+    source_span: Span)
 {
     // Determine what type we are casting to; if it is not an trait, then no
     // worries.
-    let target_ty = ty::expr_ty(cx.tcx, target);
     match ty::get(target_ty).sty {
         ty::ty_trait(..) => {}
         _ => { return; }
@@ -533,7 +562,6 @@ pub fn check_cast_for_escaping_regions(
     // Assuming the trait instance can escape, then ensure that each parameter
     // either appears in the trait type or is sendable.
     let target_params = ty::param_tys_in_type(target_ty);
-    let source_ty = ty::expr_ty(cx.tcx, source);
     ty::walk_regions_and_ty(
         cx.tcx,
         source_ty,
@@ -543,8 +571,8 @@ pub fn check_cast_for_escaping_regions(
             //
             // if !target_regions.iter().any(|t_r| is_subregion_of(cx, *t_r, r)) {
             //     cx.tcx.sess.span_err(
-            //         source.span,
-            //         format!("source contains borrowed pointer with lifetime \
+            //         source_span,
+            //         format!("source contains reference with lifetime \
             //               not found in the target type `{}`",
             //              ty_to_str(cx.tcx, target_ty)));
             //     note_and_explain_region(
@@ -558,7 +586,7 @@ pub fn check_cast_for_escaping_regions(
                     if target_params.iter().any(|x| x == &source_param) {
                         /* case (2) */
                     } else {
-                        check_durable(cx.tcx, ty, source.span); /* case (3) */
+                        check_durable(cx.tcx, ty, source_span); /* case (3) */
                     }
                 }
                 _ => {}

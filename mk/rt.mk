@@ -72,15 +72,14 @@ RUNTIME_CXXFLAGS_$(1)_$(2) = -D_RUST_STAGE1
 endif
 endif
 
-RUNTIME_CXXS_$(1)_$(2) := \
-	      rt/rust_cxx_glue.cpp
-
 RUNTIME_CS_$(1)_$(2) := \
               rt/rust_builtin.c \
-              rt/rust_upcall.c \
               rt/miniz.c \
               rt/rust_android_dummy.c \
               rt/rust_test_helpers.c
+
+RUNTIME_LL_$(1)_$(2) := \
+			rt/rust_try.ll
 
 # stage0 remove this after the next snapshot
 %.cpp:
@@ -94,18 +93,15 @@ RT_BUILD_DIR_$(1)_$(2) := $$(RT_OUTPUT_DIR_$(1))/stage$(2)
 RUNTIME_DEF_$(1)_$(2) := $$(RT_OUTPUT_DIR_$(1))/rustrt$$(CFG_DEF_SUFFIX_$(1))
 RUNTIME_INCS_$(1)_$(2) := -I $$(S)src/rt -I $$(S)src/rt/isaac -I $$(S)src/rt/uthash \
                      -I $$(S)src/rt/arch/$$(HOST_$(1))
-RUNTIME_OBJS_$(1)_$(2) := $$(RUNTIME_CXXS_$(1)_$(2):rt/%.cpp=$$(RT_BUILD_DIR_$(1)_$(2))/%.o) \
+RUNTIME_OBJS_$(1)_$(2) := \
                      $$(RUNTIME_CS_$(1)_$(2):rt/%.c=$$(RT_BUILD_DIR_$(1)_$(2))/%.o) \
-                     $$(RUNTIME_S_$(1)_$(2):rt/%.S=$$(RT_BUILD_DIR_$(1)_$(2))/%.o)
+                     $$(RUNTIME_S_$(1)_$(2):rt/%.S=$$(RT_BUILD_DIR_$(1)_$(2))/%.o) \
+                     $$(RUNTIME_LL_$(1)_$(2):rt/%.ll=$$(RT_BUILD_DIR_$(1)_$(2))/%.o)
+
 ALL_OBJ_FILES += $$(RUNTIME_OBJS_$(1)_$(2))
 
 MORESTACK_OBJS_$(1)_$(2) := $$(RT_BUILD_DIR_$(1)_$(2))/arch/$$(HOST_$(1))/morestack.o
 ALL_OBJ_FILES += $$(MORESTACK_OBJS_$(1)_$(2))
-
-$$(RT_BUILD_DIR_$(1)_$(2))/rust_cxx_glue.o: rt/rust_cxx_glue.cpp $$(MKFILE_DEPS)
-	@$$(call E, compile: $$@)
-	$$(Q)$$(call CFG_COMPILE_CXX_$(1), $$@, $$(RUNTIME_INCS_$(1)_$(2)) \
-                 $$(SNAP_DEFINES) $$(RUNTIME_CXXFLAGS_$(1)_$(2))) $$<
 
 $$(RT_BUILD_DIR_$(1)_$(2))/%.o: rt/%.c $$(MKFILE_DEPS)
 	@$$(call E, compile: $$@)
@@ -116,6 +112,11 @@ $$(RT_BUILD_DIR_$(1)_$(2))/%.o: rt/%.S  $$(MKFILE_DEPS) \
                      $$(LLVM_CONFIG_$$(CFG_BUILD))
 	@$$(call E, compile: $$@)
 	$$(Q)$$(call CFG_ASSEMBLE_$(1),$$@,$$<)
+
+$$(RT_BUILD_DIR_$(1)_$(2))/%.o: rt/%.ll  $$(MKFILE_DEPS) \
+                     $$(LLVM_CONFIG_$$(CFG_BUILD))
+	@$$(call E, compile: $$@)
+	$$(Q)$(LLC_$(CFG_BUILD)) $$(CFG_LLC_FLAGS_$(1)) -filetype=obj -mtriple=$(1) -relocation-model=pic -o $$@ $$<
 
 $$(RT_BUILD_DIR_$(1)_$(2))/arch/$$(HOST_$(1))/libmorestack.a: $$(MORESTACK_OBJS_$(1)_$(2))
 	@$$(call E, link: $$@)
@@ -186,25 +187,34 @@ else
 endif
 
 LIBUV_NAME_$(1) := $$(call CFG_STATIC_LIB_NAME_$(1),uv)
-LIBUV_LIB_$(1) := $$(RT_OUTPUT_DIR_$(1))/libuv/$$(LIBUV_NAME_$(1))
+LIBUV_DIR_$(1) := $$(RT_OUTPUT_DIR_$(1))/libuv
+LIBUV_LIB_$(1) := $$(LIBUV_DIR_$(1))/$$(LIBUV_NAME_$(1))
 
 LIBUV_MAKEFILE_$(1) := $$(CFG_BUILD_DIR)$$(RT_OUTPUT_DIR_$(1))/libuv/Makefile
+
+LIBUV_STAMP_$(1) = $$(LIBUV_DIR_$(1))/libuv-auto-clean-stamp
+
+$$(LIBUV_STAMP_$(1)): $(S)src/rt/libuv-auto-clean-trigger
+	$$(Q)rm -rf $$(LIBUV_DIR_$(1))
+	$$(Q)mkdir -p $$(@D)
+	touch $$@
 
 # libuv triggers a few warnings on some platforms
 LIBUV_CFLAGS_$(1) := $(subst -Werror,,$(CFG_GCCISH_CFLAGS_$(1)))
 
-$$(LIBUV_MAKEFILE_$(1)): $$(LIBUV_DEPS)
+$$(LIBUV_MAKEFILE_$(1)): $$(LIBUV_DEPS) $$(MKFILE_DEPS) $$(LIBUV_STAMP_$(1))
 	(cd $(S)src/libuv/ && \
 	 $$(CFG_PYTHON) ./gyp_uv.py -f make -Dtarget_arch=$$(LIBUV_ARCH_$(1)) \
 	   -D ninja \
 	   -DOS=$$(LIBUV_OSTYPE_$(1)) \
 	   -Goutput_dir=$$(@D) --generator-output $$(@D))
+	touch $$@
 
 # Windows has a completely different build system for libuv because of mingw. In
 # theory when we support msvc then we should be using gyp's msvc output instead
 # of mingw's makefile for windows
 ifdef CFG_WINDOWSY_$(1)
-$$(LIBUV_LIB_$(1)): $$(LIBUV_DEPS)
+$$(LIBUV_LIB_$(1)): $$(LIBUV_DEPS) $$(MKFILE_DEPS)
 	$$(Q)$$(MAKE) -C $$(S)src/libuv -f Makefile.mingw \
 		LDFLAGS="$$(CFG_GCCISH_LINK_FLAGS_$(1))" \
 		CC="$$(CC_$(1)) $$(LIBUV_CFLAGS_$(1)) $$(SNAP_DEFINES)" \
@@ -213,15 +223,17 @@ $$(LIBUV_LIB_$(1)): $$(LIBUV_DEPS)
 		V=$$(VERBOSE)
 	$$(Q)cp $$(S)src/libuv/libuv.a $$@
 else
-$$(LIBUV_LIB_$(1)): $$(LIBUV_DEPS) $$(LIBUV_MAKEFILE_$(1))
-	$$(Q)$$(MAKE) -C $$(@D) \
+$$(LIBUV_LIB_$(1)): $$(LIBUV_DIR_$(1))/Release/libuv.a $$(MKFILE_DEPS)
+	$$(Q)ln -f $$< $$@
+$$(LIBUV_DIR_$(1))/Release/libuv.a: $$(LIBUV_DEPS) $$(LIBUV_MAKEFILE_$(1)) \
+				    $$(MKFILE_DEPS)
+	$$(Q)$$(MAKE) -C $$(LIBUV_DIR_$(1)) \
 		CFLAGS="$$(LIBUV_CFLAGS_$(1)) $$(SNAP_DEFINES)" \
 		LDFLAGS="$$(CFG_GCCISH_LINK_FLAGS_$(1))" \
 		CC="$$(CC_$(1))" \
 		CXX="$$(CXX_$(1))" \
 		AR="$$(AR_$(1))" \
 		$$(LIBUV_ARGS_$(1)) \
-		builddir="." \
 		BUILDTYPE=Release \
 		NO_LOAD="$$(LIBUV_NO_LOAD)" \
 		V=$$(VERBOSE)

@@ -11,6 +11,7 @@
 #[allow(non_uppercase_pattern_statics)];
 
 use std::c_str::ToCStr;
+use std::cell::RefCell;
 use std::hashmap::HashMap;
 use std::libc::{c_uint, c_ushort, c_void, free};
 use std::str::raw::from_c_str;
@@ -319,7 +320,6 @@ pub mod llvm {
     // automatically updated whenever LLVM is updated to include an up-to-date
     // set of the libraries we need to link to LLVM for.
     #[link(name = "rustllvm", kind = "static")]
-    #[link(name = "stdc++")]
     extern {
         /* Create and destroy contexts. */
         pub fn LLVMContextCreate() -> ContextRef;
@@ -786,6 +786,10 @@ pub mod llvm {
         /* Operations on call instructions (only) */
         pub fn LLVMIsTailCall(CallInst: ValueRef) -> Bool;
         pub fn LLVMSetTailCall(CallInst: ValueRef, IsTailCall: Bool);
+
+        /* Operations on load/store instructions (only) */
+        pub fn LLVMGetVolatile(MemoryAccessInst: ValueRef) -> Bool;
+        pub fn LLVMSetVolatile(MemoryAccessInst: ValueRef, volatile: Bool);
 
         /* Operations on phi nodes */
         pub fn LLVMAddIncoming(PhiNode: ValueRef,
@@ -1455,14 +1459,15 @@ pub mod llvm {
                                                          BufferName: *c_char)
             -> MemoryBufferRef;
 
+        pub fn LLVMIsMultithreaded() -> Bool;
+        pub fn LLVMStartMultithreaded() -> Bool;
+
         /** Returns a string describing the last error caused by an LLVMRust*
             call. */
         pub fn LLVMRustGetLastError() -> *c_char;
 
         /// Print the pass timings since static dtors aren't picking them up.
         pub fn LLVMRustPrintPassTimings();
-
-        pub fn LLVMRustStartMultithreading() -> bool;
 
         pub fn LLVMStructCreateNamed(C: ContextRef, Name: *c_char) -> TypeRef;
 
@@ -1653,7 +1658,8 @@ pub mod llvm {
                                             AlignInBits: c_ulonglong,
                                             Flags: c_uint,
                                             Elements: ValueRef,
-                                            RunTimeLang: c_uint)
+                                            RunTimeLang: c_uint,
+                                            UniqueId: *c_char)
                                             -> ValueRef;
 
         pub fn LLVMSetUnnamedAddr(GlobalVar: ValueRef, UnnamedAddr: Bool);
@@ -1805,32 +1811,24 @@ pub fn SetFunctionAttribute(Fn: ValueRef, attr: Attribute) {
 /* Memory-managed object interface to type handles. */
 
 pub struct TypeNames {
-    type_names: HashMap<TypeRef, ~str>,
-    named_types: HashMap<~str, TypeRef>
+    named_types: RefCell<HashMap<~str, TypeRef>>,
 }
 
 impl TypeNames {
     pub fn new() -> TypeNames {
         TypeNames {
-            type_names: HashMap::new(),
-            named_types: HashMap::new()
+            named_types: RefCell::new(HashMap::new())
         }
     }
 
-    pub fn associate_type(&mut self, s: &str, t: &Type) {
-        assert!(self.type_names.insert(t.to_ref(), s.to_owned()));
-        assert!(self.named_types.insert(s.to_owned(), t.to_ref()));
-    }
-
-    pub fn find_name<'r>(&'r self, ty: &Type) -> Option<&'r str> {
-        match self.type_names.find(&ty.to_ref()) {
-            Some(a) => Some(a.slice(0, a.len())),
-            None => None
-        }
+    pub fn associate_type(&self, s: &str, t: &Type) {
+        let mut named_types = self.named_types.borrow_mut();
+        assert!(named_types.get().insert(s.to_owned(), t.to_ref()));
     }
 
     pub fn find_type(&self, s: &str) -> Option<Type> {
-        self.named_types.find_equiv(&s).map(|x| Type::from_ref(*x))
+        let named_types = self.named_types.borrow();
+        named_types.get().find_equiv(&s).map(|x| Type::from_ref(*x))
     }
 
     pub fn type_to_str(&self, ty: Type) -> ~str {
@@ -1939,7 +1937,7 @@ impl ObjectFile {
         unsafe {
             let llof = llvm::LLVMCreateObjectFile(llmb);
             if llof as int == 0 {
-                llvm::LLVMDisposeMemoryBuffer(llmb);
+                // LLVMCreateObjectFile took ownership of llmb
                 return None
             }
 

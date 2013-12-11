@@ -28,8 +28,6 @@ use std::io;
 use std::io::fs;
 use std::path::is_sep;
 
-use sort;
-
 /**
  * An iterator that yields Paths from the filesystem that match a particular
  * pattern - see the `glob` function for more details.
@@ -55,8 +53,10 @@ pub struct GlobIterator {
 /// `puppies.jpg` and `hamsters.gif`:
 ///
 /// ```rust
+/// use extra::glob::glob;
+///
 /// for path in glob("/media/pictures/*.jpg") {
-///     println(path.to_str());
+///     println!("{}", path.display());
 /// }
 /// ```
 ///
@@ -100,7 +100,7 @@ pub fn glob_with(pattern: &str, options: MatchOptions) -> GlobIterator {
         root.push(pat_root.get_ref());
     }
 
-    let root_len = pat_root.map_default(0u, |p| p.as_vec().len());
+    let root_len = pat_root.map_or(0u, |p| p.as_vec().len());
     let dir_patterns = pattern.slice_from(root_len.min(&pattern.len()))
                        .split_terminator(is_sep).map(|s| Pattern::new(s)).to_owned_vec();
 
@@ -149,9 +149,8 @@ impl Iterator<Path> for GlobIterator {
 
 fn list_dir_sorted(path: &Path) -> ~[Path] {
     match io::result(|| fs::readdir(path)) {
-        Ok(children) => {
-            let mut children = children;
-            sort::quick_sort(children, |p1, p2| p2.filename() <= p1.filename());
+        Ok(mut children) => {
+            children.sort_by(|p1, p2| p2.filename().cmp(&p1.filename()));
             children
         }
         Err(..) => ~[]
@@ -191,21 +190,23 @@ enum MatchResult {
 impl Pattern {
 
     /**
-     * This function compiles Unix shell style patterns: `?` matches any single character,
-     * `*` matches any (possibly empty) sequence of characters and `[...]` matches any character
-     * inside the brackets, unless the first character is `!` in which case it matches any
-     * character except those between the `!` and the `]`. Character sequences can also specify
-     * ranges of characters, as ordered by Unicode, so e.g. `[0-9]` specifies any character
-     * between 0 and 9 inclusive.
+     * This function compiles Unix shell style patterns: `?` matches any single
+     * character, `*` matches any (possibly empty) sequence of characters and
+     * `[...]` matches any character inside the brackets, unless the first
+     * character is `!` in which case it matches any character except those
+     * between the `!` and the `]`. Character sequences can also specify ranges
+     * of characters, as ordered by Unicode, so e.g. `[0-9]` specifies any
+     * character between 0 and 9 inclusive.
      *
-     * The metacharacters `?`, `*`, `[`, `]` can be matched by using brackets (e.g. `[?]`).
-     * When a `]` occurs immediately following `[` or `[!` then it is interpreted as
-     * being part of, rather then ending, the character set, so `]` and NOT `]` can be
-     * matched by `[]]` and `[!]]` respectively. The `-` character can be specified inside a
-     * character sequence pattern by placing it at the start or the end, e.g. `[abc-]`.
+     * The metacharacters `?`, `*`, `[`, `]` can be matched by using brackets
+     * (e.g. `[?]`).  When a `]` occurs immediately following `[` or `[!` then
+     * it is interpreted as being part of, rather then ending, the character
+     * set, so `]` and NOT `]` can be matched by `[]]` and `[!]]` respectively.
+     * The `-` character can be specified inside a character sequence pattern by
+     * placing it at the start or the end, e.g. `[abc-]`.
      *
-     * When a `[` does not have a closing `]` before the end of the string then the `[` will
-     * be treated literally.
+     * When a `[` does not have a closing `]` before the end of the string then
+     * the `[` will be treated literally.
      */
     pub fn new(pattern: &str) -> Pattern {
 
@@ -232,7 +233,8 @@ impl Pattern {
                         match chars.slice_from(i + 3).position_elem(&']') {
                             None => (),
                             Some(j) => {
-                                let cs = parse_char_specifiers(chars.slice(i + 2, i + 3 + j));
+                                let chars = chars.slice(i + 2, i + 3 + j);
+                                let cs = parse_char_specifiers(chars);
                                 tokens.push(AnyExcept(cs));
                                 i += j + 4;
                                 continue;
@@ -295,6 +297,8 @@ impl Pattern {
      * # Example
      *
      * ```rust
+     * use extra::glob::Pattern;
+     *
      * assert!(Pattern::new("c?t").matches("cat"));
      * assert!(Pattern::new("k[!e]tteh").matches("kitteh"));
      * assert!(Pattern::new("d*g").matches("doog"));
@@ -310,7 +314,7 @@ impl Pattern {
      */
     pub fn matches_path(&self, path: &Path) -> bool {
         // FIXME (#9639): This needs to handle non-utf8 paths
-        path.as_str().map_default(false, |s| {
+        path.as_str().map_or(false, |s| {
             self.matches(s)
         })
     }
@@ -328,7 +332,7 @@ impl Pattern {
      */
     pub fn matches_path_with(&self, path: &Path, options: MatchOptions) -> bool {
         // FIXME (#9639): This needs to handle non-utf8 paths
-        path.as_str().map_default(false, |s| {
+        path.as_str().map_or(false, |s| {
             self.matches_with(s, options)
         })
     }
@@ -512,7 +516,7 @@ impl MatchOptions {
      *
      * This function always returns this value:
      *
-     * ```rust
+     * ```rust,ignore
      * MatchOptions {
      *     case_sensitive: true,
      *     require_literal_separator: false.
@@ -771,4 +775,3 @@ mod test {
         assert!(Pattern::new("a/b").matches_path(&Path::new("a/b")));
     }
 }
-

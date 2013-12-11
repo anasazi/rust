@@ -13,7 +13,7 @@
 use std::unstable::intrinsics::{TyDesc, get_tydesc, visit_tydesc, TyVisitor, Disr, Opaque};
 
 struct MyVisitor {
-    types: @mut ~[~str],
+    types: ~[~str],
 }
 
 impl TyVisitor for MyVisitor {
@@ -65,7 +65,7 @@ impl TyVisitor for MyVisitor {
     fn visit_estr_uniq(&mut self) -> bool { true }
     fn visit_estr_slice(&mut self) -> bool { true }
     fn visit_estr_fixed(&mut self,
-                        _sz: uint, _sz: uint,
+                        _sz: uint, _sz2: uint,
                         _align: uint) -> bool { true }
 
     fn visit_box(&mut self, _mtbl: uint, _inner: *TyDesc) -> bool { true }
@@ -153,7 +153,7 @@ fn visit_ty<T>(v: &mut MyVisitor) {
 }
 
 pub fn main() {
-    let mut v = MyVisitor {types: @mut ~[]};
+    let mut v = MyVisitor {types: ~[]};
 
     visit_ty::<bool>(&mut v);
     visit_ty::<int>(&mut v);
@@ -164,5 +164,5 @@ pub fn main() {
     for s in v.types.iter() {
         println!("type: {}", (*s).clone());
     }
-    assert_eq!((*v.types).clone(), ~[~"bool", ~"int", ~"i8", ~"i16", ~"[", ~"int", ~"]"]);
+    assert_eq!(v.types.clone(), ~[~"bool", ~"int", ~"i8", ~"i16", ~"[", ~"int", ~"]"]);
 }

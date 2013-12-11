@@ -25,11 +25,12 @@ use driver::session::Session;
 use middle::ty::{FreeRegion};
 use middle::ty;
 
+use std::cell::RefCell;
 use std::hashmap::{HashMap, HashSet};
 use syntax::codemap::Span;
 use syntax::{ast, visit};
-use syntax::visit::{Visitor,fn_kind};
-use syntax::ast::{P,Block,item,fn_decl,NodeId,Arm,Pat,Stmt,Expr,Local};
+use syntax::visit::{Visitor, FnKind};
+use syntax::ast::{Block, Item, FnDecl, NodeId, Arm, Pat, Stmt, Expr, Local};
 
 /**
 The region maps encode information about region relationships.
@@ -50,9 +51,9 @@ The region maps encode information about region relationships.
     necessarily how I think things ought to work
 */
 pub struct RegionMaps {
-    priv scope_map: HashMap<ast::NodeId, ast::NodeId>,
-    priv free_region_map: HashMap<FreeRegion, ~[FreeRegion]>,
-    priv cleanup_scopes: HashSet<ast::NodeId>
+    priv scope_map: RefCell<HashMap<ast::NodeId, ast::NodeId>>,
+    priv free_region_map: RefCell<HashMap<FreeRegion, ~[FreeRegion]>>,
+    priv cleanup_scopes: RefCell<HashSet<ast::NodeId>>,
 }
 
 #[deriving(Clone)]
@@ -68,13 +69,14 @@ struct RegionResolutionVisitor {
     sess: Session,
 
     // Generated maps:
-    region_maps: @mut RegionMaps,
+    region_maps: RegionMaps,
 }
 
 
 impl RegionMaps {
-    pub fn relate_free_regions(&mut self, sub: FreeRegion, sup: FreeRegion) {
-        match self.free_region_map.find_mut(&sub) {
+    pub fn relate_free_regions(&self, sub: FreeRegion, sup: FreeRegion) {
+        let mut free_region_map = self.free_region_map.borrow_mut();
+        match free_region_map.get().find_mut(&sub) {
             Some(sups) => {
                 if !sups.iter().any(|x| x == &sup) {
                     sups.push(sup);
@@ -86,49 +88,55 @@ impl RegionMaps {
 
         debug!("relate_free_regions(sub={:?}, sup={:?})", sub, sup);
 
-        self.free_region_map.insert(sub, ~[sup]);
+        free_region_map.get().insert(sub, ~[sup]);
     }
 
-    pub fn record_parent(&mut self, sub: ast::NodeId, sup: ast::NodeId) {
+    pub fn record_parent(&self, sub: ast::NodeId, sup: ast::NodeId) {
         debug!("record_parent(sub={:?}, sup={:?})", sub, sup);
         assert!(sub != sup);
 
-        self.scope_map.insert(sub, sup);
+        let mut scope_map = self.scope_map.borrow_mut();
+        scope_map.get().insert(sub, sup);
     }
 
-    pub fn record_cleanup_scope(&mut self, scope_id: ast::NodeId) {
+    pub fn record_cleanup_scope(&self, scope_id: ast::NodeId) {
         //! Records that a scope is a CLEANUP SCOPE.  This is invoked
         //! from within regionck.  We wait until regionck because we do
         //! not know which operators are overloaded until that point,
         //! and only overloaded operators result in cleanup scopes.
 
-        self.cleanup_scopes.insert(scope_id);
+        let mut cleanup_scopes = self.cleanup_scopes.borrow_mut();
+        cleanup_scopes.get().insert(scope_id);
     }
 
     pub fn opt_encl_scope(&self, id: ast::NodeId) -> Option<ast::NodeId> {
         //! Returns the narrowest scope that encloses `id`, if any.
 
-        self.scope_map.find(&id).map(|x| *x)
+        let scope_map = self.scope_map.borrow();
+        scope_map.get().find(&id).map(|x| *x)
     }
 
     pub fn encl_scope(&self, id: ast::NodeId) -> ast::NodeId {
         //! Returns the narrowest scope that encloses `id`, if any.
 
-        match self.scope_map.find(&id) {
+        let scope_map = self.scope_map.borrow();
+        match scope_map.get().find(&id) {
             Some(&r) => r,
             None => { fail!("No enclosing scope for id {:?}", id); }
         }
     }
 
     pub fn is_cleanup_scope(&self, scope_id: ast::NodeId) -> bool {
-        self.cleanup_scopes.contains(&scope_id)
+        let cleanup_scopes = self.cleanup_scopes.borrow();
+        cleanup_scopes.get().contains(&scope_id)
     }
 
     pub fn cleanup_scope(&self, expr_id: ast::NodeId) -> ast::NodeId {
         //! Returns the scope when temps in expr will be cleaned up
 
         let mut id = self.encl_scope(expr_id);
-        while !self.cleanup_scopes.contains(&id) {
+        let cleanup_scopes = self.cleanup_scopes.borrow();
+        while !cleanup_scopes.get().contains(&id) {
             id = self.encl_scope(id);
         }
         return id;
@@ -157,7 +165,8 @@ impl RegionMaps {
 
         let mut s = subscope;
         while superscope != s {
-            match self.scope_map.find(&s) {
+            let scope_map = self.scope_map.borrow();
+            match scope_map.get().find(&s) {
                 None => {
                     debug!("is_subscope_of({:?}, {:?}, s={:?})=false",
                            subscope, superscope, s);
@@ -193,7 +202,8 @@ impl RegionMaps {
         let mut queue = ~[sub];
         let mut i = 0;
         while i < queue.len() {
-            match self.free_region_map.find(&queue[i]) {
+            let free_region_map = self.free_region_map.borrow();
+            match free_region_map.get().find(&queue[i]) {
                 Some(parents) => {
                     for parent in parents.iter() {
                         if *parent == sup {
@@ -298,7 +308,8 @@ impl RegionMaps {
             let mut result = ~[scope];
             let mut scope = scope;
             loop {
-                match this.scope_map.find(&scope) {
+                let scope_map = this.scope_map.borrow();
+                match scope_map.get().find(&scope) {
                     None => return result,
                     Some(&superscope) => {
                         result.push(superscope);
@@ -322,7 +333,7 @@ fn parent_to_expr(visitor: &mut RegionResolutionVisitor,
 }
 
 fn resolve_block(visitor: &mut RegionResolutionVisitor,
-                 blk: ast::P<ast::Block>,
+                 blk: &ast::Block,
                  cx: Context) {
     // Record the parent of this block.
     parent_to_expr(visitor, cx, blk.id, blk.span);
@@ -348,7 +359,7 @@ fn resolve_pat(visitor: &mut RegionResolutionVisitor,
 }
 
 fn resolve_stmt(visitor: &mut RegionResolutionVisitor,
-                stmt: @ast::Stmt,
+                stmt: &ast::Stmt,
                 cx: Context) {
     match stmt.node {
         ast::StmtDecl(..) => {
@@ -365,7 +376,7 @@ fn resolve_stmt(visitor: &mut RegionResolutionVisitor,
 }
 
 fn resolve_expr(visitor: &mut RegionResolutionVisitor,
-                expr: @ast::Expr,
+                expr: &ast::Expr,
                 cx: Context) {
     parent_to_expr(visitor, cx, expr.id, expr.span);
 
@@ -406,7 +417,7 @@ fn resolve_expr(visitor: &mut RegionResolutionVisitor,
 }
 
 fn resolve_local(visitor: &mut RegionResolutionVisitor,
-                 local: @ast::Local,
+                 local: &ast::Local,
                  cx: Context) {
     assert_eq!(cx.var_parent, cx.parent);
     parent_to_expr(visitor, cx, local.id, local.span);
@@ -414,7 +425,7 @@ fn resolve_local(visitor: &mut RegionResolutionVisitor,
 }
 
 fn resolve_item(visitor: &mut RegionResolutionVisitor,
-                item: @ast::item,
+                item: &ast::Item,
                 cx: Context) {
     // Items create a new outer block scope as far as we're concerned.
     let new_cx = Context {var_parent: None, parent: None, ..cx};
@@ -422,9 +433,9 @@ fn resolve_item(visitor: &mut RegionResolutionVisitor,
 }
 
 fn resolve_fn(visitor: &mut RegionResolutionVisitor,
-              fk: &visit::fn_kind,
-              decl: &ast::fn_decl,
-              body: ast::P<ast::Block>,
+              fk: &FnKind,
+              decl: &ast::FnDecl,
+              body: &ast::Block,
               sp: Span,
               id: ast::NodeId,
               cx: Context) {
@@ -442,7 +453,7 @@ fn resolve_fn(visitor: &mut RegionResolutionVisitor,
                            var_parent: Some(body.id),
                            ..cx};
     match *fk {
-        visit::fk_method(_, _, method) => {
+        visit::FkMethod(_, _, method) => {
             visitor.region_maps.record_parent(method.self_id, body.id);
         }
         _ => {}
@@ -452,62 +463,56 @@ fn resolve_fn(visitor: &mut RegionResolutionVisitor,
     // The body of the fn itself is either a root scope (top-level fn)
     // or it continues with the inherited scope (closures).
     let body_cx = match *fk {
-        visit::fk_item_fn(..) |
-        visit::fk_method(..) => {
+        visit::FkItemFn(..) | visit::FkMethod(..) => {
             Context {parent: None, var_parent: None, ..cx}
         }
-        visit::fk_fn_block(..) => {
-            cx
-        }
+        visit::FkFnBlock(..) => cx
     };
     visitor.visit_block(body, body_cx);
 }
 
 impl Visitor<Context> for RegionResolutionVisitor {
 
-    fn visit_block(&mut self, b:P<Block>, cx:Context) {
+    fn visit_block(&mut self, b: &Block, cx: Context) {
         resolve_block(self, b, cx);
     }
 
-    fn visit_item(&mut self, i:@item, cx:Context) {
+    fn visit_item(&mut self, i: &Item, cx: Context) {
         resolve_item(self, i, cx);
     }
 
-    fn visit_fn(&mut self, fk:&fn_kind, fd:&fn_decl, b:P<Block>, s:Span, n:NodeId, cx:Context) {
+    fn visit_fn(&mut self, fk: &FnKind, fd: &FnDecl,
+                b: &Block, s: Span, n: NodeId, cx: Context) {
         resolve_fn(self, fk, fd, b, s, n, cx);
     }
-    fn visit_arm(&mut self, a:&Arm, cx:Context) {
+    fn visit_arm(&mut self, a: &Arm, cx: Context) {
         resolve_arm(self, a, cx);
     }
-    fn visit_pat(&mut self, p:&Pat, cx:Context) {
+    fn visit_pat(&mut self, p: &Pat, cx: Context) {
         resolve_pat(self, p, cx);
     }
-    fn visit_stmt(&mut self, s:@Stmt, cx:Context) {
+    fn visit_stmt(&mut self, s: &Stmt, cx: Context) {
         resolve_stmt(self, s, cx);
     }
-    fn visit_expr(&mut self, ex:@Expr, cx:Context) {
+    fn visit_expr(&mut self, ex: &Expr, cx: Context) {
         resolve_expr(self, ex, cx);
     }
-    fn visit_local(&mut self, l:@Local, cx:Context) {
+    fn visit_local(&mut self, l: &Local, cx: Context) {
         resolve_local(self, l, cx);
     }
 }
 
-pub fn resolve_crate(sess: Session,
-                     crate: &ast::Crate) -> @mut RegionMaps
-{
-    let region_maps = @mut RegionMaps {
-        scope_map: HashMap::new(),
-        free_region_map: HashMap::new(),
-        cleanup_scopes: HashSet::new(),
-    };
-    let cx = Context {parent: None,
-                      var_parent: None};
+pub fn resolve_crate(sess: Session, crate: &ast::Crate) -> RegionMaps {
     let mut visitor = RegionResolutionVisitor {
         sess: sess,
-        region_maps: region_maps,
+        region_maps: RegionMaps {
+            scope_map: RefCell::new(HashMap::new()),
+            free_region_map: RefCell::new(HashMap::new()),
+            cleanup_scopes: RefCell::new(HashSet::new())
+        }
     };
+    let cx = Context { parent: None, var_parent: None };
     visit::walk_crate(&mut visitor, crate, cx);
-    return region_maps;
+    return visitor.region_maps;
 }
 

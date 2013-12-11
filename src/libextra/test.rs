@@ -21,7 +21,6 @@ use getopts::groups;
 use json::ToJson;
 use json;
 use serialize::Decodable;
-use sort;
 use stats::Stats;
 use stats;
 use term;
@@ -37,7 +36,6 @@ use std::task;
 use std::to_str::ToStr;
 use std::f64;
 use std::os;
-
 
 // The name of a test. By convention this follows the rules for rust
 // paths; i.e. it should be a series of identifiers separated by double
@@ -139,7 +137,8 @@ pub struct MetricMap(TreeMap<~str,Metric>);
 
 impl Clone for MetricMap {
     fn clone(&self) -> MetricMap {
-        MetricMap((**self).clone())
+        let MetricMap(ref map) = *self;
+        MetricMap(map.clone())
     }
 }
 
@@ -339,9 +338,14 @@ pub enum TestResult {
     TrBench(BenchSamples),
 }
 
+enum OutputLocation<T> {
+    Pretty(term::Terminal<T>),
+    Raw(T),
+}
+
 struct ConsoleTestState<T> {
     log_out: Option<File>,
-    out: Either<term::Terminal<T>, T>,
+    out: OutputLocation<T>,
     use_color: bool,
     total: uint,
     passed: uint,
@@ -360,8 +364,8 @@ impl<T: Writer> ConsoleTestState<T> {
             None => None
         };
         let out = match term::Terminal::new(io::stdout()) {
-            Err(_) => Right(io::stdout()),
-            Ok(t) => Left(t)
+            Err(_) => Raw(io::stdout()),
+            Ok(t) => Pretty(t)
         };
         ConsoleTestState {
             out: out,
@@ -418,7 +422,7 @@ impl<T: Writer> ConsoleTestState<T> {
                         word: &str,
                         color: term::color::Color) {
         match self.out {
-            Left(ref mut term) => {
+            Pretty(ref mut term) => {
                 if self.use_color {
                     term.fg(color);
                 }
@@ -427,14 +431,14 @@ impl<T: Writer> ConsoleTestState<T> {
                     term.reset();
                 }
             }
-            Right(ref mut stdout) => stdout.write(word.as_bytes())
+            Raw(ref mut stdout) => stdout.write(word.as_bytes())
         }
     }
 
     pub fn write_plain(&mut self, s: &str) {
         match self.out {
-            Left(ref mut term) => term.write(s.as_bytes()),
-            Right(ref mut stdout) => stdout.write(s.as_bytes())
+            Pretty(ref mut term) => term.write(s.as_bytes()),
+            Raw(ref mut stdout) => stdout.write(s.as_bytes())
         }
     }
 
@@ -488,7 +492,7 @@ impl<T: Writer> ConsoleTestState<T> {
         for f in self.failures.iter() {
             failures.push(f.name.to_str());
         }
-        sort::tim_sort(failures);
+        failures.sort();
         for name in failures.iter() {
             self.write_plain(format!("    {}\n", name.to_str()));
         }
@@ -581,6 +585,7 @@ impl<T: Writer> ConsoleTestState<T> {
 }
 
 pub fn fmt_metrics(mm: &MetricMap) -> ~str {
+    let MetricMap(ref mm) = *mm;
     let v : ~[~str] = mm.iter()
         .map(|(k,v)| format!("{}: {} (+/- {})",
                           *k,
@@ -619,6 +624,7 @@ pub fn run_tests_console(opts: &TestOpts,
                     TrIgnored => st.ignored += 1,
                     TrMetrics(mm) => {
                         let tname = test.name.to_str();
+                        let MetricMap(mm) = mm;
                         for (k,v) in mm.iter() {
                             st.metrics.insert_metric(tname + "." + *k,
                                                      v.value, v.noise);
@@ -667,7 +673,6 @@ pub fn run_tests_console(opts: &TestOpts,
 
 #[test]
 fn should_sort_failures_before_printing_them() {
-    use std::io::Decorator;
     use std::io::mem::MemWriter;
     use std::str;
 
@@ -685,7 +690,7 @@ fn should_sort_failures_before_printing_them() {
 
     let mut st = ConsoleTestState {
         log_out: None,
-        out: Right(MemWriter::new()),
+        out: Raw(MemWriter::new()),
         use_color: false,
         total: 0u,
         passed: 0u,
@@ -699,8 +704,8 @@ fn should_sort_failures_before_printing_them() {
 
     st.write_failures();
     let s = match st.out {
-        Right(ref m) => str::from_utf8(*m.inner_ref()),
-        Left(_) => unreachable!()
+        Raw(ref m) => str::from_utf8(m.get_ref()),
+        Pretty(_) => unreachable!()
     };
 
     let apos = s.find_str("a").unwrap();
@@ -839,10 +844,7 @@ pub fn filter_tests(
     };
 
     // Sort the tests alphabetically
-    fn lteq(t1: &TestDescAndFn, t2: &TestDescAndFn) -> bool {
-        t1.desc.name.to_str() < t2.desc.name.to_str()
-    }
-    sort::quick_sort(filtered, lteq);
+    filtered.sort_by(|t1, t2| t1.desc.name.to_str().cmp(&t2.desc.name.to_str()));
 
     // Shard the remaining tests, if sharding requested.
     match opts.test_shard {
@@ -926,8 +928,8 @@ fn calc_result(desc: &TestDesc, task_succeeded: bool) -> TestResult {
 impl ToJson for Metric {
     fn to_json(&self) -> json::Json {
         let mut map = ~TreeMap::new();
-        map.insert(~"value", json::Number(self.value as f64));
-        map.insert(~"noise", json::Number(self.noise as f64));
+        map.insert(~"value", json::Number(self.value));
+        map.insert(~"noise", json::Number(self.noise));
         json::Object(map)
     }
 }
@@ -949,7 +951,9 @@ impl MetricMap {
 
     /// Write MetricDiff to a file.
     pub fn save(&self, p: &Path) {
-        self.to_json().to_pretty_writer(@mut File::create(p) as @mut io::Writer);
+        let mut file = File::create(p);
+        let MetricMap(ref map) = *self;
+        map.to_json().to_pretty_writer(&mut file)
     }
 
     /// Compare against another MetricMap. Optionally compare all
@@ -961,8 +965,10 @@ impl MetricMap {
     pub fn compare_to_old(&self, old: &MetricMap,
                           noise_pct: Option<f64>) -> MetricDiff {
         let mut diff : MetricDiff = TreeMap::new();
+        let MetricMap(ref selfmap) = *self;
+        let MetricMap(ref old) = *old;
         for (k, vold) in old.iter() {
-            let r = match self.find(k) {
+            let r = match selfmap.find(k) {
                 None => MetricRemoved,
                 Some(v) => {
                     let delta = (v.value - vold.value);
@@ -998,7 +1004,8 @@ impl MetricMap {
             };
             diff.insert((*k).clone(), r);
         }
-        for (k, _) in self.iter() {
+        let MetricMap(ref map) = *self;
+        for (k, _) in map.iter() {
             if !diff.contains_key(k) {
                 diff.insert((*k).clone(), MetricAdded);
             }
@@ -1024,7 +1031,8 @@ impl MetricMap {
             value: value,
             noise: noise
         };
-        self.insert(name.to_owned(), m);
+        let MetricMap(ref mut map) = *self;
+        map.insert(name.to_owned(), m);
     }
 
     /// Attempt to "ratchet" an external metric file. This involves loading
@@ -1123,7 +1131,7 @@ impl BenchHarness {
             let loop_start = precise_time_ns();
 
             for p in samples.mut_iter() {
-                self.bench_n(n as u64, |x| f(x));
+                self.bench_n(n, |x| f(x));
                 *p = self.ns_per_iter() as f64;
             };
 
@@ -1131,7 +1139,7 @@ impl BenchHarness {
             let summ = stats::Summary::new(samples);
 
             for p in samples.mut_iter() {
-                self.bench_n(5 * n as u64, |x| f(x));
+                self.bench_n(5 * n, |x| f(x));
                 *p = self.ns_per_iter() as f64;
             };
 
@@ -1463,6 +1471,7 @@ mod tests {
 
         // Check that it was not rewritten.
         let m3 = MetricMap::load(&pth);
+        let MetricMap(m3) = m3;
         assert_eq!(m3.len(), 2);
         assert_eq!(*(m3.find(&~"runtime").unwrap()), Metric { value: 1000.0, noise: 2.0 });
         assert_eq!(*(m3.find(&~"throughput").unwrap()), Metric { value: 50.0, noise: 2.0 });
@@ -1477,6 +1486,7 @@ mod tests {
 
         // Check that it was rewritten.
         let m4 = MetricMap::load(&pth);
+        let MetricMap(m4) = m4;
         assert_eq!(m4.len(), 2);
         assert_eq!(*(m4.find(&~"runtime").unwrap()), Metric { value: 1100.0, noise: 2.0 });
         assert_eq!(*(m4.find(&~"throughput").unwrap()), Metric { value: 50.0, noise: 2.0 });

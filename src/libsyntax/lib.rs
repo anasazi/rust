@@ -8,19 +8,27 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-/*! This module contains the Rust parser. It maps source text
- *  to token trees and to ASTs. It contains code for expanding
- *  macros.
- */
+/*!
 
-// NOTE: remove pkgid after snapshot
-#[pkgid = "syntax#0.9-pre"];
-#[crate_id = "syntax#0.9-pre"];
+The Rust parser and macro expander.
+
+# Note
+
+This API is completely unstable and subject to change.
+
+*/
+
+#[crate_id = "syntax#0.9"];
 #[license = "MIT/ASL2"];
 #[crate_type = "dylib"];
 #[crate_type = "rlib"];
+#[doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk.png",
+      html_favicon_url = "http://www.rust-lang.org/favicon.ico",
+      html_root_url = "http://static.rust-lang.org/doc/master")];
 
 #[feature(macro_rules, globs, managed_boxes)];
+
+#[deny(non_camel_case_types)];
 
 extern mod extra;
 
@@ -49,7 +57,7 @@ pub mod fold;
 
 
 pub mod parse;
-pub mod pkgid;
+pub mod crateid;
 
 pub mod print {
     pub mod pp;

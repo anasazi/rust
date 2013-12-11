@@ -10,7 +10,7 @@
 
 /*!
 
-String manipulation
+Unicode string manipulation (`str` type)
 
 # Basic Usage
 
@@ -38,11 +38,15 @@ there are three common kinds of strings in rust:
 As an example, here's a few different kinds of strings.
 
 ```rust
-let owned_string = ~"I am an owned string";
-let managed_string = @"This string is garbage-collected";
-let borrowed_string1 = "This string is borrowed with the 'static lifetime";
-let borrowed_string2: &str = owned_string;   // owned strings can be borrowed
-let borrowed_string3: &str = managed_string; // managed strings can also be borrowed
+#[feature(managed_boxes)];
+
+fn main() {
+    let owned_string = ~"I am an owned string";
+    let managed_string = @"This string is garbage-collected";
+    let borrowed_string1 = "This string is borrowed with the 'static lifetime";
+    let borrowed_string2: &str = owned_string;   // owned strings can be borrowed
+    let borrowed_string3: &str = managed_string; // managed strings can also be borrowed
+}
  ```
 
 From the example above, you can see that rust has 3 different kinds of string
@@ -897,7 +901,7 @@ pub fn utf16_chars(v: &[u16], f: |char|) {
             let mut c: u32 = (u - 0xD800_u16) as u32;
             c = c << 10;
             c |= (u2 - 0xDC00_u16) as u32;
-            c |= 0x1_0000_u32 as u32;
+            c |= 0x1_0000_u32;
             f(unsafe { cast::transmute(c) });
             i += 2u;
         }
@@ -973,17 +977,19 @@ static TAG_CONT_U8: u8 = 128u8;
 /// Unsafe operations
 pub mod raw {
     use cast;
+    use container::Container;
     use libc;
     use ptr;
-    use str::{is_utf8, OwnedStr};
+    use ptr::RawPtr;
+    use str::{is_utf8, OwnedStr, StrSlice};
     use vec;
-    use vec::MutableVector;
+    use vec::{MutableVector, ImmutableVector, OwnedVector};
     use unstable::raw::Slice;
 
     /// Create a Rust string from a *u8 buffer of the given length
     pub unsafe fn from_buf_len(buf: *u8, len: uint) -> ~str {
         let mut v: ~[u8] = vec::with_capacity(len);
-        ptr::copy_memory(v.as_mut_ptr(), buf as *u8, len);
+        ptr::copy_memory(v.as_mut_ptr(), buf, len);
         v.set_len(len);
 
         assert!(is_utf8(v));
@@ -1133,10 +1139,12 @@ Section: Trait implementations
 #[cfg(not(test))]
 #[allow(missing_doc)]
 pub mod traits {
-    use ops::Add;
+    use container::Container;
     use cmp::{TotalOrd, Ordering, Less, Equal, Greater, Eq, Ord, Equiv, TotalEq};
-    use super::{Str, eq_slice};
+    use iter::Iterator;
+    use ops::Add;
     use option::{Some, None};
+    use str::{Str, StrSlice, OwnedStr, eq_slice};
 
     impl<'a> Add<&'a str,~str> for &'a str {
         #[inline]
@@ -1458,10 +1466,10 @@ pub trait StrSlice<'a> {
     /// let v: ~[(uint, uint)] = "abcXXXabcYYYabc".match_indices("abc").collect();
     /// assert_eq!(v, ~[(0,3), (6,9), (12,15)]);
     ///
-    /// let v: ~[(uint, uint)] = "1abcabc2".split_str("abc").collect();
+    /// let v: ~[(uint, uint)] = "1abcabc2".match_indices("abc").collect();
     /// assert_eq!(v, ~[(1,4), (4,7)]);
     ///
-    /// let v: ~[(uint, uint)] = "ababa".split_str("aba").collect();
+    /// let v: ~[(uint, uint)] = "ababa".match_indices("aba").collect();
     /// assert_eq!(v, ~[(0, 3)]); // only the first `aba`
     /// ```
     fn match_indices(&self, sep: &'a str) -> MatchesIndexIterator<'a>;
@@ -1536,7 +1544,7 @@ pub trait StrSlice<'a> {
     /// assert!(" \t\n".is_whitespace());
     /// assert!("".is_whitespace());
     ///
-    /// assert!( !"abc.is_whitespace());
+    /// assert!( !"abc".is_whitespace());
     /// ```
     fn is_whitespace(&self) -> bool;
 
@@ -1606,7 +1614,7 @@ pub trait StrSlice<'a> {
     /// let s = "Löwe 老虎 Léopard";
     /// assert_eq!(s.slice(0, 1), "L");
     ///
-    /// assert_eq!(s.slice(1, 9), "öwe 老"));
+    /// assert_eq!(s.slice(1, 9), "öwe 老");
     ///
     /// // these will fail:
     /// // byte 2 lies within `ö`:
@@ -1808,6 +1816,8 @@ pub trait StrSlice<'a> {
     /// `.char_indices`.
     ///
     /// ```rust
+    /// use std::str::CharRange;
+    ///
     /// let s = "中华Việt Nam";
     /// let mut i = 0u;
     /// while i < s.len() {
@@ -1949,11 +1959,11 @@ pub trait StrSlice<'a> {
     ///
     /// ```rust
     /// let s = "Löwe 老虎 Léopard";
-    /// let (c, s1) = s.shift_slice_char();
+    /// let (c, s1) = s.slice_shift_char();
     /// assert_eq!(c, 'L');
     /// assert_eq!(s1, "öwe 老虎 Léopard");
     ///
-    /// let (c, s2) = s1.shift_slice_char();
+    /// let (c, s2) = s1.slice_shift_char();
     /// assert_eq!(c, 'ö');
     /// assert_eq!(s2, "we 老虎 Léopard");
     /// ```
@@ -2508,6 +2518,16 @@ pub trait OwnedStr {
     /// Prepend a char to a string
     fn unshift_char(&mut self, ch: char);
 
+    /// Insert a new sub-string at the given position in a string, in O(n + m) time
+    /// (with n and m the lengths of the string and the substring.)
+    /// This fails if `position` is not at a character boundary.
+    fn insert(&mut self, position: uint, substring: &str);
+
+    /// Insert a char at the given position in a string, in O(n + m) time
+    /// (with n and m the lengths of the string and the substring.)
+    /// This fails if `position` is not at a character boundary.
+    fn insert_char(&mut self, position: uint, ch: char);
+
     /// Concatenate two strings together.
     fn append(self, rhs: &str) -> ~str;
 
@@ -2621,6 +2641,24 @@ impl OwnedStr for ~str {
     }
 
     #[inline]
+    fn insert(&mut self, position: uint, substring: &str) {
+        // This could be more efficient.
+        let mut new_str = self.slice_to(position).to_owned();
+        new_str.push_str(substring);
+        new_str.push_str(self.slice_from(position));
+        *self = new_str;
+    }
+
+    #[inline]
+    fn insert_char(&mut self, position: uint, ch: char) {
+        // This could be more efficient.
+        let mut new_str = self.slice_to(position).to_owned();
+        new_str.push_char(ch);
+        new_str.push_str(self.slice_from(position));
+        *self = new_str;
+    }
+
+    #[inline]
     fn append(self, rhs: &str) -> ~str {
         let mut new_str = self;
         new_str.push_str_no_overallocate(rhs);
@@ -2730,14 +2768,11 @@ impl Default for @str {
 
 #[cfg(test)]
 mod tests {
-    use container::Container;
-    use option::{None, Some, Option};
+    use iter::AdditiveIterator;
+    use prelude::*;
     use ptr;
     use str::*;
-    use vec::{Vector, ImmutableVector, CopyableVector};
-    use cmp::{TotalOrd, Less, Equal, Greater};
     use send_str::{SendStrOwned, SendStrStatic};
-    use from_str::from_str;
 
     #[test]
     fn test_eq() {
@@ -2870,6 +2905,20 @@ mod tests {
         let mut data = ~"ประเทศไทย中";
         data.unshift_char('华');
         assert_eq!(~"华ประเทศไทย中", data);
+    }
+
+    #[test]
+    fn test_insert_char() {
+        let mut data = ~"ประเทศไทย中";
+        data.insert_char(15, '华');
+        assert_eq!(~"ประเท华ศไทย中", data);
+    }
+
+    #[test]
+    fn test_insert() {
+        let mut data = ~"ประเทศไทย中";
+        data.insert(15, "华中");
+        assert_eq!(~"ประเท华中ศไทย中", data);
     }
 
     #[test]
@@ -4036,7 +4085,8 @@ mod bench {
         struct NotAscii(char);
         impl CharEq for NotAscii {
             fn matches(&self, c: char) -> bool {
-                **self == c
+                let NotAscii(cc) = *self;
+                cc == c
             }
             fn only_ascii(&self) -> bool { false }
         }
@@ -4059,7 +4109,10 @@ mod bench {
         struct NotAscii(char);
         impl CharEq for NotAscii {
             #[inline]
-            fn matches(&self, c: char) -> bool { **self == c }
+            fn matches(&self, c: char) -> bool {
+                let NotAscii(cc) = *self;
+                cc == c
+            }
             fn only_ascii(&self) -> bool { false }
         }
         let s = "Mary had a little lamb, Little lamb, little-lamb.";

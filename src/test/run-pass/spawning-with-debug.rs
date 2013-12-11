@@ -15,8 +15,7 @@
 
 use std::task;
 
-fn main() {
+pub fn main() {
     let mut t = task::task();
-    t.sched_mode(task::SingleThreaded);
     t.spawn(proc() ());
 }

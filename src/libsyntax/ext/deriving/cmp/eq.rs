@@ -8,23 +8,23 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use ast::{MetaItem, item, Expr};
+use ast::{MetaItem, Item, Expr};
 use codemap::Span;
 use ext::base::ExtCtxt;
 use ext::build::AstBuilder;
 use ext::deriving::generic::*;
 
-pub fn expand_deriving_eq(cx: @ExtCtxt,
+pub fn expand_deriving_eq(cx: &ExtCtxt,
                           span: Span,
                           mitem: @MetaItem,
-                          in_items: ~[@item]) -> ~[@item] {
+                          in_items: ~[@Item]) -> ~[@Item] {
     // structures are equal if all fields are equal, and non equal, if
     // any fields are not equal or if the enum variants are different
-    fn cs_eq(cx: @ExtCtxt, span: Span, substr: &Substructure) -> @Expr {
+    fn cs_eq(cx: &ExtCtxt, span: Span, substr: &Substructure) -> @Expr {
         cs_and(|cx, span, _, _| cx.expr_bool(span, false),
                                  cx, span, substr)
     }
-    fn cs_ne(cx: @ExtCtxt, span: Span, substr: &Substructure) -> @Expr {
+    fn cs_ne(cx: &ExtCtxt, span: Span, substr: &Substructure) -> @Expr {
         cs_or(|cx, span, _, _| cx.expr_bool(span, true),
               cx, span, substr)
     }

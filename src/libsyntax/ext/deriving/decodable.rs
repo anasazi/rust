@@ -13,16 +13,16 @@ The compiler code necessary for #[deriving(Decodable)]. See
 encodable.rs for more.
 */
 
-use ast::{MetaItem, item, Expr, MutMutable, Ident};
+use ast::{MetaItem, Item, Expr, MutMutable, Ident};
 use codemap::Span;
 use ext::base::ExtCtxt;
 use ext::build::AstBuilder;
 use ext::deriving::generic::*;
 
-pub fn expand_deriving_decodable(cx: @ExtCtxt,
+pub fn expand_deriving_decodable(cx: &ExtCtxt,
                                  span: Span,
                                  mitem: @MetaItem,
-                                 in_items: ~[@item]) -> ~[@item] {
+                                 in_items: ~[@Item]) -> ~[@Item] {
     let trait_def = TraitDef {
         cx: cx, span: span,
 
@@ -51,7 +51,7 @@ pub fn expand_deriving_decodable(cx: @ExtCtxt,
     trait_def.expand(mitem, in_items)
 }
 
-fn decodable_substructure(cx: @ExtCtxt, span: Span,
+fn decodable_substructure(cx: &ExtCtxt, span: Span,
                           substr: &Substructure) -> @Expr {
     let decoder = substr.nonself_args[0];
     let recurse = ~[cx.ident_of("extra"),
@@ -132,7 +132,7 @@ fn decodable_substructure(cx: @ExtCtxt, span: Span,
 /// Create a decoder for a single enum variant/struct:
 /// - `outer_pat_ident` is the name of this enum variant/struct
 /// - `getarg` should retrieve the `uint`-th field with name `@str`.
-fn decode_static_fields(cx: @ExtCtxt,
+fn decode_static_fields(cx: &ExtCtxt,
                         outer_span: Span,
                         outer_pat_ident: Ident,
                         fields: &StaticFields,

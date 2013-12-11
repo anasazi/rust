@@ -10,7 +10,7 @@
 
 /*!
 
-The Formatting Module
+Utilities for formatting and printing strings
 
 This module contains the runtime support for the `format!` syntax extension.
 This macro is implemented in the compiler to emit calls to this module in order
@@ -34,12 +34,12 @@ arguments directly while performing minimal allocations.
 Some examples of the `format!` extension are:
 
 ```rust
-format!("Hello")                  // => ~"Hello"
-format!("Hello, {:s}!", "world")  // => ~"Hello, world!"
-format!("The number is {:d}", 1)  // => ~"The number is 1"
-format!("{:?}", ~[3, 4])          // => ~"~[3, 4]"
-format!("{value}", value=4)       // => ~"4"
-format!("{} {}", 1, 2)            // => ~"1 2"
+format!("Hello");                 // => ~"Hello"
+format!("Hello, {:s}!", "world"); // => ~"Hello, world!"
+format!("The number is {:d}", 1); // => ~"The number is 1"
+format!("{:?}", ~[3, 4]);         // => ~"~[3, 4]"
+format!("{value}", value=4);      // => ~"4"
+format!("{} {}", 1, 2);           // => ~"1 2"
 ```
 
 From these, you can see that the first argument is a format string. It is
@@ -62,7 +62,7 @@ iterator over the argument. Each time a "next argument" specifier is seen, the
 iterator advances. This leads to behavior like this:
 
 ```rust
-format!("{1} {} {0} {}", 1, 2) // => ~"2 1 1 2"
+format!("{1} {} {0} {}", 1, 2); // => ~"2 1 1 2"
 ```
 
 The internal iterator over the argument has not been advanced by the time the
@@ -89,9 +89,9 @@ identifier '=' expression
 For example, the following `format!` expressions all use named argument:
 
 ```rust
-format!("{argument}", argument = "test")       // => ~"test"
-format!("{name} {}", 1, name = 2)              // => ~"2 1"
-format!("{a:s} {c:d} {b:?}", a="a", b=(), c=3) // => ~"a 3 ()"
+format!("{argument}", argument = "test");       // => ~"test"
+format!("{name} {}", 1, name = 2);              // => ~"2 1"
+format!("{a:s} {c:d} {b:?}", a="a", b=(), c=3); // => ~"a 3 ()"
 ```
 
 It is illegal to put positional parameters (those without names) after arguments
@@ -160,7 +160,11 @@ When implementing a format trait for your own time, you will have to implement a
 method of the signature:
 
 ```rust
+# use std;
+# struct T;
+# trait SomeName<T> {
 fn fmt(value: &T, f: &mut std::fmt::Formatter);
+# }
 ```
 
 Your type will be passed by-reference in `value`, and then the function should
@@ -218,7 +222,7 @@ fn main() {
 There are a number of related macros in the `format!` family. The ones that are
 currently implemented are:
 
-```rust
+```rust,ignore
 format!      // described above
 write!       // first argument is a &mut io::Writer, the destination
 writeln!     // same as write but appends a newline
@@ -261,8 +265,12 @@ references information on the stack. Under the hood, all of
 the related macros are implemented in terms of this. First
 off, some example usage is:
 
-```rust
+```rust,ignore
 use std::fmt;
+
+# fn lol<T>() -> T { fail!() }
+# let my_writer: &mut ::std::io::Writer = lol();
+# let my_fn: fn(&fmt::Arguments) = lol();
 
 format_args!(fmt::format, "this returns {}", "~str");
 format_args!(|args| { fmt::write(my_writer, args) }, "some {}", "args");
@@ -305,7 +313,7 @@ to reference the string value of the argument which was selected upon. As an
 example:
 
 ```rust
-format!("{0, select, other{#}}", "hello") // => ~"hello"
+format!("{0, select, other{#}}", "hello"); // => ~"hello"
 ```
 
 This example is the equivalent of `{0:s}` essentially.
@@ -462,7 +470,6 @@ use prelude::*;
 
 use cast;
 use char::Char;
-use io::Decorator;
 use io::mem::MemWriter;
 use io;
 use str;
@@ -585,7 +592,9 @@ pub trait Float { fn fmt(&Self, &mut Formatter); }
 ///
 /// ```rust
 /// use std::fmt;
-/// let w: &mut io::Writer = ...;
+/// use std::io;
+///
+/// let w = &mut io::stdout() as &mut io::Writer;
 /// format_args!(|args| { fmt::write(w, args) }, "Hello, {}!", "world");
 /// ```
 pub fn write(output: &mut io::Writer, args: &Arguments) {
@@ -650,8 +659,9 @@ pub unsafe fn write_unsafe(output: &mut io::Writer,
 ///
 /// ```rust
 /// use std::fmt;
+///
 /// let s = format_args!(fmt::format, "Hello, {}!", "world");
-/// assert_eq!(s, "Hello, world!");
+/// assert_eq!(s, ~"Hello, world!");
 /// ```
 pub fn format(args: &Arguments) -> ~str {
     unsafe { format_unsafe(args.fmt, args.args) }
@@ -681,7 +691,7 @@ pub fn format(args: &Arguments) -> ~str {
 pub unsafe fn format_unsafe(fmt: &[rt::Piece], args: &[Argument]) -> ~str {
     let mut output = MemWriter::new();
     write_unsafe(&mut output as &mut io::Writer, fmt, args);
-    return str::from_utf8_owned(output.inner());
+    return str::from_utf8_owned(output.unwrap());
 }
 
 impl<'a> Formatter<'a> {
@@ -746,7 +756,7 @@ impl<'a> Formatter<'a> {
                 // offsetted value
                 for s in selectors.iter() {
                     match s.selector {
-                        Right(val) if value == val => {
+                        rt::Literal(val) if value == val => {
                             return self.runplural(value, s.result);
                         }
                         _ => {}
@@ -758,17 +768,17 @@ impl<'a> Formatter<'a> {
                 let value = value - match offset { Some(i) => i, None => 0 };
                 for s in selectors.iter() {
                     let run = match s.selector {
-                        Left(parse::Zero) => value == 0,
-                        Left(parse::One) => value == 1,
-                        Left(parse::Two) => value == 2,
+                        rt::Keyword(parse::Zero) => value == 0,
+                        rt::Keyword(parse::One) => value == 1,
+                        rt::Keyword(parse::Two) => value == 2,
 
                         // XXX: Few/Many should have a user-specified boundary
                         //      One possible option would be in the function
                         //      pointer of the 'arg: Argument' struct.
-                        Left(parse::Few) => value < 8,
-                        Left(parse::Many) => value >= 8,
+                        rt::Keyword(parse::Few) => value < 8,
+                        rt::Keyword(parse::Many) => value >= 8,
 
-                        Right(..) => false
+                        rt::Literal(..) => false
                     };
                     if run {
                         return self.runplural(value, s.result);

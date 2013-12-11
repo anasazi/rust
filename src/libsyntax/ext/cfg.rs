@@ -23,14 +23,16 @@ use attr;
 use attr::*;
 use parse;
 use parse::token;
-use parse::attr::parser_attr;
+use parse::attr::ParserAttr;
 
-pub fn expand_cfg(cx: @ExtCtxt, sp: Span, tts: &[ast::token_tree]) -> base::MacResult {
-    let p = parse::new_parser_from_tts(cx.parse_sess(), cx.cfg(), tts.to_owned());
+pub fn expand_cfg(cx: &mut ExtCtxt, sp: Span, tts: &[ast::TokenTree]) -> base::MacResult {
+    let mut p = parse::new_parser_from_tts(cx.parse_sess(),
+                                           cx.cfg(),
+                                           tts.to_owned());
 
     let mut cfgs = ~[];
     // parse `cfg!(meta_item, meta_item(x,y), meta_item="foo", ...)`
-    while *p.token != token::EOF {
+    while p.token != token::EOF {
         cfgs.push(p.parse_meta_item());
         if p.eat(&token::EOF) { break } // trailing comma is optional,.
         p.expect(&token::COMMA);

@@ -54,12 +54,11 @@ actually operates on the path; it is only intended for display.
 
 ```rust
 let mut path = Path::new("/tmp/path");
-debug!("path: {}", path.display());
+println!("path: {}", path.display());
 path.set_filename("foo");
 path.push("bar");
-debug!("new path: {}", path.display());
-let b = std::os::path_exists(&path);
-debug!("path exists: {}", b);
+println!("new path: {}", path.display());
+println!("path exists: {}", path.exists());
 ```
 
 */
@@ -688,6 +687,7 @@ fn from_utf8_with_replacement(mut v: &[u8]) -> ~str {
 }
 #[cfg(test)]
 mod tests {
+    use prelude::*;
     use super::{GenericPath, PosixPath, WindowsPath};
     use c_str::ToCStr;
 

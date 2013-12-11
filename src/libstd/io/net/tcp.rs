@@ -26,17 +26,9 @@ impl TcpStream {
     }
 
     pub fn connect(addr: SocketAddr) -> Option<TcpStream> {
-        let result = {
-            let mut io = LocalIo::borrow();
-            io.get().tcp_connect(addr)
-        };
-        match result {
-            Ok(s) => Some(TcpStream::new(s)),
-            Err(ioerr) => {
-                io_error::cond.raise(ioerr);
-                None
-            }
-        }
+        LocalIo::maybe_raise(|io| {
+            io.tcp_connect(addr).map(TcpStream::new)
+        })
     }
 
     pub fn peer_name(&mut self) -> Option<SocketAddr> {
@@ -75,8 +67,6 @@ impl Reader for TcpStream {
             }
         }
     }
-
-    fn eof(&mut self) -> bool { fail!() }
 }
 
 impl Writer for TcpStream {
@@ -94,14 +84,9 @@ pub struct TcpListener {
 
 impl TcpListener {
     pub fn bind(addr: SocketAddr) -> Option<TcpListener> {
-        let mut io = LocalIo::borrow();
-        match io.get().tcp_bind(addr) {
-            Ok(l) => Some(TcpListener { obj: l }),
-            Err(ioerr) => {
-                io_error::cond.raise(ioerr);
-                None
-            }
-        }
+        LocalIo::maybe_raise(|io| {
+            io.tcp_bind(addr).map(|l| TcpListener { obj: l })
+        })
     }
 
     pub fn socket_name(&mut self) -> Option<SocketAddr> {
@@ -147,526 +132,480 @@ impl Acceptor<TcpStream> for TcpAcceptor {
 #[cfg(test)]
 mod test {
     use super::*;
-    use rt::test::*;
-    use io::net::ip::{Ipv4Addr, SocketAddr};
+    use io::net::ip::SocketAddr;
     use io::*;
     use prelude::*;
 
-    #[test] #[ignore]
-    fn bind_error() {
-        do run_in_mt_newsched_task {
-            let mut called = false;
-            io_error::cond.trap(|e| {
-                assert!(e.kind == PermissionDenied);
-                called = true;
-            }).inside(|| {
-                let addr = SocketAddr { ip: Ipv4Addr(0, 0, 0, 0), port: 1 };
-                let listener = TcpListener::bind(addr);
-                assert!(listener.is_none());
-            });
-            assert!(called);
-        }
-    }
+    iotest!(fn bind_error() {
+        let mut called = false;
+        io_error::cond.trap(|e| {
+            assert!(e.kind == PermissionDenied);
+            called = true;
+        }).inside(|| {
+            let addr = SocketAddr { ip: Ipv4Addr(0, 0, 0, 0), port: 1 };
+            let listener = TcpListener::bind(addr);
+            assert!(listener.is_none());
+        });
+        assert!(called);
+    } #[ignore(cfg(windows))])
 
-    #[test]
-    fn connect_error() {
-        do run_in_mt_newsched_task {
-            let mut called = false;
-            io_error::cond.trap(|e| {
-                let expected_error = if cfg!(unix) {
-                    ConnectionRefused
-                } else {
-                    // On Win32, opening port 1 gives WSAEADDRNOTAVAIL error.
-                    OtherIoError
-                };
-                assert_eq!(e.kind, expected_error);
-                called = true;
-            }).inside(|| {
-                let addr = SocketAddr { ip: Ipv4Addr(0, 0, 0, 0), port: 1 };
-                let stream = TcpStream::connect(addr);
-                assert!(stream.is_none());
-            });
-            assert!(called);
-        }
-    }
-
-    #[test]
-    fn smoke_test_ip4() {
-        do run_in_mt_newsched_task {
-            let addr = next_test_ip4();
-            let (port, chan) = Chan::new();
-
-            do spawntask {
-                let mut acceptor = TcpListener::bind(addr).listen();
-                chan.send(());
-                let mut stream = acceptor.accept();
-                let mut buf = [0];
-                stream.read(buf);
-                assert!(buf[0] == 99);
-            }
-
-            port.recv();
-            let mut stream = TcpStream::connect(addr);
-            stream.write([99]);
-        }
-    }
-
-    #[test]
-    fn smoke_test_ip6() {
-        do run_in_mt_newsched_task {
-            let addr = next_test_ip6();
-            let (port, chan) = Chan::new();
-
-            do spawntask {
-                let mut acceptor = TcpListener::bind(addr).listen();
-                chan.send(());
-                let mut stream = acceptor.accept();
-                let mut buf = [0];
-                stream.read(buf);
-                assert!(buf[0] == 99);
-            }
-
-            port.recv();
-            let mut stream = TcpStream::connect(addr);
-            stream.write([99]);
-        }
-    }
-
-    #[test]
-    fn read_eof_ip4() {
-        do run_in_mt_newsched_task {
-            let addr = next_test_ip4();
-            let (port, chan) = Chan::new();
-
-            do spawntask {
-                let mut acceptor = TcpListener::bind(addr).listen();
-                chan.send(());
-                let mut stream = acceptor.accept();
-                let mut buf = [0];
-                let nread = stream.read(buf);
-                assert!(nread.is_none());
-            }
-
-            port.recv();
-            let _stream = TcpStream::connect(addr);
-            // Close
-        }
-    }
-
-    #[test]
-    fn read_eof_ip6() {
-        do run_in_mt_newsched_task {
-            let addr = next_test_ip6();
-            let (port, chan) = Chan::new();
-
-            do spawntask {
-                let mut acceptor = TcpListener::bind(addr).listen();
-                chan.send(());
-                let mut stream = acceptor.accept();
-                let mut buf = [0];
-                let nread = stream.read(buf);
-                assert!(nread.is_none());
-            }
-
-            port.recv();
-            let _stream = TcpStream::connect(addr);
-            // Close
-        }
-    }
-
-    #[test]
-    fn read_eof_twice_ip4() {
-        do run_in_mt_newsched_task {
-            let addr = next_test_ip4();
-            let (port, chan) = Chan::new();
-
-            do spawntask {
-                let mut acceptor = TcpListener::bind(addr).listen();
-                chan.send(());
-                let mut stream = acceptor.accept();
-                let mut buf = [0];
-                let nread = stream.read(buf);
-                assert!(nread.is_none());
-                io_error::cond.trap(|e| {
-                    if cfg!(windows) {
-                        assert_eq!(e.kind, NotConnected);
-                    } else {
-                        fail!();
-                    }
-                }).inside(|| {
-                    let nread = stream.read(buf);
-                    assert!(nread.is_none());
-                })
-            }
-
-            port.recv();
-            let _stream = TcpStream::connect(addr);
-            // Close
-        }
-    }
-
-    #[test]
-    fn read_eof_twice_ip6() {
-        do run_in_mt_newsched_task {
-            let addr = next_test_ip6();
-            let (port, chan) = Chan::new();
-
-            do spawntask {
-                let mut acceptor = TcpListener::bind(addr).listen();
-                chan.send(());
-                let mut stream = acceptor.accept();
-                let mut buf = [0];
-                let nread = stream.read(buf);
-                assert!(nread.is_none());
-                io_error::cond.trap(|e| {
-                    if cfg!(windows) {
-                        assert_eq!(e.kind, NotConnected);
-                    } else {
-                        fail!();
-                    }
-                }).inside(|| {
-                    let nread = stream.read(buf);
-                    assert!(nread.is_none());
-                })
-            }
-
-            port.recv();
-            let _stream = TcpStream::connect(addr);
-            // Close
-        }
-    }
-
-    #[test]
-    fn write_close_ip4() {
-        do run_in_mt_newsched_task {
-            let addr = next_test_ip4();
-            let (port, chan) = Chan::new();
-
-            do spawntask {
-                let mut acceptor = TcpListener::bind(addr).listen();
-                chan.send(());
-                let mut stream = acceptor.accept();
-                let buf = [0];
-                loop {
-                    let mut stop = false;
-                    io_error::cond.trap(|e| {
-                        // NB: ECONNRESET on linux, EPIPE on mac, ECONNABORTED
-                        //     on windows
-                        assert!(e.kind == ConnectionReset ||
-                                e.kind == BrokenPipe ||
-                                e.kind == ConnectionAborted,
-                                "unknown error: {:?}", e);
-                        stop = true;
-                    }).inside(|| {
-                        stream.write(buf);
-                    });
-                    if stop { break }
-                }
-            }
-
-            port.recv();
-            let _stream = TcpStream::connect(addr);
-            // Close
-        }
-    }
-
-    #[test]
-    fn write_close_ip6() {
-        do run_in_mt_newsched_task {
-            let addr = next_test_ip6();
-            let (port, chan) = Chan::new();
-
-            do spawntask {
-                let mut acceptor = TcpListener::bind(addr).listen();
-                chan.send(());
-                let mut stream = acceptor.accept();
-                let buf = [0];
-                loop {
-                    let mut stop = false;
-                    io_error::cond.trap(|e| {
-                        // NB: ECONNRESET on linux, EPIPE on mac, ECONNABORTED
-                        //     on windows
-                        assert!(e.kind == ConnectionReset ||
-                                e.kind == BrokenPipe ||
-                                e.kind == ConnectionAborted,
-                                "unknown error: {:?}", e);
-                        stop = true;
-                    }).inside(|| {
-                        stream.write(buf);
-                    });
-                    if stop { break }
-                }
-            }
-
-            port.recv();
-            let _stream = TcpStream::connect(addr);
-            // Close
-        }
-    }
-
-    #[test]
-    fn multiple_connect_serial_ip4() {
-        do run_in_mt_newsched_task {
-            let addr = next_test_ip4();
-            let max = 10;
-            let (port, chan) = Chan::new();
-
-            do spawntask {
-                let mut acceptor = TcpListener::bind(addr).listen();
-                chan.send(());
-                for ref mut stream in acceptor.incoming().take(max) {
-                    let mut buf = [0];
-                    stream.read(buf);
-                    assert_eq!(buf[0], 99);
-                }
-            }
-
-            port.recv();
-            max.times(|| {
-                let mut stream = TcpStream::connect(addr);
-                stream.write([99]);
-            });
-        }
-    }
-
-    #[test]
-    fn multiple_connect_serial_ip6() {
-        do run_in_mt_newsched_task {
-            let addr = next_test_ip6();
-            let max = 10;
-            let (port, chan) = Chan::new();
-
-            do spawntask {
-                let mut acceptor = TcpListener::bind(addr).listen();
-                chan.send(());
-                for ref mut stream in acceptor.incoming().take(max) {
-                    let mut buf = [0];
-                    stream.read(buf);
-                    assert_eq!(buf[0], 99);
-                }
-            }
-
-            port.recv();
-            max.times(|| {
-                let mut stream = TcpStream::connect(addr);
-                stream.write([99]);
-            });
-        }
-    }
-
-    #[test]
-    fn multiple_connect_interleaved_greedy_schedule_ip4() {
-        do run_in_mt_newsched_task {
-            let addr = next_test_ip4();
-            static MAX: int = 10;
-            let (port, chan) = Chan::new();
-
-            do spawntask {
-                let mut acceptor = TcpListener::bind(addr).listen();
-                chan.send(());
-                for (i, stream) in acceptor.incoming().enumerate().take(MAX as uint) {
-                    // Start another task to handle the connection
-                    do spawntask {
-                        let mut stream = stream;
-                        let mut buf = [0];
-                        stream.read(buf);
-                        assert!(buf[0] == i as u8);
-                        debug!("read");
-                    }
-                }
-            }
-
-            port.recv();
-            connect(0, addr);
-
-            fn connect(i: int, addr: SocketAddr) {
-                if i == MAX { return }
-
-                do spawntask {
-                    debug!("connecting");
-                    let mut stream = TcpStream::connect(addr);
-                    // Connect again before writing
-                    connect(i + 1, addr);
-                    debug!("writing");
-                    stream.write([i as u8]);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn multiple_connect_interleaved_greedy_schedule_ip6() {
-        do run_in_mt_newsched_task {
-            let addr = next_test_ip6();
-            static MAX: int = 10;
-            let (port, chan) = Chan::new();
-
-            do spawntask {
-                let mut acceptor = TcpListener::bind(addr).listen();
-                chan.send(());
-                for (i, stream) in acceptor.incoming().enumerate().take(MAX as uint) {
-                    // Start another task to handle the connection
-                    do spawntask {
-                        let mut stream = stream;
-                        let mut buf = [0];
-                        stream.read(buf);
-                        assert!(buf[0] == i as u8);
-                        debug!("read");
-                    }
-                }
-            }
-
-            port.recv();
-            connect(0, addr);
-
-            fn connect(i: int, addr: SocketAddr) {
-                if i == MAX { return }
-
-                do spawntask {
-                    debug!("connecting");
-                    let mut stream = TcpStream::connect(addr);
-                    // Connect again before writing
-                    connect(i + 1, addr);
-                    debug!("writing");
-                    stream.write([i as u8]);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn multiple_connect_interleaved_lazy_schedule_ip4() {
-        do run_in_mt_newsched_task {
-            let addr = next_test_ip4();
-            static MAX: int = 10;
-            let (port, chan) = Chan::new();
-
-            do spawntask {
-                let mut acceptor = TcpListener::bind(addr).listen();
-                chan.send(());
-                for stream in acceptor.incoming().take(MAX as uint) {
-                    // Start another task to handle the connection
-                    do spawntask_later {
-                        let mut stream = stream;
-                        let mut buf = [0];
-                        stream.read(buf);
-                        assert!(buf[0] == 99);
-                        debug!("read");
-                    }
-                }
-            }
-
-            port.recv();
-            connect(0, addr);
-
-            fn connect(i: int, addr: SocketAddr) {
-                if i == MAX { return }
-
-                do spawntask_later {
-                    debug!("connecting");
-                    let mut stream = TcpStream::connect(addr);
-                    // Connect again before writing
-                    connect(i + 1, addr);
-                    debug!("writing");
-                    stream.write([99]);
-                }
-            }
-        }
-    }
-    #[test]
-    fn multiple_connect_interleaved_lazy_schedule_ip6() {
-        do run_in_mt_newsched_task {
-            let addr = next_test_ip6();
-            static MAX: int = 10;
-            let (port, chan) = Chan::new();
-
-            do spawntask {
-                let mut acceptor = TcpListener::bind(addr).listen();
-                chan.send(());
-                for stream in acceptor.incoming().take(MAX as uint) {
-                    // Start another task to handle the connection
-                    do spawntask_later {
-                        let mut stream = stream;
-                        let mut buf = [0];
-                        stream.read(buf);
-                        assert!(buf[0] == 99);
-                        debug!("read");
-                    }
-                }
-            }
-
-            port.recv();
-            connect(0, addr);
-
-            fn connect(i: int, addr: SocketAddr) {
-                if i == MAX { return }
-
-                do spawntask_later {
-                    debug!("connecting");
-                    let mut stream = TcpStream::connect(addr);
-                    // Connect again before writing
-                    connect(i + 1, addr);
-                    debug!("writing");
-                    stream.write([99]);
-                }
-            }
-        }
-    }
-
-    #[cfg(test)]
-    fn socket_name(addr: SocketAddr) {
-        do run_in_mt_newsched_task {
-            do spawntask {
-                let mut listener = TcpListener::bind(addr).unwrap();
-
-                // Make sure socket_name gives
-                // us the socket we binded to.
-                let so_name = listener.socket_name();
-                assert!(so_name.is_some());
-                assert_eq!(addr, so_name.unwrap());
-
-            }
-        }
-    }
-
-    #[cfg(test)]
-    fn peer_name(addr: SocketAddr) {
-        do run_in_mt_newsched_task {
-            let (port, chan) = Chan::new();
-
-            do spawntask {
-                let mut acceptor = TcpListener::bind(addr).listen();
-                chan.send(());
-
-                acceptor.accept();
-            }
-
-            port.recv();
+    iotest!(fn connect_error() {
+        let mut called = false;
+        io_error::cond.trap(|e| {
+            assert_eq!(e.kind, ConnectionRefused);
+            called = true;
+        }).inside(|| {
+            let addr = SocketAddr { ip: Ipv4Addr(0, 0, 0, 0), port: 1 };
             let stream = TcpStream::connect(addr);
+            assert!(stream.is_none());
+        });
+        assert!(called);
+    })
 
-            assert!(stream.is_some());
-            let mut stream = stream.unwrap();
+    iotest!(fn smoke_test_ip4() {
+        let addr = next_test_ip4();
+        let (port, chan) = Chan::new();
 
-            // Make sure peer_name gives us the
-            // address/port of the peer we've
-            // connected to.
-            let peer_name = stream.peer_name();
-            assert!(peer_name.is_some());
-            assert_eq!(addr, peer_name.unwrap());
+        do spawn {
+            port.recv();
+            let mut stream = TcpStream::connect(addr);
+            stream.write([99]);
         }
+
+        let mut acceptor = TcpListener::bind(addr).listen();
+        chan.send(());
+        let mut stream = acceptor.accept();
+        let mut buf = [0];
+        stream.read(buf);
+        assert!(buf[0] == 99);
+    })
+
+    iotest!(fn smoke_test_ip6() {
+        let addr = next_test_ip6();
+        let (port, chan) = Chan::new();
+
+        do spawn {
+            port.recv();
+            let mut stream = TcpStream::connect(addr);
+            stream.write([99]);
+        }
+
+        let mut acceptor = TcpListener::bind(addr).listen();
+        chan.send(());
+        let mut stream = acceptor.accept();
+        let mut buf = [0];
+        stream.read(buf);
+        assert!(buf[0] == 99);
+    })
+
+    iotest!(fn read_eof_ip4() {
+        let addr = next_test_ip4();
+        let (port, chan) = Chan::new();
+
+        do spawn {
+            port.recv();
+            let _stream = TcpStream::connect(addr);
+            // Close
+        }
+
+        let mut acceptor = TcpListener::bind(addr).listen();
+        chan.send(());
+        let mut stream = acceptor.accept();
+        let mut buf = [0];
+        let nread = stream.read(buf);
+        assert!(nread.is_none());
+    })
+
+    iotest!(fn read_eof_ip6() {
+        let addr = next_test_ip6();
+        let (port, chan) = Chan::new();
+
+        do spawn {
+            port.recv();
+            let _stream = TcpStream::connect(addr);
+            // Close
+        }
+
+        let mut acceptor = TcpListener::bind(addr).listen();
+        chan.send(());
+        let mut stream = acceptor.accept();
+        let mut buf = [0];
+        let nread = stream.read(buf);
+        assert!(nread.is_none());
+    })
+
+    iotest!(fn read_eof_twice_ip4() {
+        let addr = next_test_ip4();
+        let (port, chan) = Chan::new();
+
+        do spawn {
+            port.recv();
+            let _stream = TcpStream::connect(addr);
+            // Close
+        }
+
+        let mut acceptor = TcpListener::bind(addr).listen();
+        chan.send(());
+        let mut stream = acceptor.accept();
+        let mut buf = [0];
+        let nread = stream.read(buf);
+        assert!(nread.is_none());
+        io_error::cond.trap(|e| {
+            if cfg!(windows) {
+                assert_eq!(e.kind, NotConnected);
+            } else {
+                fail!();
+            }
+        }).inside(|| {
+            let nread = stream.read(buf);
+            assert!(nread.is_none());
+        })
+    })
+
+    iotest!(fn read_eof_twice_ip6() {
+        let addr = next_test_ip6();
+        let (port, chan) = Chan::new();
+
+        do spawn {
+            port.recv();
+            let _stream = TcpStream::connect(addr);
+            // Close
+        }
+
+        let mut acceptor = TcpListener::bind(addr).listen();
+        chan.send(());
+        let mut stream = acceptor.accept();
+        let mut buf = [0];
+        let nread = stream.read(buf);
+        assert!(nread.is_none());
+        io_error::cond.trap(|e| {
+            if cfg!(windows) {
+                assert_eq!(e.kind, NotConnected);
+            } else {
+                fail!();
+            }
+        }).inside(|| {
+            let nread = stream.read(buf);
+            assert!(nread.is_none());
+        })
+    })
+
+    iotest!(fn write_close_ip4() {
+        let addr = next_test_ip4();
+        let (port, chan) = Chan::new();
+
+        do spawn {
+            port.recv();
+            let _stream = TcpStream::connect(addr);
+            // Close
+        }
+
+        let mut acceptor = TcpListener::bind(addr).listen();
+        chan.send(());
+        let mut stream = acceptor.accept();
+        let buf = [0];
+        loop {
+            let mut stop = false;
+            io_error::cond.trap(|e| {
+                // NB: ECONNRESET on linux, EPIPE on mac, ECONNABORTED
+                //     on windows
+                assert!(e.kind == ConnectionReset ||
+                        e.kind == BrokenPipe ||
+                        e.kind == ConnectionAborted,
+                        "unknown error: {:?}", e);
+                stop = true;
+            }).inside(|| {
+                stream.write(buf);
+            });
+            if stop { break }
+        }
+    })
+
+    iotest!(fn write_close_ip6() {
+        let addr = next_test_ip6();
+        let (port, chan) = Chan::new();
+
+        do spawn {
+            port.recv();
+            let _stream = TcpStream::connect(addr);
+            // Close
+        }
+
+        let mut acceptor = TcpListener::bind(addr).listen();
+        chan.send(());
+        let mut stream = acceptor.accept();
+        let buf = [0];
+        loop {
+            let mut stop = false;
+            io_error::cond.trap(|e| {
+                // NB: ECONNRESET on linux, EPIPE on mac, ECONNABORTED
+                //     on windows
+                assert!(e.kind == ConnectionReset ||
+                        e.kind == BrokenPipe ||
+                        e.kind == ConnectionAborted,
+                        "unknown error: {:?}", e);
+                stop = true;
+            }).inside(|| {
+                stream.write(buf);
+            });
+            if stop { break }
+        }
+    })
+
+    iotest!(fn multiple_connect_serial_ip4() {
+        let addr = next_test_ip4();
+        let max = 10;
+        let (port, chan) = Chan::new();
+
+        do spawn {
+            port.recv();
+            max.times(|| {
+                let mut stream = TcpStream::connect(addr);
+                stream.write([99]);
+            });
+        }
+
+        let mut acceptor = TcpListener::bind(addr).listen();
+        chan.send(());
+        for ref mut stream in acceptor.incoming().take(max) {
+            let mut buf = [0];
+            stream.read(buf);
+            assert_eq!(buf[0], 99);
+        }
+    })
+
+    iotest!(fn multiple_connect_serial_ip6() {
+        let addr = next_test_ip6();
+        let max = 10;
+        let (port, chan) = Chan::new();
+
+        do spawn {
+            port.recv();
+            max.times(|| {
+                let mut stream = TcpStream::connect(addr);
+                stream.write([99]);
+            });
+        }
+
+        let mut acceptor = TcpListener::bind(addr).listen();
+        chan.send(());
+        for ref mut stream in acceptor.incoming().take(max) {
+            let mut buf = [0];
+            stream.read(buf);
+            assert_eq!(buf[0], 99);
+        }
+    })
+
+    iotest!(fn multiple_connect_interleaved_greedy_schedule_ip4() {
+        let addr = next_test_ip4();
+        static MAX: int = 10;
+        let (port, chan) = Chan::new();
+
+        do spawn {
+            let mut acceptor = TcpListener::bind(addr).listen();
+            chan.send(());
+            for (i, stream) in acceptor.incoming().enumerate().take(MAX as uint) {
+                // Start another task to handle the connection
+                do spawn {
+                    let mut stream = stream;
+                    let mut buf = [0];
+                    stream.read(buf);
+                    assert!(buf[0] == i as u8);
+                    debug!("read");
+                }
+            }
+        }
+
+        port.recv();
+        connect(0, addr);
+
+        fn connect(i: int, addr: SocketAddr) {
+            if i == MAX { return }
+
+            do spawn {
+                debug!("connecting");
+                let mut stream = TcpStream::connect(addr);
+                // Connect again before writing
+                connect(i + 1, addr);
+                debug!("writing");
+                stream.write([i as u8]);
+            }
+        }
+    })
+
+    iotest!(fn multiple_connect_interleaved_greedy_schedule_ip6() {
+        let addr = next_test_ip6();
+        static MAX: int = 10;
+        let (port, chan) = Chan::<()>::new();
+
+        do spawn {
+            let mut acceptor = TcpListener::bind(addr).listen();
+            chan.send(());
+            for (i, stream) in acceptor.incoming().enumerate().take(MAX as uint) {
+                // Start another task to handle the connection
+                do spawn {
+                    let mut stream = stream;
+                    let mut buf = [0];
+                    stream.read(buf);
+                    assert!(buf[0] == i as u8);
+                    debug!("read");
+                }
+            }
+        }
+
+        port.recv();
+        connect(0, addr);
+
+        fn connect(i: int, addr: SocketAddr) {
+            if i == MAX { return }
+
+            do spawn {
+                debug!("connecting");
+                let mut stream = TcpStream::connect(addr);
+                // Connect again before writing
+                connect(i + 1, addr);
+                debug!("writing");
+                stream.write([i as u8]);
+            }
+        }
+    })
+
+    iotest!(fn multiple_connect_interleaved_lazy_schedule_ip4() {
+        let addr = next_test_ip4();
+        static MAX: int = 10;
+        let (port, chan) = Chan::new();
+
+        do spawn {
+            let mut acceptor = TcpListener::bind(addr).listen();
+            chan.send(());
+            for stream in acceptor.incoming().take(MAX as uint) {
+                // Start another task to handle the connection
+                do spawn {
+                    let mut stream = stream;
+                    let mut buf = [0];
+                    stream.read(buf);
+                    assert!(buf[0] == 99);
+                    debug!("read");
+                }
+            }
+        }
+
+        port.recv();
+        connect(0, addr);
+
+        fn connect(i: int, addr: SocketAddr) {
+            if i == MAX { return }
+
+            do spawn {
+                debug!("connecting");
+                let mut stream = TcpStream::connect(addr);
+                // Connect again before writing
+                connect(i + 1, addr);
+                debug!("writing");
+                stream.write([99]);
+            }
+        }
+    })
+
+    iotest!(fn multiple_connect_interleaved_lazy_schedule_ip6() {
+        let addr = next_test_ip6();
+        static MAX: int = 10;
+        let (port, chan) = Chan::new();
+
+        do spawn {
+            let mut acceptor = TcpListener::bind(addr).listen();
+            chan.send(());
+            for stream in acceptor.incoming().take(MAX as uint) {
+                // Start another task to handle the connection
+                do spawn {
+                    let mut stream = stream;
+                    let mut buf = [0];
+                    stream.read(buf);
+                    assert!(buf[0] == 99);
+                    debug!("read");
+                }
+            }
+        }
+
+        port.recv();
+        connect(0, addr);
+
+        fn connect(i: int, addr: SocketAddr) {
+            if i == MAX { return }
+
+            do spawn {
+                debug!("connecting");
+                let mut stream = TcpStream::connect(addr);
+                // Connect again before writing
+                connect(i + 1, addr);
+                debug!("writing");
+                stream.write([99]);
+            }
+        }
+    })
+
+    pub fn socket_name(addr: SocketAddr) {
+        let mut listener = TcpListener::bind(addr).unwrap();
+
+        // Make sure socket_name gives
+        // us the socket we binded to.
+        let so_name = listener.socket_name();
+        assert!(so_name.is_some());
+        assert_eq!(addr, so_name.unwrap());
     }
 
-    #[test]
-    fn socket_and_peer_name_ip4() {
+    pub fn peer_name(addr: SocketAddr) {
+        let (port, chan) = Chan::new();
+
+        do spawn {
+            let mut acceptor = TcpListener::bind(addr).listen();
+            chan.send(());
+            acceptor.accept();
+        }
+
+        port.recv();
+        let stream = TcpStream::connect(addr);
+
+        assert!(stream.is_some());
+        let mut stream = stream.unwrap();
+
+        // Make sure peer_name gives us the
+        // address/port of the peer we've
+        // connected to.
+        let peer_name = stream.peer_name();
+        assert!(peer_name.is_some());
+        assert_eq!(addr, peer_name.unwrap());
+    }
+
+    iotest!(fn socket_and_peer_name_ip4() {
         peer_name(next_test_ip4());
         socket_name(next_test_ip4());
-    }
+    })
 
-    #[test]
-    fn socket_and_peer_name_ip6() {
+    iotest!(fn socket_and_peer_name_ip6() {
         // XXX: peer name is not consistent
         //peer_name(next_test_ip6());
         socket_name(next_test_ip6());
-    }
+    })
 
+    iotest!(fn partial_read() {
+        let addr = next_test_ip4();
+        let (p, c) = Chan::new();
+        do spawn {
+            let mut srv = TcpListener::bind(addr).listen();
+            c.send(());
+            let mut cl = srv.accept().unwrap();
+            cl.write([10]);
+            let mut b = [0];
+            cl.read(b);
+            c.send(());
+        }
+
+        p.recv();
+        let mut c = TcpStream::connect(addr).unwrap();
+        let mut b = [0, ..10];
+        assert_eq!(c.read(b), Some(1));
+        c.write([1]);
+        p.recv();
+    })
 }

@@ -20,11 +20,14 @@ that do not need to record state.
 
 */
 
-use iter::range;
+use container::Container;
+use iter::{range, Iterator};
 use option::{Some, None};
 use num;
+use num::CheckedAdd;
 use rand::{Rng, Rand};
 use clone::Clone;
+use vec::MutableVector;
 
 pub use self::range::Range;
 pub use self::gamma::{Gamma, ChiSquared, FisherF, StudentT};
@@ -94,15 +97,13 @@ pub struct Weighted<T> {
 /// use std::rand;
 /// use std::rand::distributions::{Weighted, WeightedChoice, IndependentSample};
 ///
-/// fn main() {
-///     let wc = WeightedChoice::new(~[Weighted { weight: 2, item: 'a' },
-///                                    Weighted { weight: 4, item: 'b' },
-///                                    Weighted { weight: 1, item: 'c' }]);
-///     let rng = rand::task_rng();
-///     for _ in range(0, 16) {
-///          // on average prints 'a' 4 times, 'b' 8 and 'c' twice.
-///          println!("{}", wc.ind_sample(rng));
-///     }
+/// let wc = WeightedChoice::new(~[Weighted { weight: 2, item: 'a' },
+///                                Weighted { weight: 4, item: 'b' },
+///                                Weighted { weight: 1, item: 'c' }]);
+/// let mut rng = rand::task_rng();
+/// for _ in range(0, 16) {
+///      // on average prints 'a' 4 times, 'b' 8 and 'c' twice.
+///      println!("{}", wc.ind_sample(&mut rng));
 /// }
 /// ```
 pub struct WeightedChoice<T> {
@@ -252,10 +253,11 @@ fn ziggurat<R:Rng>(
 
 #[cfg(test)]
 mod tests {
+    use prelude::*;
     use rand::*;
     use super::*;
-    use option::{Some, None};
 
+    #[deriving(Eq)]
     struct ConstRand(uint);
     impl Rand for ConstRand {
         fn rand<R: Rng>(_: &mut R) -> ConstRand {
@@ -279,8 +281,8 @@ mod tests {
     fn test_rand_sample() {
         let mut rand_sample = RandSample::<ConstRand>;
 
-        assert_eq!(*rand_sample.sample(&mut task_rng()), 0);
-        assert_eq!(*rand_sample.ind_sample(&mut task_rng()), 0);
+        assert_eq!(rand_sample.sample(&mut task_rng()), ConstRand(0));
+        assert_eq!(rand_sample.ind_sample(&mut task_rng()), ConstRand(0));
     }
     #[test]
     fn test_weighted_choice() {

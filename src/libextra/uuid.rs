@@ -65,6 +65,7 @@ use std::rand;
 use std::rand::Rng;
 use std::cmp::Eq;
 use std::cast::{transmute,transmute_copy};
+use std::to_bytes::{IterBytes, Cb};
 
 use serialize::{Encoder, Encodable, Decoder, Decodable};
 
@@ -103,6 +104,11 @@ pub enum UuidVariant {
 pub struct Uuid {
     /// The 128-bit number stored in 16 bytes
     bytes: UuidBytes
+}
+impl IterBytes for Uuid {
+    fn iter_bytes(&self, _: bool, f: Cb) -> bool {
+        f(self.bytes.slice_from(0))
+    }
 }
 
 /// A UUID stored as fields (identical to UUID, used only for conversions)
@@ -516,7 +522,6 @@ mod test {
     use std::str;
     use std::rand;
     use std::num::Zero;
-    use std::io::Decorator;
     use std::io::mem::MemWriter;
 
     #[test]
@@ -790,11 +795,22 @@ mod test {
         use serialize::{Encodable, Decodable};
 
         let u = Uuid::new_v4();
-        let wr = @mut MemWriter::new();
-        u.encode(&mut ebml::writer::Encoder(wr));
-        let doc = ebml::reader::Doc(wr.inner_ref().as_slice());
+        let mut wr = MemWriter::new();
+        u.encode(&mut ebml::writer::Encoder(&mut wr));
+        let doc = ebml::reader::Doc(wr.get_ref());
         let u2 = Decodable::decode(&mut ebml::reader::Decoder(doc));
         assert_eq!(u, u2);
+    }
+
+    #[test]
+    fn test_iterbytes_impl_for_uuid() {
+        use std::hashmap::HashSet;
+        let mut set = HashSet::new();
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        set.insert(id1);
+        assert!(set.contains(&id1));
+        assert!(!set.contains(&id2));
     }
 }
 

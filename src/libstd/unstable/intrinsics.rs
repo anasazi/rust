@@ -12,6 +12,15 @@
 
 The corresponding definitions are in librustc/middle/trans/foreign.rs.
 
+# Volatiles
+
+The volatile intrinsics provide operations intended to act on I/O
+memory, which are guaranteed to not be reordered by the compiler
+across other volatile intrinsics. See the LLVM documentation on
+[[volatile]].
+
+[volatile]: http://llvm.org/docs/LangRef.html#volatile-memory-accesses
+
 # Atomics
 
 The atomic intrinsics provide common atomic operations on machine
@@ -178,6 +187,9 @@ extern "rust-intrinsic" {
 
     /// Execute a breakpoint trap, for inspection by a debugger.
     pub fn breakpoint();
+
+    pub fn volatile_load<T>(src: *T) -> T;
+    pub fn volatile_store<T>(dst: *mut T, val: T);
 
     /// Atomic compare and exchange, sequentially consistent.
     pub fn atomic_cxchg(dst: &mut int, old: int, src: int) -> int;
@@ -474,20 +486,33 @@ extern "rust-intrinsic" {
     pub fn u64_mul_with_overflow(x: u64, y: u64) -> (u64, bool);
 }
 
-#[cfg(target_endian = "little")] pub fn to_le16(x: i16) -> i16 { x }
-#[cfg(target_endian = "big")]    pub fn to_le16(x: i16) -> i16 { unsafe { bswap16(x) } }
-#[cfg(target_endian = "little")] pub fn to_le32(x: i32) -> i32 { x }
-#[cfg(target_endian = "big")]    pub fn to_le32(x: i32) -> i32 { unsafe { bswap32(x) } }
-#[cfg(target_endian = "little")] pub fn to_le64(x: i64) -> i64 { x }
-#[cfg(target_endian = "big")]    pub fn to_le64(x: i64) -> i64 { unsafe { bswap64(x) } }
+#[cfg(target_endian = "little")] #[inline] pub fn to_le16(x: i16) -> i16 { x }
+#[cfg(target_endian = "big")]    #[inline] pub fn to_le16(x: i16) -> i16 { unsafe { bswap16(x) } }
+#[cfg(target_endian = "little")] #[inline] pub fn to_le32(x: i32) -> i32 { x }
+#[cfg(target_endian = "big")]    #[inline] pub fn to_le32(x: i32) -> i32 { unsafe { bswap32(x) } }
+#[cfg(target_endian = "little")] #[inline] pub fn to_le64(x: i64) -> i64 { x }
+#[cfg(target_endian = "big")]    #[inline] pub fn to_le64(x: i64) -> i64 { unsafe { bswap64(x) } }
 
-#[cfg(target_endian = "little")] pub fn to_be16(x: i16) -> i16 { unsafe { bswap16(x) } }
-#[cfg(target_endian = "big")]    pub fn to_be16(x: i16) -> i16 { x }
-#[cfg(target_endian = "little")] pub fn to_be32(x: i32) -> i32 { unsafe { bswap32(x) } }
-#[cfg(target_endian = "big")]    pub fn to_be32(x: i32) -> i32 { x }
-#[cfg(target_endian = "little")] pub fn to_be64(x: i64) -> i64 { unsafe { bswap64(x) } }
-#[cfg(target_endian = "big")]    pub fn to_be64(x: i64) -> i64 { x }
+#[cfg(target_endian = "little")] #[inline] pub fn to_be16(x: i16) -> i16 { unsafe { bswap16(x) } }
+#[cfg(target_endian = "big")]    #[inline] pub fn to_be16(x: i16) -> i16 { x }
+#[cfg(target_endian = "little")] #[inline] pub fn to_be32(x: i32) -> i32 { unsafe { bswap32(x) } }
+#[cfg(target_endian = "big")]    #[inline] pub fn to_be32(x: i32) -> i32 { x }
+#[cfg(target_endian = "little")] #[inline] pub fn to_be64(x: i64) -> i64 { unsafe { bswap64(x) } }
+#[cfg(target_endian = "big")]    #[inline] pub fn to_be64(x: i64) -> i64 { x }
 
+#[cfg(target_endian = "little")] #[inline] pub fn from_le16(x: i16) -> i16 { x }
+#[cfg(target_endian = "big")]    #[inline] pub fn from_le16(x: i16) -> i16 { unsafe { bswap16(x) } }
+#[cfg(target_endian = "little")] #[inline] pub fn from_le32(x: i32) -> i32 { x }
+#[cfg(target_endian = "big")]    #[inline] pub fn from_le32(x: i32) -> i32 { unsafe { bswap32(x) } }
+#[cfg(target_endian = "little")] #[inline] pub fn from_le64(x: i64) -> i64 { x }
+#[cfg(target_endian = "big")]    #[inline] pub fn from_le64(x: i64) -> i64 { unsafe { bswap64(x) } }
+
+#[cfg(target_endian = "little")] #[inline] pub fn from_be16(x: i16) -> i16 { unsafe { bswap16(x) } }
+#[cfg(target_endian = "big")]    #[inline] pub fn from_be16(x: i16) -> i16 { x }
+#[cfg(target_endian = "little")] #[inline] pub fn from_be32(x: i32) -> i32 { unsafe { bswap32(x) } }
+#[cfg(target_endian = "big")]    #[inline] pub fn from_be32(x: i32) -> i32 { x }
+#[cfg(target_endian = "little")] #[inline] pub fn from_be64(x: i64) -> i64 { unsafe { bswap64(x) } }
+#[cfg(target_endian = "big")]    #[inline] pub fn from_be64(x: i64) -> i64 { x }
 
 /// `TypeId` represents a globally unique identifier for a type
 #[lang="type_id"] // This needs to be kept in lockstep with the code in trans/intrinsic.rs and

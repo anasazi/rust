@@ -19,6 +19,7 @@ use syntax::ast_map;
 use syntax::ast_util;
 use syntax::attr;
 use syntax::attr::AttributeMethods;
+use syntax::codemap::Pos;
 
 use rustc::metadata::cstore;
 use rustc::metadata::csearch;
@@ -71,18 +72,18 @@ pub struct Crate {
     externs: HashMap<ast::CrateNum, ExternalCrate>,
 }
 
-impl Clean<Crate> for visit_ast::RustdocVisitor {
+impl<'a> Clean<Crate> for visit_ast::RustdocVisitor<'a> {
     fn clean(&self) -> Crate {
-        use syntax::attr::find_pkgid;
+        use syntax::attr::find_crateid;
         let cx = local_data::get(super::ctxtkey, |x| *x.unwrap());
 
         let mut externs = HashMap::new();
-        cstore::iter_crate_data(cx.sess.cstore, |n, meta| {
+        cx.sess.cstore.iter_crate_data(|n, meta| {
             externs.insert(n, meta.clean());
         });
 
         Crate {
-            name: match find_pkgid(self.attrs) {
+            name: match find_crateid(self.attrs) {
                 Some(n) => n.name,
                 None => fail!("rustdoc requires a `crate_id` crate attribute"),
             },
@@ -289,6 +290,14 @@ impl Clean<TyParamBound> for ast::TyParamBound {
 #[deriving(Clone, Encodable, Decodable)]
 pub struct Lifetime(~str);
 
+impl Lifetime {
+    pub fn get_ref<'a>(&'a self) -> &'a str {
+        let Lifetime(ref s) = *self;
+        let s: &'a str = *s;
+        return s;
+    }
+}
+
 impl Clean<Lifetime> for ast::Lifetime {
     fn clean(&self) -> Lifetime {
         Lifetime(self.ident.clean())
@@ -315,11 +324,11 @@ impl Clean<Generics> for ast::Generics {
 pub struct Method {
     generics: Generics,
     self_: SelfTy,
-    purity: ast::purity,
+    purity: ast::Purity,
     decl: FnDecl,
 }
 
-impl Clean<Item> for ast::method {
+impl Clean<Item> for ast::Method {
     fn clean(&self) -> Item {
         Item {
             name: Some(self.ident.clean()),
@@ -339,7 +348,7 @@ impl Clean<Item> for ast::method {
 
 #[deriving(Clone, Encodable, Decodable)]
 pub struct TyMethod {
-    purity: ast::purity,
+    purity: ast::Purity,
     decl: FnDecl,
     generics: Generics,
     self_: SelfTy,
@@ -372,14 +381,14 @@ pub enum SelfTy {
     SelfOwned,
 }
 
-impl Clean<SelfTy> for ast::explicit_self {
+impl Clean<SelfTy> for ast::ExplicitSelf {
     fn clean(&self) -> SelfTy {
         match self.node {
-            ast::sty_static => SelfStatic,
-            ast::sty_value(_) => SelfValue,
-            ast::sty_uniq(_) => SelfOwned,
-            ast::sty_region(lt, mt) => SelfBorrowed(lt.clean(), mt.clean()),
-            ast::sty_box(mt) => SelfManaged(mt.clean()),
+            ast::SelfStatic => SelfStatic,
+            ast::SelfValue(_) => SelfValue,
+            ast::SelfUniq(_) => SelfOwned,
+            ast::SelfRegion(lt, mt) => SelfBorrowed(lt.clean(), mt.clean()),
+            ast::SelfBox(mt) => SelfManaged(mt.clean()),
         }
     }
 }
@@ -388,7 +397,7 @@ impl Clean<SelfTy> for ast::explicit_self {
 pub struct Function {
     decl: FnDecl,
     generics: Generics,
-    purity: ast::purity,
+    purity: ast::Purity,
 }
 
 impl Clean<Item> for doctree::Function {
@@ -415,11 +424,11 @@ pub struct ClosureDecl {
     lifetimes: ~[Lifetime],
     decl: FnDecl,
     onceness: ast::Onceness,
-    purity: ast::purity,
+    purity: ast::Purity,
     bounds: ~[TyParamBound]
 }
 
-impl Clean<ClosureDecl> for ast::TyClosure {
+impl Clean<ClosureDecl> for ast::ClosureTy {
     fn clean(&self) -> ClosureDecl {
         ClosureDecl {
             sigil: self.sigil,
@@ -444,7 +453,7 @@ pub struct FnDecl {
     attrs: ~[Attribute]
 }
 
-impl Clean<FnDecl> for ast::fn_decl {
+impl Clean<FnDecl> for ast::FnDecl {
     fn clean(&self) -> FnDecl {
         FnDecl {
             inputs: self.inputs.iter().map(|x| x.clean()).collect(),
@@ -462,7 +471,7 @@ pub struct Argument {
     id: ast::NodeId
 }
 
-impl Clean<Argument> for ast::arg {
+impl Clean<Argument> for ast::Arg {
     fn clean(&self) -> Argument {
         Argument {
             name: name_from_pat(self.pat),
@@ -478,11 +487,11 @@ pub enum RetStyle {
     Return
 }
 
-impl Clean<RetStyle> for ast::ret_style {
+impl Clean<RetStyle> for ast::RetStyle {
     fn clean(&self) -> RetStyle {
         match *self {
-            ast::return_val => Return,
-            ast::noreturn => NoReturn
+            ast::Return => Return,
+            ast::NoReturn => NoReturn
         }
     }
 }
@@ -511,7 +520,7 @@ impl Clean<Item> for doctree::Trait {
     }
 }
 
-impl Clean<Type> for ast::trait_ref {
+impl Clean<Type> for ast::TraitRef {
     fn clean(&self) -> Type {
         resolve_type(self.path.clean(), None, self.ref_id)
     }
@@ -544,11 +553,11 @@ impl TraitMethod {
     }
 }
 
-impl Clean<TraitMethod> for ast::trait_method {
+impl Clean<TraitMethod> for ast::TraitMethod {
     fn clean(&self) -> TraitMethod {
         match self {
-            &ast::required(ref t) => Required(t.clean()),
-            &ast::provided(ref t) => Provided(t.clean()),
+            &ast::Required(ref t) => Required(t.clean()),
+            &ast::Provided(ref t) => Provided(t.clean()),
         }
     }
 }
@@ -558,7 +567,7 @@ impl Clean<TraitMethod> for ast::trait_method {
 /// it does not preserve mutability or boxes.
 #[deriving(Clone, Encodable, Decodable)]
 pub enum Type {
-    /// structs/enums/traits (anything that'd be an ast::ty_path)
+    /// structs/enums/traits (anything that'd be an ast::TyPath)
     ResolvedPath {
         path: Path,
         typarams: Option<~[TyParamBound]>,
@@ -580,7 +589,7 @@ pub enum Type {
     /// For references to self
     Self(ast::NodeId),
     /// Primitives are just the fixed-size numeric types (plus int/uint/float), and char.
-    Primitive(ast::prim_ty),
+    Primitive(ast::PrimTy),
     Closure(~ClosureDecl),
     /// extern "ABI" fn
     BareFunction(~BareFunctionDecl),
@@ -589,12 +598,12 @@ pub enum Type {
     FixedVector(~Type, ~str),
     String,
     Bool,
-    /// aka ty_nil
+    /// aka TyNil
     Unit,
-    /// aka ty_bot
+    /// aka TyBot
     Bottom,
     Unique(~Type),
-    Managed(Mutability, ~Type),
+    Managed(~Type),
     RawPointer(Mutability, ~Type),
     BorrowedRef { lifetime: Option<Lifetime>, mutability: Mutability, type_: ~Type},
     // region, raw, other boxes, mutable
@@ -615,22 +624,22 @@ impl Clean<Type> for ast::Ty {
         let codemap = local_data::get(super::ctxtkey, |x| *x.unwrap()).sess.codemap;
         debug!("span corresponds to `{}`", codemap.span_to_str(self.span));
         match self.node {
-            ty_nil => Unit,
-            ty_ptr(ref m) => RawPointer(m.mutbl.clean(), ~m.ty.clean()),
-            ty_rptr(ref l, ref m) =>
+            TyNil => Unit,
+            TyPtr(ref m) => RawPointer(m.mutbl.clean(), ~m.ty.clean()),
+            TyRptr(ref l, ref m) =>
                 BorrowedRef {lifetime: l.clean(), mutability: m.mutbl.clean(),
                              type_: ~m.ty.clean()},
-            ty_box(ref m) => Managed(m.mutbl.clean(), ~m.ty.clean()),
-            ty_uniq(ty) => Unique(~ty.clean()),
-            ty_vec(ty) => Vector(~ty.clean()),
-            ty_fixed_length_vec(ty, ref e) => FixedVector(~ty.clean(),
-                                                          e.span.to_src()),
-            ty_tup(ref tys) => Tuple(tys.iter().map(|x| x.clean()).collect()),
-            ty_path(ref p, ref tpbs, id) =>
+            TyBox(ty) => Managed(~ty.clean()),
+            TyUniq(ty) => Unique(~ty.clean()),
+            TyVec(ty) => Vector(~ty.clean()),
+            TyFixedLengthVec(ty, ref e) => FixedVector(~ty.clean(),
+                                                       e.span.to_src()),
+            TyTup(ref tys) => Tuple(tys.iter().map(|x| x.clean()).collect()),
+            TyPath(ref p, ref tpbs, id) =>
                 resolve_type(p.clean(), tpbs.clean(), id),
-            ty_closure(ref c) => Closure(~c.clean()),
-            ty_bare_fn(ref barefn) => BareFunction(~barefn.clean()),
-            ty_bot => Bottom,
+            TyClosure(ref c) => Closure(~c.clean()),
+            TyBareFn(ref barefn) => BareFunction(~barefn.clean()),
+            TyBot => Bottom,
             ref x => fail!("Unimplemented type {:?}", x),
         }
     }
@@ -641,10 +650,10 @@ pub struct StructField {
     type_: Type,
 }
 
-impl Clean<Item> for ast::struct_field {
+impl Clean<Item> for ast::StructField {
     fn clean(&self) -> Item {
         let (name, vis) = match self.node.kind {
-            ast::named_field(id, vis) => (Some(id), Some(vis)),
+            ast::NamedField(id, vis) => (Some(id), Some(vis)),
             _ => (None, None)
         };
         Item {
@@ -660,9 +669,9 @@ impl Clean<Item> for ast::struct_field {
     }
 }
 
-pub type Visibility = ast::visibility;
+pub type Visibility = ast::Visibility;
 
-impl Clean<Option<Visibility>> for ast::visibility {
+impl Clean<Option<Visibility>> for ast::Visibility {
     fn clean(&self) -> Option<Visibility> {
         Some(*self)
     }
@@ -704,7 +713,7 @@ pub struct VariantStruct {
     fields_stripped: bool,
 }
 
-impl Clean<VariantStruct> for syntax::ast::struct_def {
+impl Clean<VariantStruct> for syntax::ast::StructDef {
     fn clean(&self) -> VariantStruct {
         VariantStruct {
             struct_type: doctree::struct_type_from_def(self),
@@ -765,17 +774,17 @@ pub enum VariantKind {
     StructVariant(VariantStruct),
 }
 
-impl Clean<VariantKind> for ast::variant_kind {
+impl Clean<VariantKind> for ast::VariantKind {
     fn clean(&self) -> VariantKind {
         match self {
-            &ast::tuple_variant_kind(ref args) => {
+            &ast::TupleVariantKind(ref args) => {
                 if args.len() == 0 {
                     CLikeVariant
                 } else {
                     TupleVariant(args.iter().map(|x| x.ty.clean()).collect())
                 }
             },
-            &ast::struct_variant_kind(ref sd) => StructVariant(sd.clean()),
+            &ast::StructVariantKind(ref sd) => StructVariant(sd.clean()),
         }
     }
 }
@@ -798,9 +807,9 @@ impl Clean<Span> for syntax::codemap::Span {
         Span {
             filename: filename.to_owned(),
             loline: lo.line,
-            locol: *lo.col,
+            locol: lo.col.to_uint(),
             hiline: hi.line,
-            hicol: *hi.col,
+            hicol: hi.col.to_uint(),
         }
     }
 }
@@ -883,13 +892,13 @@ impl Clean<Item> for doctree::Typedef {
 
 #[deriving(Clone, Encodable, Decodable)]
 pub struct BareFunctionDecl {
-    purity: ast::purity,
+    purity: ast::Purity,
     generics: Generics,
     decl: FnDecl,
     abi: ~str
 }
 
-impl Clean<BareFunctionDecl> for ast::TyBareFn {
+impl Clean<BareFunctionDecl> for ast::BareFnTy {
     fn clean(&self) -> BareFunctionDecl {
         BareFunctionDecl {
             purity: self.purity,
@@ -977,7 +986,7 @@ pub struct ViewItem {
     inner: ViewItemInner
 }
 
-impl Clean<Item> for ast::view_item {
+impl Clean<Item> for ast::ViewItem {
     fn clean(&self) -> Item {
         Item {
             name: None,
@@ -994,16 +1003,16 @@ impl Clean<Item> for ast::view_item {
 
 #[deriving(Clone, Encodable, Decodable)]
 pub enum ViewItemInner {
-    ExternMod(~str, Option<~str>, ~[Attribute], ast::NodeId),
+    ExternMod(~str, Option<~str>, ast::NodeId),
     Import(~[ViewPath])
 }
 
-impl Clean<ViewItemInner> for ast::view_item_ {
+impl Clean<ViewItemInner> for ast::ViewItem_ {
     fn clean(&self) -> ViewItemInner {
         match self {
-            &ast::view_item_extern_mod(ref i, ref p, ref mi, ref id) =>
-                ExternMod(i.clean(), p.map(|(ref x, _)| x.to_owned()),  mi.clean(), *id),
-            &ast::view_item_use(ref vp) => Import(vp.clean())
+            &ast::ViewItemExternMod(ref i, ref p, ref id) =>
+                ExternMod(i.clean(), p.map(|(ref x, _)| x.to_owned()), *id),
+            &ast::ViewItemUse(ref vp) => Import(vp.clean())
         }
     }
 }
@@ -1024,14 +1033,14 @@ pub struct ImportSource {
     did: Option<ast::DefId>,
 }
 
-impl Clean<ViewPath> for ast::view_path {
+impl Clean<ViewPath> for ast::ViewPath {
     fn clean(&self) -> ViewPath {
         match self.node {
-            ast::view_path_simple(ref i, ref p, id) =>
+            ast::ViewPathSimple(ref i, ref p, id) =>
                 SimpleImport(i.clean(), resolve_use_source(p.clean(), id)),
-            ast::view_path_glob(ref p, id) =>
+            ast::ViewPathGlob(ref p, id) =>
                 GlobImport(resolve_use_source(p.clean(), id)),
-            ast::view_path_list(ref p, ref pl, id) =>
+            ast::ViewPathList(ref p, ref pl, id) =>
                 ImportList(resolve_use_source(p.clean(), id), pl.clean()),
         }
     }
@@ -1043,7 +1052,7 @@ pub struct ViewListIdent {
     source: Option<ast::DefId>,
 }
 
-impl Clean<ViewListIdent> for ast::path_list_ident {
+impl Clean<ViewListIdent> for ast::PathListIdent {
     fn clean(&self) -> ViewListIdent {
         ViewListIdent {
             name: self.node.name.clean(),
@@ -1052,23 +1061,23 @@ impl Clean<ViewListIdent> for ast::path_list_ident {
     }
 }
 
-impl Clean<~[Item]> for ast::foreign_mod {
+impl Clean<~[Item]> for ast::ForeignMod {
     fn clean(&self) -> ~[Item] {
         self.items.clean()
     }
 }
 
-impl Clean<Item> for ast::foreign_item {
+impl Clean<Item> for ast::ForeignItem {
     fn clean(&self) -> Item {
         let inner = match self.node {
-            ast::foreign_item_fn(ref decl, ref generics) => {
+            ast::ForeignItemFn(ref decl, ref generics) => {
                 ForeignFunctionItem(Function {
                     decl: decl.clean(),
                     generics: generics.clean(),
-                    purity: ast::extern_fn,
+                    purity: ast::ExternFn,
                 })
             }
-            ast::foreign_item_static(ref ty, mutbl) => {
+            ast::ForeignItemStatic(ref ty, mutbl) => {
                 ForeignStaticItem(Static {
                     type_: ty.clean(),
                     mutability: if mutbl {Mutable} else {Immutable},
@@ -1106,23 +1115,25 @@ impl ToSource for syntax::codemap::Span {
     }
 }
 
-fn lit_to_str(lit: &ast::lit) -> ~str {
+fn lit_to_str(lit: &ast::Lit) -> ~str {
     match lit.node {
-        ast::lit_str(st, _) => st.to_owned(),
-        ast::lit_binary(data) => format!("{:?}", data.as_slice()),
-        ast::lit_char(c) => ~"'" + std::char::from_u32(c).unwrap().to_str() + "'",
-        ast::lit_int(i, _t) => i.to_str(),
-        ast::lit_uint(u, _t) => u.to_str(),
-        ast::lit_int_unsuffixed(i) => i.to_str(),
-        ast::lit_float(f, _t) => f.to_str(),
-        ast::lit_float_unsuffixed(f) => f.to_str(),
-        ast::lit_bool(b) => b.to_str(),
-        ast::lit_nil => ~"",
+        ast::LitStr(st, _) => st.to_owned(),
+        ast::LitBinary(data) => format!("{:?}", data.as_slice()),
+        ast::LitChar(c) => ~"'" + std::char::from_u32(c).unwrap().to_str() + "'",
+        ast::LitInt(i, _t) => i.to_str(),
+        ast::LitUint(u, _t) => u.to_str(),
+        ast::LitIntUnsuffixed(i) => i.to_str(),
+        ast::LitFloat(f, _t) => f.to_str(),
+        ast::LitFloatUnsuffixed(f) => f.to_str(),
+        ast::LitBool(b) => b.to_str(),
+        ast::LitNil => ~"",
     }
 }
 
 fn name_from_pat(p: &ast::Pat) -> ~str {
     use syntax::ast::*;
+    debug!("Trying to get a name from pattern: {:?}", p);
+
     match p.node {
         PatWild => ~"_",
         PatWildMulti => ~"..",
@@ -1134,9 +1145,12 @@ fn name_from_pat(p: &ast::Pat) -> ~str {
         PatBox(p) => name_from_pat(p),
         PatUniq(p) => name_from_pat(p),
         PatRegion(p) => name_from_pat(p),
-        PatLit(..) => fail!("tried to get argument name from pat_lit, \
-                            which is not allowed in function arguments"),
-        PatRange(..) => fail!("tried to get argument name from pat_range, \
+        PatLit(..) => {
+            warn!("tried to get argument name from PatLit, \
+                  which is silly in function arguments");
+            ~"()"
+        },
+        PatRange(..) => fail!("tried to get argument name from PatRange, \
                               which is not allowed in function arguments"),
         PatVec(..) => fail!("tried to get argument name from pat_vec, \
                              which is not allowed in function arguments")
@@ -1147,13 +1161,18 @@ fn name_from_pat(p: &ast::Pat) -> ~str {
 fn resolve_type(path: Path, tpbs: Option<~[TyParamBound]>,
                 id: ast::NodeId) -> Type {
     let cx = local_data::get(super::ctxtkey, |x| *x.unwrap());
+    let tycx = match cx.tycx {
+        Some(tycx) => tycx,
+        // If we're extracting tests, this return value doesn't matter.
+        None => return Bool
+    };
     debug!("searching for {:?} in defmap", id);
-    let d = match cx.tycx.def_map.find(&id) {
+    let def_map = tycx.def_map.borrow();
+    let d = match def_map.get().find(&id) {
         Some(k) => k,
         None => {
-            let ctxt = local_data::get(super::ctxtkey, |x| *x.unwrap());
             debug!("could not find {:?} in defmap (`{}`)", id,
-                   syntax::ast_map::node_id_to_str(ctxt.tycx.items, id, ctxt.sess.intr()));
+                   syntax::ast_map::node_id_to_str(tycx.items, id, cx.sess.intr()));
             fail!("Unexpected failure: unresolved id not in defmap (this is a bug!)")
         }
     };
@@ -1167,8 +1186,8 @@ fn resolve_type(path: Path, tpbs: Option<~[TyParamBound]>,
             (i, TypeTrait)
         },
         ast::DefPrimTy(p) => match p {
-            ast::ty_str => return String,
-            ast::ty_bool => return Bool,
+            ast::TyStr => return String,
+            ast::TyBool => return Bool,
             _ => return Primitive(p)
         },
         ast::DefTyParam(i, _) => return Generic(i.node),
@@ -1182,12 +1201,11 @@ fn resolve_type(path: Path, tpbs: Option<~[TyParamBound]>,
     if ast_util::is_local(def_id) {
         ResolvedPath{ path: path, typarams: tpbs, id: def_id.node }
     } else {
-        let fqn = csearch::get_item_path(cx.tycx, def_id);
+        let fqn = csearch::get_item_path(tycx, def_id);
         let fqn = fqn.move_iter().map(|i| {
             match i {
-                ast_map::path_mod(id) |
-                ast_map::path_name(id) |
-                ast_map::path_pretty_name(id, _) => id.clean()
+                ast_map::PathMod(id) | ast_map::PathName(id) |
+                ast_map::PathPrettyName(id, _) => id.clean()
             }
         }).to_owned_vec();
         ExternalPath{ path: path, typarams: tpbs, fqn: fqn, kind: kind,
@@ -1203,6 +1221,12 @@ fn resolve_use_source(path: Path, id: ast::NodeId) -> ImportSource {
 }
 
 fn resolve_def(id: ast::NodeId) -> Option<ast::DefId> {
-    let dm = local_data::get(super::ctxtkey, |x| *x.unwrap()).tycx.def_map;
-    dm.find(&id).map(|&d| ast_util::def_id_of_def(d))
+    let cx = local_data::get(super::ctxtkey, |x| *x.unwrap());
+    match cx.tycx {
+        Some(tcx) => {
+            let def_map = tcx.def_map.borrow();
+            def_map.get().find(&id).map(|&d| ast_util::def_id_of_def(d))
+        }
+        None => None
+    }
 }

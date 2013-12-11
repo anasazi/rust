@@ -191,7 +191,7 @@ impl<T> DList<T> {
     /// Remove the last Node and return it, or None if the list is empty
     #[inline]
     fn pop_back_node(&mut self) -> Option<~Node<T>> {
-        self.list_tail.resolve().map_default(None, |tail| {
+        self.list_tail.resolve().map_or(None, |tail| {
             self.length -= 1;
             self.list_tail = tail.prev;
             match tail.prev.resolve() {
@@ -625,43 +625,43 @@ impl<A: Clone> Clone for DList<A> {
 }
 
 #[cfg(test)]
-pub fn check_links<T>(list: &DList<T>) {
-    let mut len = 0u;
-    let mut last_ptr: Option<&Node<T>> = None;
-    let mut node_ptr: &Node<T>;
-    match list.list_head {
-        None => { assert_eq!(0u, list.length); return }
-        Some(ref node) => node_ptr = &**node,
-    }
-    loop {
-        match (last_ptr, node_ptr.prev.resolve_immut()) {
-            (None   , None      ) => {}
-            (None   , _         ) => fail!("prev link for list_head"),
-            (Some(p), Some(pptr)) => {
-                assert_eq!(p as *Node<T>, pptr as *Node<T>);
-            }
-            _ => fail!("prev link is none, not good"),
-        }
-        match node_ptr.next {
-            Some(ref next) => {
-                last_ptr = Some(node_ptr);
-                node_ptr = &**next;
-                len += 1;
-            }
-            None => {
-                len += 1;
-                break;
-            }
-        }
-    }
-    assert_eq!(len, list.length);
-}
-
-#[cfg(test)]
 mod tests {
-    use super::*;
-    use std::rand;
+    use container::Deque;
     use extra::test;
+    use std::rand;
+    use super::{DList, Node, ListInsertion};
+
+    pub fn check_links<T>(list: &DList<T>) {
+        let mut len = 0u;
+        let mut last_ptr: Option<&Node<T>> = None;
+        let mut node_ptr: &Node<T>;
+        match list.list_head {
+            None => { assert_eq!(0u, list.length); return }
+            Some(ref node) => node_ptr = &**node,
+        }
+        loop {
+            match (last_ptr, node_ptr.prev.resolve_immut()) {
+                (None   , None      ) => {}
+                (None   , _         ) => fail!("prev link for list_head"),
+                (Some(p), Some(pptr)) => {
+                    assert_eq!(p as *Node<T>, pptr as *Node<T>);
+                }
+                _ => fail!("prev link is none, not good"),
+            }
+            match node_ptr.next {
+                Some(ref next) => {
+                    last_ptr = Some(node_ptr);
+                    node_ptr = &**next;
+                    len += 1;
+                }
+                None => {
+                    len += 1;
+                    break;
+                }
+            }
+        }
+        assert_eq!(len, list.length);
+    }
 
     #[test]
     fn test_basic() {

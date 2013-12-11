@@ -26,6 +26,10 @@ Some examples of obvious things you might want to do
 * Read lines from stdin
 
     ```rust
+    use std::io::buffered::BufferedReader;
+    use std::io::stdin;
+
+    # let _g = ::std::io::ignore_io_error();
     let mut stdin = BufferedReader::new(stdin());
     for line in stdin.lines() {
         print(line);
@@ -35,19 +39,31 @@ Some examples of obvious things you might want to do
 * Read a complete file
 
     ```rust
+    use std::io::File;
+
+    # let _g = ::std::io::ignore_io_error();
     let contents = File::open(&Path::new("message.txt")).read_to_end();
     ```
 
 * Write a line to a file
 
     ```rust
+    use std::io::File;
+
+    # let _g = ::std::io::ignore_io_error();
     let mut file = File::create(&Path::new("message.txt"));
     file.write(bytes!("hello, file!\n"));
+    # drop(file);
+    # ::std::io::fs::unlink(&Path::new("message.txt"));
     ```
 
 * Iterate over the lines of a file
 
     ```rust
+    use std::io::buffered::BufferedReader;
+    use std::io::File;
+
+    # let _g = ::std::io::ignore_io_error();
     let path = Path::new("message.txt");
     let mut file = BufferedReader::new(File::open(&path));
     for line in file.lines() {
@@ -58,6 +74,10 @@ Some examples of obvious things you might want to do
 * Pull the lines of a file into a vector of strings
 
     ```rust
+    use std::io::buffered::BufferedReader;
+    use std::io::File;
+
+    # let _g = ::std::io::ignore_io_error();
     let path = Path::new("message.txt");
     let mut file = BufferedReader::new(File::open(&path));
     let lines: ~[~str] = file.lines().collect();
@@ -67,7 +87,11 @@ Some examples of obvious things you might want to do
   XXX This needs more improvement: TcpStream constructor taking &str,
   `write_str` and `write_line` methods.
 
-    ```rust
+    ```rust,should_fail
+    use std::io::net::ip::SocketAddr;
+    use std::io::net::tcp::TcpStream;
+
+    # let _g = ::std::io::ignore_io_error();
     let addr = from_str::<SocketAddr>("127.0.0.1:8080").unwrap();
     let mut socket = TcpStream::connect(addr).unwrap();
     socket.write(bytes!("GET / HTTP/1.0\n\n"));
@@ -89,7 +113,6 @@ Some examples of obvious things you might want to do
 * Writer - An I/O sink, writes bytes from a buffer
 * Stream - Typical I/O sources like files and sockets are both Readers and Writers,
   and are collectively referred to a `streams`.
-* Decorator - A Reader or Writer that composes with others to add additional capabilities
   such as encoding or decoding
 
 # Blocking and synchrony
@@ -142,9 +165,6 @@ requests are implemented by descheduling the running task and
 performing an asynchronous request; the task is only resumed once the
 asynchronous request completes.
 
-For blocking (but possibly more efficient) implementations, look
-in the `io::native` module.
-
 # Error Handling
 
 I/O is an area where nearly every operation can result in unexpected
@@ -165,23 +185,29 @@ while still providing feedback about errors. The basic strategy:
   so that nullable values do not have to be 'unwrapped' before use.
 
 These features combine in the API to allow for expressions like
-`File::new("diary.txt").write_line("met a girl")` without having to
-worry about whether "diary.txt" exists or whether the write
-succeeds. As written, if either `new` or `write_line` encounters
-an error the task will fail.
+`File::create(&Path::new("diary.txt")).write(bytes!("Met a girl.\n"))`
+without having to worry about whether "diary.txt" exists or whether
+the write succeeds. As written, if either `new` or `write_line`
+encounters an error the task will fail.
 
-If you wanted to handle the error though you might write
+If you wanted to handle the error though you might write:
 
-    let mut error = None;
-    do io_error::cond(|e: IoError| {
-        error = Some(e);
-    }).in {
-        File::new("diary.txt").write_line("met a girl");
-    }
+```rust
+use std::io::File;
+use std::io::{IoError, io_error};
 
-    if error.is_some() {
-        println("failed to write my diary");
-    }
+let mut error = None;
+io_error::cond.trap(|e: IoError| {
+    error = Some(e);
+}).inside(|| {
+    File::create(&Path::new("diary.txt")).write(bytes!("Met a girl.\n"));
+});
+
+if error.is_some() {
+    println("failed to write my diary");
+}
+# ::std::io::fs::unlink(&Path::new("diary.txt"));
+```
 
 XXX: Need better condition handling syntax
 
@@ -263,6 +289,7 @@ Out of scope
 #[allow(missing_doc)];
 
 use cast;
+use char::Char;
 use condition::Guard;
 use container::Container;
 use int;
@@ -293,6 +320,9 @@ pub use self::net::tcp::TcpStream;
 pub use self::net::udp::UdpStream;
 pub use self::pipe::PipeStream;
 pub use self::process::Process;
+
+/// Various utility functions useful for writing I/O tests
+pub mod test;
 
 /// Synchronous, non-blocking filesystem operations.
 pub mod fs;
@@ -326,8 +356,6 @@ pub mod timer;
 
 /// Buffered I/O wrappers
 pub mod buffered;
-
-pub mod native;
 
 /// Signal handling
 pub mod signal;
@@ -385,6 +413,7 @@ pub enum IoErrorKind {
     MismatchedFileTypeForOperation,
     ResourceUnavailable,
     IoUnavailable,
+    InvalidInput,
 }
 
 // FIXME: #8242 implementing manually because deriving doesn't work for some reason
@@ -408,6 +437,7 @@ impl ToStr for IoErrorKind {
             IoUnavailable => ~"IoUnavailable",
             ResourceUnavailable => ~"ResourceUnavailable",
             ConnectionAborted => ~"ConnectionAborted",
+            InvalidInput => ~"InvalidInput",
         }
     }
 }
@@ -471,20 +501,6 @@ pub trait Reader {
     /// and will that be annoying?
     /// Is it actually possible for 0 bytes to be read successfully?
     fn read(&mut self, buf: &mut [u8]) -> Option<uint>;
-
-    /// Return whether the Reader has reached the end of the stream.
-    ///
-    /// # Example
-    ///
-    ///     let mut reader = BufferedReader::new(File::open(&Path::new("foo.txt")));
-    ///     for line in reader.lines() {
-    ///         println(line);
-    ///     }
-    ///
-    /// # Failure
-    ///
-    /// Returns `true` on failure.
-    fn eof(&mut self) -> bool;
 
     // Convenient helper methods based on the above methods
 
@@ -579,6 +595,23 @@ pub trait Reader {
         return buf;
     }
 
+    /// Reads all of the remaining bytes of this stream, interpreting them as a
+    /// UTF-8 encoded stream. The corresponding string is returned.
+    ///
+    /// # Failure
+    ///
+    /// This function will raise all the same conditions as the `read` method,
+    /// along with raising a condition if the input is not valid UTF-8.
+    fn read_to_str(&mut self) -> ~str {
+        match str::from_utf8_owned_opt(self.read_to_end()) {
+            Some(s) => s,
+            None => {
+                io_error::cond.raise(standard_error(InvalidInput));
+                ~""
+            }
+        }
+    }
+
     /// Create an iterator that reads a single byte on
     /// each iteration, until EOF.
     ///
@@ -671,7 +704,7 @@ pub trait Reader {
     ///
     /// `u64`s are 8 bytes long.
     fn read_be_u64(&mut self) -> u64 {
-        self.read_be_uint_n(8) as u64
+        self.read_be_uint_n(8)
     }
 
     /// Reads a big-endian `u32`.
@@ -692,7 +725,7 @@ pub trait Reader {
     ///
     /// `i64`s are 8 bytes long.
     fn read_be_i64(&mut self) -> i64 {
-        self.read_be_int_n(8) as i64
+        self.read_be_int_n(8)
     }
 
     /// Reads a big-endian `i32`.
@@ -731,7 +764,7 @@ pub trait Reader {
     ///
     /// `u64`s are 8 bytes long.
     fn read_le_u64(&mut self) -> u64 {
-        self.read_le_uint_n(8) as u64
+        self.read_le_uint_n(8)
     }
 
     /// Reads a little-endian `u32`.
@@ -752,7 +785,7 @@ pub trait Reader {
     ///
     /// `i64`s are 8 bytes long.
     fn read_le_i64(&mut self) -> i64 {
-        self.read_le_int_n(8) as i64
+        self.read_le_int_n(8)
     }
 
     /// Reads a little-endian `i32`.
@@ -792,7 +825,7 @@ pub trait Reader {
     /// `u8`s are 1 byte.
     fn read_u8(&mut self) -> u8 {
         match self.read_byte() {
-            Some(b) => b as u8,
+            Some(b) => b,
             None => 0
         }
     }
@@ -811,12 +844,10 @@ pub trait Reader {
 
 impl Reader for ~Reader {
     fn read(&mut self, buf: &mut [u8]) -> Option<uint> { self.read(buf) }
-    fn eof(&mut self) -> bool { self.eof() }
 }
 
 impl<'a> Reader for &'a mut Reader {
     fn read(&mut self, buf: &mut [u8]) -> Option<uint> { self.read(buf) }
-    fn eof(&mut self) -> bool { self.eof() }
 }
 
 fn extend_sign(val: u64, nbytes: uint) -> i64 {
@@ -838,6 +869,35 @@ pub trait Writer {
     /// This is by default a no-op and implementers of the `Writer` trait should
     /// decide whether their stream needs to be buffered or not.
     fn flush(&mut self) {}
+
+    /// Write a rust string into this sink.
+    ///
+    /// The bytes written will be the UTF-8 encoded version of the input string.
+    /// If other encodings are desired, it is recommended to compose this stream
+    /// with another performing the conversion, or to use `write` with a
+    /// converted byte-array instead.
+    fn write_str(&mut self, s: &str) {
+        self.write(s.as_bytes());
+    }
+
+    /// Writes a string into this sink, and then writes a literal newline (`\n`)
+    /// byte afterwards. Note that the writing of the newline is *not* atomic in
+    /// the sense that the call to `write` is invoked twice (once with the
+    /// string and once with a newline character).
+    ///
+    /// If other encodings or line ending flavors are desired, it is recommended
+    /// that the `write` method is used specifically instead.
+    fn write_line(&mut self, s: &str) {
+        self.write_str(s);
+        self.write(['\n' as u8]);
+    }
+
+    /// Write a single char, encoded as UTF-8.
+    fn write_char(&mut self, c: char) {
+        let mut buf = [0u8, ..4];
+        let n = c.encode_utf8(buf.as_mut_slice());
+        self.write(buf.slice_to(n));
+    }
 
     /// Write the result of passing n through `int::to_str_bytes`.
     fn write_int(&mut self, n: int) {
@@ -1031,16 +1091,28 @@ pub trait Buffer: Reader {
     /// so they should no longer be returned in calls to `fill` or `read`.
     fn consume(&mut self, amt: uint);
 
-    /// Reads the next line of input, interpreted as a sequence of utf-8
+    /// Reads the next line of input, interpreted as a sequence of UTF-8
     /// encoded unicode codepoints. If a newline is encountered, then the
     /// newline is contained in the returned string.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::io::buffered::BufferedReader;
+    /// use std::io;
+    /// # let _g = ::std::io::ignore_io_error();
+    ///
+    /// let mut reader = BufferedReader::new(io::stdin());
+    ///
+    /// let input = reader.read_line().unwrap_or(~"nothing");
+    /// ```
     ///
     /// # Failure
     ///
     /// This function will raise on the `io_error` condition (except for
     /// `EndOfFile` which is swallowed) if a read error is encountered.
     /// The task will also fail if sequence of bytes leading up to
-    /// the newline character are not valid utf-8.
+    /// the newline character are not valid UTF-8.
     fn read_line(&mut self) -> Option<~str> {
         self.read_until('\n' as u8).map(str::from_utf8_owned)
     }
@@ -1117,9 +1189,15 @@ pub trait Buffer: Reader {
         };
         if width == 0 { return None } // not uf8
         let mut buf = [0, ..4];
-        match self.read(buf.mut_slice_to(width)) {
-            Some(n) if n == width => {}
-            Some(..) | None => return None // read error
+        {
+            let mut start = 0;
+            loop {
+                match self.read(buf.mut_slice(start, width)) {
+                    Some(n) if n == width - start => break,
+                    Some(n) if n < width - start => { start += n; }
+                    Some(..) | None => return None // read error
+                }
+            }
         }
         match str::from_utf8_opt(buf.slice_to(width)) {
             Some(s) => Some(s.char_at(0)),
@@ -1197,56 +1275,18 @@ impl<'a, T, A: Acceptor<T>> Iterator<Option<T>> for IncomingIterator<'a, A> {
     }
 }
 
-/// Common trait for decorator types.
-///
-/// Provides accessors to get the inner, 'decorated' values. The I/O library
-/// uses decorators to add functionality like compression and encryption to I/O
-/// streams.
-///
-/// # XXX
-///
-/// Is this worth having a trait for? May be overkill
-pub trait Decorator<T> {
-    /// Destroy the decorator and extract the decorated value
-    ///
-    /// # XXX
-    ///
-    /// Because this takes `self' one could never 'undecorate' a Reader/Writer
-    /// that has been boxed. Is that ok? This feature is mostly useful for
-    /// extracting the buffer from MemWriter
-    fn inner(self) -> T;
-
-    /// Take an immutable reference to the decorated value
-    fn inner_ref<'a>(&'a self) -> &'a T;
-
-    /// Take a mutable reference to the decorated value
-    fn inner_mut_ref<'a>(&'a mut self) -> &'a mut T;
-}
-
 pub fn standard_error(kind: IoErrorKind) -> IoError {
-    match kind {
-        PreviousIoError => {
-            IoError {
-                kind: PreviousIoError,
-                desc: "Failing due to a previous I/O error",
-                detail: None
-            }
-        }
-        EndOfFile => {
-            IoError {
-                kind: EndOfFile,
-                desc: "End of file",
-                detail: None
-            }
-        }
-        IoUnavailable => {
-            IoError {
-                kind: IoUnavailable,
-                desc: "I/O is unavailable",
-                detail: None
-            }
-        }
+    let desc = match kind {
+        PreviousIoError => "failing due to previous I/O error",
+        EndOfFile => "end of file",
+        IoUnavailable => "I/O is unavailable",
+        InvalidInput => "invalid input",
         _ => fail!()
+    };
+    IoError {
+        kind: kind,
+        desc: desc,
+        detail: None,
     }
 }
 

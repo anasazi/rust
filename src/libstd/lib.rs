@@ -18,7 +18,7 @@
 //! `std` includes modules corresponding to each of the integer types,
 //! each of the floating point types, the `bool` type, tuples, characters,
 //! strings (`str`), vectors (`vec`), managed boxes (`managed`), owned
-//! boxes (`owned`), and unsafe and borrowed pointers (`ptr`, `borrowed`).
+//! boxes (`owned`), and unsafe pointers and references (`ptr`, `borrowed`).
 //! Additionally, `std` provides pervasive types (`option` and `result`),
 //! task creation and communication primitives (`task`, `comm`), platform
 //! abstractions (`os` and `path`), basic I/O abstractions (`io`), common
@@ -43,9 +43,7 @@
 //!
 //!     use std::prelude::*;
 
-// NOTE: remove after snapshot
-#[pkgid = "std#0.9-pre"];
-#[crate_id = "std#0.9-pre"];
+#[crate_id = "std#0.9"];
 #[comment = "The Rust standard library"];
 #[license = "MIT/ASL2"];
 #[crate_type = "rlib"];
@@ -65,13 +63,15 @@
 // When testing libstd, bring in libuv as the I/O backend so tests can print
 // things and all of the std::io tests have an I/O interface to run on top
 // of
-#[cfg(test)] extern mod rustuv = "rustuv#0.9-pre";
+#[cfg(test)] extern mod rustuv = "rustuv";
+#[cfg(test)] extern mod native = "native";
+#[cfg(test)] extern mod green = "green";
 
 // Make extra accessible for benchmarking
-#[cfg(test)] extern mod extra = "extra#0.9-pre";
+#[cfg(test)] extern mod extra = "extra";
 
 // Make std testable by not duplicating lang items. See #2912
-#[cfg(test)] extern mod realstd = "std#0.9-pre";
+#[cfg(test)] extern mod realstd = "std";
 #[cfg(test)] pub use kinds = realstd::kinds;
 #[cfg(test)] pub use ops = realstd::ops;
 #[cfg(test)] pub use cmp = realstd::cmp;
@@ -85,6 +85,7 @@ pub mod prelude;
 
 /* Primitive types */
 
+#[path = "num/float_macros.rs"] mod float_macros;
 #[path = "num/int_macros.rs"]   mod int_macros;
 #[path = "num/uint_macros.rs"]  mod uint_macros;
 
@@ -148,7 +149,6 @@ pub mod any;
 
 pub mod option;
 pub mod result;
-pub mod either;
 pub mod hashmap;
 pub mod cell;
 pub mod trie;
@@ -159,10 +159,12 @@ pub mod trie;
 pub mod task;
 pub mod comm;
 pub mod local_data;
+pub mod sync;
 
 
 /* Runtime and platform support */
 
+#[unstable]
 pub mod libc;
 pub mod c_str;
 pub mod os;
@@ -172,9 +174,8 @@ pub mod rand;
 pub mod run;
 pub mod cast;
 pub mod fmt;
-pub mod repr;
 pub mod cleanup;
-pub mod reflect;
+#[deprecated]
 pub mod condition;
 pub mod logging;
 pub mod util;
@@ -183,7 +184,13 @@ pub mod mem;
 
 /* Unsupported interfaces */
 
+#[unstable]
+pub mod repr;
+#[unstable]
+pub mod reflect;
+
 // Private APIs
+#[unstable]
 pub mod unstable;
 
 
@@ -195,6 +202,7 @@ mod cmath;
 
 // FIXME #7809: This shouldn't be pub, and it should be reexported under 'unstable'
 // but name resolution doesn't work without it being pub.
+#[unstable]
 pub mod rt;
 
 // A curious inner-module that's not exported that contains the binding

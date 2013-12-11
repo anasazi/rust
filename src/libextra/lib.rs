@@ -20,9 +20,7 @@ Rust extras are part of the standard Rust distribution.
 
 */
 
-// NOTE: remove after snapshot
-#[pkgid = "extra#0.9-pre"];
-#[crate_id = "extra#0.9-pre"];
+#[crate_id = "extra#0.9"];
 #[comment = "Rust extras"];
 #[license = "MIT/ASL2"];
 #[crate_type = "rlib"];
@@ -35,10 +33,6 @@ Rust extras are part of the standard Rust distribution.
 
 #[deny(non_camel_case_types)];
 #[deny(missing_doc)];
-
-use std::str::{StrSlice, OwnedStr};
-
-pub use std::os;
 
 // Utility modules
 
@@ -60,8 +54,6 @@ pub mod list;
 pub mod ringbuf;
 pub mod priority_queue;
 pub mod smallintmap;
-
-pub mod sort;
 
 pub mod dlist;
 pub mod treemap;
@@ -112,12 +104,4 @@ pub mod serialize;
 pub mod extra {
     pub use serialize;
     pub use test;
-
-    // For bootstrapping.
-    pub use std::clone;
-    pub use std::condition;
-    pub use std::cmp;
-    pub use std::unstable;
-    pub use std::str;
-    pub use std::os;
 }

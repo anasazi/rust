@@ -51,13 +51,13 @@ let my_string = "Hello, world!";
 let my_c_string = my_string.to_c_str();
 my_c_string.with_ref(|c_buffer| {
     unsafe { puts(c_buffer); }
-})
+});
 
 // Don't save off the allocation of the C string, the `c_buffer` will be
 // deallocated when this block returns!
 my_string.with_c_str(|c_buffer| {
     unsafe { puts(c_buffer); }
-})
+});
  ```
 
 */
@@ -216,7 +216,11 @@ pub trait ToCStr {
     /// # Example
     ///
     /// ```rust
-    /// let s = "PATH".with_c_str(|path| libc::getenv(path))
+    /// use std::libc;
+    ///
+    /// let s = "PATH".with_c_str(|path| unsafe {
+    ///     libc::getenv(path)
+    /// });
     /// ```
     ///
     /// # Failure
@@ -373,10 +377,10 @@ pub unsafe fn from_c_multistring(buf: *libc::c_char,
 
 #[cfg(test)]
 mod tests {
+    use prelude::*;
     use super::*;
     use libc;
     use ptr;
-    use option::{Some, None};
 
     #[test]
     fn test_str_multistring_parsing() {
@@ -564,11 +568,10 @@ mod tests {
 
 #[cfg(test)]
 mod bench {
-    use iter::range;
-    use libc;
-    use option::Some;
-    use ptr;
     use extra::test::BenchHarness;
+    use libc;
+    use prelude::*;
+    use ptr;
 
     #[inline]
     fn check(s: &str, c_str: *libc::c_char) {

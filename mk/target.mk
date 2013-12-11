@@ -61,7 +61,8 @@ $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_STDLIB_$(2)): \
 	@$$(call E, compile_and_link: $$@)
 	$$(call REMOVE_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(STDLIB_GLOB_$(2)),$$(notdir $$@))
 	$$(call REMOVE_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(STDLIB_RGLOB_$(2)),$$(notdir $$@))
-	$$(STAGE$(1)_T_$(2)_H_$(3)) $$(WFLAGS_ST$(1)) --out-dir $$(@D) $$< && touch $$@
+	$$(STAGE$(1)_T_$(2)_H_$(3)) $$(WFLAGS_ST$(1)) \
+		--out-dir $$(@D) $$< && touch $$@
 	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(STDLIB_GLOB_$(2)),$$(notdir $$@))
 	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(STDLIB_RGLOB_$(2)),$$(notdir $$@))
 
@@ -73,7 +74,8 @@ $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_EXTRALIB_$(2)): \
 	@$$(call E, compile_and_link: $$@)
 	$$(call REMOVE_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(EXTRALIB_GLOB_$(2)),$$(notdir $$@))
 	$$(call REMOVE_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(EXTRALIB_RGLOB_$(2)),$$(notdir $$@))
-	$$(STAGE$(1)_T_$(2)_H_$(3)) $$(WFLAGS_ST$(1)) --out-dir $$(@D) $$< && touch $$@
+	$$(STAGE$(1)_T_$(2)_H_$(3)) $$(WFLAGS_ST$(1)) \
+		--out-dir $$(@D) $$< && touch $$@
 	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(EXTRALIB_GLOB_$(2)),$$(notdir $$@))
 	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(EXTRALIB_RGLOB_$(2)),$$(notdir $$@))
 
@@ -94,17 +96,43 @@ $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_LIBRUSTUV_$(2)): \
 	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBRUSTUV_GLOB_$(2)),$$(notdir $$@))
 	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBRUSTUV_RGLOB_$(2)),$$(notdir $$@))
 
+$$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_LIBGREEN_$(2)): \
+		$$(LIBGREEN_CRATE) $$(LIBGREEN_INPUTS) \
+	        $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_STDLIB_$(2)) \
+		$$(TSREQ$(1)_T_$(2)_H_$(3)) \
+		| $$(TLIB$(1)_T_$(2)_H_$(3))/
+	@$$(call E, compile_and_link: $$@)
+	$$(call REMOVE_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBGREEN_GLOB_$(2)),$$(notdir $$@))
+	$$(call REMOVE_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBGREEN_RGLOB_$(2)),$$(notdir $$@))
+	$$(STAGE$(1)_T_$(2)_H_$(3)) $$(WFLAGS_ST$(1)) \
+		--out-dir $$(@D) $$< && touch $$@
+	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBGREEN_GLOB_$(2)),$$(notdir $$@))
+	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBGREEN_RGLOB_$(2)),$$(notdir $$@))
+
+$$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_LIBNATIVE_$(2)): \
+		$$(LIBNATIVE_CRATE) $$(LIBNATIVE_INPUTS) \
+	        $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_STDLIB_$(2)) \
+		$$(TSREQ$(1)_T_$(2)_H_$(3)) \
+		| $$(TLIB$(1)_T_$(2)_H_$(3))/
+	@$$(call E, compile_and_link: $$@)
+	$$(call REMOVE_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBNATIVE_GLOB_$(2)),$$(notdir $$@))
+	$$(call REMOVE_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBNATIVE_RGLOB_$(2)),$$(notdir $$@))
+	$$(STAGE$(1)_T_$(2)_H_$(3)) $$(WFLAGS_ST$(1)) \
+		--out-dir $$(@D) $$< && touch $$@
+	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBNATIVE_GLOB_$(2)),$$(notdir $$@))
+	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBNATIVE_RGLOB_$(2)),$$(notdir $$@))
+
 $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_LIBSYNTAX_$(3)): \
                 $$(LIBSYNTAX_CRATE) $$(LIBSYNTAX_INPUTS) \
 		$$(TSREQ$(1)_T_$(2)_H_$(3))			\
 		$$(TSTDLIB_DEFAULT$(1)_T_$(2)_H_$(3))      \
 		$$(TEXTRALIB_DEFAULT$(1)_T_$(2)_H_$(3)) \
-		$$(TLIBRUSTUV_DEFAULT$(1)_T_$(2)_H_$(3)) \
 		| $$(TLIB$(1)_T_$(2)_H_$(3))/
 	@$$(call E, compile_and_link: $$@)
 	$$(call REMOVE_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBSYNTAX_GLOB_$(2)),$$(notdir $$@))
 	$$(call REMOVE_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBSYNTAX_RGLOB_$(2)),$$(notdir $$@))
-	$$(STAGE$(1)_T_$(2)_H_$(3)) $$(WFLAGS_ST$(1)) $(BORROWCK) --out-dir $$(@D) $$< && touch $$@
+	$$(STAGE$(1)_T_$(2)_H_$(3)) $$(WFLAGS_ST$(1)) $(BORROWCK) \
+	    --out-dir $$(@D) $$< && touch $$@
 	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBSYNTAX_GLOB_$(2)),$$(notdir $$@))
 	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBSYNTAX_RGLOB_$(2)),$$(notdir $$@))
 
@@ -135,16 +163,13 @@ $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_LIBRUSTC_$(3)):		\
 	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBRUSTC_GLOB_$(2)),$$(notdir $$@))
 	$$(call LIST_ALL_OLD_GLOB_MATCHES_EXCEPT,$$(dir $$@),$(LIBRUSTC_RGLOB_$(2)),$$(notdir $$@))
 
-# NOTE: after the next snapshot remove these '-L' flags
 $$(TBIN$(1)_T_$(2)_H_$(3))/rustc$$(X_$(3)):			\
 		$$(DRIVER_CRATE)				\
-		$$(TSREQ$(1)_T_$(2)_H_$(3)) \
+		$$(SREQ$(1)_T_$(2)_H_$(3)) \
 		$$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_LIBRUSTC_$(3)) \
 		| $$(TBIN$(1)_T_$(2)_H_$(3))/
 	@$$(call E, compile_and_link: $$@)
-	$$(STAGE$(1)_T_$(2)_H_$(3)) --cfg rustc -o $$@ $$< \
-		-L $$(UV_SUPPORT_DIR_$(2)) \
-		-L $$(dir $$(LIBUV_LIB_$(2)))
+	$$(STAGE$(1)_T_$(2)_H_$(3)) --cfg rustc -o $$@ $$<
 ifdef CFG_ENABLE_PAX_FLAGS
 	@$$(call E, apply PaX flags: $$@)
 	@"$(CFG_PAXCTL)" -cm "$$@"
@@ -155,10 +180,8 @@ endif
 $$(TBIN$(1)_T_$(2)_H_$(3))/:
 	mkdir -p $$@
 
-ifneq ($(CFG_LIBDIR),bin)
 $$(TLIB$(1)_T_$(2)_H_$(3))/:
 	mkdir -p $$@
-endif
 
 endef
 

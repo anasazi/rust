@@ -15,9 +15,10 @@
  * # Example
  *
  * ```rust
+ * use extra::future::Future;
  * # fn fib(n: uint) -> uint {42};
  * # fn make_a_sandwich() {};
- * let mut delayed_fib = extra::future::spawn (|| fib(5000) );
+ * let mut delayed_fib = do Future::spawn { fib(5000) };
  * make_a_sandwich();
  * println!("fib(5000) = {}", delayed_fib.get())
  * ```
@@ -59,8 +60,8 @@ impl<A> Future<A> {
 
     pub fn get_ref<'a>(&'a mut self) -> &'a A {
         /*!
-        * Executes the future's closure and then returns a borrowed
-        * pointer to the result.  The borrowed pointer lasts as long as
+        * Executes the future's closure and then returns a reference
+        * to the result.  The reference lasts as long as
         * the future.
         */
         match self.state {

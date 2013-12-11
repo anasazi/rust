@@ -85,7 +85,7 @@ pub struct CopiedUpvar {
 #[deriving(Eq, IterBytes)]
 pub enum PointerKind {
     uniq_ptr,
-    gc_ptr(ast::Mutability),
+    gc_ptr,
     region_ptr(ast::Mutability, ty::Region),
     unsafe_ptr(ast::Mutability)
 }
@@ -178,17 +178,11 @@ pub fn opt_deref_kind(t: ty::t) -> Option<deref_kind> {
             Some(deref_ptr(region_ptr(ast::MutImmutable, r)))
         }
 
-        ty::ty_box(ref mt) |
-        ty::ty_evec(ref mt, ty::vstore_box) => {
-            Some(deref_ptr(gc_ptr(mt.mutbl)))
-        }
-
-        ty::ty_trait(_, _, ty::BoxTraitStore, m, _) => {
-            Some(deref_ptr(gc_ptr(m)))
-        }
-
+        ty::ty_box(_) |
+        ty::ty_evec(_, ty::vstore_box) |
+        ty::ty_trait(_, _, ty::BoxTraitStore, _, _) |
         ty::ty_estr(ty::vstore_box) => {
-            Some(deref_ptr(gc_ptr(ast::MutImmutable)))
+            Some(deref_ptr(gc_ptr))
         }
 
         ty::ty_ptr(ref mt) => {
@@ -222,7 +216,7 @@ pub fn deref_kind(tcx: ty::ctxt, t: ty::t) -> deref_kind {
 
 pub fn cat_expr(tcx: ty::ctxt,
                 method_map: typeck::method_map,
-                expr: @ast::Expr)
+                expr: &ast::Expr)
              -> cmt {
     let mcx = &mem_categorization_ctxt {
         tcx: tcx, method_map: method_map
@@ -232,7 +226,7 @@ pub fn cat_expr(tcx: ty::ctxt,
 
 pub fn cat_expr_unadjusted(tcx: ty::ctxt,
                            method_map: typeck::method_map,
-                           expr: @ast::Expr)
+                           expr: &ast::Expr)
                         -> cmt {
     let mcx = &mem_categorization_ctxt {
         tcx: tcx, method_map: method_map
@@ -243,7 +237,7 @@ pub fn cat_expr_unadjusted(tcx: ty::ctxt,
 pub fn cat_expr_autoderefd(
     tcx: ty::ctxt,
     method_map: typeck::method_map,
-    expr: @ast::Expr,
+    expr: &ast::Expr,
     autoderefs: uint) -> cmt
 {
     let mcx = &mem_categorization_ctxt {
@@ -271,12 +265,12 @@ pub trait ast_node {
     fn span(&self) -> Span;
 }
 
-impl ast_node for @ast::Expr {
+impl ast_node for ast::Expr {
     fn id(&self) -> ast::NodeId { self.id }
     fn span(&self) -> Span { self.span }
 }
 
-impl ast_node for @ast::Pat {
+impl ast_node for ast::Pat {
     fn id(&self) -> ast::NodeId { self.id }
     fn span(&self) -> Span { self.span }
 }
@@ -331,19 +325,27 @@ impl MutabilityCategory {
 }
 
 impl mem_categorization_ctxt {
-    pub fn expr_ty(&self, expr: @ast::Expr) -> ty::t {
+    pub fn expr_ty(&self, expr: &ast::Expr) -> ty::t {
         ty::expr_ty(self.tcx, expr)
     }
 
-    pub fn pat_ty(&self, pat: @ast::Pat) -> ty::t {
+    pub fn pat_ty(&self, pat: &ast::Pat) -> ty::t {
         ty::node_id_to_type(self.tcx, pat.id)
     }
 
-    pub fn cat_expr(&self, expr: @ast::Expr) -> cmt {
-        match self.tcx.adjustments.find(&expr.id) {
+    pub fn cat_expr(&self, expr: &ast::Expr) -> cmt {
+        let adjustments = self.tcx.adjustments.borrow();
+        match adjustments.get().find(&expr.id) {
             None => {
                 // No adjustments.
                 self.cat_expr_unadjusted(expr)
+            }
+
+            Some(&@ty::AutoObject(..)) => {
+                // Implicity casts a concrete object to trait object
+                // Result is an rvalue
+                let expr_ty = ty::expr_ty_adjusted(self.tcx, expr);
+                self.cat_rvalue_node(expr, expr_ty)
             }
 
             Some(&@ty::AutoAddEnv(..)) => {
@@ -373,7 +375,7 @@ impl mem_categorization_ctxt {
         }
     }
 
-    pub fn cat_expr_autoderefd(&self, expr: @ast::Expr, autoderefs: uint)
+    pub fn cat_expr_autoderefd(&self, expr: &ast::Expr, autoderefs: uint)
                                -> cmt {
         let mut cmt = self.cat_expr_unadjusted(expr);
         for deref in range(1u, autoderefs + 1) {
@@ -382,14 +384,15 @@ impl mem_categorization_ctxt {
         return cmt;
     }
 
-    pub fn cat_expr_unadjusted(&self, expr: @ast::Expr) -> cmt {
+    pub fn cat_expr_unadjusted(&self, expr: &ast::Expr) -> cmt {
         debug!("cat_expr: id={} expr={}",
                expr.id, pprust::expr_to_str(expr, self.tcx.sess.intr()));
 
         let expr_ty = self.expr_ty(expr);
         match expr.node {
           ast::ExprUnary(_, ast::UnDeref, e_base) => {
-            if self.method_map.contains_key(&expr.id) {
+            let method_map = self.method_map.borrow();
+            if method_map.get().contains_key(&expr.id) {
                 return self.cat_rvalue_node(expr, expr_ty);
             }
 
@@ -400,14 +403,16 @@ impl mem_categorization_ctxt {
           ast::ExprField(base, f_name, _) => {
             // Method calls are now a special syntactic form,
             // so `a.b` should always be a field.
-            assert!(!self.method_map.contains_key(&expr.id));
+            let method_map = self.method_map.borrow();
+            assert!(!method_map.get().contains_key(&expr.id));
 
             let base_cmt = self.cat_expr(base);
             self.cat_field(expr, base_cmt, f_name, self.expr_ty(expr))
           }
 
           ast::ExprIndex(_, base, _) => {
-            if self.method_map.contains_key(&expr.id) {
+            let method_map = self.method_map.borrow();
+            if method_map.get().contains_key(&expr.id) {
                 return self.cat_rvalue_node(expr, expr_ty);
             }
 
@@ -416,7 +421,8 @@ impl mem_categorization_ctxt {
           }
 
           ast::ExprPath(_) | ast::ExprSelf => {
-            let def = self.tcx.def_map.get_copy(&expr.id);
+            let def_map = self.tcx.def_map.borrow();
+            let def = def_map.get().get_copy(&expr.id);
             self.cat_def(expr.id, expr.span, expr_ty, def)
           }
 
@@ -432,7 +438,7 @@ impl mem_categorization_ctxt {
           ast::ExprBlock(..) | ast::ExprLoop(..) | ast::ExprMatch(..) |
           ast::ExprLit(..) | ast::ExprBreak(..) | ast::ExprMac(..) |
           ast::ExprAgain(..) | ast::ExprStruct(..) | ast::ExprRepeat(..) |
-          ast::ExprInlineAsm(..) => {
+          ast::ExprInlineAsm(..) | ast::ExprBox(..) => {
             return self.cat_rvalue_node(expr, expr_ty);
           }
 
@@ -571,7 +577,7 @@ impl mem_categorization_ctxt {
     }
 
     pub fn cat_rvalue_node<N:ast_node>(&self,
-                                       node: N,
+                                       node: &N,
                                        expr_ty: ty::t) -> cmt {
         self.cat_rvalue(node.id(),
                         node.span(),
@@ -608,7 +614,7 @@ impl mem_categorization_ctxt {
     }
 
     pub fn cat_field<N:ast_node>(&self,
-                                 node: N,
+                                 node: &N,
                                  base_cmt: cmt,
                                  f_name: ast::Ident,
                                  f_ty: ty::t)
@@ -623,7 +629,7 @@ impl mem_categorization_ctxt {
     }
 
     pub fn cat_deref_fn_or_obj<N:ast_node>(&self,
-                                           node: N,
+                                           node: &N,
                                            base_cmt: cmt,
                                            deref_cnt: uint)
                                            -> cmt {
@@ -638,11 +644,11 @@ impl mem_categorization_ctxt {
     }
 
     pub fn cat_deref<N:ast_node>(&self,
-                                 node: N,
+                                 node: &N,
                                  base_cmt: cmt,
                                  deref_cnt: uint)
                                  -> cmt {
-        let mt = match ty::deref(self.tcx, base_cmt.ty, true) {
+        let mt = match ty::deref(base_cmt.ty, true) {
             Some(mt) => mt,
             None => {
                 self.tcx.sess.span_bug(
@@ -656,7 +662,7 @@ impl mem_categorization_ctxt {
     }
 
     pub fn cat_deref_common<N:ast_node>(&self,
-                                        node: N,
+                                        node: &N,
                                         base_cmt: cmt,
                                         deref_cnt: uint,
                                         deref_ty: ty::t)
@@ -669,7 +675,10 @@ impl mem_categorization_ctxt {
                     uniq_ptr => {
                         base_cmt.mutbl.inherit()
                     }
-                    gc_ptr(m) | region_ptr(m, _) | unsafe_ptr(m) => {
+                    gc_ptr => {
+                        McImmutable
+                    }
+                    region_ptr(m, _) | unsafe_ptr(m) => {
                         MutabilityCategory::from_mutbl(m)
                     }
                 };
@@ -697,7 +706,7 @@ impl mem_categorization_ctxt {
     }
 
     pub fn cat_index<N:ast_node>(&self,
-                                 elt: N,
+                                 elt: &N,
                                  base_cmt: cmt,
                                  derefs: uint)
                                  -> cmt {
@@ -747,12 +756,15 @@ impl mem_categorization_ctxt {
             // for unique ptrs, we inherit mutability from the
             // owning reference.
             let m = match ptr {
-              uniq_ptr => {
-                base_cmt.mutbl.inherit()
-              }
-              gc_ptr(m) | region_ptr(m, _) | unsafe_ptr(m) => {
-                MutabilityCategory::from_mutbl(m)
-              }
+                uniq_ptr => {
+                    base_cmt.mutbl.inherit()
+                }
+                gc_ptr => {
+                    McImmutable
+                }
+                region_ptr(m, _) | unsafe_ptr(m) => {
+                    MutabilityCategory::from_mutbl(m)
+                }
             };
 
             // the deref is explicit in the resulting cmt
@@ -774,7 +786,7 @@ impl mem_categorization_ctxt {
           }
         };
 
-        fn interior<N: ast_node>(elt: N,
+        fn interior<N: ast_node>(elt: &N,
                                  of_cmt: cmt,
                                  vec_ty: ty::t,
                                  mutbl: MutabilityCategory,
@@ -791,7 +803,7 @@ impl mem_categorization_ctxt {
     }
 
     pub fn cat_imm_interior<N:ast_node>(&self,
-                                        node: N,
+                                        node: &N,
                                         base_cmt: cmt,
                                         interior_ty: ty::t,
                                         interior: InteriorKind)
@@ -806,7 +818,7 @@ impl mem_categorization_ctxt {
     }
 
     pub fn cat_downcast<N:ast_node>(&self,
-                                    node: N,
+                                    node: &N,
                                     base_cmt: cmt,
                                     downcast_ty: ty::t)
                                     -> cmt {
@@ -821,8 +833,8 @@ impl mem_categorization_ctxt {
 
     pub fn cat_pattern(&self,
                        cmt: cmt,
-                       pat: @ast::Pat,
-                       op: |cmt, @ast::Pat|) {
+                       pat: &ast::Pat,
+                       op: |cmt, &ast::Pat|) {
         // Here, `cmt` is the categorization for the value being
         // matched and pat is the pattern it is being matched against.
         //
@@ -884,7 +896,8 @@ impl mem_categorization_ctxt {
             // variant(..)
           }
           ast::PatEnum(_, Some(ref subpats)) => {
-            match self.tcx.def_map.find(&pat.id) {
+            let def_map = self.tcx.def_map.borrow();
+            match def_map.get().find(&pat.id) {
                 Some(&ast::DefVariant(enum_did, _, _)) => {
                     // variant(x, y, z)
 
@@ -1070,7 +1083,8 @@ pub fn field_mutbl(tcx: ty::ctxt,
         }
       }
       ty::ty_enum(..) => {
-        match tcx.def_map.get_copy(&node_id) {
+        let def_map = tcx.def_map.borrow();
+        match def_map.get().get_copy(&node_id) {
           ast::DefVariant(_, variant_id, _) => {
             let r = ty::lookup_struct_fields(tcx, variant_id);
             for fld in r.iter() {
@@ -1089,7 +1103,7 @@ pub fn field_mutbl(tcx: ty::ctxt,
 }
 
 pub enum AliasableReason {
-    AliasableManaged(ast::Mutability),
+    AliasableManaged,
     AliasableBorrowed(ast::Mutability),
     AliasableOther
 }
@@ -1108,7 +1122,7 @@ impl cmt_ {
             cat_self(..) |
             cat_arg(..) |
             cat_deref(_, _, unsafe_ptr(..)) |
-            cat_deref(_, _, gc_ptr(..)) |
+            cat_deref(_, _, gc_ptr) |
             cat_deref(_, _, region_ptr(..)) => {
                 self
             }
@@ -1152,8 +1166,8 @@ impl cmt_ {
                 Some(AliasableOther)
             }
 
-            cat_deref(_, _, gc_ptr(m)) => {
-                Some(AliasableManaged(m))
+            cat_deref(_, _, gc_ptr) => {
+                Some(AliasableManaged)
             }
 
             cat_deref(_, _, region_ptr(m @ MutImmutable, _)) => {
@@ -1215,7 +1229,7 @@ impl Repr for categorization {
 pub fn ptr_sigil(ptr: PointerKind) -> ~str {
     match ptr {
         uniq_ptr => ~"~",
-        gc_ptr(_) => ~"@",
+        gc_ptr => ~"@",
         region_ptr(_, _) => ~"&",
         unsafe_ptr(_) => ~"*"
     }

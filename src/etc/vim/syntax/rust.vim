@@ -71,14 +71,14 @@ syn keyword rustTrait Bool
 syn keyword rustTrait ToCStr
 syn keyword rustTrait Char
 syn keyword rustTrait Clone DeepClone
-syn keyword rustTrait Eq ApproxEq Ord TotalEq TotalOrd Ordering Equiv
+syn keyword rustTrait Eq Ord TotalEq TotalOrd Ordering Equiv
 syn keyword rustEnumVariant Less Equal Greater
 syn keyword rustTrait Container Mutable Map MutableMap Set MutableSet
 syn keyword rustTrait Default
 syn keyword rustTrait Hash
 syn keyword rustTrait FromStr
 syn keyword rustTrait FromIterator Extendable
-syn keyword rustTrait Iterator DoubleEndedIterator RandomAccessIterator ClonableIterator
+syn keyword rustTrait Iterator DoubleEndedIterator RandomAccessIterator CloneableIterator
 syn keyword rustTrait OrdIterator MutableDoubleEndedIterator ExactSize
 syn keyword rustTrait Times
 

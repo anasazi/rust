@@ -23,7 +23,7 @@ use syntax::codemap::Span;
 use util::ppaux::{UserString};
 
 pub fn gather_decl(bccx: &BorrowckCtxt,
-                   move_data: &mut MoveData,
+                   move_data: &MoveData,
                    decl_id: ast::NodeId,
                    _decl_span: Span,
                    var_id: ast::NodeId) {
@@ -32,23 +32,21 @@ pub fn gather_decl(bccx: &BorrowckCtxt,
 }
 
 pub fn gather_move_from_expr(bccx: &BorrowckCtxt,
-                             move_data: &mut MoveData,
-                             move_expr: @ast::Expr,
+                             move_data: &MoveData,
+                             move_expr: &ast::Expr,
                              cmt: mc::cmt) {
-    gather_move_from_expr_or_pat(bccx, move_data, move_expr.id,
-                                 MoveExpr(move_expr), cmt);
+    gather_move_from_expr_or_pat(bccx, move_data, move_expr.id, MoveExpr, cmt);
 }
 
 pub fn gather_move_from_pat(bccx: &BorrowckCtxt,
-                            move_data: &mut MoveData,
-                            move_pat: @ast::Pat,
+                            move_data: &MoveData,
+                            move_pat: &ast::Pat,
                             cmt: mc::cmt) {
-    gather_move_from_expr_or_pat(bccx, move_data, move_pat.id,
-                                 MovePat(move_pat), cmt);
+    gather_move_from_expr_or_pat(bccx, move_data, move_pat.id, MovePat, cmt);
 }
 
 fn gather_move_from_expr_or_pat(bccx: &BorrowckCtxt,
-                                move_data: &mut MoveData,
+                                move_data: &MoveData,
                                 move_id: ast::NodeId,
                                 move_kind: MoveKind,
                                 cmt: mc::cmt) {
@@ -67,16 +65,17 @@ fn gather_move_from_expr_or_pat(bccx: &BorrowckCtxt,
 }
 
 pub fn gather_captures(bccx: &BorrowckCtxt,
-                       move_data: &mut MoveData,
-                       closure_expr: @ast::Expr) {
-    let captured_vars = bccx.capture_map.get(&closure_expr.id);
+                       move_data: &MoveData,
+                       closure_expr: &ast::Expr) {
+    let capture_map = bccx.capture_map.borrow();
+    let captured_vars = capture_map.get().get(&closure_expr.id);
     for captured_var in captured_vars.iter() {
         match captured_var.mode {
             moves::CapMove => {
                 let fvar_id = ast_util::def_id_of_def(captured_var.def).node;
                 let loan_path = @LpVar(fvar_id);
                 move_data.add_move(bccx.tcx, loan_path, closure_expr.id,
-                                   Captured(closure_expr));
+                                   Captured);
             }
             moves::CapCopy | moves::CapRef => {}
         }
@@ -84,7 +83,7 @@ pub fn gather_captures(bccx: &BorrowckCtxt,
 }
 
 pub fn gather_assignment(bccx: &BorrowckCtxt,
-                         move_data: &mut MoveData,
+                         move_data: &MoveData,
                          assignment_id: ast::NodeId,
                          assignment_span: Span,
                          assignee_loan_path: @LoanPath,
@@ -101,7 +100,7 @@ fn check_is_legal_to_move_from(bccx: &BorrowckCtxt,
                                cmt: mc::cmt) -> bool {
     match cmt.cat {
         mc::cat_deref(_, _, mc::region_ptr(..)) |
-        mc::cat_deref(_, _, mc::gc_ptr(..)) |
+        mc::cat_deref(_, _, mc::gc_ptr) |
         mc::cat_deref(_, _, mc::unsafe_ptr(..)) |
         mc::cat_stack_upvar(..) |
         mc::cat_copied_upvar(mc::CopiedUpvar { onceness: ast::Many, .. }) => {

@@ -13,14 +13,16 @@
 use ascii::AsciiCast;
 use c_str::{CString, ToCStr};
 use cast;
+use clone::Clone;
+use container::Container;
 use cmp::Eq;
 use from_str::FromStr;
 use iter::{AdditiveIterator, DoubleEndedIterator, Extendable, Invert, Iterator, Map};
 use option::{Option, Some, None};
 use str;
-use str::{CharSplitIterator, OwnedStr, Str, StrVector};
+use str::{CharSplitIterator, OwnedStr, Str, StrVector, StrSlice};
 use to_bytes::IterBytes;
-use vec::Vector;
+use vec::{Vector, OwnedVector, ImmutableVector};
 use super::{contains_nul, BytesContainer, GenericPath, GenericPathUnsafe};
 
 /// Iterator that yields successive components of a Path as &str
@@ -255,7 +257,7 @@ impl GenericPathUnsafe for Path {
             // if me is verbatim, we need to pre-normalize the new path
             let path_ = if is_verbatim(me) { Path::normalize__(path, None) }
                         else { None };
-            let pathlen = path_.as_ref().map_default(path.len(), |p| p.len());
+            let pathlen = path_.as_ref().map_or(path.len(), |p| p.len());
             let mut s = str::with_capacity(me.repr.len() + 1 + pathlen);
             s.push_str(me.repr);
             let plen = me.prefix_len();
@@ -1051,11 +1053,9 @@ fn prefix_len(p: Option<PathPrefix>) -> uint {
 
 #[cfg(test)]
 mod tests {
+    use prelude::*;
     use super::*;
     use super::parse_prefix;
-    use option::{Some,None};
-    use iter::Iterator;
-    use vec::Vector;
 
     macro_rules! t(
         (s: $path:expr, $exp:expr) => (

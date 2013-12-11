@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-
+use std::cell::RefCell;
 use std::option;
 use std::os;
 use std::io;
@@ -42,11 +42,11 @@ pub trait FileSearch {
 
 pub fn mk_filesearch(maybe_sysroot: &Option<@Path>,
                      target_triple: &str,
-                     addl_lib_search_paths: @mut HashSet<Path>)
+                     addl_lib_search_paths: @RefCell<HashSet<Path>>)
                   -> @FileSearch {
     struct FileSearchImpl {
         sysroot: @Path,
-        addl_lib_search_paths: @mut HashSet<Path>,
+        addl_lib_search_paths: @RefCell<HashSet<Path>>,
         target_triple: ~str
     }
     impl FileSearch for FileSearchImpl {
@@ -56,9 +56,10 @@ pub fn mk_filesearch(maybe_sysroot: &Option<@Path>,
             let mut visited_dirs = HashSet::new();
             let mut found = false;
 
+            let addl_lib_search_paths = self.addl_lib_search_paths.borrow();
             debug!("filesearch: searching additional lib search paths [{:?}]",
-                   self.addl_lib_search_paths.len());
-            for path in self.addl_lib_search_paths.iter() {
+                   addl_lib_search_paths.get().len());
+            for path in addl_lib_search_paths.get().iter() {
                 match f(path) {
                     FileMatches => found = true,
                     FileDoesntMatch => ()
@@ -153,12 +154,11 @@ pub fn search(filesearch: @FileSearch, pick: pick) {
 }
 
 pub fn relative_target_lib_path(target_triple: &str) -> Path {
-    let dir = libdir();
-    let mut p = Path::new(dir.as_slice());
+    let mut p = Path::new(libdir());
     assert!(p.is_relative());
-    p.push("rustc");
+    p.push(rustlibdir());
     p.push(target_triple);
-    p.push(dir);
+    p.push("lib");
     p
 }
 
@@ -244,5 +244,11 @@ pub fn rust_path() -> ~[Path] {
 // The name of the directory rustc expects libraries to be located.
 // On Unix should be "lib", on windows "bin"
 pub fn libdir() -> ~str {
-    (env!("CFG_LIBDIR")).to_owned()
+    (env!("LIBDIR_RELATIVE")).to_owned()
+}
+
+// The name of rustc's own place to organize libraries.
+// Used to be "rustc", now the default is "rustlib"
+pub fn rustlibdir() -> ~str {
+    (env!("CFG_RUSTLIBDIR")).to_owned()
 }

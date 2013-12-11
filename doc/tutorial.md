@@ -103,9 +103,9 @@ If you've fulfilled those prerequisites, something along these lines
 should work.
 
 ~~~~ {.notrust}
-$ curl -O http://static.rust-lang.org/dist/rust-0.8.tar.gz
-$ tar -xzf rust-0.8.tar.gz
-$ cd rust-0.8
+$ curl -O http://static.rust-lang.org/dist/rust-0.9.tar.gz
+$ tar -xzf rust-0.9.tar.gz
+$ cd rust-0.9
 $ ./configure
 $ make && make install
 ~~~~
@@ -120,8 +120,8 @@ When complete, `make install` will place several programs into
 `/usr/local/bin`: `rustc`, the Rust compiler; `rustdoc`, the
 API-documentation tool; and `rustpkg`, the Rust package manager.
 
-[tarball]: http://static.rust-lang.org/dist/rust-0.8.tar.gz
-[win-exe]: http://static.rust-lang.org/dist/rust-0.8-install.exe
+[tarball]: http://static.rust-lang.org/dist/rust-0.9.tar.gz
+[win-exe]: http://static.rust-lang.org/dist/rust-0.9-install.exe
 
 ## Compiling your first program
 
@@ -793,15 +793,6 @@ synonym for an existing type but is rather its own distinct type.
 struct GizmoId(int);
 ~~~~
 
-For convenience, you can extract the contents of such a struct with the
-dereference (`*`) unary operator:
-
-~~~~
-# struct GizmoId(int);
-let my_gizmo_id: GizmoId = GizmoId(10);
-let id_int: int = *my_gizmo_id;
-~~~~
-
 Types like this can be useful to differentiate between data that have
 the same underlying type but must be used in different ways.
 
@@ -811,7 +802,16 @@ struct Centimeters(int);
 ~~~~
 
 The above definitions allow for a simple way for programs to avoid
-confusing numbers that correspond to different units.
+confusing numbers that correspond to different units. Their integer
+values can be extracted with pattern matching:
+
+~~~
+# struct Inches(int);
+
+let length_with_unit = Inches(10);
+let Inches(integer_length) = length_with_unit;
+println!("length is {} inches", integer_length);
+~~~
 
 # Functions
 
@@ -1341,11 +1341,12 @@ let mut y = ~5; // mutable
 *y += 2; // the * operator is needed to access the contained value
 ~~~~
 
-# Borrowed pointers
+# References
 
-Rust's borrowed pointers are a general purpose reference type. In contrast with
+In contrast with
 owned boxes, where the holder of an owned box is the owner of the pointed-to
-memory, borrowed pointers never imply ownership. A pointer can be borrowed to
+memory, references never imply ownership - they are "borrowed".
+A reference can be borrowed to
 any object, and the compiler verifies that it cannot outlive the lifetime of
 the object.
 
@@ -1377,7 +1378,7 @@ to define a function that takes two arguments of type point—that is,
 it takes the points by value. But this will cause the points to be
 copied when we call the function. For points, this is probably not so
 bad, but often copies are expensive. So we’d like to define a function
-that takes the points by pointer. We can use borrowed pointers to do this:
+that takes the points by pointer. We can use references to do this:
 
 ~~~
 # struct Point { x: f64, y: f64 }
@@ -1410,7 +1411,7 @@ route to the same data.
 
 In the case of the boxes `managed_box` and `owned_box`, however, no
 explicit action is necessary. The compiler will automatically convert
-a box like `@point` or `~point` to a borrowed pointer like
+a box like `@point` or `~point` to a reference like
 `&point`. This is another form of borrowing; in this case, the
 contents of the managed/owned box are being lent out.
 
@@ -1420,19 +1421,17 @@ have been lent out, you cannot send that variable to another task, nor
 will you be permitted to take actions that might cause the borrowed
 value to be freed or to change its type. This rule should make
 intuitive sense: you must wait for a borrowed value to be returned
-(that is, for the borrowed pointer to go out of scope) before you can
+(that is, for the reference to go out of scope) before you can
 make full use of it again.
 
-For a more in-depth explanation of borrowed pointers, read the
-[borrowed pointer tutorial][borrowtut].
-
-[borrowtut]: tutorial-borrowed-ptr.html
+For a more in-depth explanation of references and lifetimes, read the
+[references and lifetimes guide][lifetimes].
 
 ## Freezing
 
 Lending an immutable pointer to an object freezes it and prevents mutation.
-`Freeze` objects have freezing enforced statically at compile-time. Examples
-of non-`Freeze` types are `@mut` and [`RefCell<T>`][refcell].
+`Freeze` objects have freezing enforced statically at compile-time. An example
+of a non-`Freeze` type is [`RefCell<T>`][refcell].
 
 ~~~~
 let mut x = 5;
@@ -1441,20 +1440,6 @@ let mut x = 5;
 }
 // x is now unfrozen again
 # x = 3;
-~~~~
-
-Mutable managed boxes handle freezing dynamically when any of their contents
-are borrowed, and the task will fail if an attempt to modify them is made while
-they are frozen:
-
-~~~~
-let x = @mut 5;
-let y = x;
-{
-    let z = &*y; // the managed box is now frozen
-    // modifying it through x or y will cause a task failure
-}
-// the box is now unfrozen again
 ~~~~
 
 [refcell]: http://static.rust-lang.org/doc/master/std/cell/struct.RefCell.html
@@ -1477,13 +1462,12 @@ assignments. Such an assignment modifies the value that the pointer
 points to.
 
 ~~~
-let managed = @mut 10;
+let managed = @10;
 let mut owned = ~20;
 
 let mut value = 30;
 let borrowed = &mut value;
 
-*managed = *owned + 10;
 *owned = *borrowed + 100;
 *borrowed = *managed + 1000;
 ~~~
@@ -1639,8 +1623,7 @@ defined in [`std::vec`] and [`std::str`].
 
 # Ownership escape hatches
 
-Ownership can cleanly describe tree-like data structures, and borrowed pointers provide non-owning
-references. However, more flexibility is often desired and Rust provides ways to escape from strict
+Ownership can cleanly describe tree-like data structures, and references provide non-owning pointers. However, more flexibility is often desired and Rust provides ways to escape from strict
 single parent ownership.
 
 The standard library provides the `std::rc::Rc` pointer type to express *shared ownership* over a
@@ -1897,7 +1880,7 @@ A caller must in turn have a compatible pointer type to call the method.
 #     Rectangle(Point, Point)
 # }
 impl Shape {
-    fn draw_borrowed(&self) { ... }
+    fn draw_reference(&self) { ... }
     fn draw_managed(@self) { ... }
     fn draw_owned(~self) { ... }
     fn draw_value(self) { ... }
@@ -1907,13 +1890,13 @@ let s = Circle(Point { x: 1.0, y: 2.0 }, 3.0);
 
 (@s).draw_managed();
 (~s).draw_owned();
-(&s).draw_borrowed();
+(&s).draw_reference();
 s.draw_value();
 ~~~
 
-Methods typically take a borrowed pointer self type,
+Methods typically take a reference self type,
 so the compiler will go to great lengths to convert a callee
-to a borrowed pointer.
+to a reference.
 
 ~~~
 # fn draw_circle(p: Point, f: f64) { }
@@ -1924,27 +1907,27 @@ to a borrowed pointer.
 #     Rectangle(Point, Point)
 # }
 # impl Shape {
-#    fn draw_borrowed(&self) { ... }
+#    fn draw_reference(&self) { ... }
 #    fn draw_managed(@self) { ... }
 #    fn draw_owned(~self) { ... }
 #    fn draw_value(self) { ... }
 # }
 # let s = Circle(Point { x: 1.0, y: 2.0 }, 3.0);
 // As with typical function arguments, managed and owned pointers
-// are automatically converted to borrowed pointers
+// are automatically converted to references
 
-(@s).draw_borrowed();
-(~s).draw_borrowed();
+(@s).draw_reference();
+(~s).draw_reference();
 
 // Unlike typical function arguments, the self value will
 // automatically be referenced ...
-s.draw_borrowed();
+s.draw_reference();
 
 // ... and dereferenced
-(& &s).draw_borrowed();
+(& &s).draw_reference();
 
 // ... and dereferenced and borrowed
-(&@~s).draw_borrowed();
+(&@~s).draw_reference();
 ~~~
 
 Implementations may also define standalone (sometimes called "static")
@@ -2050,28 +2033,30 @@ C++ templates.
 
 ## Traits
 
-Within a generic function the operations available on generic types
-are very limited. After all, since the function doesn't know what
-types it is operating on, it can't safely modify or query their
-values. This is where _traits_ come into play. Traits are Rust's most
-powerful tool for writing polymorphic code. Java developers will see
-them as similar to Java interfaces, and Haskellers will notice their
-similarities to type classes. Rust's traits are a form of *bounded
-polymorphism*: a trait is a way of limiting the set of possible types
-that a type parameter could refer to.
+Within a generic function -- that is, a function parameterized by a
+type parameter, say, `T` -- the operations we can do on arguments of
+type `T` are quite limited.  After all, since we don't know what type
+`T` will be instantiated with, we can't safely modify or query values
+of type `T`.  This is where _traits_ come into play. Traits are Rust's
+most powerful tool for writing polymorphic code. Java developers will
+see them as similar to Java interfaces, and Haskellers will notice
+their similarities to type classes. Rust's traits give us a way to
+express *bounded polymorphism*: by limiting the set of possible types
+that a type parameter could refer to, they expand the number of
+operations we can safely perform on arguments of that type.
 
-As motivation, let us consider copying in Rust.
-The `clone` method is not defined for all Rust types.
-One reason is user-defined destructors:
-copying a type that has a destructor
-could result in the destructor running multiple times.
-Therefore, types with destructors cannot be copied
-unless you explicitly implement `Clone` for them.
+As motivation, let us consider copying of values in Rust.  The `clone`
+method is not defined for values of every type.  One reason is
+user-defined destructors: copying a value of a type that has a
+destructor could result in the destructor running multiple times.
+Therefore, values of types that have destructors cannot be copied
+unless we explicitly implement `clone` for them.
 
 This complicates handling of generic functions.
-If you have a type parameter `T`, can you copy values of that type?
-In Rust, you can't,
-and if you try to run the following code the compiler will complain.
+If we have a function with a type parameter `T`,
+can we copy values of type `T` inside that function?
+In Rust, we can't,
+and if we try to run the following code the compiler will complain.
 
 ~~~~ {.xfail-test}
 // This does not compile
@@ -2081,11 +2066,10 @@ fn head_bad<T>(v: &[T]) -> T {
 ~~~~
 
 However, we can tell the compiler
-that the `head` function is only for copyable types:
-that is, those that implement the `Clone` trait.
-In that case,
-we can explicitly create a second copy of the value we are returning
-using the `clone` keyword:
+that the `head` function is only for copyable types.
+In Rust, copyable types are those that _implement the `Clone` trait_.  
+We can then explicitly create a second copy of the value we are returning
+by calling the `clone` method:
 
 ~~~~
 // This does
@@ -2094,12 +2078,14 @@ fn head<T: Clone>(v: &[T]) -> T {
 }
 ~~~~
 
-This says that we can call `head` on any type `T`
-as long as that type implements the `Clone` trait.
+The bounded type parameter `T: Clone` says that `head`
+can be called on an argument of type `&[T]` for any `T`,
+so long as there is an implementation of the
+`Clone` trait for `T`.
 When instantiating a generic function,
-you can only instantiate it with types
+we can only instantiate it with types
 that implement the correct trait,
-so you could not apply `head` to a type
+so we could not apply `head` to a vector whose elements are of some type
 that does not implement `Clone`.
 
 While most traits can be defined and implemented by user code,
@@ -2109,24 +2095,23 @@ and may not be overridden:
 
 * `Send` - Sendable types.
 Types are sendable
-unless they contain managed boxes, managed closures, or borrowed pointers.
+unless they contain managed boxes, managed closures, or references.
 
 * `Freeze` - Constant (immutable) types.
 These are types that do not contain anything intrinsically mutable.
-Intrinsically mutable values include `@mut`
-and `Cell` in the standard library.
+Intrinsically mutable values include `Cell` in the standard library.
 
 * `'static` - Non-borrowed types.
 These are types that do not contain any data whose lifetime is bound to
 a particular stack frame. These are types that do not contain any
-borrowed pointers, or types where the only contained borrowed pointers
+references, or types where the only contained references
 have the `'static` lifetime.
 
 > ***Note:*** These two traits were referred to as 'kinds' in earlier
 > iterations of the language, and often still are.
 
 Additionally, the `Drop` trait is used to define destructors. This
-trait defines one method called `drop`, which is automatically
+trait provides one method called `drop`, which is automatically
 called when a value of the type that implements this trait is
 destroyed, either because the value went out of scope or because the
 garbage collector reclaimed it.
@@ -2150,11 +2135,10 @@ may call it.
 
 ## Declaring and implementing traits
 
-A trait consists of a set of methods without bodies,
-or may be empty, as is the case with `Send` and `Freeze`.
+At its simplest, a trait is a set of zero or more _method signatures_.
 For example, we could declare the trait
 `Printable` for things that can be printed to the console,
-with a single method:
+with a single method signature:
 
 ~~~~
 trait Printable {
@@ -2162,17 +2146,25 @@ trait Printable {
 }
 ~~~~
 
-Traits may be implemented for specific types with [impls]. An impl
-that implements a trait includes the name of the trait at the start of
-the definition, as in the following impls of `Printable` for `int`
-and `~str`.
+We say that the `Printable` trait _provides_ a `print` method with the
+given signature.  This means that we can call `print` on an argument
+of any type that implements the `Printable` trait.
+
+Rust's built-in `Send` and `Freeze` types are examples of traits that
+don't provide any methods.
+
+Traits may be implemented for specific types with [impls]. An impl for
+a particular trait gives an implementation of the methods that
+trait provides.  For instance, the following impls of
+`Printable` for `int` and `~str` give implementations of the `print`
+method.
 
 [impls]: #methods
 
 ~~~~
 # trait Printable { fn print(&self); }
 impl Printable for int {
-    fn print(&self) { println!("{}", *self) }
+    fn print(&self) { println!("{:?}", *self) }
 }
 
 impl Printable for ~str {
@@ -2183,10 +2175,71 @@ impl Printable for ~str {
 # (~"foo").print();
 ~~~~
 
-Methods defined in an implementation of a trait may be called just like
-any other method, using dot notation, as in `1.print()`. Traits may
-themselves contain type parameters. A trait for generalized sequence
-types might look like the following:
+Methods defined in an impl for a trait may be called just like
+any other method, using dot notation, as in `1.print()`.
+
+## Default method implementations in trait definitions
+
+Sometimes, a method that a trait provides will have the same
+implementation for most or all of the types that implement that trait.
+For instance, suppose that we wanted `bool`s and `f32`s to be
+printable, and that we wanted the implementation of `print` for those
+types to be exactly as it is for `int`, above:
+
+~~~~
+# trait Printable { fn print(&self); }
+impl Printable for f32 {
+    fn print(&self) { println!("{:?}", *self) }
+}
+
+impl Printable for bool {
+    fn print(&self) { println!("{:?}", *self) }
+}
+
+# true.print();
+# 3.14159.print();
+~~~~
+
+This works fine, but we've now repeated the same definition of `print`
+in three places.  Instead of doing that, we can simply include the
+definition of `print` right in the trait definition, instead of just
+giving its signature.  That is, we can write the following:
+
+~~~~
+trait Printable {
+	// Default method implementation
+    fn print(&self) { println!("{:?}", *self) }
+}
+
+impl Printable for int {}
+
+impl Printable for ~str {
+    fn print(&self) { println(*self) }
+}
+
+impl Printable for bool {}
+
+impl Printable for f32 {}
+
+# 1.print();
+# (~"foo").print();
+# true.print();
+# 3.14159.print();
+~~~~
+
+Here, the impls of `Printable` for `int`, `bool`, and `f32` don't
+need to provide an implementation of `print`, because in the absence
+of a specific implementation, Rust just uses the _default method_
+provided in the trait definition.  Depending on the trait, default
+methods can save a great deal of boilerplate code from having to be
+written in impls.  Of course, individual impls can still override the
+default method for `print`, as is being done above in the impl for
+`~str`.
+
+## Type-parameterized traits
+
+Traits may be parameterized by type variables.  For example, a trait
+for generalized sequence types might look like the following:
 
 ~~~~
 trait Seq<T> {
@@ -2386,7 +2439,7 @@ order to be packaged up in a trait object of that storage class.
 
 * The contents of owned traits (`~Trait`) must fulfill the `Send` bound.
 * The contents of managed traits (`@Trait`) must fulfill the `'static` bound.
-* The contents of borrowed traits (`&Trait`) are not constrained by any bound.
+* The contents of reference traits (`&Trait`) are not constrained by any bound.
 
 Consequently, the trait objects themselves automatically fulfill their
 respective kind bounds. However, this default behavior can be overridden by
@@ -2611,7 +2664,7 @@ the `priv` keyword:
 mod farm {
 # pub type Chicken = int;
 # struct Human(int);
-# impl Human { fn rest(&self) { } }
+# impl Human { pub fn rest(&self) { } }
 # pub fn make_me_a_farm() -> Farm { Farm { chickens: ~[], farmer: Human(0) } }
     pub struct Farm {
         priv chickens: ~[Chicken],
@@ -2735,6 +2788,7 @@ For example, if we move the `animals` module above into its own file...
 mod plants;
 mod animals;
 ~~~
+
 ~~~ {.ignore}
 // src/animals.rs or src/animals/mod.rs
 mod fish;
@@ -2742,6 +2796,7 @@ mod mammals {
     mod humans;
 }
 ~~~
+
 ...then the source files of `mod animals`'s submodules can
 either be placed right next to that of its parents, or in a subdirectory if `animals` source file is:
 
@@ -2904,6 +2959,7 @@ pub fn bar() { println("Baz!"); }
 There also exist two short forms for importing multiple names at once:
 
 1. Explicit mention multiple names as the last element of an `use` path:
+
 ~~~
 use farm::{chicken, cow};
 # mod farm {
@@ -2914,6 +2970,7 @@ use farm::{chicken, cow};
 ~~~
 
 2. Import everything in a module with a wildcard:
+
 ~~~
 use farm::*;
 # mod farm {
@@ -3039,7 +3096,7 @@ they model most closely what people expect to shadow.
 
 ## Package ids
 
-If you use `extern mod`, per default `rustc` will look for libraries in the the library search path (which you can
+If you use `extern mod`, per default `rustc` will look for libraries in the library search path (which you can
 extend with the `-L` switch).
 
 However, Rust also ships with rustpkg, a package manager that is able to automatically download and build
@@ -3050,8 +3107,6 @@ but for this tutorial it's only important to know that you can optionally annota
 ~~~ {.ignore}
 extern mod rust = "github.com/mozilla/rust"; // pretend Rust is a simple library
 ~~~
-
-[rustpkg]: rustpkg.html
 
 ## Crate metadata and settings
 
@@ -3071,7 +3126,7 @@ Therefore, if you plan to compile your crate as a library, you should annotate i
 
 # #[crate_type = "lib"];
 // Package ID
-#[pkgid = "farm#2.5"];
+#[crate_id = "farm#2.5"];
 
 // ...
 # fn farm() {}
@@ -3095,7 +3150,7 @@ or setting the crate type (library or executable) explicitly:
 // ...
 
 // This crate is a library ("bin" is the default)
-#[pkgid = "farm#2.5"];
+#[crate_id = "farm#2.5"];
 #[crate_type = "lib"];
 
 // Turn on a warning
@@ -3116,7 +3171,7 @@ We define two crates, and use one of them as a library in the other.
 
 ~~~~
 // world.rs
-#[pkgid = "world#0.42"];
+#[crate_id = "world#0.42"];
 # extern mod extra;
 pub fn explore() -> &'static str { "world" }
 # fn main() {}
@@ -3210,9 +3265,10 @@ re-export a bunch of 'officially blessed' crates that get managed with `rustpkg`
 # What next?
 
 Now that you know the essentials, check out any of the additional
-tutorials on individual topics.
+guides on individual topics.
 
-* [Borrowed pointers][borrow]
+* [Pointers][pointers]
+* [Lifetimes][lifetimes]
 * [Tasks and communication][tasks]
 * [Macros][macros]
 * [The foreign function interface][ffi]
@@ -3220,18 +3276,20 @@ tutorials on individual topics.
 * [Error-handling and Conditions][conditions]
 * [Packaging up Rust code][rustpkg]
 * [Documenting Rust code][rustdoc]
+* [Testing Rust code][testing]
 
-There is further documentation on the [wiki], however those tend to be even
-more out of date than this document.
+There is further documentation on the [wiki], however those tend to be even more out of date as this document.
 
-[borrow]: tutorial-borrowed-ptr.html
-[tasks]: tutorial-tasks.html
-[macros]: tutorial-macros.html
-[ffi]: tutorial-ffi.html
-[container]: tutorial-container.html
-[conditions]: tutorial-conditions.html
-[rustpkg]: tutorial-rustpkg.html
+[pointers]: guide-pointers.html
+[lifetimes]: guide-lifetimes.html
+[tasks]: guide-tasks.html
+[macros]: guide-macros.html
+[ffi]: guide-ffi.html
+[container]: guide-container.html
+[conditions]: guide-conditions.html
+[rustpkg]: guide-rustpkg.html
+[testing]: guide-testing.html
 [rustdoc]: rustdoc.html
-
 [wiki]: https://github.com/mozilla/rust/wiki/Docs
+
 [wiki-packages]: https://github.com/mozilla/rust/wiki/Doc-packages,-editors,-and-other-tools

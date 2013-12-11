@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! The `bool` module contains useful code to help work with boolean values.
+//! Operations on boolean values (`bool` type)
 //!
 //! A quick summary:
 //!
@@ -317,10 +317,7 @@ impl Zero for bool {
 
 #[cfg(test)]
 mod tests {
-    use cmp::{Equal, Greater, Less, Eq, TotalOrd};
-    use ops::{BitAnd, BitXor, BitOr};
-    use from_str::{FromStr, from_str};
-    use option::{Some, None};
+    use prelude::*;
     use super::all_values;
 
     #[test]

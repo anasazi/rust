@@ -13,7 +13,7 @@ comments":
 ~~~
 // the "link" crate attribute is currently required for rustdoc, but normally
 // isn't needed.
-#[pkgid = "universe"];
+#[crate_id = "universe"];
 #[crate_type="lib"];
 
 //! Tools for dealing with universes (this is a doc comment, and is shown on
@@ -85,3 +85,93 @@ javascript and a statically-generated search index. No special web server is
 required for the search.
 
 [sundown]: https://github.com/vmg/sundown/
+
+# Testing the Documentation
+
+`rustdoc` has support for testing code examples which appear in the
+documentation. This is helpful for keeping code examples up to date with the
+source code.
+
+To test documentation, the `--test` argument is passed to rustdoc:
+
+~~~
+rustdoc --test crate.rs
+~~~
+
+## Defining tests
+
+Rust documentation currently uses the markdown format, and code blocks can refer
+to any piece of code-related documentation, which isn't always rust. Because of
+this, only code blocks with the language of "rust" will be considered for
+testing.
+
+~~~
+```rust
+// This is a testable code block
+```
+
+```
+// This is not a testable code block
+```
+
+    // This is not a testable code block (4-space indent)
+~~~
+
+In addition to only testing "rust"-language code blocks, there are additional
+specifiers that can be used to dictate how a code block is tested:
+
+~~~
+```rust,ignore
+// This code block is ignored by rustdoc, but is passed through to the test
+// harness
+```
+
+```rust,should_fail
+// This code block is expected to generate a failure
+```
+~~~
+
+Rustdoc also supplies some extra sugar for helping with some tedious
+documentation examples. If a line is prefixed with `# `, then the line
+will not show up in the HTML documentation, but it will be used when
+testing the code block (NB. the space after the `#` is required, so
+that one can still write things like `#[deriving(Eq)]`).
+
+~~~
+```rust
+# // showing 'fib' in this documentation would just be tedious and detracts from
+# // what's actualy being documented.
+# fn fib(n: int) { n + 2 }
+
+do spawn { fib(200); }
+```
+~~~
+
+The documentation online would look like `do spawn { fib(200); }`, but when
+testing this code, the `fib` function will be included (so it can compile).
+
+## Running tests (advanced)
+
+Running tests often requires some special configuration to filter tests, find
+libraries, or try running ignored examples. The testing framework that rustdoc
+uses is build on `extra::test`, which is also used when you compile crates with
+rustc's `--test` flag. Extra arguments can be passed to rustdoc's test harness
+with the `--test-args` flag.
+
+~~~
+// Only run tests containing 'foo' in their name
+rustdoc --test lib.rs --test-args 'foo'
+
+// See what's possible when running tests
+rustdoc --test lib.rs --test-args '--help'
+
+// Run all ignored tests
+rustdoc --test lib.rs --test-args '--ignored'
+~~~
+
+When testing a library, code examples will often show how functions are used,
+and this code often requires `use`-ing paths from the crate. To accomodate this,
+rustdoc will implicitly add `extern mod <crate>;` where `<crate>` is the name of
+the crate being tested to the top of each code example. This means that rustdoc
+must be able to find a compiled version of the library crate being tested. Extra
+search paths may be added via the `-L` flag to `rustdoc`.

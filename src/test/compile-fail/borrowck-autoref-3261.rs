@@ -8,11 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+enum Either<T, U> { Left(T), Right(U) }
+
 struct X(Either<(uint,uint),extern fn()>);
 
 impl X {
     pub fn with(&self, blk: |x: &Either<(uint,uint),extern fn()>|) {
-        blk(&**self)
+        let X(ref e) = *self;
+        blk(e)
     }
 }
 

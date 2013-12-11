@@ -19,9 +19,9 @@ use metadata::encoder;
 use metadata::filesearch::{FileMatches, FileDoesntMatch};
 use metadata::filesearch;
 use syntax::codemap::Span;
-use syntax::diagnostic::span_handler;
-use syntax::parse::token::ident_interner;
-use syntax::pkgid::PkgId;
+use syntax::diagnostic::SpanHandler;
+use syntax::parse::token::IdentInterner;
+use syntax::crateid::CrateId;
 use syntax::attr;
 use syntax::attr::AttrMetaMethods;
 
@@ -52,7 +52,7 @@ pub struct Context {
     version: @str,
     hash: @str,
     os: Os,
-    intr: @ident_interner
+    intr: @IdentInterner
 }
 
 pub struct Library {
@@ -112,7 +112,7 @@ impl Context {
                             Some(cvec) =>
                                 if crate_matches(cvec.as_slice(), self.name,
                                                  self.version, self.hash) {
-                                    debug!("found {} with matching pkgid",
+                                    debug!("found {} with matching crate_id",
                                            path.display());
                                     let (rlib, dylib) = if file.ends_with(".rlib") {
                                         (Some(path.clone()), None)
@@ -126,7 +126,7 @@ impl Context {
                                     });
                                     FileMatches
                                 } else {
-                                    debug!("skipping {}, pkgid doesn't match",
+                                    debug!("skipping {}, crate_id doesn't match",
                                            path.display());
                                     FileDoesntMatch
                                 },
@@ -165,10 +165,10 @@ impl Context {
                     }
                     let data = lib.metadata.as_slice();
                     let attrs = decoder::get_crate_attributes(data);
-                    match attr::find_pkgid(attrs) {
+                    match attr::find_crateid(attrs) {
                         None => {}
-                        Some(pkgid) => {
-                            note_pkgid_attr(self.sess.diagnostic(), &pkgid);
+                        Some(crateid) => {
+                            note_crateid_attr(self.sess.diagnostic(), &crateid);
                         }
                     }
                 }
@@ -231,9 +231,8 @@ impl Context {
     }
 }
 
-pub fn note_pkgid_attr(diag: @mut span_handler,
-                       pkgid: &PkgId) {
-    diag.handler().note(format!("pkgid: {}", pkgid.to_str()));
+pub fn note_crateid_attr(diag: @SpanHandler, crateid: &CrateId) {
+    diag.handler().note(format!("crate_id: {}", crateid.to_str()));
 }
 
 fn crate_matches(crate_data: &[u8],
@@ -241,15 +240,15 @@ fn crate_matches(crate_data: &[u8],
                  version: @str,
                  hash: @str) -> bool {
     let attrs = decoder::get_crate_attributes(crate_data);
-    match attr::find_pkgid(attrs) {
+    match attr::find_crateid(attrs) {
         None => false,
-        Some(pkgid) => {
+        Some(crateid) => {
             if !hash.is_empty() {
                 let chash = decoder::get_crate_hash(crate_data);
                 if chash != hash { return false; }
             }
-            name == pkgid.name.to_managed() &&
-                (version.is_empty() || version == pkgid.version_or_default().to_managed())
+            name == crateid.name.to_managed() &&
+                (version.is_empty() || version == crateid.version_or_default().to_managed())
         }
     }
 }
@@ -377,10 +376,10 @@ pub fn read_meta_section_name(os: Os) -> &'static str {
 }
 
 // A diagnostic function for dumping crate metadata to an output stream
-pub fn list_file_metadata(intr: @ident_interner,
+pub fn list_file_metadata(intr: @IdentInterner,
                           os: Os,
                           path: &Path,
-                          out: @mut io::Writer) {
+                          out: &mut io::Writer) {
     match get_metadata_section(os, path) {
       option::Some(bytes) => decoder::list_crate_metadata(intr,
                                                           bytes.as_slice(),

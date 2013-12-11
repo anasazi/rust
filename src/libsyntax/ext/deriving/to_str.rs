@@ -9,17 +9,17 @@
 // except according to those terms.
 
 use ast;
-use ast::{MetaItem, item, Expr};
+use ast::{MetaItem, Item, Expr};
 use codemap::Span;
 use ext::base::ExtCtxt;
 use ext::build::AstBuilder;
 use ext::deriving::generic::*;
 
-pub fn expand_deriving_to_str(cx: @ExtCtxt,
+pub fn expand_deriving_to_str(cx: &ExtCtxt,
                               span: Span,
                               mitem: @MetaItem,
-                              in_items: ~[@item])
-    -> ~[@item] {
+                              in_items: ~[@Item])
+    -> ~[@Item] {
     let trait_def = TraitDef {
         cx: cx, span: span,
 
@@ -47,7 +47,7 @@ pub fn expand_deriving_to_str(cx: @ExtCtxt,
 // doesn't invoke the to_str() method on each field. Hence we mirror
 // the logic of the repr_to_str() method, but with tweaks to call to_str()
 // on sub-fields.
-fn to_str_substructure(cx: @ExtCtxt, span: Span,
+fn to_str_substructure(cx: &ExtCtxt, span: Span,
                        substr: &Substructure) -> @Expr {
     let to_str = cx.ident_of("to_str");
 
@@ -98,9 +98,9 @@ fn to_str_substructure(cx: @ExtCtxt, span: Span,
 
         EnumMatching(_, variant, ref fields) => {
             match variant.node.kind {
-                ast::tuple_variant_kind(..) =>
+                ast::TupleVariantKind(..) =>
                     doit("(", @")", variant.node.name, *fields),
-                ast::struct_variant_kind(..) =>
+                ast::StructVariantKind(..) =>
                     doit("{", @"}", variant.node.name, *fields),
             }
         }

@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Operations on the ubiquitous `Option` type.
+//! Optionally nullable values (`Option` type)
 //!
 //! Type `Option` represents an optional value.
 //!
@@ -43,7 +43,7 @@ use clone::DeepClone;
 use cmp::{Eq, TotalEq, TotalOrd};
 use default::Default;
 use fmt;
-use iter::{Iterator, DoubleEndedIterator, ExactSize};
+use iter::{Iterator, DoubleEndedIterator, FromIterator, ExactSize};
 use kinds::Send;
 use str::OwnedStr;
 use to_str::ToStr;
@@ -164,7 +164,7 @@ impl<T> Option<T> {
 
     /// Applies a function to the contained value or returns a default.
     #[inline]
-    pub fn map_default<U>(self, def: U, f: |T| -> U) -> U {
+    pub fn map_or<U>(self, def: U, f: |T| -> U) -> U {
         match self { None => def, Some(t) => f(t) }
     }
 
@@ -179,7 +179,7 @@ impl<T> Option<T> {
 
     /// Apply a function to the contained value or set it to a default.
     /// Returns true if the contained value was mutated, or false if set to the default.
-    pub fn mutate_default(&mut self, def: T, f: |T| -> T) -> bool {
+    pub fn mutate_or_set(&mut self, def: T, f: |T| -> T) -> bool {
         if self.is_some() {
             *self = Some(f(self.take_unwrap()));
             true
@@ -411,15 +411,58 @@ impl<A> DoubleEndedIterator<A> for OptionIterator<A> {
 impl<A> ExactSize<A> for OptionIterator<A> {}
 
 /////////////////////////////////////////////////////////////////////////////
+// Free functions
+/////////////////////////////////////////////////////////////////////////////
+
+/// Takes each element in the `Iterator`: if it is `None`, no further
+/// elements are taken, and the `None` is returned. Should no `None` occur, a
+/// vector containing the values of each `Option` is returned.
+///
+/// Here is an example which increments every integer in a vector,
+/// checking for overflow:
+///
+///     fn inc_conditionally(x: uint) -> Option<uint> {
+///         if x == uint::max_value { return None; }
+///         else { return Some(x+1u); }
+///     }
+///     let v = [1u, 2, 3];
+///     let res = collect(v.iter().map(|&x| inc_conditionally(x)));
+///     assert!(res == Some(~[2u, 3, 4]));
+#[inline]
+pub fn collect<T, Iter: Iterator<Option<T>>, V: FromIterator<T>>(iter: Iter) -> Option<V> {
+    // FIXME(#11084): This should be twice as fast once this bug is closed.
+    let mut iter = iter.scan(false, |state, x| {
+        match x {
+            Some(x) => Some(x),
+            None => {
+                *state = true;
+                None
+            }
+        }
+    });
+
+    let v: V = FromIterator::from_iterator(&mut iter);
+
+    if iter.state {
+        None
+    } else {
+        Some(v)
+    }
+}
+
+/////////////////////////////////////////////////////////////////////////////
 // Tests
 /////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use prelude::*;
 
+    use iter::range;
     use str::StrSlice;
     use util;
+    use vec::ImmutableVector;
 
     #[test]
     fn test_get_ptr() {
@@ -445,28 +488,34 @@ mod tests {
 
     #[test]
     fn test_get_resource() {
+        use rc::Rc;
+        use cell::RefCell;
+
         struct R {
-           i: @mut int,
+           i: Rc<RefCell<int>>,
         }
 
         #[unsafe_destructor]
         impl ::ops::Drop for R {
-           fn drop(&mut self) { *(self.i) += 1; }
+           fn drop(&mut self) {
+                let ii = self.i.borrow();
+                ii.set(ii.get() + 1);
+            }
         }
 
-        fn R(i: @mut int) -> R {
+        fn R(i: Rc<RefCell<int>>) -> R {
             R {
                 i: i
             }
         }
 
-        let i = @mut 0;
+        let i = Rc::new(RefCell::new(0));
         {
-            let x = R(i);
+            let x = R(i.clone());
             let opt = Some(x);
             let _y = opt.unwrap();
         }
-        assert_eq!(*i, 1);
+        assert_eq!(i.borrow().get(), 1);
     }
 
     #[test]
@@ -647,12 +696,34 @@ mod tests {
         let mut x = Some(3i);
         assert!(x.mutate(|i| i+1));
         assert_eq!(x, Some(4i));
-        assert!(x.mutate_default(0, |i| i+1));
+        assert!(x.mutate_or_set(0, |i| i+1));
         assert_eq!(x, Some(5i));
         x = None;
         assert!(!x.mutate(|i| i+1));
         assert_eq!(x, None);
-        assert!(!x.mutate_default(0i, |i| i+1));
+        assert!(!x.mutate_or_set(0i, |i| i+1));
         assert_eq!(x, Some(0i));
+    }
+
+    #[test]
+    fn test_collect() {
+        let v: Option<~[int]> = collect(range(0, 0)
+                                        .map(|_| Some(0)));
+        assert_eq!(v, Some(~[]));
+
+        let v: Option<~[int]> = collect(range(0, 3)
+                                        .map(|x| Some(x)));
+        assert_eq!(v, Some(~[0, 1, 2]));
+
+        let v: Option<~[int]> = collect(range(0, 3)
+                                        .map(|x| if x > 1 { None } else { Some(x) }));
+        assert_eq!(v, None);
+
+        // test that it does not take more elements than it needs
+        let functions = [|| Some(()), || None, || fail!()];
+
+        let v: Option<~[()]> = collect(functions.iter().map(|f| (*f)()));
+
+        assert_eq!(v, None);
     }
 }

@@ -697,7 +697,7 @@ impl BigUint {
     #[inline]
     pub fn new(v: ~[BigDigit]) -> BigUint {
         // omit trailing zeros
-        let new_len = v.iter().rposition(|n| *n != 0).map_default(0, |p| p + 1);
+        let new_len = v.iter().rposition(|n| *n != 0).map_or(0, |p| p + 1);
 
         if new_len == v.len() { return BigUint { data: v }; }
         let mut v = v;
@@ -1434,6 +1434,7 @@ impl BigInt {
 #[cfg(test)]
 mod biguint_tests {
     use super::*;
+    use super::RandBigInt;
 
     use std::cmp::{Less, Equal, Greater};
     use std::i64;
@@ -2090,6 +2091,7 @@ mod biguint_tests {
 #[cfg(test)]
 mod bigint_tests {
     use super::*;
+    use super::RandBigInt;
 
     use std::cmp::{Less, Equal, Greater};
     use std::i64;

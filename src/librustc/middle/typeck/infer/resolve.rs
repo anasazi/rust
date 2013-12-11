@@ -80,14 +80,14 @@ pub static resolve_and_force_all_but_regions: uint =
     (resolve_all | force_all) & not_regions;
 
 pub struct ResolveState {
-    infcx: @mut InferCtxt,
+    infcx: @InferCtxt,
     modes: uint,
     err: Option<fixup_err>,
     v_seen: ~[TyVid],
     type_depth: uint
 }
 
-pub fn resolver(infcx: @mut InferCtxt, modes: uint) -> ResolveState {
+pub fn resolver(infcx: @InferCtxt, modes: uint) -> ResolveState {
     ResolveState {
         infcx: infcx,
         modes: modes,
@@ -260,8 +260,7 @@ impl ResolveState {
             if self.should(force_ivar) {
                 // As a last resort, default to int.
                 let ty = ty::mk_int();
-                self.infcx.set(vid,
-                               Root(Some(IntType(ast::ty_i)), node.rank));
+                self.infcx.set(vid, Root(Some(IntType(ast::TyI)), node.rank));
                 ty
             } else {
                 ty::mk_int_var(self.infcx.tcx, vid)
@@ -282,7 +281,7 @@ impl ResolveState {
             if self.should(force_fvar) {
                 // As a last resort, default to f64.
                 let ty = ty::mk_f64();
-                self.infcx.set(vid, Root(Some(ast::ty_f64), node.rank));
+                self.infcx.set(vid, Root(Some(ast::TyF64), node.rank));
                 ty
             } else {
                 ty::mk_float_var(self.infcx.tcx, vid)

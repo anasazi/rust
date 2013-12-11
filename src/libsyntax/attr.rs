@@ -10,15 +10,13 @@
 
 // Functions dealing with attributes and meta items
 
-use extra;
-
 use ast;
 use ast::{Attribute, Attribute_, MetaItem, MetaWord, MetaNameValue, MetaList};
 use codemap::{Span, Spanned, spanned, dummy_spanned};
 use codemap::BytePos;
-use diagnostic::span_handler;
+use diagnostic::SpanHandler;
 use parse::comments::{doc_comment_style, strip_doc_comment_decoration};
-use pkgid::PkgId;
+use crateid::CrateId;
 
 use std::hashmap::HashSet;
 
@@ -68,7 +66,7 @@ impl AttrMetaMethods for MetaItem {
         match self.node {
             MetaNameValue(_, ref v) => {
                 match v.node {
-                    ast::lit_str(s, _) => Some(s),
+                    ast::LitStr(s, _) => Some(s),
                     _ => None,
                 }
             },
@@ -128,11 +126,11 @@ impl AttributeMethods for Attribute {
 /* Constructors */
 
 pub fn mk_name_value_item_str(name: @str, value: @str) -> @MetaItem {
-    let value_lit = dummy_spanned(ast::lit_str(value, ast::CookedStr));
+    let value_lit = dummy_spanned(ast::LitStr(value, ast::CookedStr));
     mk_name_value_item(name, value_lit)
 }
 
-pub fn mk_name_value_item(name: @str, value: ast::lit) -> @MetaItem {
+pub fn mk_name_value_item(name: @str, value: ast::Lit) -> @MetaItem {
     @dummy_spanned(MetaNameValue(name, value))
 }
 
@@ -154,7 +152,7 @@ pub fn mk_attr(item: @MetaItem) -> Attribute {
 
 pub fn mk_sugared_doc_attr(text: @str, lo: BytePos, hi: BytePos) -> Attribute {
     let style = doc_comment_style(text);
-    let lit = spanned(lo, hi, ast::lit_str(text, ast::CookedStr));
+    let lit = spanned(lo, hi, ast::LitStr(text, ast::CookedStr));
     let attr = Attribute_ {
         style: style,
         value: @spanned(lo, hi, MetaNameValue(@"doc", lit)),
@@ -205,7 +203,7 @@ pub fn sort_meta_items(items: &[@MetaItem]) -> ~[@MetaItem] {
         .map(|&mi| (mi.name(), mi))
         .collect::<~[(@str, @MetaItem)]>();
 
-    extra::sort::quick_sort(v, |&(a, _), &(b, _)| a <= b);
+    v.sort_by(|&(a, _), &(b, _)| a.cmp(&b));
 
     // There doesn't seem to be a more optimal way to do this
     v.move_iter().map(|(_, m)| {
@@ -236,10 +234,10 @@ pub fn find_linkage_metas(attrs: &[Attribute]) -> ~[@MetaItem] {
     result
 }
 
-pub fn find_pkgid(attrs: &[Attribute]) -> Option<PkgId> {
+pub fn find_crateid(attrs: &[Attribute]) -> Option<CrateId> {
     match first_attr_value_str_by_name(attrs, "crate_id") {
         None => None,
-        Some(id) => from_str::<PkgId>(id),
+        Some(id) => from_str::<CrateId>(id),
     }
 }
 
@@ -357,8 +355,7 @@ pub fn find_stability<AM: AttrMetaMethods, It: Iterator<AM>>(mut metas: It) -> O
     None
 }
 
-pub fn require_unique_names(diagnostic: @mut span_handler,
-                            metas: &[@MetaItem]) {
+pub fn require_unique_names(diagnostic: @SpanHandler, metas: &[@MetaItem]) {
     let mut set = HashSet::new();
     for meta in metas.iter() {
         let name = meta.name();
@@ -383,7 +380,7 @@ pub fn require_unique_names(diagnostic: @mut span_handler,
  * present (before fields, if any) with that type; reprensentation
  * optimizations which would remove it will not be done.
  */
-pub fn find_repr_attr(diagnostic: @mut span_handler, attr: @ast::MetaItem, acc: ReprAttr)
+pub fn find_repr_attr(diagnostic: @SpanHandler, attr: @ast::MetaItem, acc: ReprAttr)
     -> ReprAttr {
     let mut acc = acc;
     match attr.node {
@@ -426,16 +423,16 @@ pub fn find_repr_attr(diagnostic: @mut span_handler, attr: @ast::MetaItem, acc: 
 
 fn int_type_of_word(s: &str) -> Option<IntType> {
     match s {
-        "i8" => Some(SignedInt(ast::ty_i8)),
-        "u8" => Some(UnsignedInt(ast::ty_u8)),
-        "i16" => Some(SignedInt(ast::ty_i16)),
-        "u16" => Some(UnsignedInt(ast::ty_u16)),
-        "i32" => Some(SignedInt(ast::ty_i32)),
-        "u32" => Some(UnsignedInt(ast::ty_u32)),
-        "i64" => Some(SignedInt(ast::ty_i64)),
-        "u64" => Some(UnsignedInt(ast::ty_u64)),
-        "int" => Some(SignedInt(ast::ty_i)),
-        "uint" => Some(UnsignedInt(ast::ty_u)),
+        "i8" => Some(SignedInt(ast::TyI8)),
+        "u8" => Some(UnsignedInt(ast::TyU8)),
+        "i16" => Some(SignedInt(ast::TyI16)),
+        "u16" => Some(UnsignedInt(ast::TyU16)),
+        "i32" => Some(SignedInt(ast::TyI32)),
+        "u32" => Some(UnsignedInt(ast::TyU32)),
+        "i64" => Some(SignedInt(ast::TyI64)),
+        "u64" => Some(UnsignedInt(ast::TyU64)),
+        "int" => Some(SignedInt(ast::TyI)),
+        "uint" => Some(UnsignedInt(ast::TyU)),
         _ => None
     }
 }
@@ -459,8 +456,8 @@ impl ReprAttr {
 
 #[deriving(Eq)]
 pub enum IntType {
-    SignedInt(ast::int_ty),
-    UnsignedInt(ast::uint_ty)
+    SignedInt(ast::IntTy),
+    UnsignedInt(ast::UintTy)
 }
 
 impl IntType {
@@ -473,10 +470,10 @@ impl IntType {
     }
     fn is_ffi_safe(self) -> bool {
         match self {
-            SignedInt(ast::ty_i8) | UnsignedInt(ast::ty_u8) |
-            SignedInt(ast::ty_i16) | UnsignedInt(ast::ty_u16) |
-            SignedInt(ast::ty_i32) | UnsignedInt(ast::ty_u32) |
-            SignedInt(ast::ty_i64) | UnsignedInt(ast::ty_u64) => true,
+            SignedInt(ast::TyI8) | UnsignedInt(ast::TyU8) |
+            SignedInt(ast::TyI16) | UnsignedInt(ast::TyU16) |
+            SignedInt(ast::TyI32) | UnsignedInt(ast::TyU32) |
+            SignedInt(ast::TyI64) | UnsignedInt(ast::TyU64) => true,
             _ => false
         }
     }

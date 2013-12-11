@@ -37,7 +37,8 @@ use std::libc;
 #[cfg(test)]
 use std::libc::uintptr_t;
 
-pub use self::errors::*;
+pub use self::errors::{EACCES, ECONNREFUSED, ECONNRESET, EPIPE, ECONNABORTED,
+                       ECANCELED, EBADF, ENOTCONN, ENOENT, EADDRNOTAVAIL};
 
 pub static OK: c_int = 0;
 pub static EOF: c_int = -4095;
@@ -59,6 +60,7 @@ pub mod errors {
     pub static ECONNABORTED: c_int = -4079;
     pub static ECANCELED: c_int = -4081;
     pub static EBADF: c_int = -4083;
+    pub static EADDRNOTAVAIL: c_int = -4090;
 }
 #[cfg(not(windows))]
 pub mod errors {
@@ -74,6 +76,7 @@ pub mod errors {
     pub static ECONNABORTED: c_int = -libc::ECONNABORTED;
     pub static ECANCELED : c_int = -libc::ECANCELED;
     pub static EBADF : c_int = -libc::EBADF;
+    pub static EADDRNOTAVAIL : c_int = -libc::EADDRNOTAVAIL;
 }
 
 pub static PROCESS_SETUID: c_int = 1 << 0;
@@ -576,6 +579,8 @@ extern {
 
     // generic uv functions
     pub fn uv_loop_delete(l: *uv_loop_t);
+    pub fn uv_ref(t: *uv_handle_t);
+    pub fn uv_unref(t: *uv_handle_t);
     pub fn uv_handle_size(ty: uv_handle_type) -> size_t;
     pub fn uv_req_size(ty: uv_req_type) -> size_t;
     pub fn uv_run(l: *uv_loop_t, mode: uv_run_mode) -> c_int;
@@ -732,6 +737,10 @@ extern {
 // android libc (bionic) provides pthread, so no additional link is required
 #[cfg(not(windows), not(target_os = "android"))]
 #[link(name = "pthread")]
+extern {}
+
+#[cfg(target_os = "linux")]
+#[link(name = "rt")]
 extern {}
 
 #[cfg(target_os = "win32")]

@@ -129,6 +129,12 @@ pub fn parse_trait_ref_data(data: &[u8], crate_num: ast::CrateNum, pos: uint, tc
     parse_trait_ref(&mut st, conv)
 }
 
+pub fn parse_substs_data(data: &[u8], crate_num: ast::CrateNum, pos: uint, tcx: ty::ctxt,
+                         conv: conv_did) -> ty::substs {
+    let mut st = parse_state_from_data(data, crate_num, pos, tcx);
+    parse_substs(&mut st, conv)
+}
+
 fn parse_sigil(st: &mut PState) -> ast::Sigil {
     match next(st) {
         '@' => ast::ManagedSigil,
@@ -296,16 +302,16 @@ fn parse_ty(st: &mut PState, conv: conv_did) -> ty::t {
       'u' => return ty::mk_uint(),
       'M' => {
         match next(st) {
-          'b' => return ty::mk_mach_uint(ast::ty_u8),
-          'w' => return ty::mk_mach_uint(ast::ty_u16),
-          'l' => return ty::mk_mach_uint(ast::ty_u32),
-          'd' => return ty::mk_mach_uint(ast::ty_u64),
-          'B' => return ty::mk_mach_int(ast::ty_i8),
-          'W' => return ty::mk_mach_int(ast::ty_i16),
-          'L' => return ty::mk_mach_int(ast::ty_i32),
-          'D' => return ty::mk_mach_int(ast::ty_i64),
-          'f' => return ty::mk_mach_float(ast::ty_f32),
-          'F' => return ty::mk_mach_float(ast::ty_f64),
+          'b' => return ty::mk_mach_uint(ast::TyU8),
+          'w' => return ty::mk_mach_uint(ast::TyU16),
+          'l' => return ty::mk_mach_uint(ast::TyU32),
+          'd' => return ty::mk_mach_uint(ast::TyU64),
+          'B' => return ty::mk_mach_int(ast::TyI8),
+          'W' => return ty::mk_mach_int(ast::TyI16),
+          'L' => return ty::mk_mach_int(ast::TyI32),
+          'D' => return ty::mk_mach_int(ast::TyI64),
+          'f' => return ty::mk_mach_float(ast::TyF32),
+          'F' => return ty::mk_mach_float(ast::TyF64),
           _ => fail!("parse_ty: bad numeric type")
         }
       }
@@ -336,7 +342,7 @@ fn parse_ty(st: &mut PState, conv: conv_did) -> ty::t {
         let did = parse_def(st, TypeParameter, |x,y| conv(x,y));
         return ty::mk_self(st.tcx, did);
       }
-      '@' => return ty::mk_box(st.tcx, parse_mt(st, |x,y| conv(x,y))),
+      '@' => return ty::mk_box(st.tcx, parse_ty(st, |x,y| conv(x,y))),
       '~' => return ty::mk_uniq(st.tcx, parse_mt(st, |x,y| conv(x,y))),
       '*' => return ty::mk_ptr(st.tcx, parse_mt(st, |x,y| conv(x,y))),
       '&' => {
@@ -380,15 +386,21 @@ fn parse_ty(st: &mut PState, conv: conv_did) -> ty::t {
         let key = ty::creader_cache_key {cnum: st.crate,
                                          pos: pos,
                                          len: len };
-        match st.tcx.rcache.find(&key) {
-          Some(&tt) => return tt,
+
+        let tt_opt = {
+            let rcache = st.tcx.rcache.borrow();
+            rcache.get().find_copy(&key)
+        };
+        match tt_opt {
+          Some(tt) => return tt,
           None => {
             let mut ps = PState {
                 pos: pos,
                 .. *st
             };
             let tt = parse_ty(&mut ps, |x,y| conv(x,y));
-            st.tcx.rcache.insert(key, tt);
+            let mut rcache = st.tcx.rcache.borrow_mut();
+            rcache.get().insert(key, tt);
             return tt;
           }
         }
@@ -451,12 +463,12 @@ fn parse_hex(st: &mut PState) -> uint {
     };
 }
 
-fn parse_purity(c: char) -> purity {
+fn parse_purity(c: char) -> Purity {
     match c {
-      'u' => unsafe_fn,
-      'i' => impure_fn,
-      'c' => extern_fn,
-      _ => fail!("parse_purity: bad purity {}", c)
+        'u' => UnsafeFn,
+        'i' => ImpureFn,
+        'c' => ExternFn,
+        _ => fail!("parse_purity: bad purity {}", c)
     }
 }
 

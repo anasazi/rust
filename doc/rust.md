@@ -1,4 +1,4 @@
-% Rust Reference Manual
+% The Rust Reference Manual
 
 # Introduction
 
@@ -610,12 +610,12 @@ the behavior of the compiler.
 
 ~~~~
 // Package ID
-#[ pkgid = "projx#2.5" ];
+#[ crate_id = "projx#2.5" ];
 
 // Additional metadata attributes
 #[ desc = "Project X" ];
 #[ license = "BSD" ];
-#[ author = "Jane Doe" ];
+#[ comment = "This is a comment on Project X." ];
 
 // Specify the output type
 #[ crate_type = "lib" ];
@@ -776,9 +776,9 @@ as the `ident` provided in the `extern_mod_decl`.
 The external crate is resolved to a specific `soname` at compile time, and a
 runtime linkage requirement to that `soname` is passed to the linker for
 loading at runtime.  The `soname` is resolved at compile time by scanning the
-compiler's library path and matching the optional `pkgid` provided as a string literal
-against the `pkgid` attributes that were declared on the external crate when
-it was compiled.  If no `pkgid` is provided, a default `name` attribute is
+compiler's library path and matching the optional `crateid` provided as a string literal
+against the `crateid` attributes that were declared on the external crate when
+it was compiled.  If no `crateid` is provided, a default `name` attribute is
 assumed, equal to the `ident` given in the `extern_mod_decl`.
 
 Four examples of `extern mod` declarations:
@@ -845,6 +845,7 @@ If a sequence of such redirections form a cycle or cannot be resolved unambiguou
 they represent a compile-time error.
 
 An example of re-exporting:
+
 ~~~~
 # fn main() { }
 mod quux {
@@ -868,6 +869,7 @@ All rules regarding accessing declared modules in `use` declarations applies to 
 and `extern mod` declarations.
 
 An example of what will and will not work for `use` items:
+
 ~~~~
 # #[allow(unused_imports)];
 use foo::extra;          // good: foo is at the root of the crate
@@ -1184,6 +1186,7 @@ a = Cat;
 ~~~~
 
 Enumeration constructors can have either named or unnamed fields:
+
 ~~~~
 enum Animal {
     Dog (~str, f64),
@@ -1212,7 +1215,7 @@ A static item must have a _constant expression_ giving its definition.
 
 Static items must be explicitly typed.
 The type may be ```bool```, ```char```, a number, or a type derived from those primitive types.
-The derived types are borrowed pointers with the `'static` lifetime,
+The derived types are references with the `'static` lifetime,
 fixed-size arrays, tuples, and structs.
 
 ~~~~
@@ -1729,7 +1732,7 @@ names are effectively reserved. Some significant attributes include:
 * The `cfg` attribute, for conditional-compilation by build-configuration.
 * The `lang` attribute, for custom definitions of traits and functions that are known to the Rust compiler (see [Language items](#language-items)).
 * The `link` attribute, for describing linkage metadata for a extern blocks.
-* The `pkgid` attribute, for describing the package ID of a crate.
+* The `crate_id` attribute, for describing the package ID of a crate.
 * The `test` attribute, for marking functions as unit tests.
 * The `allow`, `warn`, `forbid`, and `deny` attributes, for
   controlling lint checks (see [Lint check attributes](#lint-check-attributes)).
@@ -1838,7 +1841,7 @@ A complete list of the built-in language items follows:
 `owned`
   : Are uniquely owned.
 `durable`
-  : Contain borrowed pointers.
+  : Contain references.
 `drop`
   : Have finalizers.
 `add`
@@ -1895,11 +1898,11 @@ A complete list of the built-in language items follows:
 `free`
   : Free memory that was allocated on the managed heap.
 `borrow_as_imm`
-  : Create an immutable borrowed pointer to a mutable value.
+  : Create an immutable reference to a mutable value.
 `return_to_mut`
-  : Release a borrowed pointer created with `return_to_mut`
+  : Release a reference created with `return_to_mut`
 `check_not_borrowed`
-  : Fail if a value has existing borrowed pointers to it.
+  : Fail if a value has existing references to it.
 `strdup_uniq`
   : Return a new unique string
     containing a copy of the contents of a unique string.
@@ -2196,7 +2199,7 @@ When an lvalue is evaluated in an _lvalue context_, it denotes a memory location
 when evaluated in an _rvalue context_, it denotes the value held _in_ that memory location.
 
 When an rvalue is used in lvalue context, a temporary un-named lvalue is created and used instead.
-A temporary's lifetime equals the largest lifetime of any borrowed pointer that points to it.
+A temporary's lifetime equals the largest lifetime of any reference that points to it.
 
 #### Moved and copied types
 
@@ -2400,8 +2403,8 @@ before the expression they apply to.
   :  [Boxing](#pointer-types) operators. Allocate a box to hold the value they are applied to,
      and store the value in it. `@` creates a managed box, whereas `~` creates an owned box.
 `&`
-  : Borrow operator. Returns a borrowed pointer, pointing to its operand.
-    The operand of a borrowed pointer is statically proven to outlive the resulting pointer.
+  : Borrow operator. Returns a reference, pointing to its operand.
+    The operand of a borrow is statically proven to outlive the resulting pointer.
     If the borrow-checker cannot prove this, it is a compilation error.
 
 ### Binary operator expressions
@@ -2891,9 +2894,9 @@ match x {
 Patterns that bind variables
 default to binding to a copy or move of the matched value
 (depending on the matched value's type).
-This can be changed to bind to a borrowed pointer by
+This can be changed to bind to a reference by
 using the ```ref``` keyword,
-or to a mutable borrowed pointer using ```ref mut```.
+or to a mutable reference using ```ref mut```.
 
 A pattern that's just an identifier,
 like `Nil` in the previous answer,
@@ -3054,8 +3057,7 @@ assert!(b != "world");
 The vector type constructor represents a homogeneous array of values of a given type.
 A vector has a fixed size.
 (Operations like `vec.push` operate solely on owned vectors.)
-A vector type can be annotated with a _definite_ size,
-written with a trailing asterisk and integer literal, such as `[int * 10]`.
+A vector type can be annotated with a _definite_ size, such as `[int, ..10]`.
 Such a definite-sized vector type is a first-class type, since its size is known statically.
 A vector without such a size is said to be of _indefinite_ size,
 and is therefore not a _first-class_ type.
@@ -3170,18 +3172,18 @@ Owning pointers (`~`)
     it involves allocating a new owned box and copying the contents of the old box into the new box.
     Releasing an owning pointer immediately releases its corresponding owned box.
 
-Borrowed pointers (`&`)
+References (`&`)
   : These point to memory _owned by some other value_.
-    Borrowed pointers arise by (automatic) conversion from owning pointers, managed pointers,
+    References arise by (automatic) conversion from owning pointers, managed pointers,
     or by applying the borrowing operator `&` to some other value,
     including [lvalues, rvalues or temporaries](#lvalues-rvalues-and-temporaries).
-    Borrowed pointers are written `&content`, or in some cases `&'f content` for some lifetime-variable `f`,
-    for example `&int` means a borrowed pointer to an integer.
-    Copying a borrowed pointer is a "shallow" operation:
+    References are written `&content`, or in some cases `&'f content` for some lifetime-variable `f`,
+    for example `&int` means a reference to an integer.
+    Copying a reference is a "shallow" operation:
     it involves only copying the pointer itself.
-    Releasing a borrowed pointer typically has no effect on the value it points to,
+    Releasing a reference typically has no effect on the value it points to,
     with the exception of temporary values,
-    which are released when the last borrowed pointer to them is released.
+    which are released when the last reference to them is released.
 
 Raw pointers (`*`)
   : Raw pointers are pointers without safety or liveness guarantees.
@@ -3336,7 +3338,7 @@ The kinds are:
     This kind includes scalars and immutable references,
     as well as structural types containing other `Pod` types.
 `'static`
-  : Types of this kind do not contain any borrowed pointers;
+  : Types of this kind do not contain any references;
     this can be a useful guarantee for code
     that breaks borrowing assumptions
     using [`unsafe` operations](#unsafe-functions).
@@ -3415,14 +3417,14 @@ frame they are allocated within.
 ### Memory ownership
 
 A task owns all memory it can *safely* reach through local variables,
-as well as managed, owning and borrowed pointers.
+as well as managed, owned boxes and references.
 
 When a task sends a value that has the `Send` trait to another task,
 it loses ownership of the value sent and can no longer refer to it.
 This is statically guaranteed by the combined use of "move semantics",
 and the compiler-checked _meaning_ of the `Send` trait:
 it is only instantiated for (transitively) sendable kinds of data constructor and pointers,
-never including managed or borrowed pointers.
+never including managed boxes or references.
 
 When a stack frame is exited, its local allocations are all released, and its
 references to boxes (both managed and owned) are dropped.
@@ -3567,7 +3569,7 @@ These include:
   - simple locks and semaphores
 
 When such facilities carry values, the values are restricted to the [`Send` type-kind](#type-kinds).
-Restricting communication interfaces to this kind ensures that no borrowed or managed pointers move between tasks.
+Restricting communication interfaces to this kind ensures that no references or managed pointers move between tasks.
 Thus access to an entire data structure can be mediated through its owning "root" value;
 no further locking or copying is required to avoid data races within the substructure of such a value.
 
@@ -3605,10 +3607,8 @@ failed destructor. Nonetheless, the outermost unwinding activity will continue
 until the stack is unwound and the task transitions to the *dead*
 state. There is no way to "recover" from task failure.  Once a task has
 temporarily suspended its unwinding in the *failing* state, failure
-occurring from within this destructor results in *hard* failure.  The
-unwinding procedure of hard failure frees resources but does not execute
-destructors.  The original (soft) failure is still resumed at the point where
-it was temporarily suspended.
+occurring from within this destructor results in *hard* failure.
+A hard failure currently results in the process aborting.
 
 A task in the *dead* state cannot transition to other states; it exists
 only to have its termination status inspected by other tasks, and/or to await
@@ -3792,7 +3792,7 @@ specified then log level 4 is assumed.  Debug messages can be omitted
 by passing `--cfg ndebug` to `rustc`.
 
 As an example, to see all the logs generated by the compiler, you would set
-`RUST_LOG` to `rustc`, which is the crate name (as specified in its `pkgid`
+`RUST_LOG` to `rustc`, which is the crate name (as specified in its `crate_id`
 [attribute](#attributes)). To narrow down the logs to just crate resolution,
 you would set it to `rustc::metadata::creader`. To see just error logging
 use `rustc=0`.
@@ -3805,25 +3805,6 @@ compiled from, e.g. `helloworld.rs`, `RUST_LOG` should be set to `helloworld`.
 As a convenience, the logging spec can also be set to a special pseudo-crate,
 `::help`. In this case, when the application starts, the runtime will
 simply output a list of loaded modules containing log expressions, then exit.
-
-The Rust runtime itself generates logging information. The runtime's logs are
-generated for a number of artificial modules in the `::rt` pseudo-crate,
-and can be enabled just like the logs for any standard module. The full list
-of runtime logging modules follows.
-
-* `::rt::mem` Memory management
-* `::rt::comm` Messaging and task communication
-* `::rt::task` Task management
-* `::rt::dom` Task scheduling
-* `::rt::trace` Unused
-* `::rt::cache` Type descriptor cache
-* `::rt::upcall` Compiler-generated runtime calls
-* `::rt::timer` The scheduler timer
-* `::rt::gc` Garbage collection
-* `::rt::stdlib` Functions used directly by the standard library
-* `::rt::kern` The runtime kernel
-* `::rt::backtrace` Log a backtrace on task failure
-* `::rt::callback` Unused
 
 #### Logging Expressions
 

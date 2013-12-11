@@ -26,7 +26,7 @@ use util::ppaux::ty_to_str;
 
 use std::vec;
 use syntax::ast;
-use syntax::ast_map::path_name;
+use syntax::ast_map::PathName;
 use syntax::ast_util;
 use syntax::parse::token::special_idents;
 
@@ -155,7 +155,7 @@ pub fn mk_closure_tys(tcx: ty::ctxt,
     return cdata_ty;
 }
 
-fn heap_for_unique_closure(bcx: @mut Block, t: ty::t) -> heap {
+fn heap_for_unique_closure(bcx: &Block, t: ty::t) -> heap {
     if ty::type_contents(bcx.tcx(), t).owns_managed() {
         heap_managed_unique
     } else {
@@ -163,8 +163,11 @@ fn heap_for_unique_closure(bcx: @mut Block, t: ty::t) -> heap {
     }
 }
 
-pub fn allocate_cbox(bcx: @mut Block, sigil: ast::Sigil, cdata_ty: ty::t)
-                  -> Result {
+pub fn allocate_cbox<'a>(
+                     bcx: &'a Block<'a>,
+                     sigil: ast::Sigil,
+                     cdata_ty: ty::t)
+                     -> Result<'a> {
     let _icx = push_ctxt("closure::allocate_cbox");
     let ccx = bcx.ccx();
     let tcx = ccx.tcx;
@@ -185,20 +188,21 @@ pub fn allocate_cbox(bcx: @mut Block, sigil: ast::Sigil, cdata_ty: ty::t)
     }
 }
 
-pub struct ClosureResult {
-    llbox: ValueRef, // llvalue of ptr to closure
-    cdata_ty: ty::t, // type of the closure data
-    bcx: @mut Block       // final bcx
+pub struct ClosureResult<'a> {
+    llbox: ValueRef,    // llvalue of ptr to closure
+    cdata_ty: ty::t,    // type of the closure data
+    bcx: &'a Block<'a>  // final bcx
 }
 
 // Given a block context and a list of tydescs and values to bind
 // construct a closure out of them. If copying is true, it is a
 // heap allocated closure that copies the upvars into environment.
 // Otherwise, it is stack allocated and copies pointers to the upvars.
-pub fn store_environment(bcx: @mut Block,
+pub fn store_environment<'a>(
+                         bcx: &'a Block<'a>,
                          bound_values: ~[EnvValue],
                          sigil: ast::Sigil)
-                         -> ClosureResult {
+                         -> ClosureResult<'a> {
     let _icx = push_ctxt("closure::store_environment");
     let ccx = bcx.ccx();
     let tcx = ccx.tcx;
@@ -257,9 +261,11 @@ pub fn store_environment(bcx: @mut Block,
 
 // Given a context and a list of upvars, build a closure. This just
 // collects the upvars and packages them up for store_environment.
-pub fn build_closure(bcx0: @mut Block,
+pub fn build_closure<'a>(
+                     bcx0: &'a Block<'a>,
                      cap_vars: &[moves::CaptureVar],
-                     sigil: ast::Sigil) -> ClosureResult {
+                     sigil: ast::Sigil)
+                     -> ClosureResult<'a> {
     let _icx = push_ctxt("closure::build_closure");
 
     // If we need to, package up the iterator body to call
@@ -293,7 +299,7 @@ pub fn build_closure(bcx0: @mut Block,
 // Given an enclosing block context, a new function context, a closure type,
 // and a list of upvars, generate code to load and populate the environment
 // with the upvars and type descriptors.
-pub fn load_environment(fcx: @mut FunctionContext,
+pub fn load_environment(fcx: &FunctionContext,
                         cdata_ty: ty::t,
                         cap_vars: &[moves::CaptureVar],
                         sigil: ast::Sigil) {
@@ -304,10 +310,10 @@ pub fn load_environment(fcx: @mut FunctionContext,
         return;
     }
 
-    let bcx = fcx.entry_bcx.unwrap();
+    let bcx = fcx.entry_bcx.get().unwrap();
 
     // Load a pointer to the closure data, skipping over the box header:
-    let llcdata = opaque_box_body(bcx, cdata_ty, fcx.llenv);
+    let llcdata = opaque_box_body(bcx, cdata_ty, fcx.llenv.get());
 
     // Store the pointer to closure data in an alloca for debug info because that's what the
     // llvm.dbg.declare intrinsic expects
@@ -328,7 +334,11 @@ pub fn load_environment(fcx: @mut FunctionContext,
             ast::ManagedSigil | ast::OwnedSigil => {}
         }
         let def_id = ast_util::def_id_of_def(cap_var.def);
-        fcx.llupvars.insert(def_id.node, upvarptr);
+
+        {
+            let mut llupvars = fcx.llupvars.borrow_mut();
+            llupvars.get().insert(def_id.node, upvarptr);
+        }
 
         for &env_pointer_alloca in env_pointer_alloca.iter() {
             debuginfo::create_captured_var_metadata(
@@ -345,13 +355,15 @@ pub fn load_environment(fcx: @mut FunctionContext,
     }
 }
 
-pub fn trans_expr_fn(bcx: @mut Block,
+pub fn trans_expr_fn<'a>(
+                     bcx: &'a Block<'a>,
                      sigil: ast::Sigil,
-                     decl: &ast::fn_decl,
+                     decl: &ast::FnDecl,
                      body: &ast::Block,
                      outer_id: ast::NodeId,
                      user_id: ast::NodeId,
-                     dest: expr::Dest) -> @mut Block {
+                     dest: expr::Dest)
+                     -> &'a Block<'a> {
     /*!
      *
      * Translates the body of a closure expression.
@@ -388,7 +400,7 @@ pub fn trans_expr_fn(bcx: @mut Block,
     };
 
     let sub_path = vec::append_one(bcx.fcx.path.clone(),
-                                   path_name(special_idents::anon));
+                                   PathName(special_idents::anon));
     // XXX: Bad copy.
     let s = mangle_internal_name_by_path_and_seq(ccx,
                                                  sub_path.clone(),
@@ -400,7 +412,10 @@ pub fn trans_expr_fn(bcx: @mut Block,
 
     let Result {bcx: bcx, val: closure} = match sigil {
         ast::BorrowedSigil | ast::ManagedSigil | ast::OwnedSigil => {
-            let cap_vars = ccx.maps.capture_map.get_copy(&user_id);
+            let cap_vars = {
+                let capture_map = ccx.maps.capture_map.borrow();
+                capture_map.get().get_copy(&user_id)
+            };
             let ClosureResult {llbox, cdata_ty, bcx}
                 = build_closure(bcx, cap_vars, sigil);
             trans_closure(ccx,
@@ -422,12 +437,13 @@ pub fn trans_expr_fn(bcx: @mut Block,
     return bcx;
 }
 
-pub fn make_closure_glue(cx: @mut Block,
+pub fn make_closure_glue<'a>(
+                         cx: &'a Block<'a>,
                          v: ValueRef,
                          t: ty::t,
-                         glue_fn: |@mut Block, v: ValueRef, t: ty::t|
-                                   -> @mut Block)
-                         -> @mut Block {
+                         glue_fn: |&'a Block<'a>, v: ValueRef, t: ty::t|
+                                   -> &'a Block<'a>)
+                         -> &'a Block<'a> {
     let _icx = push_ctxt("closure::make_closure_glue");
     let bcx = cx;
     let tcx = cx.tcx();
@@ -446,11 +462,11 @@ pub fn make_closure_glue(cx: @mut Block,
     }
 }
 
-pub fn make_opaque_cbox_drop_glue(
-    bcx: @mut Block,
-    sigil: ast::Sigil,
-    cboxptr: ValueRef)     // ptr to the opaque closure
-    -> @mut Block {
+pub fn make_opaque_cbox_drop_glue<'a>(
+                                  bcx: &'a Block<'a>,
+                                  sigil: ast::Sigil,
+                                  cboxptr: ValueRef)    // opaque closure ptr
+                                  -> &'a Block<'a> {
     let _icx = push_ctxt("closure::make_opaque_cbox_drop_glue");
     match sigil {
         ast::BorrowedSigil => bcx,
@@ -465,11 +481,12 @@ pub fn make_opaque_cbox_drop_glue(
     }
 }
 
-pub fn make_opaque_cbox_free_glue(
-    bcx: @mut Block,
-    sigil: ast::Sigil,
-    cbox: ValueRef)     // ptr to ptr to the opaque closure
-    -> @mut Block {
+/// `cbox` is a pointer to a pointer to an opaque closure.
+pub fn make_opaque_cbox_free_glue<'a>(
+                                  bcx: &'a Block<'a>,
+                                  sigil: ast::Sigil,
+                                  cbox: ValueRef)
+                                  -> &'a Block<'a> {
     let _icx = push_ctxt("closure::make_opaque_cbox_free_glue");
     match sigil {
         ast::BorrowedSigil => {

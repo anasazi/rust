@@ -1,4 +1,4 @@
-// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,9 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// NOTE: remove after snapshot
-#[pkgid = "rustdoc#0.9-pre"];
-#[crate_id = "rustdoc#0.9-pre"];
+#[crate_id = "rustdoc#0.9"];
 #[desc = "rustdoc, the Rust documentation extractor"];
 #[license = "MIT/ASL2"];
 #[crate_type = "dylib"];
@@ -25,7 +23,6 @@ use std::local_data;
 use std::io;
 use std::io::File;
 use std::io::mem::MemWriter;
-use std::io::Decorator;
 use std::str;
 use extra::getopts;
 use extra::getopts::groups;
@@ -47,6 +44,7 @@ pub mod html {
 pub mod passes;
 pub mod plugins;
 pub mod visit_ast;
+pub mod test;
 
 pub static SCHEMA_VERSION: &'static str = "0.8.1";
 
@@ -100,6 +98,9 @@ pub fn opts() -> ~[groups::OptGroup] {
         optmulti("", "plugins", "space separated list of plugins to also load",
                  "PLUGINS"),
         optflag("", "no-defaults", "don't run the default passes"),
+        optflag("", "test", "run code examples as tests"),
+        optmulti("", "test-args", "arguments to pass to the test runner",
+                 "ARGS"),
     ]
 }
 
@@ -108,10 +109,29 @@ pub fn usage(argv0: &str) {
 }
 
 pub fn main_args(args: &[~str]) -> int {
-    let matches = groups::getopts(args.tail(), opts()).unwrap();
+    let matches = match groups::getopts(args.tail(), opts()) {
+        Ok(m) => m,
+        Err(err) => {
+            println(err.to_err_msg());
+            return 1;
+        }
+    };
     if matches.opt_present("h") || matches.opt_present("help") {
         usage(args[0]);
         return 0;
+    }
+
+    if matches.free.len() == 0 {
+        println("expected an input file to act on");
+        return 1;
+    } if matches.free.len() > 1 {
+        println("only one input file may be specified");
+        return 1;
+    }
+    let input = matches.free[0].as_slice();
+
+    if matches.opt_present("test") {
+        return test::run(input, &matches);
     }
 
     if matches.opt_strs("passes") == ~[~"list"] {
@@ -126,7 +146,7 @@ pub fn main_args(args: &[~str]) -> int {
         return 0;
     }
 
-    let (crate, res) = match acquire_input(&matches) {
+    let (crate, res) = match acquire_input(input, &matches) {
         Ok(pair) => pair,
         Err(s) => {
             println!("input error: {}", s);
@@ -157,14 +177,8 @@ pub fn main_args(args: &[~str]) -> int {
 
 /// Looks inside the command line arguments to extract the relevant input format
 /// and files and then generates the necessary rustdoc output for formatting.
-fn acquire_input(matches: &getopts::Matches) -> Result<Output, ~str> {
-    if matches.free.len() == 0 {
-        return Err(~"expected an input file to act on");
-    } if matches.free.len() > 1 {
-        return Err(~"only one input file may be specified");
-    }
-
-    let input = matches.free[0].as_slice();
+fn acquire_input(input: &str,
+                 matches: &getopts::Matches) -> Result<Output, ~str> {
     match matches.opt_str("r") {
         Some(~"rust") => Ok(rust_input(input, matches)),
         Some(~"json") => json_input(input),
@@ -233,7 +247,7 @@ fn rust_input(cratefile: &str, matches: &getopts::Matches) -> Output {
     }
 
     // Load all plugins/passes into a PluginManager
-    let path = matches.opt_str("plugin-path").unwrap_or(~"/tmp/rustdoc_ng/plugins");
+    let path = matches.opt_str("plugin-path").unwrap_or(~"/tmp/rustdoc/plugins");
     let mut pm = plugins::PluginManager::new(Path::new(path));
     for pass in passes.iter() {
         let plugin = match PASSES.iter().position(|&(p, _, _)| p == *pass) {
@@ -258,11 +272,11 @@ fn rust_input(cratefile: &str, matches: &getopts::Matches) -> Output {
 /// This input format purely deserializes the json output file. No passes are
 /// run over the deserialized output.
 fn json_input(input: &str) -> Result<Output, ~str> {
-    let input = match File::open(&Path::new(input)) {
+    let mut input = match File::open(&Path::new(input)) {
         Some(f) => f,
         None => return Err(format!("couldn't open {} for reading", input)),
     };
-    match json::from_reader(@mut input as @mut io::Reader) {
+    match json::from_reader(&mut input) {
         Err(s) => Err(s.to_str()),
         Ok(json::Object(obj)) => {
             let mut obj = obj;
@@ -313,7 +327,7 @@ fn json_output(crate: clean::Crate, res: ~[plugins::PluginJson], dst: Path) {
             let mut encoder = json::Encoder::new(&mut w as &mut io::Writer);
             crate.encode(&mut encoder);
         }
-        str::from_utf8_owned(w.inner())
+        str::from_utf8_owned(w.unwrap())
     };
     let crate_json = match json::from_str(crate_json_str) {
         Ok(j) => j,
@@ -323,6 +337,6 @@ fn json_output(crate: clean::Crate, res: ~[plugins::PluginJson], dst: Path) {
     json.insert(~"crate", crate_json);
     json.insert(~"plugins", json::Object(plugins_json));
 
-    let file = @mut File::create(&dst).unwrap();
-    json::Object(json).to_writer(file as @mut io::Writer);
+    let mut file = File::create(&dst).unwrap();
+    json::Object(json).to_writer(&mut file);
 }

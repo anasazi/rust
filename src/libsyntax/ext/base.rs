@@ -12,7 +12,6 @@ use ast;
 use ast::Name;
 use codemap;
 use codemap::{CodeMap, Span, ExpnInfo};
-use diagnostic::span_handler;
 use ext;
 use ext::expand;
 use parse;
@@ -26,20 +25,17 @@ use std::hashmap::HashMap;
 //
 //    MacResult, NormalTT, IdentTT
 //
-// also note that ast::mac used to have a bunch of extraneous cases and
+// also note that ast::Mac used to have a bunch of extraneous cases and
 // is now probably a redundant AST node, can be merged with
-// ast::mac_invoc_tt.
+// ast::MacInvocTT.
 
 pub struct MacroDef {
     name: @str,
     ext: SyntaxExtension
 }
 
-pub type ItemDecorator = extern "Rust" fn(@ExtCtxt,
-                                          Span,
-                                          @ast::MetaItem,
-                                          ~[@ast::item])
-                                          -> ~[@ast::item];
+pub type ItemDecorator =
+    fn(&ExtCtxt, Span, @ast::MetaItem, ~[@ast::Item]) -> ~[@ast::Item];
 
 pub struct SyntaxExpanderTT {
     expander: SyntaxExpanderTTExpander,
@@ -48,18 +44,16 @@ pub struct SyntaxExpanderTT {
 
 pub trait SyntaxExpanderTTTrait {
     fn expand(&self,
-              ecx: @ExtCtxt,
+              ecx: &mut ExtCtxt,
               span: Span,
-              token_tree: &[ast::token_tree],
+              token_tree: &[ast::TokenTree],
               context: ast::SyntaxContext)
               -> MacResult;
 }
 
 pub type SyntaxExpanderTTFunNoCtxt =
-    extern "Rust" fn(ecx: @ExtCtxt,
-                     span: codemap::Span,
-                     token_tree: &[ast::token_tree])
-                     -> MacResult;
+    fn(ecx: &mut ExtCtxt, span: codemap::Span, token_tree: &[ast::TokenTree])
+       -> MacResult;
 
 enum SyntaxExpanderTTExpander {
     SyntaxExpanderTTExpanderWithoutContext(SyntaxExpanderTTFunNoCtxt),
@@ -67,9 +61,9 @@ enum SyntaxExpanderTTExpander {
 
 impl SyntaxExpanderTTTrait for SyntaxExpanderTT {
     fn expand(&self,
-              ecx: @ExtCtxt,
+              ecx: &mut ExtCtxt,
               span: Span,
-              token_tree: &[ast::token_tree],
+              token_tree: &[ast::TokenTree],
               _: ast::SyntaxContext)
               -> MacResult {
         match self.expander {
@@ -92,20 +86,20 @@ pub struct SyntaxExpanderTTItem {
 
 pub trait SyntaxExpanderTTItemTrait {
     fn expand(&self,
-              cx: @ExtCtxt,
+              cx: &mut ExtCtxt,
               sp: Span,
               ident: ast::Ident,
-              token_tree: ~[ast::token_tree],
+              token_tree: ~[ast::TokenTree],
               context: ast::SyntaxContext)
               -> MacResult;
 }
 
 impl SyntaxExpanderTTItemTrait for SyntaxExpanderTTItem {
     fn expand(&self,
-              cx: @ExtCtxt,
+              cx: &mut ExtCtxt,
               sp: Span,
               ident: ast::Ident,
-              token_tree: ~[ast::token_tree],
+              token_tree: ~[ast::TokenTree],
               context: ast::SyntaxContext)
               -> MacResult {
         match self.expander {
@@ -119,26 +113,22 @@ impl SyntaxExpanderTTItemTrait for SyntaxExpanderTTItem {
     }
 }
 
-pub type SyntaxExpanderTTItemFun = extern "Rust" fn(@ExtCtxt,
-                                                    Span,
-                                                    ast::Ident,
-                                                    ~[ast::token_tree],
-                                                    ast::SyntaxContext)
-                                                    -> MacResult;
+pub type SyntaxExpanderTTItemFun =
+    fn(&mut ExtCtxt, Span, ast::Ident, ~[ast::TokenTree], ast::SyntaxContext)
+       -> MacResult;
 
 pub type SyntaxExpanderTTItemFunNoCtxt =
-    extern "Rust" fn(@ExtCtxt, Span, ast::Ident, ~[ast::token_tree])
-                     -> MacResult;
+    fn(&mut ExtCtxt, Span, ast::Ident, ~[ast::TokenTree]) -> MacResult;
 
 pub trait AnyMacro {
     fn make_expr(&self) -> @ast::Expr;
-    fn make_items(&self) -> SmallVector<@ast::item>;
+    fn make_items(&self) -> SmallVector<@ast::Item>;
     fn make_stmt(&self) -> @ast::Stmt;
 }
 
 pub enum MacResult {
     MRExpr(@ast::Expr),
-    MRItem(@ast::item),
+    MRItem(@ast::Item),
     MRAny(@AnyMacro),
     MRDef(MacroDef),
 }
@@ -148,7 +138,7 @@ pub enum SyntaxExtension {
     ItemDecorator(ItemDecorator),
 
     // Token-tree expanders
-    NormalTT(@SyntaxExpanderTTTrait, Option<Span>),
+    NormalTT(~SyntaxExpanderTTTrait:'static, Option<Span>),
 
     // An IdentTT is a macro that has an
     // identifier in between the name of the
@@ -158,64 +148,55 @@ pub enum SyntaxExtension {
 
     // perhaps macro_rules! will lose its odd special identifier argument,
     // and this can go away also
-    IdentTT(@SyntaxExpanderTTItemTrait, Option<Span>),
+    IdentTT(~SyntaxExpanderTTItemTrait:'static, Option<Span>),
 }
 
 
 // The SyntaxEnv is the environment that's threaded through the expansion
 // of macros. It contains bindings for macros, and also a special binding
 // for " block" (not a legal identifier) that maps to a BlockInfo
-pub type SyntaxEnv = @mut MapChain<Name, Transformer>;
-
-// Transformer : the codomain of SyntaxEnvs
-
-pub enum Transformer {
-    // this identifier maps to a syntax extension or macro
-    SE(SyntaxExtension),
-    // blockinfo : this is ... well, it's simpler than threading
-    // another whole data stack-structured data structure through
-    // expansion. Basically, there's an invariant that every
-    // map must contain a binding for " block".
-    BlockInfo(BlockInfo)
-}
+pub type SyntaxEnv = MapChain<Name, SyntaxExtension>;
 
 pub struct BlockInfo {
     // should macros escape from this scope?
     macros_escape : bool,
     // what are the pending renames?
-    pending_renames : @mut RenameList
+    pending_renames : RenameList
+}
+
+impl BlockInfo {
+    pub fn new() -> BlockInfo {
+        BlockInfo {
+            macros_escape: false,
+            pending_renames: ~[]
+        }
+    }
 }
 
 // a list of ident->name renamings
-type RenameList = ~[(ast::Ident,Name)];
+pub type RenameList = ~[(ast::Ident,Name)];
 
 // The base map of methods for expanding syntax extension
 // AST nodes into full ASTs
 pub fn syntax_expander_table() -> SyntaxEnv {
     // utility function to simplify creating NormalTT syntax extensions
     fn builtin_normal_tt_no_ctxt(f: SyntaxExpanderTTFunNoCtxt)
-                                 -> @Transformer {
-        @SE(NormalTT(@SyntaxExpanderTT{
+                                 -> SyntaxExtension {
+        NormalTT(~SyntaxExpanderTT{
             expander: SyntaxExpanderTTExpanderWithoutContext(f),
             span: None,
-        } as @SyntaxExpanderTTTrait,
-        None))
+        },
+        None)
     }
 
-    let mut syntax_expanders = HashMap::new();
-    // NB identifier starts with space, and can't conflict with legal idents
-    syntax_expanders.insert(intern(&" block"),
-                            @BlockInfo(BlockInfo{
-                                macros_escape : false,
-                                pending_renames : @mut ~[]
-                            }));
+    let mut syntax_expanders = MapChain::new();
     syntax_expanders.insert(intern(&"macro_rules"),
-                            @SE(IdentTT(@SyntaxExpanderTTItem {
+                            IdentTT(~SyntaxExpanderTTItem {
                                 expander: SyntaxExpanderTTItemExpanderWithContext(
                                     ext::tt::macro_rules::add_new_extension),
                                 span: None,
-                            } as @SyntaxExpanderTTItemTrait,
-                            None)));
+                            },
+                            None));
     syntax_expanders.insert(intern(&"fmt"),
                             builtin_normal_tt_no_ctxt(
                                 ext::fmt::expand_syntax_ext));
@@ -241,8 +222,7 @@ pub fn syntax_expander_table() -> SyntaxEnv {
                             builtin_normal_tt_no_ctxt(
                                     ext::log_syntax::expand_syntax_ext));
     syntax_expanders.insert(intern(&"deriving"),
-                            @SE(ItemDecorator(
-                                ext::deriving::expand_meta_deriving)));
+                            ItemDecorator(ext::deriving::expand_meta_deriving));
 
     // Quasi-quoting expanders
     syntax_expanders.insert(intern(&"quote_tokens"),
@@ -297,48 +277,42 @@ pub fn syntax_expander_table() -> SyntaxEnv {
     syntax_expanders.insert(intern(&"trace_macros"),
                             builtin_normal_tt_no_ctxt(
                                     ext::trace_macros::expand_trace_macros));
-    MapChain::new(~syntax_expanders)
+    syntax_expanders
 }
 
 // One of these is made during expansion and incrementally updated as we go;
 // when a macro expansion occurs, the resulting nodes have the backtrace()
 // -> expn_info of their expansion context stored into their span.
 pub struct ExtCtxt {
-    parse_sess: @mut parse::ParseSess,
+    parse_sess: @parse::ParseSess,
     cfg: ast::CrateConfig,
-    backtrace: @mut Option<@ExpnInfo>,
+    backtrace: Option<@ExpnInfo>,
 
-    // These two @mut's should really not be here,
-    // but the self types for CtxtRepr are all wrong
-    // and there are bugs in the code for object
-    // types that make this hard to get right at the
-    // moment. - nmatsakis
-    mod_path: @mut ~[ast::Ident],
-    trace_mac: @mut bool
+    mod_path: ~[ast::Ident],
+    trace_mac: bool
 }
 
 impl ExtCtxt {
-    pub fn new(parse_sess: @mut parse::ParseSess, cfg: ast::CrateConfig)
-               -> @ExtCtxt {
-        @ExtCtxt {
+    pub fn new(parse_sess: @parse::ParseSess, cfg: ast::CrateConfig)
+               -> ExtCtxt {
+        ExtCtxt {
             parse_sess: parse_sess,
             cfg: cfg,
-            backtrace: @mut None,
-            mod_path: @mut ~[],
-            trace_mac: @mut false
+            backtrace: None,
+            mod_path: ~[],
+            trace_mac: false
         }
     }
 
-    pub fn expand_expr(@self, mut e: @ast::Expr) -> @ast::Expr {
+    pub fn expand_expr(&mut self, mut e: @ast::Expr) -> @ast::Expr {
         loop {
             match e.node {
                 ast::ExprMac(..) => {
-                    let extsbox = @mut syntax_expander_table();
-                    let expander = expand::MacroExpander {
-                        extsbox: extsbox,
+                    let mut expander = expand::MacroExpander {
+                        extsbox: syntax_expander_table(),
                         cx: self,
                     };
-                    e = expand::expand_expr(extsbox, self, e, &expander);
+                    e = expand::expand_expr(e, &mut expander);
                 }
                 _ => return e
             }
@@ -346,35 +320,35 @@ impl ExtCtxt {
     }
 
     pub fn codemap(&self) -> @CodeMap { self.parse_sess.cm }
-    pub fn parse_sess(&self) -> @mut parse::ParseSess { self.parse_sess }
+    pub fn parse_sess(&self) -> @parse::ParseSess { self.parse_sess }
     pub fn cfg(&self) -> ast::CrateConfig { self.cfg.clone() }
     pub fn call_site(&self) -> Span {
-        match *self.backtrace {
+        match self.backtrace {
             Some(@ExpnInfo {call_site: cs, ..}) => cs,
             None => self.bug("missing top span")
         }
     }
     pub fn print_backtrace(&self) { }
-    pub fn backtrace(&self) -> Option<@ExpnInfo> { *self.backtrace }
-    pub fn mod_push(&self, i: ast::Ident) { self.mod_path.push(i); }
-    pub fn mod_pop(&self) { self.mod_path.pop(); }
-    pub fn mod_path(&self) -> ~[ast::Ident] { (*self.mod_path).clone() }
-    pub fn bt_push(&self, ei: codemap::ExpnInfo) {
+    pub fn backtrace(&self) -> Option<@ExpnInfo> { self.backtrace }
+    pub fn mod_push(&mut self, i: ast::Ident) { self.mod_path.push(i); }
+    pub fn mod_pop(&mut self) { self.mod_path.pop(); }
+    pub fn mod_path(&self) -> ~[ast::Ident] { self.mod_path.clone() }
+    pub fn bt_push(&mut self, ei: codemap::ExpnInfo) {
         match ei {
             ExpnInfo {call_site: cs, callee: ref callee} => {
-                *self.backtrace =
+                self.backtrace =
                     Some(@ExpnInfo {
                         call_site: Span {lo: cs.lo, hi: cs.hi,
-                                         expn_info: *self.backtrace},
+                                         expn_info: self.backtrace},
                         callee: *callee});
             }
         }
     }
-    pub fn bt_pop(&self) {
-        match *self.backtrace {
+    pub fn bt_pop(&mut self) {
+        match self.backtrace {
             Some(@ExpnInfo {
                 call_site: Span {expn_info: prev, ..}, ..}) => {
-                *self.backtrace = prev
+                self.backtrace = prev
             }
             _ => self.bug("tried to pop without a push")
         }
@@ -404,10 +378,10 @@ impl ExtCtxt {
         self.parse_sess.span_diagnostic.handler().bug(msg);
     }
     pub fn trace_macros(&self) -> bool {
-        *self.trace_mac
+        self.trace_mac
     }
-    pub fn set_trace_macros(&self, x: bool) {
-        *self.trace_mac = x
+    pub fn set_trace_macros(&mut self, x: bool) {
+        self.trace_mac = x
     }
     pub fn str_of(&self, id: ast::Ident) -> @str {
         ident_to_str(&id)
@@ -417,26 +391,26 @@ impl ExtCtxt {
     }
 }
 
-pub fn expr_to_str(cx: @ExtCtxt, expr: @ast::Expr, err_msg: &str) -> (@str, ast::StrStyle) {
+pub fn expr_to_str(cx: &ExtCtxt, expr: @ast::Expr, err_msg: &str) -> (@str, ast::StrStyle) {
     match expr.node {
-      ast::ExprLit(l) => match l.node {
-        ast::lit_str(s, style) => (s, style),
-        _ => cx.span_fatal(l.span, err_msg)
-      },
-      _ => cx.span_fatal(expr.span, err_msg)
+        ast::ExprLit(l) => match l.node {
+            ast::LitStr(s, style) => (s, style),
+            _ => cx.span_fatal(l.span, err_msg)
+        },
+        _ => cx.span_fatal(expr.span, err_msg)
     }
 }
 
-pub fn check_zero_tts(cx: @ExtCtxt, sp: Span, tts: &[ast::token_tree],
+pub fn check_zero_tts(cx: &ExtCtxt, sp: Span, tts: &[ast::TokenTree],
                       name: &str) {
     if tts.len() != 0 {
         cx.span_fatal(sp, format!("{} takes no arguments", name));
     }
 }
 
-pub fn get_single_str_from_tts(cx: @ExtCtxt,
+pub fn get_single_str_from_tts(cx: &ExtCtxt,
                                sp: Span,
-                               tts: &[ast::token_tree],
+                               tts: &[ast::TokenTree],
                                name: &str)
                                -> @str {
     if tts.len() != 1 {
@@ -444,20 +418,20 @@ pub fn get_single_str_from_tts(cx: @ExtCtxt,
     }
 
     match tts[0] {
-        ast::tt_tok(_, token::LIT_STR(ident))
-        | ast::tt_tok(_, token::LIT_STR_RAW(ident, _)) => cx.str_of(ident),
+        ast::TTTok(_, token::LIT_STR(ident))
+        | ast::TTTok(_, token::LIT_STR_RAW(ident, _)) => cx.str_of(ident),
         _ => cx.span_fatal(sp, format!("{} requires a string.", name)),
     }
 }
 
-pub fn get_exprs_from_tts(cx: @ExtCtxt,
+pub fn get_exprs_from_tts(cx: &ExtCtxt,
                           sp: Span,
-                          tts: &[ast::token_tree]) -> ~[@ast::Expr] {
-    let p = parse::new_parser_from_tts(cx.parse_sess(),
-                                       cx.cfg(),
-                                       tts.to_owned());
+                          tts: &[ast::TokenTree]) -> ~[@ast::Expr] {
+    let mut p = parse::new_parser_from_tts(cx.parse_sess(),
+                                           cx.cfg(),
+                                           tts.to_owned());
     let mut es = ~[];
-    while *p.token != token::EOF {
+    while p.token != token::EOF {
         if es.len() != 0 && !p.eat(&token::COMMA) {
             cx.span_fatal(sp, "expected token: `,`");
         }
@@ -470,11 +444,7 @@ pub fn get_exprs_from_tts(cx: @ExtCtxt,
 // we want to implement the notion of a transformation
 // environment.
 
-// This environment maps Names to Transformers.
-// Initially, this includes macro definitions and
-// block directives.
-
-
+// This environment maps Names to SyntaxExtensions.
 
 // Actually, the following implementation is parameterized
 // by both key and value types.
@@ -489,169 +459,98 @@ pub fn get_exprs_from_tts(cx: @ExtCtxt,
 // able to refer to a macro that was added to an enclosing
 // scope lexically later than the deeper scope.
 
-// Note on choice of representation: I've been pushed to
-// use a top-level managed pointer by some difficulties
-// with pushing and popping functionally, and the ownership
-// issues.  As a result, the values returned by the table
-// also need to be managed; the &'a ... type that Maps
-// return won't work for things that need to get outside
-// of that managed pointer.  The easiest way to do this
-// is just to insist that the values in the tables are
-// managed to begin with.
-
-// a transformer env is either a base map or a map on top
-// of another chain.
-pub enum MapChain<K,V> {
-    BaseMapChain(~HashMap<K,@V>),
-    ConsMapChain(~HashMap<K,@V>,@mut MapChain<K,V>)
+// Only generic to make it easy to test
+struct MapChainFrame<K, V> {
+    info: BlockInfo,
+    map: HashMap<K, V>,
 }
 
-
-// get the map from an env frame
-impl <K: Eq + Hash + IterBytes + 'static, V: 'static> MapChain<K,V>{
-    // Constructor. I don't think we need a zero-arg one.
-    pub fn new(init: ~HashMap<K,@V>) -> @mut MapChain<K,V> {
-        @mut BaseMapChain(init)
-    }
-
-    // add a new frame to the environment (functionally)
-    pub fn push_frame (@mut self) -> @mut MapChain<K,V> {
-        @mut ConsMapChain(~HashMap::new() ,self)
-    }
-
-// no need for pop, it'll just be functional.
-
-    // utility fn...
-
-    // ugh: can't get this to compile with mut because of the
-    // lack of flow sensitivity.
-    pub fn get_map<'a>(&'a self) -> &'a HashMap<K,@V> {
-        match *self {
-            BaseMapChain (~ref map) => map,
-            ConsMapChain (~ref map,_) => map
-        }
-    }
-
-// traits just don't work anywhere...?
-//impl Map<Name,SyntaxExtension> for MapChain {
-
-    pub fn contains_key (&self, key: &K) -> bool {
-        match *self {
-            BaseMapChain (ref map) => map.contains_key(key),
-            ConsMapChain (ref map,ref rest) =>
-            (map.contains_key(key)
-             || rest.contains_key(key))
-        }
-    }
-    // should each_key and each_value operate on shadowed
-    // names? I think not.
-    // delaying implementing this....
-    pub fn each_key (&self, _f: |&K| -> bool) {
-        fail!("unimplemented 2013-02-15T10:01");
-    }
-
-    pub fn each_value (&self, _f: |&V| -> bool) {
-        fail!("unimplemented 2013-02-15T10:02");
-    }
-
-    // Returns a copy of the value that the name maps to.
-    // Goes down the chain 'til it finds one (or bottom out).
-    pub fn find (&self, key: &K) -> Option<@V> {
-        match self.get_map().find (key) {
-            Some(ref v) => Some(**v),
-            None => match *self {
-                BaseMapChain (_) => None,
-                ConsMapChain (_,ref rest) => rest.find(key)
-            }
-        }
-    }
-
-    pub fn find_in_topmost_frame(&self, key: &K) -> Option<@V> {
-        let map = match *self {
-            BaseMapChain(ref map) => map,
-            ConsMapChain(ref map,_) => map
-        };
-        // strip one layer of indirection off the pointer.
-        map.find(key).map(|r| {*r})
-    }
-
-    // insert the binding into the top-level map
-    pub fn insert (&mut self, key: K, ext: @V) -> bool {
-        // can't abstract over get_map because of flow sensitivity...
-        match *self {
-            BaseMapChain (~ref mut map) => map.insert(key, ext),
-            ConsMapChain (~ref mut map,_) => map.insert(key,ext)
-        }
-    }
-    // insert the binding into the topmost frame for which the binding
-    // associated with 'n' exists and satisfies pred
-    // ... there are definitely some opportunities for abstraction
-    // here that I'm ignoring. (e.g., manufacturing a predicate on
-    // the maps in the chain, and using an abstract "find".
-    pub fn insert_into_frame(&mut self,
-                             key: K,
-                             ext: @V,
-                             n: K,
-                             pred: |&@V| -> bool) {
-        match *self {
-            BaseMapChain (~ref mut map) => {
-                if satisfies_pred(map,&n,pred) {
-                    map.insert(key,ext);
-                } else {
-                    fail!("expected map chain containing satisfying frame")
-                }
-            },
-            ConsMapChain (~ref mut map, rest) => {
-                if satisfies_pred(map,&n,|v|pred(v)) {
-                    map.insert(key,ext);
-                } else {
-                    rest.insert_into_frame(key,ext,n,pred)
-                }
-            }
-        }
-    }
+// Only generic to make it easy to test
+pub struct MapChain<K, V> {
+    priv chain: ~[MapChainFrame<K, V>],
 }
 
-// returns true if the binding for 'n' satisfies 'pred' in 'map'
-fn satisfies_pred<K:Eq + Hash + IterBytes,
-                  V>(
-                  map: &mut HashMap<K,V>,
-                  n: &K,
-                  pred: |&V| -> bool)
-                  -> bool {
-    match map.find(n) {
-        Some(ref v) => (pred(*v)),
-        None => false
+impl<K: Hash+Eq, V> MapChain<K, V> {
+    pub fn new() -> MapChain<K, V> {
+        let mut map = MapChain { chain: ~[] };
+        map.push_frame();
+        map
+    }
+
+    pub fn push_frame(&mut self) {
+        self.chain.push(MapChainFrame {
+            info: BlockInfo::new(),
+            map: HashMap::new(),
+        });
+    }
+
+    pub fn pop_frame(&mut self) {
+        assert!(self.chain.len() > 1, "too many pops on MapChain!");
+        self.chain.pop();
+    }
+
+    fn find_escape_frame<'a>(&'a mut self) -> &'a mut MapChainFrame<K, V> {
+        for (i, frame) in self.chain.mut_iter().enumerate().invert() {
+            if !frame.info.macros_escape || i == 0 {
+                return frame
+            }
+        }
+        unreachable!()
+    }
+
+    pub fn find<'a>(&'a self, k: &K) -> Option<&'a V> {
+        for frame in self.chain.iter().invert() {
+            match frame.map.find(k) {
+                Some(v) => return Some(v),
+                None => {}
+            }
+        }
+        None
+    }
+
+    pub fn insert(&mut self, k: K, v: V) {
+        self.find_escape_frame().map.insert(k, v);
+    }
+
+    pub fn info<'a>(&'a mut self) -> &'a mut BlockInfo {
+        &mut self.chain[self.chain.len()-1].info
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::MapChain;
-    use std::hashmap::HashMap;
 
     #[test]
     fn testenv() {
-        let mut a = HashMap::new();
-        a.insert (@"abc",@15);
-        let m = MapChain::new(~a);
-        m.insert (@"def",@16);
-        assert_eq!(m.find(&@"abc"),Some(@15));
-        assert_eq!(m.find(&@"def"),Some(@16));
-        assert_eq!(*(m.find(&@"abc").unwrap()),15);
-        assert_eq!(*(m.find(&@"def").unwrap()),16);
-        let n = m.push_frame();
-        // old bindings are still present:
-        assert_eq!(*(n.find(&@"abc").unwrap()),15);
-        assert_eq!(*(n.find(&@"def").unwrap()),16);
-        n.insert (@"def",@17);
-        // n shows the new binding
-        assert_eq!(*(n.find(&@"abc").unwrap()),15);
-        assert_eq!(*(n.find(&@"def").unwrap()),17);
-        // ... but m still has the old ones
-        assert_eq!(m.find(&@"abc"),Some(@15));
-        assert_eq!(m.find(&@"def"),Some(@16));
-        assert_eq!(*(m.find(&@"abc").unwrap()),15);
-        assert_eq!(*(m.find(&@"def").unwrap()),16);
+        let mut m = MapChain::new();
+        let (a,b,c,d) = ("a", "b", "c", "d");
+        m.insert(1, a);
+        assert_eq!(Some(&a), m.find(&1));
+
+        m.push_frame();
+        m.info().macros_escape = true;
+        m.insert(2, b);
+        assert_eq!(Some(&a), m.find(&1));
+        assert_eq!(Some(&b), m.find(&2));
+        m.pop_frame();
+
+        assert_eq!(Some(&a), m.find(&1));
+        assert_eq!(Some(&b), m.find(&2));
+
+        m.push_frame();
+        m.push_frame();
+        m.info().macros_escape = true;
+        m.insert(3, c);
+        assert_eq!(Some(&c), m.find(&3));
+        m.pop_frame();
+        assert_eq!(Some(&c), m.find(&3));
+        m.pop_frame();
+        assert_eq!(None, m.find(&3));
+
+        m.push_frame();
+        m.insert(4, d);
+        m.pop_frame();
+        assert_eq!(None, m.find(&4));
     }
 }

@@ -8,16 +8,56 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! An unordered map and set type implemented as hash tables
+//! Unordered containers, implemented as hash-tables (`HashSet` and `HashMap` types)
 //!
 //! The tables use a keyed hash with new random keys generated for each container, so the ordering
 //! of a set of keys in a hash table is randomized.
+//!
+//! # Example
+//!
+//! ```rust
+//! use std::hashmap::HashMap;
+//!
+//! // type inference lets us omit an explicit type signature (which
+//! // would be `HashMap<&str, &str>` in this example).
+//! let mut book_reviews = HashMap::new();
+//!
+//! // review some books.
+//! book_reviews.insert("Adventures of Hucklebury Fin",      "My favorite book.");
+//! book_reviews.insert("Grimms' Fairy Tales",               "Masterpiece.");
+//! book_reviews.insert("Pride and Prejudice",               "Very enjoyable.");
+//! book_reviews.insert("The Adventures of Sherlock Holmes", "Eye lyked it alot.");
+//!
+//! // check for a specific one.
+//! if !book_reviews.contains_key(& &"Les Misérables") {
+//!     println!("We've got {} reviews, but Les Misérables ain't one.",
+//!              book_reviews.len());
+//! }
+//!
+//! // oops, this review has a lot of spelling mistakes, let's delete it.
+//! book_reviews.remove(& &"The Adventures of Sherlock Holmes");
+//!
+//! // look up the values associated with some keys.
+//! let to_find = ["Pride and Prejudice", "Alice's Adventure in Wonderland"];
+//! for book in to_find.iter() {
+//!     match book_reviews.find(book) {
+//!         Some(review) => println!("{}: {}", *book, *review),
+//!         None => println!("{} is unreviewed.", *book)
+//!     }
+//! }
+//!
+//! // iterate over everything.
+//! for (book, review) in book_reviews.iter() {
+//!     println!("{}: \"{}\"", *book, *review);
+//! }
+//! ```
 
 use container::{Container, Mutable, Map, MutableMap, Set, MutableSet};
 use clone::Clone;
 use cmp::{Eq, Equiv};
 use default::Default;
 use hash::Hash;
+use iter;
 use iter::{Iterator, FromIterator, Extendable};
 use iter::{FilterMap, Chain, Repeat, Zip};
 use num;
@@ -354,6 +394,43 @@ impl<K: Hash + Eq, V> HashMap<K, V> {
 
     /// Modify and return the value corresponding to the key in the map, or
     /// insert and return a new value if it doesn't exist.
+    ///
+    /// This method allows for all insertion behaviours of a hashmap,
+    /// see methods like `insert`, `find_or_insert` and
+    /// `insert_or_update_with` for less general and more friendly
+    /// variations of this.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::hashmap::HashMap;
+    ///
+    /// // map some strings to vectors of strings
+    /// let mut map = HashMap::<~str, ~[~str]>::new();
+    /// map.insert(~"a key", ~[~"value"]);
+    /// map.insert(~"z key", ~[~"value"]);
+    ///
+    /// let new = ~[~"a key", ~"b key", ~"z key"];
+    /// for k in new.move_iter() {
+    ///     map.mangle(k, ~"new value",
+    ///                // if the key doesn't exist in the map yet, add it in
+    ///                // the obvious way.
+    ///                |_k, v| ~[v],
+    ///                // if the key does exist either prepend or append this
+    ///                // new value based on the first letter of the key.
+    ///                |key, already, new| {
+    ///                     if key.starts_with("z") {
+    ///                         already.unshift(new);
+    ///                     } else {
+    ///                         already.push(new);
+    ///                     }
+    ///                });
+    /// }
+    ///
+    /// for (k, v) in map.iter() {
+    ///    println!("{} -> {:?}", *k, *v);
+    /// }
+    /// ```
     pub fn mangle<'a,
                   A>(
                   &'a mut self,
@@ -449,14 +526,16 @@ impl<K: Hash + Eq, V> HashMap<K, V> {
         }
     }
 
-    /// Visit all keys
-    pub fn each_key(&self, blk: |k: &K| -> bool) -> bool {
-        self.iter().advance(|(k, _)| blk(k))
+    /// An iterator visiting all keys in arbitrary order.
+    /// Iterator element type is &'a K.
+    pub fn keys<'a>(&'a self) -> HashMapKeyIterator<'a, K, V> {
+        self.iter().map(|(k, _v)| k)
     }
 
-    /// Visit all values
-    pub fn each_value<'a>(&'a self, blk: |v: &'a V| -> bool) -> bool {
-        self.iter().advance(|(_, v)| blk(v))
+    /// An iterator visiting all values in arbitrary order.
+    /// Iterator element type is &'a V.
+    pub fn values<'a>(&'a self) -> HashMapValueIterator<'a, K, V> {
+        self.iter().map(|(_k, v)| v)
     }
 
     /// An iterator visiting all key-value pairs in arbitrary order.
@@ -532,6 +611,14 @@ pub struct HashMapMutIterator<'a, K, V> {
 pub struct HashMapMoveIterator<K, V> {
     priv iter: vec::MoveIterator<Option<Bucket<K, V>>>,
 }
+
+/// HashMap keys iterator
+pub type HashMapKeyIterator<'a, K, V> =
+    iter::Map<'static, (&'a K, &'a V), &'a K, HashMapIterator<'a, K, V>>;
+
+/// HashMap values iterator
+pub type HashMapValueIterator<'a, K, V> =
+    iter::Map<'static, (&'a K, &'a V), &'a V, HashMapIterator<'a, K, V>>;
 
 /// HashSet iterator
 #[deriving(Clone)]
@@ -937,6 +1024,28 @@ mod test_map {
             observed |= (1 << *k);
         }
         assert_eq!(observed, 0xFFFF_FFFF);
+    }
+
+    #[test]
+    fn test_keys() {
+        let vec = ~[(1, 'a'), (2, 'b'), (3, 'c')];
+        let map = vec.move_iter().collect::<HashMap<int, char>>();
+        let keys = map.keys().map(|&k| k).collect::<~[int]>();
+        assert_eq!(keys.len(), 3);
+        assert!(keys.contains(&1));
+        assert!(keys.contains(&2));
+        assert!(keys.contains(&3));
+    }
+
+    #[test]
+    fn test_values() {
+        let vec = ~[(1, 'a'), (2, 'b'), (3, 'c')];
+        let map = vec.move_iter().collect::<HashMap<int, char>>();
+        let values = map.values().map(|&v| v).collect::<~[char]>();
+        assert_eq!(values.len(), 3);
+        assert!(values.contains(&'a'));
+        assert!(values.contains(&'b'));
+        assert!(values.contains(&'c'));
     }
 
     #[test]

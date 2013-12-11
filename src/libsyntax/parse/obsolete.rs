@@ -17,10 +17,9 @@ Obsolete syntax that becomes too hard to parse can be
 removed.
 */
 
-use ast::{Expr, ExprLit, lit_nil};
+use ast::{Expr, ExprLit, LitNil};
 use codemap::{Span, respan};
 use parse::parser::Parser;
-use parse::token::Token;
 use parse::token;
 
 use std::str;
@@ -45,6 +44,7 @@ pub enum ObsoleteSyntax {
     ObsoleteBoxedClosure,
     ObsoleteClosureType,
     ObsoleteMultipleImport,
+    ObsoleteExternModAttributesInParens
 }
 
 impl to_bytes::IterBytes for ObsoleteSyntax {
@@ -56,23 +56,22 @@ impl to_bytes::IterBytes for ObsoleteSyntax {
 
 pub trait ParserObsoleteMethods {
     /// Reports an obsolete syntax non-fatal error.
-    fn obsolete(&self, sp: Span, kind: ObsoleteSyntax);
+    fn obsolete(&mut self, sp: Span, kind: ObsoleteSyntax);
     // Reports an obsolete syntax non-fatal error, and returns
     // a placeholder expression
-    fn obsolete_expr(&self, sp: Span, kind: ObsoleteSyntax) -> @Expr;
-    fn report(&self,
+    fn obsolete_expr(&mut self, sp: Span, kind: ObsoleteSyntax) -> @Expr;
+    fn report(&mut self,
               sp: Span,
               kind: ObsoleteSyntax,
               kind_str: &str,
               desc: &str);
-    fn token_is_obsolete_ident(&self, ident: &str, token: &Token) -> bool;
-    fn is_obsolete_ident(&self, ident: &str) -> bool;
-    fn eat_obsolete_ident(&self, ident: &str) -> bool;
+    fn is_obsolete_ident(&mut self, ident: &str) -> bool;
+    fn eat_obsolete_ident(&mut self, ident: &str) -> bool;
 }
 
 impl ParserObsoleteMethods for Parser {
     /// Reports an obsolete syntax non-fatal error.
-    fn obsolete(&self, sp: Span, kind: ObsoleteSyntax) {
+    fn obsolete(&mut self, sp: Span, kind: ObsoleteSyntax) {
         let (kind_str, desc) = match kind {
             ObsoleteSwap => (
                 "swap",
@@ -145,6 +144,11 @@ impl ParserObsoleteMethods for Parser {
                 "multiple imports",
                 "only one import is allowed per `use` statement"
             ),
+            ObsoleteExternModAttributesInParens => (
+                "`extern mod` with linkage attribute list",
+                "use `extern mod foo = \"bar\";` instead of \
+                `extern mod foo (name = \"bar\")`"
+            )
         };
 
         self.report(sp, kind, kind_str, desc);
@@ -152,12 +156,12 @@ impl ParserObsoleteMethods for Parser {
 
     // Reports an obsolete syntax non-fatal error, and returns
     // a placeholder expression
-    fn obsolete_expr(&self, sp: Span, kind: ObsoleteSyntax) -> @Expr {
+    fn obsolete_expr(&mut self, sp: Span, kind: ObsoleteSyntax) -> @Expr {
         self.obsolete(sp, kind);
-        self.mk_expr(sp.lo, sp.hi, ExprLit(@respan(sp, lit_nil)))
+        self.mk_expr(sp.lo, sp.hi, ExprLit(@respan(sp, LitNil)))
     }
 
-    fn report(&self,
+    fn report(&mut self,
               sp: Span,
               kind: ObsoleteSyntax,
               kind_str: &str,
@@ -170,9 +174,8 @@ impl ParserObsoleteMethods for Parser {
         }
     }
 
-    fn token_is_obsolete_ident(&self, ident: &str, token: &Token)
-                                   -> bool {
-        match *token {
+    fn is_obsolete_ident(&mut self, ident: &str) -> bool {
+        match self.token {
             token::IDENT(sid, _) => {
                 str::eq_slice(self.id_to_str(sid), ident)
             }
@@ -180,11 +183,7 @@ impl ParserObsoleteMethods for Parser {
         }
     }
 
-    fn is_obsolete_ident(&self, ident: &str) -> bool {
-        self.token_is_obsolete_ident(ident, self.token)
-    }
-
-    fn eat_obsolete_ident(&self, ident: &str) -> bool {
+    fn eat_obsolete_ident(&mut self, ident: &str) -> bool {
         if self.is_obsolete_ident(ident) {
             self.bump();
             true

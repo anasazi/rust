@@ -39,10 +39,10 @@ use rand::distributions::{Sample, IndependentSample};
 ///
 /// fn main() {
 ///     let between = Range::new(10u, 10000u);
-///     let rng = rand::task_rng();
+///     let mut rng = rand::task_rng();
 ///     let mut sum = 0;
 ///     for _ in range(0, 1000) {
-///         sum += between.ind_sample(rng);
+///         sum += between.ind_sample(&mut rng);
 ///     }
 ///     println!("{}", sum);
 /// }
@@ -163,12 +163,11 @@ float_impl! { f64 }
 
 #[cfg(test)]
 mod tests {
+    use prelude::*;
     use super::*;
     use rand::*;
+    use rand::distributions::*;
     use num::Bounded;
-    use iter::range;
-    use option::{Some, None};
-    use vec::ImmutableVector;
 
     #[should_fail]
     #[test]

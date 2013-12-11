@@ -10,7 +10,7 @@
 
 /*!
 
-Vector manipulation
+Utilities for vector manipulation
 
 The `vec` module contains useful code to help work with vector values.
 Vectors are Rust's list type. Vectors contain zero or more values of
@@ -71,7 +71,7 @@ traits from other modules. Some notable examples:
 ## Iteration
 
 The method `iter()` returns an iteration value for a vector or a vector slice.
-The iterator yields borrowed pointers to the vector's elements, so if the element
+The iterator yields references to the vector's elements, so if the element
 type of the vector is `int`, the element type of the iterator is `&int`.
 
 ```rust
@@ -611,6 +611,7 @@ impl<'a, T> RandomAccessIterator<&'a [T]> for ChunkIter<'a, T> {
 pub mod traits {
     use super::*;
 
+    use container::Container;
     use clone::Clone;
     use cmp::{Eq, Ord, TotalEq, TotalOrd, Ordering, Equiv};
     use iter::order;
@@ -1921,9 +1922,158 @@ impl<T:Eq> OwnedEqVector<T> for ~[T] {
     }
 }
 
+fn merge_sort<T>(v: &mut [T], compare: |&T, &T| -> Ordering) {
+    // warning: this wildly uses unsafe.
+    static INSERTION: uint = 8;
+
+    let len = v.len();
+
+    // allocate some memory to use as scratch memory, we keep the
+    // length 0 so we can keep shallow copies of the contents of `v`
+    // without risking the dtors running on an object twice if
+    // `compare` fails.
+    let mut working_space = with_capacity(2 * len);
+    // these both are buffers of length `len`.
+    let mut buf_dat = working_space.as_mut_ptr();
+    let mut buf_tmp = unsafe {buf_dat.offset(len as int)};
+
+    // length `len`.
+    let buf_v = v.as_ptr();
+
+    // step 1. sort short runs with insertion sort. This takes the
+    // values from `v` and sorts them into `buf_dat`, leaving that
+    // with sorted runs of length INSERTION.
+
+    // We could hardcode the sorting comparisons here, and we could
+    // manipulate/step the pointers themselves, rather than repeatedly
+    // .offset-ing.
+    for start in range_step(0, len, INSERTION) {
+        // start <= i <= len;
+        for i in range(start, cmp::min(start + INSERTION, len)) {
+            // j satisfies: start <= j <= i;
+            let mut j = i as int;
+            unsafe {
+                // `i` is in bounds.
+                let read_ptr = buf_v.offset(i as int);
+
+                // find where to insert, we need to do strict <,
+                // rather than <=, to maintain stability.
+
+                // start <= j - 1 < len, so .offset(j - 1) is in
+                // bounds.
+                while j > start as int &&
+                        compare(&*read_ptr, &*buf_dat.offset(j - 1)) == Less {
+                    j -= 1;
+                }
+
+                // shift everything to the right, to make space to
+                // insert this value.
+
+                // j + 1 could be `len` (for the last `i`), but in
+                // that case, `i == j` so we don't copy. The
+                // `.offset(j)` is always in bounds.
+                ptr::copy_memory(buf_dat.offset(j + 1),
+                                 buf_dat.offset(j),
+                                 i - j as uint);
+                ptr::copy_nonoverlapping_memory(buf_dat.offset(j), read_ptr, 1);
+            }
+        }
+    }
+
+    // step 2. merge the sorted runs.
+    let mut width = INSERTION;
+    while width < len {
+        // merge the sorted runs of length `width` in `buf_dat` two at
+        // a time, placing the result in `buf_tmp`.
+
+        // 0 <= start <= len.
+        for start in range_step(0, len, 2 * width) {
+            // manipulate pointers directly for speed (rather than
+            // using a `for` loop with `range` and `.offset` inside
+            // that loop).
+            unsafe {
+                // the end of the first run & start of the
+                // second. Offset of `len` is defined, since this is
+                // precisely one byte past the end of the object.
+                let right_start = buf_dat.offset(cmp::min(start + width, len) as int);
+                // end of the second. Similar reasoning to the above re safety.
+                let right_end_idx = cmp::min(start + 2 * width, len);
+                let right_end = buf_dat.offset(right_end_idx as int);
+
+                // the pointers to the elements under consideration
+                // from the two runs.
+
+                // both of these are in bounds.
+                let mut left = buf_dat.offset(start as int);
+                let mut right = right_start;
+
+                // where we're putting the results, it is a run of
+                // length `2*width`, so we step it once for each step
+                // of either `left` or `right`.  `buf_tmp` has length
+                // `len`, so these are in bounds.
+                let mut out = buf_tmp.offset(start as int);
+                let out_end = buf_tmp.offset(right_end_idx as int);
+
+                while out < out_end {
+                    // Either the left or the right run are exhausted,
+                    // so just copy the remainder from the other run
+                    // and move on; this gives a huge speed-up (order
+                    // of 25%) for mostly sorted vectors (the best
+                    // case).
+                    if left == right_start {
+                        // the number remaining in this run.
+                        let elems = (right_end as uint - right as uint) / mem::size_of::<T>();
+                        ptr::copy_nonoverlapping_memory(out, right, elems);
+                        break;
+                    } else if right == right_end {
+                        let elems = (right_start as uint - left as uint) / mem::size_of::<T>();
+                        ptr::copy_nonoverlapping_memory(out, left, elems);
+                        break;
+                    }
+
+                    // check which side is smaller, and that's the
+                    // next element for the new run.
+
+                    // `left < right_start` and `right < right_end`,
+                    // so these are valid.
+                    let to_copy = if compare(&*left, &*right) == Greater {
+                        step(&mut right)
+                    } else {
+                        step(&mut left)
+                    };
+                    ptr::copy_nonoverlapping_memory(out, to_copy, 1);
+                    step(&mut out);
+                }
+            }
+        }
+
+        util::swap(&mut buf_dat, &mut buf_tmp);
+
+        width *= 2;
+    }
+
+    // write the result to `v` in one go, so that there are never two copies
+    // of the same object in `v`.
+    unsafe {
+        ptr::copy_nonoverlapping_memory(v.as_mut_ptr(), buf_dat, len);
+    }
+
+    // increment the pointer, returning the old pointer.
+    #[inline(always)]
+    unsafe fn step<T>(ptr: &mut *mut T) -> *mut T {
+        let old = *ptr;
+        *ptr = ptr.offset(1);
+        old
+    }
+}
+
 /// Extension methods for vectors such that their elements are
 /// mutable.
 pub trait MutableVector<'a, T> {
+    /// Work with `self` as a mut slice.
+    /// Primarily intended for getting a &mut [T] from a [T, ..N].
+    fn as_mut_slice(self) -> &'a mut [T];
+
     /// Return a slice that points into another slice.
     fn mut_slice(self, start: uint, end: uint) -> &'a mut [T];
 
@@ -1998,27 +2148,89 @@ pub trait MutableVector<'a, T> {
      */
     fn mut_pop_ref(&mut self) -> &'a mut T;
 
-    /**
-     * Swaps two elements in a vector
-     *
-     * # Arguments
-     *
-     * * a - The index of the first element
-     * * b - The index of the second element
-     */
+    /// Swaps two elements in a vector.
+    ///
+    /// Fails if `a` or `b` are out of bounds.
+    ///
+    /// # Arguments
+    ///
+    /// * a - The index of the first element
+    /// * b - The index of the second element
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let mut v = ["a", "b", "c", "d"];
+    /// v.swap(1, 3);
+    /// assert_eq!(v, ["a", "d", "c", "b"]);
+    /// ```
     fn swap(self, a: uint, b: uint);
 
-    /**
-     * Divides one `&mut` into two. The first will
-     * contain all indices from `0..mid` (excluding the index `mid`
-     * itself) and the second will contain all indices from
-     * `mid..len` (excluding the index `len` itself).
-     */
+
+    /// Divides one `&mut` into two at an index.
+    ///
+    /// The first will contain all indices from `[0, mid)` (excluding
+    /// the index `mid` itself) and the second will contain all
+    /// indices from `[mid, len)` (excluding the index `len` itself).
+    ///
+    /// Fails if `mid > len`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let mut v = [1, 2, 3, 4, 5, 6];
+    ///
+    /// // scoped to restrict the lifetime of the borrows
+    /// {
+    ///    let (left, right) = v.mut_split_at(0);
+    ///    assert_eq!(left, &mut []);
+    ///    assert_eq!(right, &mut [1, 2, 3, 4, 5, 6]);
+    /// }
+    ///
+    /// {
+    ///     let (left, right) = v.mut_split_at(2);
+    ///     assert_eq!(left, &mut [1, 2]);
+    ///     assert_eq!(right, &mut [3, 4, 5, 6]);
+    /// }
+    ///
+    /// {
+    ///     let (left, right) = v.mut_split_at(6);
+    ///     assert_eq!(left, &mut [1, 2, 3, 4, 5, 6]);
+    ///     assert_eq!(right, &mut []);
+    /// }
+    /// ```
     fn mut_split_at(self, mid: uint) -> (&'a mut [T],
                                       &'a mut [T]);
 
-    /// Reverse the order of elements in a vector, in place
+    /// Reverse the order of elements in a vector, in place.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let mut v = [1, 2, 3];
+    /// v.reverse();
+    /// assert_eq!(v, [3, 2, 1]);
+    /// ```
     fn reverse(self);
+
+    /// Sort the vector, in place, using `compare` to compare
+    /// elements.
+    ///
+    /// This sort is `O(n log n)` worst-case and stable, but allocates
+    /// approximately `2 * n`, where `n` is the length of `self`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let mut v = [5i, 4, 1, 3, 2];
+    /// v.sort_by(|a, b| a.cmp(b));
+    /// assert_eq!(v, [1, 2, 3, 4, 5]);
+    ///
+    /// // reverse sorting
+    /// v.sort_by(|a, b| b.cmp(a));
+    /// assert_eq!(v, [5, 4, 3, 2, 1]);
+    /// ```
+    fn sort_by(self, compare: |&T, &T| -> Ordering);
 
     /**
      * Consumes `src` and moves as many elements as it can into `self`
@@ -2048,25 +2260,55 @@ pub trait MutableVector<'a, T> {
     #[inline]
     fn as_mut_ptr(self) -> *mut T;
 
-    /// Unsafely sets the element in index to the value
+    /// Unsafely sets the element in index to the value.
+    ///
+    /// This performs no bounds checks, and it is undefined behaviour
+    /// if `index` is larger than the length of `self`. However, it
+    /// does run the destructor at `index`. It is equivalent to
+    /// `self[index] = val`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let mut v = ~[~"foo", ~"bar", ~"baz"];
+    ///
+    /// unsafe {
+    ///     // `~"baz"` is deallocated.
+    ///     v.unsafe_set(2, ~"qux");
+    ///
+    ///     // Out of bounds: could cause a crash, or overwriting
+    ///     // other data, or something else.
+    ///     // v.unsafe_set(10, ~"oops");
+    /// }
+    /// ```
     unsafe fn unsafe_set(self, index: uint, val: T);
 
-    /**
-     * Unchecked vector index assignment.  Does not drop the
-     * old value and hence is only suitable when the vector
-     * is newly allocated.
-     */
+    /// Unchecked vector index assignment.  Does not drop the
+    /// old value and hence is only suitable when the vector
+    /// is newly allocated.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let mut v = [~"foo", ~"bar"];
+    ///
+    /// // memory leak! `~"bar"` is not deallocated.
+    /// unsafe { v.init_elem(1, ~"baz"); }
+    /// ```
     unsafe fn init_elem(self, i: uint, val: T);
 
-    /// Copies data from `src` to `self`.
+    /// Copies raw bytes from `src` to `self`.
     ///
-    /// `self` and `src` must not overlap. Fails if `self` is
-    /// shorter than `src`.
+    /// This does not run destructors on the overwritten elements, and
+    /// ignores move semantics. `self` and `src` must not
+    /// overlap. Fails if `self` is shorter than `src`.
     unsafe fn copy_memory(self, src: &[T]);
 }
 
 impl<'a,T> MutableVector<'a, T> for &'a mut [T] {
     #[inline]
+    fn as_mut_slice(self) -> &'a mut [T] { self }
+
     fn mut_slice(self, start: uint, end: uint) -> &'a mut [T] {
         assert!(start <= end);
         assert!(end <= self.len());
@@ -2164,6 +2406,11 @@ impl<'a,T> MutableVector<'a, T> for &'a mut [T] {
     }
 
     #[inline]
+    fn sort_by(self, compare: |&T, &T| -> Ordering) {
+        merge_sort(self, compare)
+    }
+
+    #[inline]
     fn move_from(self, mut src: ~[T], start: uint, end: uint) -> uint {
         for (a, b) in self.mut_iter().zip(src.mut_slice(start, end).mut_iter()) {
             util::swap(a, b);
@@ -2201,8 +2448,25 @@ impl<'a,T> MutableVector<'a, T> for &'a mut [T] {
 
 /// Trait for &[T] where T is Cloneable
 pub trait MutableCloneableVector<T> {
-    /// Copies as many elements from `src` as it can into `self`
-    /// (the shorter of self.len() and src.len()). Returns the number of elements copied.
+    /// Copies as many elements from `src` as it can into `self` (the
+    /// shorter of `self.len()` and `src.len()`). Returns the number
+    /// of elements copied.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::vec::MutableCloneableVector;
+    ///
+    /// let mut dst = [0, 0, 0];
+    /// let src = [1, 2];
+    ///
+    /// assert_eq!(dst.copy_from(src), 2);
+    /// assert_eq!(dst, [1, 2, 0]);
+    ///
+    /// let src2 = [3, 4, 5, 6];
+    /// assert_eq!(dst.copy_from(src2), 3);
+    /// assert_eq!(dst, [3, 4, 5]);
+    /// ```
     fn copy_from(self, &[T]) -> uint;
 }
 
@@ -2213,6 +2477,30 @@ impl<'a, T:Clone> MutableCloneableVector<T> for &'a mut [T] {
             a.clone_from(b);
         }
         cmp::min(self.len(), src.len())
+    }
+}
+
+/// Methods for mutable vectors with orderable elements, such as
+/// in-place sorting.
+pub trait MutableTotalOrdVector<T> {
+    /// Sort the vector, in place.
+    ///
+    /// This is equivalent to `self.sort_by(|a, b| a.cmp(b))`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let mut v = [-5, 4, 1, -3, 2];
+    ///
+    /// v.sort();
+    /// assert_eq!(v, [-5, -3, 1, 2, 4]);
+    /// ```
+    fn sort(self);
+}
+impl<'a, T: TotalOrd> MutableTotalOrdVector<T> for &'a mut [T] {
+    #[inline]
+    fn sort(self) {
+        self.sort_by(|a,b| a.cmp(b))
     }
 }
 
@@ -2233,7 +2521,7 @@ pub unsafe fn from_buf<T>(ptr: *T, elts: uint) -> ~[T] {
 pub mod raw {
     use cast;
     use ptr;
-    use vec::{with_capacity, MutableVector};
+    use vec::{with_capacity, MutableVector, OwnedVector};
     use unstable::raw::Slice;
 
     /**
@@ -2312,8 +2600,9 @@ pub mod raw {
 /// Operations on `[u8]`.
 pub mod bytes {
     use container::Container;
-    use vec::MutableVector;
+    use vec::{MutableVector, OwnedVector, ImmutableVector};
     use ptr;
+    use ptr::RawPtr;
 
     /// A trait for operations on mutable `[u8]`s.
     pub trait MutableByteVector {
@@ -2681,11 +2970,11 @@ impl<A> Extendable<A> for ~[A] {
 
 #[cfg(test)]
 mod tests {
-    use option::{None, Some};
+    use prelude::*;
     use mem;
     use vec::*;
     use cmp::*;
-    use prelude::*;
+    use rand::{Rng, task_rng};
 
     fn square(n: uint) -> uint { n * n }
 
@@ -3058,7 +3347,7 @@ mod tests {
 
     #[test]
     fn test_truncate() {
-        let mut v = ~[@6,@5,@4];
+        let mut v = ~[~6,~5,~4];
         v.truncate(1);
         assert_eq!(v.len(), 1);
         assert_eq!(*(v[0]), 6);
@@ -3067,7 +3356,7 @@ mod tests {
 
     #[test]
     fn test_clear() {
-        let mut v = ~[@6,@5,@4];
+        let mut v = ~[~6,~5,~4];
         v.clear();
         assert_eq!(v.len(), 0);
         // If the unsafe block didn't drop things properly, we blow up here.
@@ -3106,14 +3395,14 @@ mod tests {
 
     #[test]
     fn test_dedup_shared() {
-        let mut v0 = ~[@1, @1, @2, @3];
+        let mut v0 = ~[~1, ~1, ~2, ~3];
         v0.dedup();
-        let mut v1 = ~[@1, @2, @2, @3];
+        let mut v1 = ~[~1, ~2, ~2, ~3];
         v1.dedup();
-        let mut v2 = ~[@1, @2, @3, @3];
+        let mut v2 = ~[~1, ~2, ~3, ~3];
         v2.dedup();
         /*
-         * If the @pointers were leaked or otherwise misused, valgrind and/or
+         * If the pointers were leaked or otherwise misused, valgrind and/or
          * rustrt should raise errors.
          */
     }
@@ -3280,6 +3569,64 @@ mod tests {
     }
 
     #[test]
+    fn test_sort() {
+        for len in range(4u, 25) {
+            for _ in range(0, 100) {
+                let mut v = task_rng().gen_vec::<uint>(len);
+                let mut v1 = v.clone();
+
+                v.sort();
+                assert!(v.windows(2).all(|w| w[0] <= w[1]));
+
+                v1.sort_by(|a, b| a.cmp(b));
+                assert!(v1.windows(2).all(|w| w[0] <= w[1]));
+
+                v1.sort_by(|a, b| b.cmp(a));
+                assert!(v1.windows(2).all(|w| w[0] >= w[1]));
+            }
+        }
+
+        // shouldn't fail/crash
+        let mut v: [uint, .. 0] = [];
+        v.sort();
+
+        let mut v = [0xDEADBEEF];
+        v.sort();
+        assert_eq!(v, [0xDEADBEEF]);
+    }
+
+    #[test]
+    fn test_sort_stability() {
+        for len in range(4, 25) {
+            for _ in range(0 , 10) {
+                let mut counts = [0, .. 10];
+
+                // create a vector like [(6, 1), (5, 1), (6, 2), ...],
+                // where the first item of each tuple is random, but
+                // the second item represents which occurrence of that
+                // number this element is, i.e. the second elements
+                // will occur in sorted order.
+                let mut v = range(0, len).map(|_| {
+                        let n = task_rng().gen::<uint>() % 10;
+                        counts[n] += 1;
+                        (n, counts[n])
+                    }).to_owned_vec();
+
+                // only sort on the first element, so an unstable sort
+                // may mix up the counts.
+                v.sort_by(|&(a,_), &(b,_)| a.cmp(&b));
+
+                // this comparison includes the count (the second item
+                // of the tuple), so elements with equal first items
+                // will need to be ordered with increasing
+                // counts... i.e. exactly asserting that this sort is
+                // stable.
+                assert!(v.windows(2).all(|w| w[0] <= w[1]));
+            }
+        }
+    }
+
+    #[test]
     fn test_partition() {
         assert_eq!((~[]).partition(|x: &int| *x < 3), (~[], ~[]));
         assert_eq!((~[1, 2, 3]).partition(|x: &int| *x < 4), (~[1, 2, 3], ~[]));
@@ -3440,7 +3787,7 @@ mod tests {
     fn test_from_fn_fail() {
         from_fn(100, |v| {
             if v == 50 { fail!() }
-            (~0, @0)
+            ~0
         });
     }
 
@@ -3448,10 +3795,11 @@ mod tests {
     #[should_fail]
     fn test_from_elem_fail() {
         use cast;
+        use rc::Rc;
 
         struct S {
             f: int,
-            boxes: (~int, @int)
+            boxes: (~int, Rc<int>)
         }
 
         impl Clone for S {
@@ -3463,18 +3811,19 @@ mod tests {
             }
         }
 
-        let s = S { f: 0, boxes: (~0, @0) };
+        let s = S { f: 0, boxes: (~0, Rc::new(0)) };
         let _ = from_elem(100, s);
     }
 
     #[test]
     #[should_fail]
     fn test_build_fail() {
+        use rc::Rc;
         build(None, |push| {
-            push((~0, @0));
-            push((~0, @0));
-            push((~0, @0));
-            push((~0, @0));
+            push((~0, Rc::new(0)));
+            push((~0, Rc::new(0)));
+            push((~0, Rc::new(0)));
+            push((~0, Rc::new(0)));
             fail!();
         });
     }
@@ -3482,47 +3831,51 @@ mod tests {
     #[test]
     #[should_fail]
     fn test_grow_fn_fail() {
+        use rc::Rc;
         let mut v = ~[];
         v.grow_fn(100, |i| {
             if i == 50 {
                 fail!()
             }
-            (~0, @0)
+            (~0, Rc::new(0))
         })
     }
 
     #[test]
     #[should_fail]
     fn test_map_fail() {
-        let v = [(~0, @0), (~0, @0), (~0, @0), (~0, @0)];
+        use rc::Rc;
+        let v = [(~0, Rc::new(0)), (~0, Rc::new(0)), (~0, Rc::new(0)), (~0, Rc::new(0))];
         let mut i = 0;
         v.map(|_elt| {
             if i == 2 {
                 fail!()
             }
             i += 1;
-            ~[(~0, @0)]
+            ~[(~0, Rc::new(0))]
         });
     }
 
     #[test]
     #[should_fail]
     fn test_flat_map_fail() {
-        let v = [(~0, @0), (~0, @0), (~0, @0), (~0, @0)];
+        use rc::Rc;
+        let v = [(~0, Rc::new(0)), (~0, Rc::new(0)), (~0, Rc::new(0)), (~0, Rc::new(0))];
         let mut i = 0;
         flat_map(v, |_elt| {
             if i == 2 {
                 fail!()
             }
             i += 1;
-            ~[(~0, @0)]
+            ~[(~0, Rc::new(0))]
         });
     }
 
     #[test]
     #[should_fail]
     fn test_permute_fail() {
-        let v = [(~0, @0), (~0, @0), (~0, @0), (~0, @0)];
+        use rc::Rc;
+        let v = [(~0, Rc::new(0)), (~0, Rc::new(0)), (~0, Rc::new(0)), (~0, Rc::new(0))];
         let mut i = 0;
         for _ in v.permutations() {
             if i == 2 {
@@ -3860,9 +4213,10 @@ mod tests {
     #[test]
     #[should_fail]
     fn test_overflow_does_not_cause_segfault_managed() {
-        let mut v = ~[@1];
+        use rc::Rc;
+        let mut v = ~[Rc::new(1)];
         v.reserve(-1);
-        v.push(@2);
+        v.push(Rc::new(2));
     }
 
     #[test]
@@ -4100,12 +4454,11 @@ mod tests {
 #[cfg(test)]
 mod bench {
     use extra::test::BenchHarness;
-    use iter::range;
-    use vec;
-    use vec::VectorVector;
-    use option::*;
+    use mem;
+    use prelude::*;
     use ptr;
     use rand::{weak_rng, Rng};
+    use vec;
 
     #[bench]
     fn iterator(bh: &mut BenchHarness) {
@@ -4305,5 +4658,44 @@ mod bench {
                     v.remove(rng.gen::<uint>() % l);
                 }
             })
+    }
+
+    #[bench]
+    fn sort_random_small(bh: &mut BenchHarness) {
+        let mut rng = weak_rng();
+        bh.iter(|| {
+            let mut v: ~[u64] = rng.gen_vec(5);
+            v.sort();
+        });
+        bh.bytes = 5 * mem::size_of::<u64>() as u64;
+    }
+
+    #[bench]
+    fn sort_random_medium(bh: &mut BenchHarness) {
+        let mut rng = weak_rng();
+        bh.iter(|| {
+            let mut v: ~[u64] = rng.gen_vec(100);
+            v.sort();
+        });
+        bh.bytes = 100 * mem::size_of::<u64>() as u64;
+    }
+
+    #[bench]
+    fn sort_random_large(bh: &mut BenchHarness) {
+        let mut rng = weak_rng();
+        bh.iter(|| {
+            let mut v: ~[u64] = rng.gen_vec(10000);
+            v.sort();
+        });
+        bh.bytes = 10000 * mem::size_of::<u64>() as u64;
+    }
+
+    #[bench]
+    fn sort_sorted(bh: &mut BenchHarness) {
+        let mut v = vec::from_fn(10000, |i| i);
+        bh.iter(|| {
+            v.sort();
+        });
+        bh.bytes = (v.len() * mem::size_of_val(&v[0])) as u64;
     }
 }

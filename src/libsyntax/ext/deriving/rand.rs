@@ -9,18 +9,18 @@
 // except according to those terms.
 
 use ast;
-use ast::{MetaItem, item, Expr, Ident};
+use ast::{MetaItem, Item, Expr, Ident};
 use codemap::Span;
 use ext::base::ExtCtxt;
 use ext::build::{AstBuilder};
 use ext::deriving::generic::*;
 use opt_vec;
 
-pub fn expand_deriving_rand(cx: @ExtCtxt,
+pub fn expand_deriving_rand(cx: &ExtCtxt,
                             span: Span,
                             mitem: @MetaItem,
-                            in_items: ~[@item])
-    -> ~[@item] {
+                            in_items: ~[@Item])
+    -> ~[@Item] {
     let trait_def = TraitDef {
         cx: cx, span: span,
 
@@ -50,7 +50,7 @@ pub fn expand_deriving_rand(cx: @ExtCtxt,
     trait_def.expand(mitem, in_items)
 }
 
-fn rand_substructure(cx: @ExtCtxt, span: Span, substr: &Substructure) -> @Expr {
+fn rand_substructure(cx: &ExtCtxt, span: Span, substr: &Substructure) -> @Expr {
     let rng = match substr.nonself_args {
         [rng] => ~[ rng ],
         _ => cx.bug("Incorrect number of arguments to `rand` in `deriving(Rand)`")
@@ -130,7 +130,7 @@ fn rand_substructure(cx: @ExtCtxt, span: Span, substr: &Substructure) -> @Expr {
         _ => cx.bug("Non-static method in `deriving(Rand)`")
     };
 
-    fn rand_thing(cx: @ExtCtxt,
+    fn rand_thing(cx: &ExtCtxt,
                   span: Span,
                   ctor_ident: Ident,
                   summary: &StaticFields,

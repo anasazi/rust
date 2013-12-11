@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! `SendStr` definition and trait implementations
+//! The `SendStr` trait for optionally static strings
 
 use clone::{Clone, DeepClone};
 use cmp::{Eq, TotalEq, Ord, TotalOrd, Equiv};
@@ -176,14 +176,8 @@ impl IterBytes for SendStr {
 
 #[cfg(test)]
 mod tests {
-    use clone::{Clone, DeepClone};
-    use cmp::{TotalEq, Ord, TotalOrd, Equiv};
-    use cmp::Equal;
-    use container::Container;
-    use default::Default;
+    use prelude::*;
     use send_str::{SendStrOwned, SendStrStatic};
-    use str::Str;
-    use to_str::ToStr;
 
     #[test]
     fn test_send_str_traits() {

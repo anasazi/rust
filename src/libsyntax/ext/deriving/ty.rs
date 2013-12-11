@@ -24,7 +24,7 @@ use opt_vec::OptVec;
 /// The types of pointers
 pub enum PtrTy<'a> {
     Send, // ~
-    Managed(ast::Mutability), // @[mut]
+    Managed, // @
     Borrowed(Option<&'a str>, ast::Mutability), // &['lifetime] [mut]
 }
 
@@ -58,7 +58,7 @@ impl<'a> Path<'a> {
     }
 
     pub fn to_ty(&self,
-                 cx: @ExtCtxt,
+                 cx: &ExtCtxt,
                  span: Span,
                  self_ty: Ident,
                  self_generics: &Generics)
@@ -66,7 +66,7 @@ impl<'a> Path<'a> {
         cx.ty_path(self.to_path(cx, span, self_ty, self_generics), None)
     }
     pub fn to_path(&self,
-                   cx: @ExtCtxt,
+                   cx: &ExtCtxt,
                    span: Span,
                    self_ty: Ident,
                    self_generics: &Generics)
@@ -110,14 +110,14 @@ pub fn nil_ty() -> Ty<'static> {
     Tuple(~[])
 }
 
-fn mk_lifetime(cx: @ExtCtxt, span: Span, lt: &Option<&str>) -> Option<ast::Lifetime> {
+fn mk_lifetime(cx: &ExtCtxt, span: Span, lt: &Option<&str>) -> Option<ast::Lifetime> {
     match *lt {
         Some(ref s) => Some(cx.lifetime(span, cx.ident_of(*s))),
         None => None
     }
 }
 
-fn mk_lifetimes(cx: @ExtCtxt, span: Span, lt: &Option<&str>) -> OptVec<ast::Lifetime> {
+fn mk_lifetimes(cx: &ExtCtxt, span: Span, lt: &Option<&str>) -> OptVec<ast::Lifetime> {
     match *lt {
         Some(ref s) => opt_vec::with(cx.lifetime(span, cx.ident_of(*s))),
         None => opt_vec::Empty
@@ -126,7 +126,7 @@ fn mk_lifetimes(cx: @ExtCtxt, span: Span, lt: &Option<&str>) -> OptVec<ast::Life
 
 impl<'a> Ty<'a> {
     pub fn to_ty(&self,
-                 cx: @ExtCtxt,
+                 cx: &ExtCtxt,
                  span: Span,
                  self_ty: Ident,
                  self_generics: &Generics)
@@ -138,8 +138,8 @@ impl<'a> Ty<'a> {
                     Send => {
                         cx.ty_uniq(span, raw_ty)
                     }
-                    Managed(mutbl) => {
-                        cx.ty_box(span, raw_ty, mutbl)
+                    Managed => {
+                        cx.ty_box(span, raw_ty)
                     }
                     Borrowed(ref lt, mutbl) => {
                         let lt = mk_lifetime(cx, span, lt);
@@ -153,9 +153,9 @@ impl<'a> Ty<'a> {
             }
             Tuple(ref fields) => {
                 let ty = if fields.is_empty() {
-                    ast::ty_nil
+                    ast::TyNil
                 } else {
-                    ast::ty_tup(fields.map(|f| f.to_ty(cx, span, self_ty, self_generics)))
+                    ast::TyTup(fields.map(|f| f.to_ty(cx, span, self_ty, self_generics)))
                 };
 
                 cx.ty(span, ty)
@@ -164,7 +164,7 @@ impl<'a> Ty<'a> {
     }
 
     pub fn to_path(&self,
-                   cx: @ExtCtxt,
+                   cx: &ExtCtxt,
                    span: Span,
                    self_ty: Ident,
                    self_generics: &Generics)
@@ -189,7 +189,7 @@ impl<'a> Ty<'a> {
 }
 
 
-fn mk_ty_param(cx: @ExtCtxt, span: Span, name: &str, bounds: &[Path],
+fn mk_ty_param(cx: &ExtCtxt, span: Span, name: &str, bounds: &[Path],
                self_ident: Ident, self_generics: &Generics) -> ast::TyParam {
     let bounds = opt_vec::from(
         bounds.map(|b| {
@@ -219,7 +219,7 @@ impl<'a> LifetimeBounds<'a> {
         }
     }
     pub fn to_generics(&self,
-                       cx: @ExtCtxt,
+                       cx: &ExtCtxt,
                        span: Span,
                        self_ty: Ident,
                        self_generics: &Generics)
@@ -239,22 +239,22 @@ impl<'a> LifetimeBounds<'a> {
 }
 
 
-pub fn get_explicit_self(cx: @ExtCtxt, span: Span, self_ptr: &Option<PtrTy>)
-    -> (@Expr, ast::explicit_self) {
+pub fn get_explicit_self(cx: &ExtCtxt, span: Span, self_ptr: &Option<PtrTy>)
+    -> (@Expr, ast::ExplicitSelf) {
     let self_path = cx.expr_self(span);
     match *self_ptr {
         None => {
-            (self_path, respan(span, ast::sty_value(ast::MutImmutable)))
+            (self_path, respan(span, ast::SelfValue(ast::MutImmutable)))
         }
         Some(ref ptr) => {
             let self_ty = respan(
                 span,
                 match *ptr {
-                    Send => ast::sty_uniq(ast::MutImmutable),
-                    Managed(mutbl) => ast::sty_box(mutbl),
+                    Send => ast::SelfUniq(ast::MutImmutable),
+                    Managed => ast::SelfBox(ast::MutImmutable),
                     Borrowed(ref lt, mutbl) => {
                         let lt = lt.map(|s| cx.lifetime(span, cx.ident_of(s)));
-                        ast::sty_region(lt, mutbl)
+                        ast::SelfRegion(lt, mutbl)
                     }
                 });
             let self_expr = cx.expr_deref(span, self_path);

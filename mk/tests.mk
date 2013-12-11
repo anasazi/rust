@@ -14,13 +14,16 @@
 ######################################################################
 
 # The names of crates that must be tested
-TEST_TARGET_CRATES = std extra rustuv
+TEST_TARGET_CRATES = std extra rustuv green native
+TEST_DOC_CRATES = std extra
 TEST_HOST_CRATES = rustpkg rustc rustdoc syntax
 TEST_CRATES = $(TEST_TARGET_CRATES) $(TEST_HOST_CRATES)
 
 # Markdown files under doc/ that should have their code extracted and run
-DOC_TEST_NAMES = tutorial tutorial-ffi tutorial-macros tutorial-borrowed-ptr \
-                 tutorial-tasks tutorial-conditions tutorial-container rust
+DOC_TEST_NAMES = tutorial guide-ffi guide-macros guide-lifetimes \
+                 guide-tasks guide-conditions guide-container guide-pointers \
+                 complement-cheatsheet \
+                 rust
 
 ######################################################################
 # Environment configuration
@@ -100,14 +103,14 @@ endif
 ifdef CFG_WINDOWSY_$(1)
   CFG_TESTLIB_$(1)=$$(CFG_BUILD_DIR)$$(2)/$$(strip \
    $$(if $$(findstring stage0,$$(1)), \
-       stage0/$$(CFG_LIBDIR), \
+       stage0/$$(LIBDIR_RELATIVE), \
       $$(if $$(findstring stage1,$$(1)), \
-           stage1/$$(CFG_LIBDIR), \
+           stage1/$$(LIBDIR_RELATIVE), \
           $$(if $$(findstring stage2,$$(1)), \
-               stage2/$$(CFG_LIBDIR), \
+               stage2/$$(LIBDIR_RELATIVE), \
                $$(if $$(findstring stage3,$$(1)), \
-                    stage3/$$(CFG_LIBDIR), \
-               )))))/rustc/$$(CFG_BUILD)/$$(CFG_LIBDIR)
+                    stage3/$$(LIBDIR_RELATIVE), \
+               )))))/$$(CFG_RUSTLIBDIR)/$$(CFG_BUILD)/lib
   CFG_RUN_TEST_$(1)=$$(call CFG_RUN_$(1),$$(call CFG_TESTLIB_$(1),$$(1),$$(3)),$$(1))
 endif
 
@@ -132,7 +135,7 @@ endef
 $(foreach target,$(CFG_TARGET), \
   $(if $(findstring $(target),"arm-linux-androideabi"), \
     $(if $(findstring adb,$(CFG_ADB)), \
-      $(if $(findstring device,$(shell $(CFG_ADB) devices 2>/dev/null | grep -E '^[_A-Za-z0-9-]+[[:blank:]]+device')), \
+      $(if $(findstring device,$(shell $(CFG_ADB) devices 2>/dev/null | grep -E '^[:_A-Za-z0-9-]+[[:blank:]]+device')), \
         $(info check: android device attached) \
         $(eval $(call DEF_ADB_DEVICE_STATUS, true)), \
         $(info check: android device not attached) \
@@ -148,19 +151,21 @@ ifeq ($(CFG_ADB_DEVICE_STATUS),true)
 CFG_ADB_TEST_DIR=/data/tmp
 
 $(info check: android device test dir $(CFG_ADB_TEST_DIR) ready \
- $(shell adb remount 1>/dev/null) \
- $(shell adb shell rm -r $(CFG_ADB_TEST_DIR) >/dev/null) \
- $(shell adb shell mkdir $(CFG_ADB_TEST_DIR)) \
- $(shell adb shell mkdir $(CFG_ADB_TEST_DIR)/tmp) \
- $(shell adb push $(S)src/etc/adb_run_wrapper.sh $(CFG_ADB_TEST_DIR) 1>/dev/null) \
- $(shell adb push $(TLIB2_T_arm-linux-androideabi_H_$(CFG_BUILD))/$(CFG_RUNTIME_arm-linux-androideabi) \
-                  $(CFG_ADB_TEST_DIR)) \
- $(shell adb push $(TLIB2_T_arm-linux-androideabi_H_$(CFG_BUILD))/$(STDLIB_GLOB_arm-linux-androideabi) \
-                  $(CFG_ADB_TEST_DIR)) \
- $(shell adb push $(TLIB2_T_arm-linux-androideabi_H_$(CFG_BUILD))/$(EXTRALIB_GLOB_arm-linux-androideabi) \
-                  $(CFG_ADB_TEST_DIR)) \
- $(shell adb push $(TLIB2_T_arm-linux-androideabi_H_$(CFG_BUILD))/$(LIBRUSTUV_GLOB_arm-linux-androideabi) \
-                  $(CFG_ADB_TEST_DIR)) \
+ $(shell $(CFG_ADB) remount 1>/dev/null) \
+ $(shell $(CFG_ADB) shell rm -r $(CFG_ADB_TEST_DIR) >/dev/null) \
+ $(shell $(CFG_ADB) shell mkdir $(CFG_ADB_TEST_DIR)) \
+ $(shell $(CFG_ADB) shell mkdir $(CFG_ADB_TEST_DIR)/tmp) \
+ $(shell $(CFG_ADB) push $(S)src/etc/adb_run_wrapper.sh $(CFG_ADB_TEST_DIR) 1>/dev/null) \
+ $(shell $(CFG_ADB) push $(TLIB2_T_arm-linux-androideabi_H_$(CFG_BUILD))/$(CFG_RUNTIME_arm-linux-androideabi) \
+                    $(CFG_ADB_TEST_DIR)) \
+ $(shell $(CFG_ADB) push $(TLIB2_T_arm-linux-androideabi_H_$(CFG_BUILD))/$(STDLIB_GLOB_arm-linux-androideabi) \
+                    $(CFG_ADB_TEST_DIR)) \
+ $(shell $(CFG_ADB) push $(TLIB2_T_arm-linux-androideabi_H_$(CFG_BUILD))/$(EXTRALIB_GLOB_arm-linux-androideabi) \
+                    $(CFG_ADB_TEST_DIR)) \
+ $(shell $(CFG_ADB) push $(TLIB2_T_arm-linux-androideabi_H_$(CFG_BUILD))/$(LIBRUSTUV_GLOB_arm-linux-androideabi) \
+                    $(CFG_ADB_TEST_DIR)) \
+ $(shell $(CFG_ADB) push $(TLIB2_T_arm-linux-androideabi_H_$(CFG_BUILD))/$(LIBGREEN_GLOB_arm-linux-androideabi) \
+                    $(CFG_ADB_TEST_DIR)) \
  )
 else
 CFG_ADB_TEST_DIR=
@@ -186,7 +191,7 @@ check-test: cleantestlibs cleantmptestlogs all check-stage2-rfail
 
 check-lite: cleantestlibs cleantmptestlogs \
 	check-stage2-std check-stage2-extra check-stage2-rpass \
-	check-stage2-rustuv \
+	check-stage2-rustuv check-stage2-native check-stage2-green \
 	check-stage2-rustpkg \
 	check-stage2-rfail check-stage2-cfail check-stage2-rmake
 	$(Q)$(CFG_PYTHON) $(S)src/etc/check-summary.py tmp/*.log
@@ -281,6 +286,7 @@ check-stage$(1)-T-$(2)-H-$(3)-exec:     				\
 	check-stage$(1)-T-$(2)-H-$(3)-rpass-full-exec			\
 	check-stage$(1)-T-$(2)-H-$(3)-rmake-exec			\
         check-stage$(1)-T-$(2)-H-$(3)-crates-exec                       \
+        check-stage$(1)-T-$(2)-H-$(3)-doc-crates-exec                   \
 	check-stage$(1)-T-$(2)-H-$(3)-bench-exec			\
 	check-stage$(1)-T-$(2)-H-$(3)-debuginfo-exec \
 	check-stage$(1)-T-$(2)-H-$(3)-codegen-exec \
@@ -302,6 +308,10 @@ check-stage$(1)-T-$(2)-H-$(3)-crates-exec: \
            check-stage$(1)-T-$(2)-H-$(3)-$$(crate)-exec)
 
 endif
+
+check-stage$(1)-T-$(2)-H-$(3)-doc-crates-exec: \
+        $$(foreach crate,$$(TEST_DOC_CRATES), \
+           check-stage$(1)-T-$(2)-H-$(3)-doc-$$(crate)-exec)
 
 check-stage$(1)-T-$(2)-H-$(3)-doc-exec: \
         $$(foreach docname,$$(DOC_TEST_NAMES), \
@@ -333,19 +343,20 @@ define TEST_RUNNER
 ifeq ($(NO_REBUILD),)
 STDTESTDEP_$(1)_$(2)_$(3) = $$(SREQ$(1)_T_$(2)_H_$(3)) \
                             $$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_EXTRALIB_$(2)) \
-                            $$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_LIBRUSTUV_$(2))
+                            $$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_LIBRUSTUV_$(2)) \
+                            $$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_LIBGREEN_$(2))
 else
 STDTESTDEP_$(1)_$(2)_$(3) =
 endif
 
 $(3)/stage$(1)/test/stdtest-$(2)$$(X_$(2)):			\
-		$$(STDLIB_CRATE) $$(STDLIB_INPUTS)	\
+		$$(STDLIB_CRATE) $$(STDLIB_INPUTS)		\
 		$$(STDTESTDEP_$(1)_$(2)_$(3))
 	@$$(call E, compile_and_link: $$@)
 	$$(STAGE$(1)_T_$(2)_H_$(3)) -o $$@ $$< --test
 
 $(3)/stage$(1)/test/extratest-$(2)$$(X_$(2)):			\
-		$$(EXTRALIB_CRATE) $$(EXTRALIB_INPUTS)	\
+		$$(EXTRALIB_CRATE) $$(EXTRALIB_INPUTS)		\
 		$$(STDTESTDEP_$(1)_$(2)_$(3))
 	@$$(call E, compile_and_link: $$@)
 	$$(STAGE$(1)_T_$(2)_H_$(3)) -o $$@ $$< --test
@@ -358,6 +369,18 @@ $(3)/stage$(1)/test/rustuvtest-$(2)$$(X_$(2)):			\
 		-L $$(UV_SUPPORT_DIR_$(2)) \
 		-L $$(dir $$(LIBUV_LIB_$(2)))
 
+$(3)/stage$(1)/test/nativetest-$(2)$$(X_$(2)):			\
+		$$(LIBNATIVE_CRATE) $$(LIBNATIVE_INPUTS)	\
+		$$(STDTESTDEP_$(1)_$(2)_$(3))
+	@$$(call E, compile_and_link: $$@)
+	$$(STAGE$(1)_T_$(2)_H_$(3)) -o $$@ $$< --test
+
+$(3)/stage$(1)/test/greentest-$(2)$$(X_$(2)):			\
+		$$(LIBGREEN_CRATE) $$(LIBGREEN_INPUTS)	\
+		$$(STDTESTDEP_$(1)_$(2)_$(3))
+	@$$(call E, compile_and_link: $$@)
+	$$(STAGE$(1)_T_$(2)_H_$(3)) -o $$@ $$< --test
+
 $(3)/stage$(1)/test/syntaxtest-$(2)$$(X_$(2)):			\
 		$$(LIBSYNTAX_CRATE) $$(LIBSYNTAX_INPUTS)	\
 		$$(STDTESTDEP_$(1)_$(2)_$(3))
@@ -369,7 +392,7 @@ $(3)/stage$(1)/test/rustctest-$(2)$$(X_$(2)):					\
 		$$(COMPILER_CRATE) $$(COMPILER_INPUTS) \
 		$$(SREQ$(1)_T_$(2)_H_$(3)) \
 		$$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_RUSTLLVM_$(2)) \
-                $$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_LIBSYNTAX_$(2))
+		$$(TLIB$(1)_T_$(2)_H_$(3))/$$(CFG_LIBSYNTAX_$(2))
 	@$$(call E, compile_and_link: $$@)
 	$$(STAGE$(1)_T_$(2)_H_$(3)) -o $$@ $$< --test \
 	    -L "$$(LLVM_LIBDIR_$(2))"
@@ -410,10 +433,10 @@ check-stage$(1)-T-$(2)-H-$(3)-$(4)-exec: $$(call TEST_OK_FILE,$(1),$(2),$(3),$(4
 $$(call TEST_OK_FILE,$(1),$(2),$(3),$(4)): \
 		$(3)/stage$(1)/test/$(4)test-$(2)$$(X_$(2))
 	@$$(call E, run: $$<)
-	$$(Q)$$(call CFG_RUN_TEST_$(2),$$<,$(2),$(3)) $$(TESTARGS)	\
-	--logfile $$(call TEST_LOG_FILE,$(1),$(2),$(3),$(4)) \
-	$$(call CRATE_TEST_EXTRA_ARGS,$(1),$(2),$(3),$(4)) \
-	&& touch $$@
+	$$(Q)$$(call CFG_RUN_TEST_$(2),$$<,$(2),$(3)) $$(TESTARGS) \
+	    --logfile $$(call TEST_LOG_FILE,$(1),$(2),$(3),$(4)) \
+	    $$(call CRATE_TEST_EXTRA_ARGS,$(1),$(2),$(3),$(4)) \
+	    && touch $$@
 endef
 
 define DEF_TEST_CRATE_RULES_arm-linux-androideabi
@@ -734,6 +757,32 @@ $(foreach host,$(CFG_HOST), \
    $(foreach docname,$(DOC_TEST_NAMES), \
     $(eval $(call DEF_RUN_DOC_TEST,$(stage),$(target),$(host),$(docname)))))))
 
+CRATE_DOC_LIB-std = $(STDLIB_CRATE)
+CRATE_DOC_LIB-extra = $(EXTRALIB_CRATE)
+
+define DEF_CRATE_DOC_TEST
+
+check-stage$(1)-T-$(2)-H-$(3)-doc-$(4)-exec: $$(call TEST_OK_FILE,$(1),$(2),$(3),doc-$(4))
+
+ifeq ($(2),$$(CFG_BUILD))
+$$(call TEST_OK_FILE,$(1),$(2),$(3),doc-$(4)):		\
+	        $$(TEST_SREQ$(1)_T_$(2)_H_$(3))		\
+		$$(HBIN$(1)_H_$(3))/rustdoc$$(X_$(3))
+	@$$(call E, run doc-$(4) [$(2)])
+	$$(Q)$$(HBIN$(1)_H_$(3))/rustdoc$$(X_$(3)) --test \
+	    $$(CRATE_DOC_LIB-$(4)) --test-args "$$(TESTARGS)" && touch $$@
+else
+$$(call TEST_OK_FILE,$(1),$(2),$(3),doc-$(4)):
+	touch $$@
+endif
+
+endef
+
+$(foreach host,$(CFG_HOST), \
+ $(foreach target,$(CFG_TARGET), \
+  $(foreach stage,$(STAGES), \
+   $(foreach crate,$(TEST_DOC_CRATES), \
+    $(eval $(call DEF_CRATE_DOC_TEST,$(stage),$(target),$(host),$(crate)))))))
 
 ######################################################################
 # Extracting tests for docs
@@ -762,6 +811,7 @@ $(foreach host,$(CFG_HOST), \
 TEST_GROUPS = \
 	crates \
 	$(foreach crate,$(TEST_CRATES),$(crate)) \
+	$(foreach crate,$(TEST_DOC_CRATES),doc-$(crate)) \
 	rpass \
 	rpass-full \
 	rfail \
@@ -908,6 +958,8 @@ define DEF_RMAKE_FOR_T_H
 # $(2) target triple
 # $(3) host triple
 
+
+ifeq ($(2)$(3),$$(CFG_BUILD)$$(CFG_BUILD))
 check-stage$(1)-T-$(2)-H-$(3)-rmake-exec: \
 		$$(call TEST_OK_FILE,$(1),$(2),$(3),rmake)
 
@@ -920,13 +972,20 @@ $(3)/test/run-make/%-$(1)-T-$(2)-H-$(3).ok: \
 		$$(CSREQ$(1)_T_$(2)_H_$(3))
 	@rm -rf $(3)/test/run-make/$$*
 	@mkdir -p $(3)/test/run-make/$$*
-	@echo maketest: $$*
 	$$(Q)$$(CFG_PYTHON) $(S)src/etc/maketest.py $$(dir $$<) \
 	    $$(HBIN$(1)_H_$(3))/rustc$$(X_$(3)) \
 	    $(3)/test/run-make/$$* \
 	    "$$(CC_$(3)) $$(CFG_GCCISH_CFLAGS_$(3))" \
-	    $$(HBIN$(1)_H_$(3))/rustdoc$$(X_$(3))
+	    $$(HBIN$(1)_H_$(3))/rustdoc$$(X_$(3)) \
+	    "$$(TESTNAME)"
 	@touch $$@
+else
+# FIXME #11094 - The above rule doesn't work right for multiple targets
+check-stage$(1)-T-$(2)-H-$(3)-rmake-exec:
+	@true
+
+endif
+
 
 endef
 

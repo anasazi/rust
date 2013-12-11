@@ -130,13 +130,14 @@ and so on.
 use middle::pat_util::{pat_bindings};
 use middle::freevars;
 use middle::ty;
-use middle::typeck::{method_map};
+use middle::typeck::method_map;
 use util::ppaux;
 use util::ppaux::Repr;
 use util::common::indenter;
 use util::ppaux::UserString;
 
 use std::at_vec;
+use std::cell::RefCell;
 use std::hashmap::{HashSet, HashMap};
 use syntax::ast::*;
 use syntax::ast_util;
@@ -158,9 +159,9 @@ pub struct CaptureVar {
     mode: CaptureMode // How variable is being accessed
 }
 
-pub type CaptureMap = @mut HashMap<NodeId, @[CaptureVar]>;
+pub type CaptureMap = @RefCell<HashMap<NodeId, @[CaptureVar]>>;
 
-pub type MovesMap = @mut HashSet<NodeId>;
+pub type MovesMap = @RefCell<HashSet<NodeId>>;
 
 /**
  * Set of variable node-ids that are moved.
@@ -168,7 +169,7 @@ pub type MovesMap = @mut HashSet<NodeId>;
  * Note: The `VariableMovesMap` stores expression ids that
  * are moves, whereas this set stores the ids of the variables
  * that are moved at some point */
-pub type MovedVariablesSet = @mut HashSet<NodeId>;
+pub type MovedVariablesSet = @RefCell<HashSet<NodeId>>;
 
 /** See the section Output on the module comment for explanation. */
 #[deriving(Clone)]
@@ -192,14 +193,14 @@ enum UseMode {
 }
 
 impl visit::Visitor<()> for VisitContext {
-    fn visit_fn(&mut self, fk:&visit::fn_kind, fd:&fn_decl,
-                b:P<Block>, s:Span, n:NodeId, _:()) {
+    fn visit_fn(&mut self, fk: &visit::FnKind, fd: &FnDecl,
+                b: &Block, s: Span, n: NodeId, _: ()) {
         compute_modes_for_fn(self, fk, fd, b, s, n);
     }
-    fn visit_expr(&mut self, ex:@Expr, _:()) {
+    fn visit_expr(&mut self, ex: &Expr, _: ()) {
         compute_modes_for_expr(self, ex);
     }
-    fn visit_local(&mut self, l:@Local, _:()) {
+    fn visit_local(&mut self, l: &Local, _: ()) {
         compute_modes_for_local(self, l);
     }
     // FIXME(#10894) should continue recursing
@@ -214,9 +215,9 @@ pub fn compute_moves(tcx: ty::ctxt,
         tcx: tcx,
         method_map: method_map,
         move_maps: MoveMaps {
-            moves_map: @mut HashSet::new(),
-            capture_map: @mut HashMap::new(),
-            moved_variables_set: @mut HashSet::new()
+            moves_map: @RefCell::new(HashSet::new()),
+            capture_map: @RefCell::new(HashMap::new()),
+            moved_variables_set: @RefCell::new(HashSet::new())
         }
     };
     let visit_cx = &mut visit_cx;
@@ -239,7 +240,7 @@ pub fn moved_variable_node_id_from_def(def: Def) -> Option<NodeId> {
 // Expressions
 
 fn compute_modes_for_local<'a>(cx: &mut VisitContext,
-                               local: @Local) {
+                               local: &Local) {
     cx.use_pat(local.pat);
     for &init in local.init.iter() {
         cx.use_expr(init, Read);
@@ -247,9 +248,9 @@ fn compute_modes_for_local<'a>(cx: &mut VisitContext,
 }
 
 fn compute_modes_for_fn(cx: &mut VisitContext,
-                        fk: &visit::fn_kind,
-                        decl: &fn_decl,
-                        body: P<Block>,
+                        fk: &visit::FnKind,
+                        decl: &FnDecl,
+                        body: &Block,
                         span: Span,
                         id: NodeId) {
     for a in decl.inputs.iter() {
@@ -259,7 +260,7 @@ fn compute_modes_for_fn(cx: &mut VisitContext,
 }
 
 fn compute_modes_for_expr(cx: &mut VisitContext,
-                          expr: @Expr)
+                          expr: &Expr)
 {
     cx.consume_expr(expr);
 }
@@ -271,7 +272,7 @@ impl VisitContext {
         }
     }
 
-    pub fn consume_expr(&mut self, expr: @Expr) {
+    pub fn consume_expr(&mut self, expr: &Expr) {
         /*!
          * Indicates that the value of `expr` will be consumed,
          * meaning either copied or moved depending on its type.
@@ -282,7 +283,10 @@ impl VisitContext {
 
         let expr_ty = ty::expr_ty_adjusted(self.tcx, expr);
         if ty::type_moves_by_default(self.tcx, expr_ty) {
-            self.move_maps.moves_map.insert(expr.id);
+            {
+                let mut moves_map = self.move_maps.moves_map.borrow_mut();
+                moves_map.get().insert(expr.id);
+            }
             self.use_expr(expr, Move);
         } else {
             self.use_expr(expr, Read);
@@ -307,7 +311,7 @@ impl VisitContext {
     }
 
     pub fn use_expr(&mut self,
-                    expr: @Expr,
+                    expr: &Expr,
                     expr_mode: UseMode) {
         /*!
          * Indicates that `expr` is used with a given mode.  This will
@@ -321,11 +325,14 @@ impl VisitContext {
         // `expr_mode` refers to the post-adjustment value.  If one of
         // those adjustments is to take a reference, then it's only
         // reading the underlying expression, not moving it.
-        let comp_mode = match self.tcx.adjustments.find(&expr.id) {
-            Some(&@ty::AutoDerefRef(
-                ty::AutoDerefRef {
-                    autoref: Some(_), ..})) => Read,
-            _ => expr_mode
+        let comp_mode = {
+            let adjustments = self.tcx.adjustments.borrow();
+            match adjustments.get().find(&expr.id) {
+                Some(&@ty::AutoDerefRef(
+                    ty::AutoDerefRef {
+                        autoref: Some(_), ..})) => Read,
+                _ => expr_mode
+            }
         };
 
         debug!("comp_mode = {:?}", comp_mode);
@@ -334,10 +341,15 @@ impl VisitContext {
             ExprPath(..) | ExprSelf => {
                 match comp_mode {
                     Move => {
-                        let def = self.tcx.def_map.get_copy(&expr.id);
+                        let def_map = self.tcx.def_map.borrow();
+                        let def = def_map.get().get_copy(&expr.id);
                         let r = moved_variable_node_id_from_def(def);
                         for &id in r.iter() {
-                            self.move_maps.moved_variables_set.insert(id);
+                            let mut moved_variables_set =
+                                self.move_maps
+                                    .moved_variables_set
+                                    .borrow_mut();
+                            moved_variables_set.get().insert(id);
                         }
                     }
                     Read => {}
@@ -384,7 +396,12 @@ impl VisitContext {
                 // closures should be noncopyable, they shouldn't move by default;
                 // calling a closure should only consume it if it's once.
                 if mode == Move {
-                    self.move_maps.moves_map.insert(callee.id);
+                    {
+                        let mut moves_map = self.move_maps
+                                                .moves_map
+                                                .borrow_mut();
+                        moves_map.get().insert(callee.id);
+                    }
                 }
                 self.use_expr(callee, mode);
                 self.use_fn_args(callee.id, *args);
@@ -561,11 +578,21 @@ impl VisitContext {
                     self.use_pat(a.pat);
                 }
                 let cap_vars = self.compute_captures(expr.id);
-                self.move_maps.capture_map.insert(expr.id, cap_vars);
+                {
+                    let mut capture_map = self.move_maps
+                                              .capture_map
+                                              .borrow_mut();
+                    capture_map.get().insert(expr.id, cap_vars);
+                }
                 self.consume_block(body);
             }
 
             ExprVstore(base, _) => {
+                self.use_expr(base, comp_mode);
+            }
+
+            ExprBox(place, base) => {
+                self.use_expr(place, comp_mode);
                 self.use_expr(base, comp_mode);
             }
 
@@ -582,14 +609,15 @@ impl VisitContext {
                                    receiver_expr: @Expr,
                                    arg_exprs: &[@Expr])
                                    -> bool {
-        if !self.method_map.contains_key(&expr.id) {
+        let method_map = self.method_map.borrow();
+        if !method_map.get().contains_key(&expr.id) {
             return false;
         }
 
         self.use_receiver(receiver_expr);
 
         // for overloaded operatrs, we are always passing in a
-        // borrowed pointer, so it's always read mode:
+        // reference, so it's always read mode:
         for arg_expr in arg_exprs.iter() {
             self.use_expr(*arg_expr, Read);
         }
@@ -633,7 +661,10 @@ impl VisitContext {
                    id, bm, binding_moves);
 
             if binding_moves {
-                self.move_maps.moves_map.insert(id);
+                {
+                    let mut moves_map = self.move_maps.moves_map.borrow_mut();
+                    moves_map.get().insert(id);
+                }
             }
         })
     }

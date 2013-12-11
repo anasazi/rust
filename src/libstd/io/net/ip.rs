@@ -10,9 +10,11 @@
 
 use container::Container;
 use from_str::FromStr;
+use iter::Iterator;
 use option::{Option, None, Some};
+use str::StrSlice;
 use to_str::ToStr;
-use vec::{MutableCloneableVector, ImmutableVector};
+use vec::{MutableCloneableVector, ImmutableVector, MutableVector};
 
 pub type Port = u16;
 
@@ -153,11 +155,11 @@ impl<'a> Parser<'a> {
             let c = c as u8;
             // assuming radix is either 10 or 16
             if c >= '0' as u8 && c <= '9' as u8 {
-                Some((c - '0' as u8) as u8)
+                Some(c - '0' as u8)
             } else if radix > 10 && c >= 'a' as u8 && c < 'a' as u8 + (radix - 10) {
-                Some((c - 'a' as u8 + 10) as u8)
+                Some(c - 'a' as u8 + 10)
             } else if radix > 10 && c >= 'A' as u8 && c < 'A' as u8 + (radix - 10) {
-                Some((c - 'A' as u8 + 10) as u8)
+                Some(c - 'A' as u8 + 10)
             } else {
                 None
             }
@@ -335,9 +337,8 @@ impl FromStr for SocketAddr {
 
 #[cfg(test)]
 mod test {
+    use prelude::*;
     use super::*;
-    use from_str::FromStr;
-    use option::{Option, Some, None};
 
     #[test]
     fn test_from_str_ipv4() {

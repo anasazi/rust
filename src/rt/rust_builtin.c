@@ -10,28 +10,35 @@
 
 /* Foreign builtins. */
 
-#include "rust_globals.h"
 #include "vg/valgrind.h"
 
+#include <stdint.h>
 #include <time.h>
-
-#ifdef __APPLE__
-    #include <TargetConditionals.h>
-    #include <mach/mach_time.h>
-
-    #if (TARGET_OS_IPHONE)
-        extern char **environ;
-    #else
-        #include <crt_externs.h>
-    #endif
-#endif
+#include <string.h>
+#include <assert.h>
+#include <stdlib.h>
 
 #if !defined(__WIN32__)
 #include <sys/time.h>
+#include <sys/types.h>
+#include <dirent.h>
+#include <signal.h>
+#include <unistd.h>
+#include <pthread.h>
+#else
+#include <windows.h>
+#include <wincrypt.h>
+#include <stdio.h>
+#include <tchar.h>
 #endif
 
-#ifdef __FreeBSD__
-extern char **environ;
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#include <mach/mach_time.h>
+
+#if !(TARGET_OS_IPHONE)
+#include <crt_externs.h>
+#endif
 #endif
 
 #ifdef __ANDROID__
@@ -55,6 +62,16 @@ timegm(struct tm *tm)
     tzset();
     return ret;
 }
+#endif
+
+#ifdef __APPLE__
+#if (TARGET_OS_IPHONE)
+extern char **environ;
+#endif
+#endif
+
+#if defined(__FreeBSD__) || defined(__linux__) || defined(__ANDROID__)
+extern char **environ;
 #endif
 
 #if defined(__WIN32__)
@@ -109,73 +126,6 @@ rust_list_dir_wfd_fp_buf(void* wfd) {
     return 0;
 }
 #endif
-
-#if defined(__WIN32__)
-void
-rust_get_time(int64_t *sec, int32_t *nsec) {
-    FILETIME fileTime;
-    GetSystemTimeAsFileTime(&fileTime);
-
-    // A FILETIME contains a 64-bit value representing the number of
-    // hectonanosecond (100-nanosecond) intervals since 1601-01-01T00:00:00Z.
-    // http://support.microsoft.com/kb/167296/en-us
-    ULARGE_INTEGER ul;
-    ul.LowPart = fileTime.dwLowDateTime;
-    ul.HighPart = fileTime.dwHighDateTime;
-    uint64_t ns_since_1601 = ul.QuadPart / 10;
-
-    const uint64_t NANOSECONDS_FROM_1601_TO_1970 = 11644473600000000ull;
-    uint64_t ns_since_1970 = ns_since_1601 - NANOSECONDS_FROM_1601_TO_1970;
-    *sec = ns_since_1970 / 1000000;
-    *nsec = (ns_since_1970 % 1000000) * 1000;
-}
-#else
-void
-rust_get_time(int64_t *sec, int32_t *nsec) {
-#ifdef __APPLE__
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    *sec = tv.tv_sec;
-    *nsec = tv.tv_usec * 1000;
-#else
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    *sec = ts.tv_sec;
-    *nsec = ts.tv_nsec;
-#endif
-}
-#endif
-
-const int64_t ns_per_s = 1000000000LL;
-
-void
-rust_precise_time_ns(uint64_t *ns) {
-
-#ifdef __APPLE__
-    uint64_t time = mach_absolute_time();
-    mach_timebase_info_data_t info = {0, 0};
-    if (info.denom == 0) {
-        mach_timebase_info(&info);
-    }
-    uint64_t time_nano = time * (info.numer / info.denom);
-    *ns = time_nano;
-#elif __WIN32__
-    LARGE_INTEGER ticks_per_s;
-    BOOL query_result = QueryPerformanceFrequency(&ticks_per_s);
-    assert(query_result);
-    if (ticks_per_s.QuadPart == 0LL) {
-        ticks_per_s.QuadPart = 1LL;
-    }
-    LARGE_INTEGER ticks;
-    query_result = QueryPerformanceCounter(&ticks);
-    assert(query_result);
-    *ns = (uint64_t)((ticks.QuadPart * ns_per_s) / ticks_per_s.QuadPart);
-#else
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    *ns = (uint64_t)(ts.tv_sec * ns_per_s + ts.tv_nsec);
-#endif
-}
 
 typedef struct
 {
@@ -323,8 +273,6 @@ rust_mktime(rust_tm* timeptr) {
 }
 
 #ifndef _WIN32
-#include <sys/types.h>
-#include <dirent.h>
 
 DIR*
 rust_opendir(char *dirname) {
@@ -418,9 +366,6 @@ rust_unset_sigprocmask() {
 }
 
 #else
-
-#include <signal.h>
-#include <unistd.h>
 
 void
 rust_unset_sigprocmask() {

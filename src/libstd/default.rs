@@ -8,16 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! The Default trait
+//! The `Default` trait for types which may have meaningful default values
 
 /// A trait that types which have a useful default value should implement.
 pub trait Default {
     /// Return the "default value" for a type.
     fn default() -> Self;
-}
-
-impl<T: Default + 'static> Default for @mut T {
-    fn default() -> @mut T { @mut Default::default() }
 }
 
 impl<T: Default + 'static> Default for @T {

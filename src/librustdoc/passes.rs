@@ -96,13 +96,13 @@ impl<'a> fold::DocFolder for Stripper<'a> {
             }
 
             clean::ViewItemItem(..) => {
-                if i.visibility != Some(ast::public) {
+                if i.visibility != Some(ast::Public) {
                     return None
                 }
             }
 
             clean::StructFieldItem(..) => {
-                if i.visibility == Some(ast::private) {
+                if i.visibility == Some(ast::Private) {
                     return None;
                 }
             }
@@ -157,7 +157,8 @@ impl<'a> fold::DocFolder for ImplStripper<'a> {
             clean::ImplItem(ref imp) => {
                 match imp.trait_ {
                     Some(clean::ResolvedPath{ id, .. }) => {
-                        if !self.contains(&id) {
+                        let ImplStripper(s) = *self;
+                        if !s.contains(&id) {
                             return None;
                         }
                     }

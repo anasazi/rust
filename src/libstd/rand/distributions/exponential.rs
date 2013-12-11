@@ -10,6 +10,7 @@
 
 //! The exponential distribution.
 
+use num::Real;
 use rand::{Rng, Rand};
 use rand::distributions::{ziggurat, ziggurat_tables, Sample, IndependentSample};
 
@@ -60,11 +61,9 @@ impl Rand for Exp1 {
 /// use std::rand;
 /// use std::rand::distributions::{Exp, IndependentSample};
 ///
-/// fn main() {
-///     let exp = Exp::new(2.0);
-///     let v = exp.ind_sample(&mut rand::task_rng());
-///     println!("{} is from a Exp(2) distribution", v);
-/// }
+/// let exp = Exp::new(2.0);
+/// let v = exp.ind_sample(&mut rand::task_rng());
+/// println!("{} is from a Exp(2) distribution", v);
 /// ```
 pub struct Exp {
     /// `lambda` stored as `1/lambda`, since this is what we scale by.
@@ -85,16 +84,17 @@ impl Sample<f64> for Exp {
 }
 impl IndependentSample<f64> for Exp {
     fn ind_sample<R: Rng>(&self, rng: &mut R) -> f64 {
-        (*rng.gen::<Exp1>()) * self.lambda_inverse
+        let Exp1(n) = rng.gen::<Exp1>();
+        n * self.lambda_inverse
     }
 }
 
 #[cfg(test)]
 mod test {
+    use rand::distributions::*;
+    use prelude::*;
     use rand::*;
     use super::*;
-    use iter::range;
-    use option::{Some, None};
 
     #[test]
     fn test_exp() {
@@ -120,11 +120,11 @@ mod test {
 #[cfg(test)]
 mod bench {
     use extra::test::BenchHarness;
+    use mem::size_of;
+    use prelude::*;
     use rand::{XorShiftRng, RAND_BENCH_N};
     use super::*;
-    use iter::range;
-    use option::{Some, None};
-    use mem::size_of;
+    use rand::distributions::*;
 
     #[bench]
     fn rand_exp(bh: &mut BenchHarness) {

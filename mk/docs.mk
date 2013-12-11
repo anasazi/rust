@@ -13,25 +13,48 @@
 ######################################################################
 
 DOCS :=
+CDOCS :=
 DOCS_L10N :=
+HTML_DEPS :=
 
 BASE_DOC_OPTS := --from=markdown --standalone --toc --number-sections
-HTML_OPTS = $(BASE_DOC_OPTS) --to=html5  --section-divs --css=rust.css  --include-before-body=doc/version_info.html --include-in-header=doc/favicon.inc
+HTML_OPTS = $(BASE_DOC_OPTS) 	--to=html5  --section-divs --css=rust.css  \
+								--include-before-body=doc/version_info.html \
+								--include-in-header=doc/favicon.inc
 TEX_OPTS = $(BASE_DOC_OPTS) --to=latex
 EPUB_OPTS = $(BASE_DOC_OPTS) --to=epub
+
+######################################################################
+# Rust version
+######################################################################
+doc/version.md: $(MKFILE_DEPS) $(wildcard $(S)doc/*.*)
+	@$(call E, version-stamp: $@)
+	$(Q)echo "$(CFG_VERSION)" >$@
+
+HTML_DEPS += doc/version_info.html
+doc/version_info.html: version_info.html.template $(MKFILE_DEPS) \
+                       $(wildcard $(S)doc/*.*)
+	@$(call E, version-info: $@)
+	sed -e "s/VERSION/$(CFG_RELEASE)/; s/SHORT_HASH/$(shell echo \
+                    $(CFG_VER_HASH) | head -c 8)/;\
+                s/STAMP/$(CFG_VER_HASH)/;" $< >$@
+
+GENERATED += doc/version.md doc/version_info.html
 
 ######################################################################
 # Docs, from pandoc, rustdoc (which runs pandoc), and node
 ######################################################################
 
+HTML_DEPS += doc/rust.css
 doc/rust.css: rust.css
 	@$(call E, cp: $@)
 	$(Q)cp -a $< $@ 2> /dev/null
 
-doc/manual.inc: manual.inc
+doc/full-toc.inc: full-toc.inc
 	@$(call E, cp: $@)
 	$(Q)cp -a $< $@ 2> /dev/null
 
+HTML_DEPS += doc/favicon.inc
 doc/favicon.inc: favicon.inc
 	@$(call E, cp: $@)
 	$(Q)cp -a $< $@ 2> /dev/null
@@ -49,11 +72,10 @@ endif
 ifneq ($(NO_DOCS),1)
 
 DOCS += doc/rust.html
-doc/rust.html: rust.md doc/version_info.html doc/rust.css doc/manual.inc \
-				doc/favicon.inc
+doc/rust.html: rust.md doc/full-toc.inc $(HTML_DEPS) 
 	@$(call E, pandoc: $@)
 	$(Q)$(CFG_NODE) $(S)doc/prep.js --highlight $< | \
-	$(CFG_PANDOC) $(HTML_OPTS) --include-in-header=doc/manual.inc --output=$@
+	$(CFG_PANDOC) $(HTML_OPTS) --include-in-header=doc/full-toc.inc --output=$@
 
 DOCS += doc/rust.tex
 doc/rust.tex: rust.md doc/version.md
@@ -68,22 +90,19 @@ doc/rust.epub: rust.md doc/version_info.html doc/rust.css
 	$(CFG_PANDOC) $(EPUB_OPTS) --output=$@
 
 DOCS += doc/rustpkg.html
-doc/rustpkg.html: rustpkg.md doc/version_info.html doc/rust.css \
-				doc/favicon.inc
+doc/rustpkg.html: rustpkg.md $(HTML_DEPS)
 	@$(call E, pandoc: $@)
 	$(Q)$(CFG_NODE) $(S)doc/prep.js --highlight $< | \
 	$(CFG_PANDOC) $(HTML_OPTS) --output=$@
 
 DOCS += doc/rustdoc.html
-doc/rustdoc.html: rustdoc.md doc/version_info.html doc/rust.css \
-				doc/favicon.inc
+doc/rustdoc.html: rustdoc.md $(HTML_DEPS)
 	@$(call E, pandoc: $@)
 	$(Q)$(CFG_NODE) $(S)doc/prep.js --highlight $< | \
 	$(CFG_PANDOC) $(HTML_OPTS) --output=$@
 
 DOCS += doc/tutorial.html
-doc/tutorial.html: tutorial.md doc/version_info.html doc/rust.css \
-				doc/favicon.inc
+doc/tutorial.html: tutorial.md $(HTML_DEPS)
 	@$(call E, pandoc: $@)
 	$(Q)$(CFG_NODE) $(S)doc/prep.js --highlight $< | \
 	$(CFG_PANDOC) $(HTML_OPTS) --output=$@
@@ -111,51 +130,96 @@ doc/l10n/ja/tutorial.html: doc/l10n/ja/tutorial.md doc/version_info.html doc/rus
            --include-before-body=doc/version_info.html \
            --output=$@
 
-DOCS += doc/tutorial-macros.html
-doc/tutorial-macros.html: tutorial-macros.md doc/version_info.html doc/rust.css \
-				doc/favicon.inc
+# Complementary documentation
+#
+DOCS += doc/index.html
+doc/index.html: index.md $(HTML_DEPS)
 	@$(call E, pandoc: $@)
 	$(Q)$(CFG_NODE) $(S)doc/prep.js --highlight $< | \
 	$(CFG_PANDOC) $(HTML_OPTS) --output=$@
 
-DOCS += doc/tutorial-container.html
-doc/tutorial-container.html: tutorial-container.md doc/version_info.html doc/rust.css \
-				doc/favicon.inc
+DOCS += doc/complement-lang-faq.html
+doc/complement-lang-faq.html: $(S)doc/complement-lang-faq.md doc/full-toc.inc $(HTML_DEPS)
+	@$(call E, pandoc: $@)
+	$(Q)$(CFG_NODE) $(S)doc/prep.js --highlight $< | \
+	$(CFG_PANDOC) $(HTML_OPTS) --include-in-header=doc/full-toc.inc --output=$@
+
+DOCS += doc/complement-project-faq.html
+doc/complement-project-faq.html: $(S)doc/complement-project-faq.md $(HTML_DEPS)
 	@$(call E, pandoc: $@)
 	$(Q)$(CFG_NODE) $(S)doc/prep.js --highlight $< | \
 	$(CFG_PANDOC) $(HTML_OPTS) --output=$@
 
-DOCS += doc/tutorial-ffi.html
-doc/tutorial-ffi.html: tutorial-ffi.md doc/version_info.html doc/rust.css \
-				doc/favicon.inc
+DOCS += doc/complement-usage-faq.html
+doc/complement-usage-faq.html: $(S)doc/complement-usage-faq.md $(HTML_DEPS)
 	@$(call E, pandoc: $@)
 	$(Q)$(CFG_NODE) $(S)doc/prep.js --highlight $< | \
 	$(CFG_PANDOC) $(HTML_OPTS) --output=$@
 
-DOCS += doc/tutorial-borrowed-ptr.html
-doc/tutorial-borrowed-ptr.html: tutorial-borrowed-ptr.md doc/version_info.html doc/rust.css \
-				doc/favicon.inc
+DOCS += doc/complement-cheatsheet.html
+doc/complement-cheatsheet.html: $(S)doc/complement-cheatsheet.md doc/full-toc.inc $(HTML_DEPS)
+	@$(call E, pandoc: $@)
+	$(Q)$(CFG_NODE) $(S)doc/prep.js --highlight $< | \
+	$(CFG_PANDOC) $(HTML_OPTS) --include-in-header=doc/full-toc.inc --output=$@
+
+DOCS += doc/complement-bugreport.html
+doc/complement-bugreport.html: $(S)doc/complement-bugreport.md $(HTML_DEPS)
 	@$(call E, pandoc: $@)
 	$(Q)$(CFG_NODE) $(S)doc/prep.js --highlight $< | \
 	$(CFG_PANDOC) $(HTML_OPTS) --output=$@
 
-DOCS += doc/tutorial-tasks.html
-doc/tutorial-tasks.html: tutorial-tasks.md doc/version_info.html doc/rust.css \
-				doc/favicon.inc
+# Guides
+
+DOCS += doc/guide-macros.html
+doc/guide-macros.html: $(S)doc/guide-macros.md $(HTML_DEPS)
 	@$(call E, pandoc: $@)
 	$(Q)$(CFG_NODE) $(S)doc/prep.js --highlight $< | \
 	$(CFG_PANDOC) $(HTML_OPTS) --output=$@
 
-DOCS += doc/tutorial-conditions.html
-doc/tutorial-conditions.html: tutorial-conditions.md doc/version_info.html doc/rust.css \
-				doc/favicon.inc
+DOCS += doc/guide-container.html
+doc/guide-container.html: $(S)doc/guide-container.md $(HTML_DEPS)
 	@$(call E, pandoc: $@)
 	$(Q)$(CFG_NODE) $(S)doc/prep.js --highlight $< | \
 	$(CFG_PANDOC) $(HTML_OPTS) --output=$@
 
-DOCS += doc/tutorial-rustpkg.html
-doc/tutorial-rustpkg.html: tutorial-rustpkg.md doc/version_info.html doc/rust.css \
-				doc/favicon.inc
+DOCS += doc/guide-ffi.html
+doc/guide-ffi.html: $(S)doc/guide-ffi.md $(HTML_DEPS)
+	@$(call E, pandoc: $@)
+	$(Q)$(CFG_NODE) $(S)doc/prep.js --highlight $< | \
+	$(CFG_PANDOC) $(HTML_OPTS) --output=$@
+
+DOCS += doc/guide-testing.html
+doc/guide-testing.html: $(S)doc/guide-testing.md $(HTML_DEPS)
+	@$(call E, pandoc: $@)
+	$(Q)$(CFG_NODE) $(S)doc/prep.js --highlight $< | \
+	$(CFG_PANDOC) $(HTML_OPTS) --output=$@
+
+DOCS += doc/guide-lifetimes.html
+doc/guide-lifetimes.html: $(S)doc/guide-lifetimes.md $(HTML_DEPS)
+	@$(call E, pandoc: $@)
+	$(Q)$(CFG_NODE) $(S)doc/prep.js --highlight $< | \
+	$(CFG_PANDOC) $(HTML_OPTS) --output=$@
+
+DOCS += doc/guide-tasks.html
+doc/guide-tasks.html: $(S)doc/guide-tasks.md $(HTML_DEPS)
+	@$(call E, pandoc: $@)
+	$(Q)$(CFG_NODE) $(S)doc/prep.js --highlight $< | \
+	$(CFG_PANDOC) $(HTML_OPTS) --output=$@
+
+DOCS += doc/guide-conditions.html
+doc/guide-conditions.html: $(S)doc/guide-conditions.md $(HTML_DEPS)
+	@$(call E, pandoc: $@)
+	$(Q)$(CFG_NODE) $(S)doc/prep.js --highlight $< | \
+	$(CFG_PANDOC) $(HTML_OPTS) --output=$@
+
+DOCS += doc/guide-rustpkg.html
+doc/guide-rustpkg.html: $(S)doc/guide-rustpkg.md $(HTML_DEPS)
+	@$(call E, pandoc: $@)
+	$(Q)$(CFG_NODE) $(S)doc/prep.js --highlight $< | \
+	$(CFG_PANDOC) $(HTML_OPTS) --output=$@
+
+DOCS += doc/guide-pointers.html
+doc/guide-pointers.html: $(S)doc/guide-pointers.md $(HTML_DEPS)
 	@$(call E, pandoc: $@)
 	$(Q)$(CFG_NODE) $(S)doc/prep.js --highlight $< | \
 	$(CFG_PANDOC) $(HTML_OPTS) --output=$@
@@ -232,8 +296,21 @@ doc/$(1)/index.html: $$(RUSTDOC) $$(TLIB2_T_$(3)_H_$(3))/$(CFG_STDLIB_$(3))
 DOCS += doc/$(1)/index.html
 endef
 
+define compiledoc
+doc/$(1)/index.html: $$(RUSTDOC) $$(TLIB2_T_$(3)_H_$(3))/$(CFG_STDLIB_$(3))
+	@$$(call E, rustdoc: $$@)
+	$(Q)$(RUSTDOC) --cfg stage2 $(2)
+
+CDOCS += doc/$(1)/index.html
+endef
+
 $(eval $(call libdoc,std,$(STDLIB_CRATE),$(CFG_BUILD)))
 $(eval $(call libdoc,extra,$(EXTRALIB_CRATE),$(CFG_BUILD)))
+$(eval $(call libdoc,native,$(LIBNATIVE_CRATE),$(CFG_BUILD)))
+$(eval $(call libdoc,green,$(LIBGREEN_CRATE),$(CFG_BUILD)))
+
+$(eval $(call compiledoc,rustc,$(COMPILER_CRATE),$(CFG_BUILD)))
+$(eval $(call compiledoc,syntax,$(LIBSYNTAX_CRATE),$(CFG_BUILD)))
 
 
 ifdef CFG_DISABLE_DOCS
@@ -241,21 +318,8 @@ ifdef CFG_DISABLE_DOCS
   DOCS :=
 endif
 
-
-doc/version.md: $(MKFILE_DEPS) $(wildcard $(S)doc/*.*)
-	@$(call E, version-stamp: $@)
-	$(Q)echo "$(CFG_VERSION)" >$@
-
-doc/version_info.html: version_info.html.template $(MKFILE_DEPS) \
-                       $(wildcard $(S)doc/*.*)
-	@$(call E, version-info: $@)
-	sed -e "s/VERSION/$(CFG_RELEASE)/; s/SHORT_HASH/$(shell echo \
-                    $(CFG_VER_HASH) | head -c 8)/;\
-                s/STAMP/$(CFG_VER_HASH)/;" $< >$@
-
-GENERATED += doc/version.md doc/version_info.html
-
 docs: $(DOCS)
+compiler-docs: $(CDOCS)
 
 docs-l10n: $(DOCS_L10N)
 

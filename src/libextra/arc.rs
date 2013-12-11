@@ -18,18 +18,19 @@
  * With simple pipes, without Arc, a copy would have to be made for each task.
  *
  * ```rust
- * extern mod std;
- * use extra::arc;
- * let numbers=vec::from_fn(100, |ind| (ind as float)*rand::random());
- * let shared_numbers=arc::Arc::new(numbers);
+ * use extra::arc::Arc;
+ * use std::{rand, vec};
  *
- *   do 10.times {
- *       let (port, chan)  = stream();
+ * let numbers = vec::from_fn(100, |i| (i as f32) * rand::random());
+ * let shared_numbers = Arc::new(numbers);
+ *
+ *   for _ in range(0, 10) {
+ *       let (port, chan) = Chan::new();
  *       chan.send(shared_numbers.clone());
  *
  *       do spawn {
- *           let shared_numbers=port.recv();
- *           let local_numbers=shared_numbers.get();
+ *           let shared_numbers = port.recv();
+ *           let local_numbers = shared_numbers.get();
  *
  *           // Work with the local numbers
  *       }
@@ -44,14 +45,14 @@ use sync;
 use sync::{Mutex, RWLock};
 
 use std::cast;
-use std::unstable::sync::UnsafeArc;
+use std::sync::arc::UnsafeArc;
 use std::task;
 use std::borrow;
 
 /// As sync::condvar, a mechanism for unlock-and-descheduling and signaling.
 pub struct Condvar<'a> {
     priv is_mutex: bool,
-    priv failed: &'a mut bool,
+    priv failed: &'a bool,
     priv cond: &'a sync::Condvar<'a>
 }
 
@@ -125,20 +126,6 @@ impl<T:Freeze+Send> Arc<T> {
     #[inline]
     pub fn get<'a>(&'a self) -> &'a T {
         unsafe { &*self.x.get_immut() }
-    }
-
-    /**
-     * Retrieve the data back out of the Arc. This function blocks until the
-     * reference given to it is the last existing one, and then unwrap the data
-     * instead of destroying it.
-     *
-     * If multiple tasks call unwrap, all but the first will fail. Do not call
-     * unwrap from a task that holds another reference to the same Arc; it is
-     * guaranteed to deadlock.
-     */
-    pub fn unwrap(self) -> T {
-        let Arc { x: x } = self;
-        x.unwrap()
     }
 }
 
@@ -226,7 +213,7 @@ impl<T:Send> MutexArc<T> {
         // not already unsafe. See borrow_rwlock, far below.
         (&(*state).lock).lock(|| {
             check_poison(true, (*state).failed);
-            let _z = PoisonOnFail(&mut (*state).failed);
+            let _z = PoisonOnFail::new(&mut (*state).failed);
             blk(&mut (*state).data)
         })
     }
@@ -239,28 +226,12 @@ impl<T:Send> MutexArc<T> {
         let state = self.x.get();
         (&(*state).lock).lock_cond(|cond| {
             check_poison(true, (*state).failed);
-            let _z = PoisonOnFail(&mut (*state).failed);
+            let _z = PoisonOnFail::new(&mut (*state).failed);
             blk(&mut (*state).data,
                 &Condvar {is_mutex: true,
-                          failed: &mut (*state).failed,
+                          failed: &(*state).failed,
                           cond: cond })
         })
-    }
-
-    /**
-     * Retrieves the data, blocking until all other references are dropped,
-     * exactly as arc::unwrap.
-     *
-     * Will additionally fail if another task has failed while accessing the arc.
-     */
-    pub fn unwrap(self) -> T {
-        let MutexArc { x: x } = self;
-        let inner = x.unwrap();
-        let MutexArcInner { failed: failed, data: data, .. } = inner;
-        if failed {
-            fail!("Can't unwrap poisoned MutexArc - another task failed inside!");
-        }
-        data
     }
 }
 
@@ -311,7 +282,8 @@ fn check_poison(is_mutex: bool, failed: bool) {
 
 #[doc(hidden)]
 struct PoisonOnFail {
-    failed: *mut bool,
+    flag: *mut bool,
+    failed: bool,
 }
 
 impl Drop for PoisonOnFail {
@@ -319,16 +291,19 @@ impl Drop for PoisonOnFail {
         unsafe {
             /* assert!(!*self.failed);
                -- might be false in case of cond.wait() */
-            if task::failing() {
-                *self.failed = true;
+            if !self.failed && task::failing() {
+                *self.flag = true;
             }
         }
     }
 }
 
-fn PoisonOnFail<'r>(failed: &'r mut bool) -> PoisonOnFail {
-    PoisonOnFail {
-        failed: failed
+impl PoisonOnFail {
+    fn new<'a>(flag: &'a mut bool) -> PoisonOnFail {
+        PoisonOnFail {
+            flag: flag,
+            failed: task::failing()
+        }
     }
 }
 
@@ -392,7 +367,7 @@ impl<T:Freeze + Send> RWArc<T> {
             let state = self.x.get();
             (*borrow_rwlock(state)).write(|| {
                 check_poison(false, (*state).failed);
-                let _z = PoisonOnFail(&mut (*state).failed);
+                let _z = PoisonOnFail::new(&mut (*state).failed);
                 blk(&mut (*state).data)
             })
         }
@@ -407,10 +382,10 @@ impl<T:Freeze + Send> RWArc<T> {
             let state = self.x.get();
             (*borrow_rwlock(state)).write_cond(|cond| {
                 check_poison(false, (*state).failed);
-                let _z = PoisonOnFail(&mut (*state).failed);
+                let _z = PoisonOnFail::new(&mut (*state).failed);
                 blk(&mut (*state).data,
                     &Condvar {is_mutex: false,
-                              failed: &mut (*state).failed,
+                              failed: &(*state).failed,
                               cond: cond})
             })
         }
@@ -444,15 +419,18 @@ impl<T:Freeze + Send> RWArc<T> {
      * # Example
      *
      * ```rust
-     * do arc.write_downgrade |mut write_token| {
-     *     do write_token.write_cond |state, condvar| {
-     *         ... exclusive access with mutable state ...
-     *     }
+     * use extra::arc::RWArc;
+     *
+     * let arc = RWArc::new(1);
+     * arc.write_downgrade(|mut write_token| {
+     *     write_token.write_cond(|state, condvar| {
+     *         // ... exclusive access with mutable state ...
+     *     });
      *     let read_token = arc.downgrade(write_token);
-     *     do read_token.read |state| {
-     *         ... shared access with immutable state ...
-     *     }
-     * }
+     *     read_token.read(|state| {
+     *         // ... shared access with immutable state ...
+     *     });
+     * })
      * ```
      */
     pub fn write_downgrade<U>(&self, blk: |v: RWWriteMode<T>| -> U) -> U {
@@ -463,7 +441,7 @@ impl<T:Freeze + Send> RWArc<T> {
                 blk(RWWriteMode {
                     data: &mut (*state).data,
                     token: write_mode,
-                    poison: PoisonOnFail(&mut (*state).failed)
+                    poison: PoisonOnFail::new(&mut (*state).failed)
                 })
             })
         }
@@ -494,23 +472,6 @@ impl<T:Freeze + Send> RWArc<T> {
                 token: new_token,
             }
         }
-    }
-
-    /**
-     * Retrieves the data, blocking until all other references are dropped,
-     * exactly as arc::unwrap.
-     *
-     * Will additionally fail if another task has failed while accessing the arc
-     * in write mode.
-     */
-    pub fn unwrap(self) -> T {
-        let RWArc { x: x, .. } = self;
-        let inner = x.unwrap();
-        let RWArcInner { failed: failed, data: data, .. } = inner;
-        if failed {
-            fail!("Can't unwrap poisoned RWArc - another task failed inside!")
-        }
-        data
     }
 }
 
@@ -563,7 +524,7 @@ impl<'a, T:Freeze + Send> RWWriteMode<'a, T> {
                     unsafe {
                         let cvar = Condvar {
                             is_mutex: false,
-                            failed: &mut *poison.failed,
+                            failed: &*poison.flag,
                             cond: cond
                         };
                         blk(data, &cvar)
@@ -681,22 +642,6 @@ mod tests {
         })
     }
 
-    #[test] #[should_fail]
-    pub fn test_mutex_arc_unwrap_poison() {
-        let arc = MutexArc::new(1);
-        let arc2 = ~(&arc).clone();
-        let (p, c) = Chan::new();
-        do task::spawn {
-            arc2.access(|one| {
-                c.send(());
-                assert!(*one == 2);
-            })
-        }
-        let _ = p.recv();
-        let one = arc.unwrap();
-        assert!(one == 1);
-    }
-
     #[test]
     fn test_unsafe_mutex_arc_nested() {
         unsafe {
@@ -712,6 +657,25 @@ mod tests {
                 })
             };
         }
+    }
+
+    #[test]
+    fn test_mutex_arc_access_in_unwind() {
+        let arc = MutexArc::new(1i);
+        let arc2 = arc.clone();
+        task::try::<()>(proc() {
+            struct Unwinder {
+                i: MutexArc<int>
+            }
+            impl Drop for Unwinder {
+                fn drop(&mut self) {
+                    self.i.access(|num| *num += 1);
+                }
+            }
+            let _u = Unwinder { i: arc2 };
+            fail!();
+        });
+        assert_eq!(2, arc.access(|n| *n));
     }
 
     #[test] #[should_fail]
@@ -840,6 +804,26 @@ mod tests {
             assert_eq!(*num, 10);
         })
     }
+
+    #[test]
+    fn test_rw_arc_access_in_unwind() {
+        let arc = RWArc::new(1i);
+        let arc2 = arc.clone();
+        task::try::<()>(proc() {
+            struct Unwinder {
+                i: RWArc<int>
+            }
+            impl Drop for Unwinder {
+                fn drop(&mut self) {
+                    self.i.write(|num| *num += 1);
+                }
+            }
+            let _u = Unwinder { i: arc2 };
+            fail!();
+        });
+        assert_eq!(2, arc.read(|n| *n));
+    }
+
     #[test]
     fn test_rw_downgrade() {
         // (1) A downgrader gets in write mode and does cond.wait.

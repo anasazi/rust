@@ -22,7 +22,6 @@
 
 use driver::session::Session;
 use metadata::csearch::each_lang_item;
-use metadata::cstore::iter_crate_data;
 use middle::ty::{BuiltinBound, BoundFreeze, BoundPod, BoundSend, BoundSized};
 use syntax::ast;
 use syntax::ast_util::local_def;
@@ -110,7 +109,7 @@ struct LanguageItemVisitor<'a> {
 }
 
 impl<'a> Visitor<()> for LanguageItemVisitor<'a> {
-    fn visit_item(&mut self, item: @ast::item, _: ()) {
+    fn visit_item(&mut self, item: &ast::Item, _: ()) {
         match extract(item.attrs) {
             Some(value) => {
                 let item_index = self.this.item_refs.find_equiv(&value).map(|x| *x);
@@ -165,7 +164,7 @@ impl LanguageItemCollector {
 
     pub fn collect_external_language_items(&mut self) {
         let crate_store = self.session.cstore;
-        iter_crate_data(crate_store, |crate_number, _crate_metadata| {
+        crate_store.iter_crate_data(|crate_number, _crate_metadata| {
             each_lang_item(crate_store, crate_number, |node_id, item_index| {
                 let def_id = ast::DefId { crate: crate_number, node: node_id };
                 self.collect_item(item_index, def_id);
@@ -208,7 +207,7 @@ pub fn collect_language_items(crate: &ast::Crate,
 }
 
 lets_do_this! {
-    There are 42 lang items.
+    There are 40 lang items.
 
 //  ID, Variant name,                    Name,                      Method name;
     0,  FreezeTraitLangItem,             "freeze",                  freeze_trait;
@@ -244,22 +243,22 @@ lets_do_this! {
     26, ExchangeFreeFnLangItem,          "exchange_free",           exchange_free_fn;
     27, MallocFnLangItem,                "malloc",                  malloc_fn;
     28, FreeFnLangItem,                  "free",                    free_fn;
-    29, BorrowAsImmFnLangItem,           "borrow_as_imm",           borrow_as_imm_fn;
-    30, BorrowAsMutFnLangItem,           "borrow_as_mut",           borrow_as_mut_fn;
-    31, ReturnToMutFnLangItem,           "return_to_mut",           return_to_mut_fn;
-    32, CheckNotBorrowedFnLangItem,      "check_not_borrowed",      check_not_borrowed_fn;
-    33, StrDupUniqFnLangItem,            "strdup_uniq",             strdup_uniq_fn;
-    34, RecordBorrowFnLangItem,          "record_borrow",           record_borrow_fn;
-    35, UnrecordBorrowFnLangItem,        "unrecord_borrow",         unrecord_borrow_fn;
+    29, StrDupUniqFnLangItem,            "strdup_uniq",             strdup_uniq_fn;
 
-    36, StartFnLangItem,                 "start",                   start_fn;
+    30, StartFnLangItem,                 "start",                   start_fn;
 
-    37, TyDescStructLangItem,            "ty_desc",                 ty_desc;
-    38, TyVisitorTraitLangItem,          "ty_visitor",              ty_visitor;
-    39, OpaqueStructLangItem,            "opaque",                  opaque;
+    31, TyDescStructLangItem,            "ty_desc",                 ty_desc;
+    32, TyVisitorTraitLangItem,          "ty_visitor",              ty_visitor;
+    33, OpaqueStructLangItem,            "opaque",                  opaque;
 
-    40, EventLoopFactoryLangItem,        "event_loop_factory",      event_loop_factory;
+    34, EventLoopFactoryLangItem,        "event_loop_factory",      event_loop_factory;
 
-    41, TypeIdLangItem,                  "type_id",                 type_id;
+    35, TypeIdLangItem,                  "type_id",                 type_id;
+
+    36, EhPersonalityLangItem,           "eh_personality",          eh_personality_fn;
+
+    37, ManagedHeapLangItem,             "managed_heap",            managed_heap;
+    38, ExchangeHeapLangItem,            "exchange_heap",           exchange_heap;
+    39, GcLangItem,                      "gc",                      gc;
 }
 

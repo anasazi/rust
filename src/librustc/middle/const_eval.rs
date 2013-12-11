@@ -19,7 +19,8 @@ use syntax::visit;
 use syntax::visit::Visitor;
 use syntax::ast::*;
 
-use std::hashmap::{HashMap, HashSet};
+use std::cell::RefCell;
+use std::hashmap::HashMap;
 
 //
 // This pass classifies expressions by their constant-ness.
@@ -77,11 +78,17 @@ pub fn join_all<It: Iterator<constness>>(mut cs: It) -> constness {
 }
 
 pub fn lookup_const(tcx: ty::ctxt, e: &Expr) -> Option<@Expr> {
-    match tcx.def_map.find(&e.id) {
-        Some(&ast::DefStatic(def_id, false)) =>
-            lookup_const_by_id(tcx, def_id),
-        Some(&ast::DefVariant(enum_def, variant_def, _)) =>
-            lookup_variant_by_id(tcx, enum_def, variant_def),
+    let opt_def = {
+        let def_map = tcx.def_map.borrow();
+        def_map.get().find_copy(&e.id)
+    };
+    match opt_def {
+        Some(ast::DefStatic(def_id, false)) => {
+            lookup_const_by_id(tcx, def_id)
+        }
+        Some(ast::DefVariant(enum_def, variant_def, _)) => {
+            lookup_variant_by_id(tcx, enum_def, variant_def)
+        }
         _ => None
     }
 }
@@ -90,7 +97,7 @@ pub fn lookup_variant_by_id(tcx: ty::ctxt,
                             enum_def: ast::DefId,
                             variant_def: ast::DefId)
                        -> Option<@Expr> {
-    fn variant_expr(variants: &[ast::P<ast::variant>], id: ast::NodeId) -> Option<@Expr> {
+    fn variant_expr(variants: &[ast::P<ast::Variant>], id: ast::NodeId) -> Option<@Expr> {
         for variant in variants.iter() {
             if variant.node.id == id {
                 return variant.node.disr_expr;
@@ -100,27 +107,32 @@ pub fn lookup_variant_by_id(tcx: ty::ctxt,
     }
 
     if ast_util::is_local(enum_def) {
-        match tcx.items.find(&enum_def.node) {
-            None => None,
-            Some(&ast_map::node_item(it, _)) => match it.node {
-                item_enum(ast::enum_def { variants: ref variants }, _) => {
-                    variant_expr(*variants, variant_def.node)
-                }
-                _ => None
-            },
-            Some(_) => None
+        {
+            let items = tcx.items.borrow();
+            match items.get().find(&enum_def.node) {
+                None => None,
+                Some(&ast_map::NodeItem(it, _)) => match it.node {
+                    ItemEnum(ast::EnumDef { variants: ref variants }, _) => {
+                        variant_expr(*variants, variant_def.node)
+                    }
+                    _ => None
+                },
+                Some(_) => None
+            }
         }
     } else {
-        match tcx.extern_const_variants.find(&variant_def) {
-            Some(&e) => return e,
-            None => {}
+        {
+            let extern_const_variants = tcx.extern_const_variants.borrow();
+            match extern_const_variants.get().find(&variant_def) {
+                Some(&e) => return e,
+                None => {}
+            }
         }
         let maps = astencode::Maps {
-            root_map: @mut HashMap::new(),
-            method_map: @mut HashMap::new(),
-            vtable_map: @mut HashMap::new(),
-            write_guard_map: @mut HashSet::new(),
-            capture_map: @mut HashMap::new()
+            root_map: @RefCell::new(HashMap::new()),
+            method_map: @RefCell::new(HashMap::new()),
+            vtable_map: @RefCell::new(HashMap::new()),
+            capture_map: @RefCell::new(HashMap::new())
         };
         let e = match csearch::maybe_get_item_ast(tcx, enum_def,
             |a, b, c, d| astencode::decode_inlined_item(a,
@@ -128,53 +140,67 @@ pub fn lookup_variant_by_id(tcx: ty::ctxt,
                                                         maps,
                                                         /*bad*/ c.clone(),
                                                         d)) {
-            csearch::found(ast::ii_item(item)) => match item.node {
-                item_enum(ast::enum_def { variants: ref variants }, _) => {
+            csearch::found(ast::IIItem(item)) => match item.node {
+                ItemEnum(ast::EnumDef { variants: ref variants }, _) => {
                     variant_expr(*variants, variant_def.node)
                 }
                 _ => None
             },
             _ => None
         };
-        tcx.extern_const_variants.insert(variant_def, e);
-        return e;
+        {
+            let mut extern_const_variants = tcx.extern_const_variants
+                                               .borrow_mut();
+            extern_const_variants.get().insert(variant_def, e);
+            return e;
+        }
     }
 }
 
-pub fn lookup_const_by_id(tcx: ty::ctxt,
-                          def_id: ast::DefId)
-                       -> Option<@Expr> {
+pub fn lookup_const_by_id(tcx: ty::ctxt, def_id: ast::DefId)
+                          -> Option<@Expr> {
     if ast_util::is_local(def_id) {
-        match tcx.items.find(&def_id.node) {
-            None => None,
-            Some(&ast_map::node_item(it, _)) => match it.node {
-                item_static(_, ast::MutImmutable, const_expr) => Some(const_expr),
-                _ => None
-            },
-            Some(_) => None
+        {
+            let items = tcx.items.borrow();
+            match items.get().find(&def_id.node) {
+                None => None,
+                Some(&ast_map::NodeItem(it, _)) => match it.node {
+                    ItemStatic(_, ast::MutImmutable, const_expr) => {
+                        Some(const_expr)
+                    }
+                    _ => None
+                },
+                Some(_) => None
+            }
         }
     } else {
-        match tcx.extern_const_statics.find(&def_id) {
-            Some(&e) => return e,
-            None => {}
+        {
+            let extern_const_statics = tcx.extern_const_statics.borrow();
+            match extern_const_statics.get().find(&def_id) {
+                Some(&e) => return e,
+                None => {}
+            }
         }
         let maps = astencode::Maps {
-            root_map: @mut HashMap::new(),
-            method_map: @mut HashMap::new(),
-            vtable_map: @mut HashMap::new(),
-            write_guard_map: @mut HashSet::new(),
-            capture_map: @mut HashMap::new()
+            root_map: @RefCell::new(HashMap::new()),
+            method_map: @RefCell::new(HashMap::new()),
+            vtable_map: @RefCell::new(HashMap::new()),
+            capture_map: @RefCell::new(HashMap::new())
         };
         let e = match csearch::maybe_get_item_ast(tcx, def_id,
             |a, b, c, d| astencode::decode_inlined_item(a, b, maps, c, d)) {
-            csearch::found(ast::ii_item(item)) => match item.node {
-                item_static(_, ast::MutImmutable, const_expr) => Some(const_expr),
+            csearch::found(ast::IIItem(item)) => match item.node {
+                ItemStatic(_, ast::MutImmutable, const_expr) => Some(const_expr),
                 _ => None
             },
             _ => None
         };
-        tcx.extern_const_statics.insert(def_id, e);
-        return e;
+        {
+            let mut extern_const_statics = tcx.extern_const_statics
+                                              .borrow_mut();
+            extern_const_statics.get().insert(def_id, e);
+            return e;
+        }
     }
 }
 
@@ -193,7 +219,7 @@ impl ConstEvalVisitor {
         let cn = match e.node {
             ast::ExprLit(lit) => {
                 match lit.node {
-                    ast::lit_str(..) | ast::lit_float(..) => general_const,
+                    ast::LitStr(..) | ast::LitFloat(..) => general_const,
                     _ => integral_const
                 }
             }
@@ -213,7 +239,6 @@ impl ConstEvalVisitor {
                     ast::ExprVstoreSlice => self.classify(e),
                     ast::ExprVstoreUniq |
                     ast::ExprVstoreBox |
-                    ast::ExprVstoreMutBox |
                     ast::ExprVstoreMutSlice => non_const
                 }
             }
@@ -271,7 +296,7 @@ impl ConstEvalVisitor {
 }
 
 impl Visitor<()> for ConstEvalVisitor {
-    fn visit_expr_post(&mut self, e:@Expr, _:()) {
+    fn visit_expr_post(&mut self, e: &Expr, _: ()) {
         self.classify(e);
     }
 }
@@ -472,19 +497,19 @@ pub fn eval_const_expr_partial<T: ty::ExprTyProvider>(tcx: &T, e: &Expr)
     }
 }
 
-pub fn lit_to_const(lit: &lit) -> const_val {
+pub fn lit_to_const(lit: &Lit) -> const_val {
     match lit.node {
-      lit_str(s, _) => const_str(s),
-      lit_binary(data) => const_binary(data),
-      lit_char(n) => const_uint(n as u64),
-      lit_int(n, _) => const_int(n),
-      lit_uint(n, _) => const_uint(n),
-      lit_int_unsuffixed(n) => const_int(n),
-      lit_float(n, _) => const_float(from_str::<f64>(n).unwrap() as f64),
-      lit_float_unsuffixed(n) =>
-        const_float(from_str::<f64>(n).unwrap() as f64),
-      lit_nil => const_int(0i64),
-      lit_bool(b) => const_bool(b)
+        LitStr(s, _) => const_str(s),
+        LitBinary(data) => const_binary(data),
+        LitChar(n) => const_uint(n as u64),
+        LitInt(n, _) => const_int(n),
+        LitUint(n, _) => const_uint(n),
+        LitIntUnsuffixed(n) => const_int(n),
+        LitFloat(n, _) => const_float(from_str::<f64>(n).unwrap() as f64),
+        LitFloatUnsuffixed(n) =>
+            const_float(from_str::<f64>(n).unwrap() as f64),
+        LitNil => const_int(0i64),
+        LitBool(b) => const_bool(b)
     }
 }
 
@@ -510,6 +535,6 @@ pub fn lit_expr_eq(tcx: middle::ty::ctxt, a: &Expr, b: &Expr) -> Option<bool> {
     compare_lit_exprs(tcx, a, b).map(|val| val == 0)
 }
 
-pub fn lit_eq(a: &lit, b: &lit) -> Option<bool> {
+pub fn lit_eq(a: &Lit, b: &Lit) -> Option<bool> {
     compare_const_vals(&lit_to_const(a), &lit_to_const(b)).map(|val| val == 0)
 }

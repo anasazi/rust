@@ -10,6 +10,7 @@
 
 // rustpkg unit tests
 
+use CtxMethods;
 use context::{BuildContext, Context, RustcFlags};
 use std::{os, run, str, task};
 use std::io;
@@ -24,7 +25,7 @@ use extra::treemap::TreeMap;
 use extra::getopts::groups::getopts;
 use std::run::ProcessOutput;
 use installed_packages::list_installed_packages;
-use package_id::{PkgId};
+use crate_id::{CrateId};
 use version::{ExactRevision, NoVersion, Version, Tagged};
 use path_util::{target_executable_in_workspace, target_test_in_workspace,
                target_bench_in_workspace, make_dir_rwx,
@@ -33,7 +34,7 @@ use path_util::{target_executable_in_workspace, target_test_in_workspace,
                built_library_in_workspace, built_executable_in_workspace, target_build_dir,
                chmod_read_only, platform_library_name};
 use rustc::back::link::get_cc_prog;
-use rustc::metadata::filesearch::rust_path;
+use rustc::metadata::filesearch::{rust_path, libdir, rustlibdir};
 use rustc::driver::session;
 use rustc::driver::driver::{build_session, build_session_options, host_triple, optgroups};
 use syntax::diagnostic;
@@ -54,30 +55,30 @@ fn fake_ctxt(sysroot: Path, workspace: &Path) -> BuildContext {
             rustc_flags: RustcFlags::default(),
 
             use_rust_path_hack: false,
-            sysroot: sysroot
-        }
+        },
+        sysroot: sysroot
     }
 }
 
-fn fake_pkg() -> PkgId {
+fn fake_pkg() -> CrateId {
     let sn = ~"bogus";
-    PkgId {
+    CrateId {
         path: Path::new(sn.as_slice()),
         short_name: sn,
         version: NoVersion
     }
 }
 
-fn git_repo_pkg() -> PkgId {
-    PkgId {
+fn git_repo_pkg() -> CrateId {
+    CrateId {
         path: Path::new("mockgithub.com/catamorphism/test-pkg"),
         short_name: ~"test-pkg",
         version: NoVersion
     }
 }
 
-fn git_repo_pkg_with_tag(a_tag: ~str) -> PkgId {
-    PkgId {
+fn git_repo_pkg_with_tag(a_tag: ~str) -> CrateId {
+    CrateId {
         path: Path::new("mockgithub.com/catamorphism/test-pkg"),
         short_name: ~"test-pkg",
         version: Tagged(a_tag)
@@ -220,7 +221,7 @@ fn test_sysroot() -> Path {
 fn rustpkg_exec() -> Path {
     // Ugh
     let first_try = test_sysroot().join_many(
-        [~"lib", ~"rustc", host_triple(), ~"bin", ~"rustpkg"]);
+        [libdir(), rustlibdir(), host_triple(), ~"bin", ~"rustpkg"]);
     if is_executable(&first_try) {
         first_try
     }
@@ -302,15 +303,16 @@ fn command_line_test_with_env(args: &[~str], cwd: &Path, env: Option<~[(~str, ~s
     }
 }
 
-fn create_local_package(pkgid: &PkgId) -> TempDir {
-    let (workspace, parent_dir) = mk_temp_workspace(&pkgid.path, &pkgid.version);
-    debug!("Created empty package dir for {}, returning {}", pkgid.to_str(), parent_dir.display());
+fn create_local_package(crateid: &CrateId) -> TempDir {
+    let (workspace, parent_dir) = mk_temp_workspace(&crateid.path, &crateid.version);
+    debug!("Created empty package dir for {}, returning {}", crateid.to_str(),
+           parent_dir.display());
     workspace
 }
 
-fn create_local_package_in(pkgid: &PkgId, pkgdir: &Path) -> Path {
+fn create_local_package_in(crateid: &CrateId, pkgdir: &Path) -> Path {
 
-    let package_dir = pkgdir.join_many([~"src", pkgid.to_str()]);
+    let package_dir = pkgdir.join_many([~"src", crateid.to_str()]);
 
     // Create main, lib, test, and bench files
     fs::mkdir_recursive(&package_dir, io::UserRWX);
@@ -329,29 +331,29 @@ fn create_local_package_in(pkgid: &PkgId, pkgdir: &Path) -> Path {
     package_dir
 }
 
-fn create_local_package_with_test(pkgid: &PkgId) -> TempDir {
-    debug!("Dry run -- would create package {:?} with test", pkgid);
-    create_local_package(pkgid) // Already has tests???
+fn create_local_package_with_test(crateid: &CrateId) -> TempDir {
+    debug!("Dry run -- would create package {:?} with test", crateid);
+    create_local_package(crateid) // Already has tests???
 }
 
-fn create_local_package_with_dep(pkgid: &PkgId, subord_pkgid: &PkgId) -> TempDir {
-    let package_dir = create_local_package(pkgid);
-    create_local_package_in(subord_pkgid, package_dir.path());
-    // Write a main.rs file into pkgid that references subord_pkgid
-    writeFile(&package_dir.path().join_many([~"src", pkgid.to_str(), ~"main.rs"]),
+fn create_local_package_with_dep(crateid: &CrateId, subord_crateid: &CrateId) -> TempDir {
+    let package_dir = create_local_package(crateid);
+    create_local_package_in(subord_crateid, package_dir.path());
+    // Write a main.rs file into crateid that references subord_crateid
+    writeFile(&package_dir.path().join_many([~"src", crateid.to_str(), ~"main.rs"]),
               format!("extern mod {};\nfn main() \\{\\}",
-                   subord_pkgid.short_name));
-    // Write a lib.rs file into subord_pkgid that has something in it
-    writeFile(&package_dir.path().join_many([~"src", subord_pkgid.to_str(), ~"lib.rs"]),
+                   subord_crateid.short_name));
+    // Write a lib.rs file into subord_crateid that has something in it
+    writeFile(&package_dir.path().join_many([~"src", subord_crateid.to_str(), ~"lib.rs"]),
               "pub fn f() {}");
     package_dir
 }
 
-fn create_local_package_with_custom_build_hook(pkgid: &PkgId,
+fn create_local_package_with_custom_build_hook(crateid: &CrateId,
                                                custom_build_hook: &str) -> TempDir {
     debug!("Dry run -- would create package {} with custom build hook {}",
-           pkgid.to_str(), custom_build_hook);
-    create_local_package(pkgid)
+           crateid.to_str(), custom_build_hook);
+    create_local_package(crateid)
     // actually write the pkg.rs with the custom build hook
 
 }
@@ -376,18 +378,18 @@ fn assert_executable_exists(repo: &Path, short_name: &str) {
 
 fn executable_exists(repo: &Path, short_name: &str) -> bool {
     debug!("executable_exists: repo = {}, short_name = {}", repo.display(), short_name);
-    let exec = target_executable_in_workspace(&PkgId::new(short_name), repo);
+    let exec = target_executable_in_workspace(&CrateId::new(short_name), repo);
     exec.exists() && is_rwx(&exec)
 }
 
 fn test_executable_exists(repo: &Path, short_name: &str) -> bool {
     debug!("test_executable_exists: repo = {}, short_name = {}", repo.display(), short_name);
-    let exec = built_test_in_workspace(&PkgId::new(short_name), repo);
-    exec.map_default(false, |exec| exec.exists() && is_rwx(&exec))
+    let exec = built_test_in_workspace(&CrateId::new(short_name), repo);
+    exec.map_or(false, |exec| exec.exists() && is_rwx(&exec))
 }
 
-fn remove_executable_file(p: &PkgId, workspace: &Path) {
-    let exec = target_executable_in_workspace(&PkgId::new(p.short_name), workspace);
+fn remove_executable_file(p: &CrateId, workspace: &Path) {
+    let exec = target_executable_in_workspace(&CrateId::new(p.short_name), workspace);
     if exec.exists() {
         fs::unlink(&exec);
     }
@@ -400,15 +402,15 @@ fn assert_built_executable_exists(repo: &Path, short_name: &str) {
 fn built_executable_exists(repo: &Path, short_name: &str) -> bool {
     debug!("assert_built_executable_exists: repo = {}, short_name = {}",
             repo.display(), short_name);
-    let exec = built_executable_in_workspace(&PkgId::new(short_name), repo);
+    let exec = built_executable_in_workspace(&CrateId::new(short_name), repo);
     exec.is_some() && {
        let execname = exec.get_ref();
        execname.exists() && is_rwx(execname)
     }
 }
 
-fn remove_built_executable_file(p: &PkgId, workspace: &Path) {
-    let exec = built_executable_in_workspace(&PkgId::new(p.short_name), workspace);
+fn remove_built_executable_file(p: &CrateId, workspace: &Path) {
+    let exec = built_executable_in_workspace(&CrateId::new(p.short_name), workspace);
     match exec {
         Some(r) => fs::unlink(&r),
         None    => ()
@@ -443,7 +445,7 @@ fn assert_built_library_exists(repo: &Path, short_name: &str) {
 
 fn built_library_exists(repo: &Path, short_name: &str) -> bool {
     debug!("assert_built_library_exists: repo = {}, short_name = {}", repo.display(), short_name);
-    let lib = built_library_in_workspace(&PkgId::new(short_name), repo);
+    let lib = built_library_in_workspace(&CrateId::new(short_name), repo);
     lib.is_some() && {
         let libname = lib.get_ref();
         libname.exists() && is_rwx(libname)
@@ -487,14 +489,15 @@ fn lib_output_file_name(workspace: &Path, short_name: &str) -> Path {
 }
 
 fn output_file_name(workspace: &Path, short_name: ~str) -> Path {
-    target_build_dir(workspace).join(short_name.as_slice()).join(format!("{}{}", short_name,
-                                                                         os::EXE_SUFFIX))
+    target_build_dir(workspace).join(short_name.as_slice())
+                               .join(format!("{}{}", short_name,
+                                             os::consts::EXE_SUFFIX))
 }
 
 #[cfg(target_os = "linux")]
-fn touch_source_file(workspace: &Path, pkgid: &PkgId) {
+fn touch_source_file(workspace: &Path, crateid: &CrateId) {
     use conditions::bad_path::cond;
-    let pkg_src_dir = workspace.join_many([~"src", pkgid.to_str()]);
+    let pkg_src_dir = workspace.join_many([~"src", crateid.to_str()]);
     let contents = fs::readdir(&pkg_src_dir);
     for p in contents.iter() {
         if p.extension_str() == Some("rs") {
@@ -512,9 +515,9 @@ fn touch_source_file(workspace: &Path, pkgid: &PkgId) {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn touch_source_file(workspace: &Path, pkgid: &PkgId) {
+fn touch_source_file(workspace: &Path, crateid: &CrateId) {
     use conditions::bad_path::cond;
-    let pkg_src_dir = workspace.join_many([~"src", pkgid.to_str()]);
+    let pkg_src_dir = workspace.join_many([~"src", crateid.to_str()]);
     let contents = fs::readdir(&pkg_src_dir);
     for p in contents.iter() {
         if p.extension_str() == Some("rs") {
@@ -531,9 +534,9 @@ fn touch_source_file(workspace: &Path, pkgid: &PkgId) {
 }
 
 /// Add a comment at the end
-fn frob_source_file(workspace: &Path, pkgid: &PkgId, filename: &str) {
+fn frob_source_file(workspace: &Path, crateid: &CrateId, filename: &str) {
     use conditions::bad_path::cond;
-    let pkg_src_dir = workspace.join_many([~"src", pkgid.to_str()]);
+    let pkg_src_dir = workspace.join_many([~"src", crateid.to_str()]);
     let mut maybe_p = None;
     let maybe_file = pkg_src_dir.join(filename);
     debug!("Trying to frob {} -- {}", pkg_src_dir.display(), filename);
@@ -598,8 +601,8 @@ fn test_install_valid() {
 
     let lib = installed_library_in_workspace(&temp_pkg_id.path, temp_workspace);
     debug!("lib = {:?}", lib);
-    assert!(lib.as_ref().map_default(false, |l| l.exists()));
-    assert!(lib.as_ref().map_default(false, |l| is_rwx(l)));
+    assert!(lib.as_ref().map_or(false, |l| l.exists()));
+    assert!(lib.as_ref().map_or(false, |l| is_rwx(l)));
 
     // And that the test and bench executables aren't installed
     assert!(!target_test_in_workspace(&temp_pkg_id, temp_workspace).exists());
@@ -617,7 +620,7 @@ fn test_install_valid() {
 #[ignore]
 fn test_install_invalid() {
     let sysroot = test_sysroot();
-    let pkgid = fake_pkg();
+    let crateid = fake_pkg();
     let temp_workspace = TempDir::new("test").expect("couldn't create temp dir");
     let temp_workspace = temp_workspace.path().clone();
     let ctxt = fake_ctxt(sysroot, &temp_workspace);
@@ -627,7 +630,7 @@ fn test_install_invalid() {
         let pkg_src = PkgSrc::new(temp_workspace.clone(),
                                   temp_workspace.clone(),
                                   false,
-                                  pkgid.clone());
+                                  crateid.clone());
         ctxt.install(pkg_src, &WhatToBuild::new(MaybeCustom, Everything));
     };
     assert!(result.unwrap_err()
@@ -636,7 +639,7 @@ fn test_install_invalid() {
 
 #[test]
 fn test_install_valid_external() {
-    let temp_pkg_id = PkgId::new("foo");
+    let temp_pkg_id = CrateId::new("foo");
     let (tempdir, _) = mk_temp_workspace(&temp_pkg_id.path,
                                          &temp_pkg_id.version);
     let temp_workspace = tempdir.path();
@@ -650,8 +653,8 @@ fn test_install_valid_external() {
 
     let lib = installed_library_in_workspace(&temp_pkg_id.path, temp_workspace);
     debug!("lib = {:?}", lib);
-    assert!(lib.as_ref().map_default(false, |l| l.exists()));
-    assert!(lib.as_ref().map_default(false, |l| is_rwx(l)));
+    assert!(lib.as_ref().map_or(false, |l| l.exists()));
+    assert!(lib.as_ref().map_or(false, |l| is_rwx(l)));
 
     // And that the test and bench executables aren't installed
     assert!(!target_test_in_workspace(&temp_pkg_id, temp_workspace).exists());
@@ -723,7 +726,7 @@ fn test_install_git() {
 }
 
 #[test]
-fn test_package_ids_must_be_relative_path_like() {
+fn test_crate_ids_must_be_relative_path_like() {
     use conditions::bad_pkg_id::cond;
 
     /*
@@ -737,30 +740,30 @@ fn test_package_ids_must_be_relative_path_like() {
 
     */
 
-    let whatever = PkgId::new("foo");
+    let whatever = CrateId::new("foo");
 
     assert_eq!(~"foo-0.0", whatever.to_str());
     assert!("github.com/catamorphism/test-pkg-0.0" ==
-            PkgId::new("github.com/catamorphism/test-pkg").to_str());
+            CrateId::new("github.com/catamorphism/test-pkg").to_str());
 
     cond.trap(|(p, e)| {
         assert!(p.filename().is_none())
-        assert!("0-length pkgid" == e);
+        assert!("0-length crate_id" == e);
         whatever.clone()
     }).inside(|| {
-        let x = PkgId::new("");
+        let x = CrateId::new("");
         assert_eq!(~"foo-0.0", x.to_str());
     });
 
     cond.trap(|(p, e)| {
         let abs = os::make_absolute(&Path::new("foo/bar/quux"));
         assert_eq!(p, abs);
-        assert!("absolute pkgid" == e);
+        assert!("absolute crate_id" == e);
         whatever.clone()
     }).inside(|| {
         let zp = os::make_absolute(&Path::new("foo/bar/quux"));
         // FIXME (#9639): This needs to handle non-utf8 paths
-        let z = PkgId::new(zp.as_str().unwrap());
+        let z = CrateId::new(zp.as_str().unwrap());
         assert_eq!(~"foo-0.0", z.to_str());
     })
 }
@@ -784,7 +787,7 @@ fn test_package_version() {
     add_git_tag(&repo_subdir, ~"0.4");
 
     // It won't pick up the 0.4 version because the dir isn't in the RUST_PATH, but...
-    let temp_pkg_id = PkgId::new("mockgithub.com/catamorphism/test_pkg_version");
+    let temp_pkg_id = CrateId::new("mockgithub.com/catamorphism/test_pkg_version");
     // This should look at the prefix, clone into a workspace, then build.
     command_line_test([~"install", ~"mockgithub.com/catamorphism/test_pkg_version"],
                       repo);
@@ -836,7 +839,7 @@ fn test_package_request_version() {
         }
         None    => false
     });
-    let temp_pkg_id = PkgId::new("mockgithub.com/catamorphism/test_pkg_version#0.3");
+    let temp_pkg_id = CrateId::new("mockgithub.com/catamorphism/test_pkg_version#0.3");
     assert!(target_executable_in_workspace(&temp_pkg_id, &repo.join(".rust"))
             == repo.join_many([".rust", "bin", "test_pkg_version"]));
 
@@ -879,7 +882,7 @@ fn rustpkg_library_target() {
 
 #[test]
 fn rustpkg_local_pkg() {
-    let dir = create_local_package(&PkgId::new("foo"));
+    let dir = create_local_package(&CrateId::new("foo"));
     command_line_test([~"install", ~"foo"], dir.path());
     assert_executable_exists(dir.path(), "foo");
 }
@@ -887,7 +890,7 @@ fn rustpkg_local_pkg() {
 #[test]
 #[ignore(reason="busted")]
 fn package_script_with_default_build() {
-    let dir = create_local_package(&PkgId::new("fancy-lib"));
+    let dir = create_local_package(&CrateId::new("fancy-lib"));
     let dir = dir.path();
     debug!("dir = {}", dir.display());
     let mut source = test_sysroot().dir_path();
@@ -944,8 +947,8 @@ fn rustpkg_clean_no_arg() {
     command_line_test([~"build"], &package_dir);
     assert_built_executable_exists(&tmp, "foo");
     command_line_test([~"clean"], &package_dir);
-    let res = built_executable_in_workspace(&PkgId::new("foo"), &tmp);
-    assert!(!res.as_ref().map_default(false, |m| m.exists()));
+    let res = built_executable_in_workspace(&CrateId::new("foo"), &tmp);
+    assert!(!res.as_ref().map_or(false, |m| m.exists()));
 }
 
 #[test]
@@ -1002,11 +1005,11 @@ fn rust_path_parse() {
 fn test_list() {
     let dir = TempDir::new("test_list").expect("test_list failed");
     let dir = dir.path();
-    let foo = PkgId::new("foo");
+    let foo = CrateId::new("foo");
     create_local_package_in(&foo, dir);
-    let bar = PkgId::new("bar");
+    let bar = CrateId::new("bar");
     create_local_package_in(&bar, dir);
-    let quux = PkgId::new("quux");
+    let quux = CrateId::new("quux");
     create_local_package_in(&quux, dir);
 
 // list doesn't output very much right now...
@@ -1032,9 +1035,9 @@ fn test_list() {
 fn install_remove() {
     let dir = TempDir::new("install_remove").expect("install_remove");
     let dir = dir.path();
-    let foo = PkgId::new("foo");
-    let bar = PkgId::new("bar");
-    let quux = PkgId::new("quux");
+    let foo = CrateId::new("foo");
+    let bar = CrateId::new("bar");
+    let quux = CrateId::new("quux");
     create_local_package_in(&foo, dir);
     create_local_package_in(&bar, dir);
     create_local_package_in(&quux, dir);
@@ -1061,13 +1064,13 @@ fn install_check_duplicates() {
     // check invariant that there are no dups in the pkg database
     let dir = TempDir::new("install_remove").expect("install_remove");
     let dir = dir.path();
-    let foo = PkgId::new("foo");
+    let foo = CrateId::new("foo");
     create_local_package_in(&foo, dir);
 
     command_line_test([~"install", ~"foo"], dir);
     command_line_test([~"install", ~"foo"], dir);
     let mut contents = ~[];
-    let check_dups = |p: &PkgId| {
+    let check_dups = |p: &CrateId| {
         if contents.contains(p) {
             fail!("package {} appears in `list` output more than once", p.path.display());
         }
@@ -1081,7 +1084,7 @@ fn install_check_duplicates() {
 
 #[test]
 fn no_rebuilding() {
-    let p_id = PkgId::new("foo");
+    let p_id = CrateId::new("foo");
     let workspace = create_local_package(&p_id);
     let workspace = workspace.path();
     command_line_test([~"build", ~"foo"], workspace);
@@ -1102,7 +1105,7 @@ fn no_rebuilding() {
 #[test]
 #[ignore]
 fn no_recopying() {
-    let p_id = PkgId::new("foo");
+    let p_id = CrateId::new("foo");
     let workspace = create_local_package(&p_id);
     let workspace = workspace.path();
     command_line_test([~"install", ~"foo"], workspace);
@@ -1121,8 +1124,8 @@ fn no_recopying() {
 
 #[test]
 fn no_rebuilding_dep() {
-    let p_id = PkgId::new("foo");
-    let dep_id = PkgId::new("bar");
+    let p_id = CrateId::new("foo");
+    let dep_id = CrateId::new("bar");
     let workspace = create_local_package_with_dep(&p_id, &dep_id);
     let workspace = workspace.path();
     command_line_test([~"build", ~"foo"], workspace);
@@ -1140,8 +1143,8 @@ fn no_rebuilding_dep() {
 
 #[test]
 fn do_rebuild_dep_dates_change() {
-    let p_id = PkgId::new("foo");
-    let dep_id = PkgId::new("bar");
+    let p_id = CrateId::new("foo");
+    let dep_id = CrateId::new("bar");
     let workspace = create_local_package_with_dep(&p_id, &dep_id);
     let workspace = workspace.path();
     command_line_test([~"build", ~"foo"], workspace);
@@ -1160,8 +1163,8 @@ fn do_rebuild_dep_dates_change() {
 
 #[test]
 fn do_rebuild_dep_only_contents_change() {
-    let p_id = PkgId::new("foo");
-    let dep_id = PkgId::new("bar");
+    let p_id = CrateId::new("foo");
+    let dep_id = CrateId::new("bar");
     let workspace = create_local_package_with_dep(&p_id, &dep_id);
     let workspace = workspace.path();
     command_line_test([~"build", ~"foo"], workspace);
@@ -1181,8 +1184,8 @@ fn do_rebuild_dep_only_contents_change() {
 
 #[test]
 fn test_versions() {
-    let workspace = create_local_package(&PkgId::new("foo#0.1"));
-    let _other_workspace = create_local_package(&PkgId::new("foo#0.2"));
+    let workspace = create_local_package(&CrateId::new("foo#0.1"));
+    let _other_workspace = create_local_package(&CrateId::new("foo#0.2"));
     command_line_test([~"install", ~"foo#0.1"], workspace.path());
     let output = command_line_test_output([~"list"]);
     // make sure output includes versions
@@ -1192,7 +1195,7 @@ fn test_versions() {
 #[test]
 #[ignore(reason = "do not yet implemented")]
 fn test_build_hooks() {
-    let workspace = create_local_package_with_custom_build_hook(&PkgId::new("foo"),
+    let workspace = create_local_package_with_custom_build_hook(&CrateId::new("foo"),
                                                                 "frob");
     command_line_test([~"do", ~"foo", ~"frob"], workspace.path());
 }
@@ -1202,14 +1205,14 @@ fn test_build_hooks() {
 #[ignore(reason = "info not yet implemented")]
 fn test_info() {
     let expected_info = ~"package foo"; // fill in
-    let workspace = create_local_package(&PkgId::new("foo"));
+    let workspace = create_local_package(&CrateId::new("foo"));
     let output = command_line_test([~"info", ~"foo"], workspace.path());
     assert_eq!(str::from_utf8_owned(output.output), expected_info);
 }
 
 #[test]
 fn test_uninstall() {
-    let workspace = create_local_package(&PkgId::new("foo"));
+    let workspace = create_local_package(&CrateId::new("foo"));
     command_line_test([~"uninstall", ~"foo"], workspace.path());
     let output = command_line_test([~"list"], workspace.path());
     assert!(!str::from_utf8(output.output).contains("foo"));
@@ -1345,7 +1348,7 @@ fn test_extern_mod_simpler() {
 
 #[test]
 fn test_import_rustpkg() {
-    let p_id = PkgId::new("foo");
+    let p_id = CrateId::new("foo");
     let workspace = create_local_package(&p_id);
     let workspace = workspace.path();
     writeFile(&workspace.join_many(["src", "foo-0.0", "pkg.rs"]),
@@ -1353,12 +1356,12 @@ fn test_import_rustpkg() {
     command_line_test([~"build", ~"foo"], workspace);
     debug!("workspace = {}", workspace.display());
     assert!(target_build_dir(workspace).join("foo").join(format!("pkg{}",
-        os::EXE_SUFFIX)).exists());
+        os::consts::EXE_SUFFIX)).exists());
 }
 
 #[test]
 fn test_macro_pkg_script() {
-    let p_id = PkgId::new("foo");
+    let p_id = CrateId::new("foo");
     let workspace = create_local_package(&p_id);
     let workspace = workspace.path();
     writeFile(&workspace.join_many(["src", "foo-0.0", "pkg.rs"]),
@@ -1366,7 +1369,7 @@ fn test_macro_pkg_script() {
     command_line_test([~"build", ~"foo"], workspace);
     debug!("workspace = {}", workspace.display());
     assert!(target_build_dir(workspace).join("foo").join(format!("pkg{}",
-        os::EXE_SUFFIX)).exists());
+        os::consts::EXE_SUFFIX)).exists());
 }
 
 #[test]
@@ -1385,7 +1388,7 @@ fn multiple_workspaces() {
     // FIXME (#9639): This needs to handle non-utf8 paths
     let env = Some(~[(~"RUST_PATH", format!("{}:{}", a_loc.as_str().unwrap(),
                                             b_loc.as_str().unwrap()))]);
-    let c_loc = create_local_package_with_dep(&PkgId::new("bar"), &PkgId::new("foo"));
+    let c_loc = create_local_package_with_dep(&CrateId::new("bar"), &CrateId::new("foo"));
     command_line_test_with_env([~"install", ~"bar"], c_loc.path(), env);
 }
 
@@ -1398,7 +1401,7 @@ fn rust_path_hack_test(hack_flag: bool) {
       make sure built files for foo are in B
       make sure nothing gets built into A or A/../build[lib,bin]
 */
-   let p_id = PkgId::new("foo");
+   let p_id = CrateId::new("foo");
    let workspace = create_local_package(&p_id);
    let workspace = workspace.path();
    let dest_workspace = mk_empty_workspace(&Path::new("bar"), &NoVersion, "dest_workspace");
@@ -1523,8 +1526,8 @@ fn rust_path_hack_build_no_arg() {
 
 #[test]
 fn rust_path_hack_build_with_dependency() {
-    let foo_id = PkgId::new("foo");
-    let dep_id = PkgId::new("dep");
+    let foo_id = CrateId::new("foo");
+    let dep_id = CrateId::new("dep");
     // Tests that when --rust-path-hack is in effect, dependencies get built
     // into the destination workspace and not the source directory
     let work_dir = create_local_package(&foo_id);
@@ -1572,7 +1575,7 @@ fn rust_path_install_target() {
 
 #[test]
 fn sysroot_flag() {
-    let p_id = PkgId::new("foo");
+    let p_id = CrateId::new("foo");
     let workspace = create_local_package(&p_id);
     let workspace = workspace.path();
     // no-op sysroot setting; I'm not sure how else to test this
@@ -1588,7 +1591,7 @@ fn sysroot_flag() {
 
 #[test]
 fn compile_flag_build() {
-    let p_id = PkgId::new("foo");
+    let p_id = CrateId::new("foo");
     let workspace = create_local_package(&p_id);
     let workspace = workspace.path();
     let test_sys = test_sysroot();
@@ -1605,7 +1608,7 @@ fn compile_flag_build() {
 #[test]
 fn compile_flag_fail() {
     // --no-link shouldn't be accepted for install
-    let p_id = PkgId::new("foo");
+    let p_id = CrateId::new("foo");
     let workspace = create_local_package(&p_id);
     let workspace = workspace.path();
     let test_sys = test_sysroot();
@@ -1621,7 +1624,7 @@ fn compile_flag_fail() {
 
 #[test]
 fn notrans_flag_build() {
-    let p_id = PkgId::new("foo");
+    let p_id = CrateId::new("foo");
     let workspace = create_local_package(&p_id);
     let workspace = workspace.path();
     let flags_to_test = [~"--no-trans", ~"--parse-only",
@@ -1646,7 +1649,7 @@ fn notrans_flag_build() {
 #[test]
 fn notrans_flag_fail() {
     // --no-trans shouldn't be accepted for install
-    let p_id = PkgId::new("foo");
+    let p_id = CrateId::new("foo");
     let workspace = create_local_package(&p_id);
     let workspace = workspace.path();
     let flags_to_test = [~"--no-trans", ~"--parse-only",
@@ -1667,7 +1670,7 @@ fn notrans_flag_fail() {
 
 #[test]
 fn dash_S() {
-    let p_id = PkgId::new("foo");
+    let p_id = CrateId::new("foo");
     let workspace = create_local_package(&p_id);
     let workspace = workspace.path();
     let test_sys = test_sysroot();
@@ -1684,7 +1687,7 @@ fn dash_S() {
 
 #[test]
 fn dash_S_fail() {
-    let p_id = PkgId::new("foo");
+    let p_id = CrateId::new("foo");
     let workspace = create_local_package(&p_id);
     let workspace = workspace.path();
     let test_sys = test_sysroot();
@@ -1701,7 +1704,7 @@ fn dash_S_fail() {
 
 #[test]
 fn test_cfg_build() {
-    let p_id = PkgId::new("foo");
+    let p_id = CrateId::new("foo");
     let workspace = create_local_package(&p_id);
     let workspace = workspace.path();
     // If the cfg flag gets messed up, this won't compile
@@ -1720,7 +1723,7 @@ fn test_cfg_build() {
 
 #[test]
 fn test_cfg_fail() {
-    let p_id = PkgId::new("foo");
+    let p_id = CrateId::new("foo");
     let workspace = create_local_package(&p_id);
     let workspace = workspace.path();
     writeFile(&workspace.join_many(["src", "foo-0.0", "main.rs"]),
@@ -1739,7 +1742,7 @@ fn test_cfg_fail() {
 
 #[test]
 fn test_emit_llvm_S_build() {
-    let p_id = PkgId::new("foo");
+    let p_id = CrateId::new("foo");
     let workspace = create_local_package(&p_id);
     let workspace = workspace.path();
     let test_sys = test_sysroot();
@@ -1757,7 +1760,7 @@ fn test_emit_llvm_S_build() {
 
 #[test]
 fn test_emit_llvm_S_fail() {
-    let p_id = PkgId::new("foo");
+    let p_id = CrateId::new("foo");
     let workspace = create_local_package(&p_id);
     let workspace = workspace.path();
     let test_sys = test_sysroot();
@@ -1777,7 +1780,7 @@ fn test_emit_llvm_S_fail() {
 
 #[test]
 fn test_emit_llvm_build() {
-    let p_id = PkgId::new("foo");
+    let p_id = CrateId::new("foo");
     let workspace = create_local_package(&p_id);
     let workspace = workspace.path();
     let test_sys = test_sysroot();
@@ -1796,7 +1799,7 @@ fn test_emit_llvm_build() {
 
 #[test]
 fn test_emit_llvm_fail() {
-    let p_id = PkgId::new("foo");
+    let p_id = CrateId::new("foo");
     let workspace = create_local_package(&p_id);
     let workspace = workspace.path();
     let test_sys = test_sysroot();
@@ -1817,11 +1820,11 @@ fn test_emit_llvm_fail() {
 
 #[test]
 fn test_linker_build() {
-    let p_id = PkgId::new("foo");
+    let p_id = CrateId::new("foo");
     let workspace = create_local_package(&p_id);
     let workspace = workspace.path();
     let matches = getopts([], optgroups());
-    let options = build_session_options(@"rustpkg",
+    let options = build_session_options(~"rustpkg",
                                         matches.as_ref().unwrap(),
                                         @diagnostic::DefaultEmitter as
                                             @diagnostic::Emitter);
@@ -1862,7 +1865,7 @@ fn test_build_install_flags_fail() {
 
 #[test]
 fn test_optimized_build() {
-    let p_id = PkgId::new("foo");
+    let p_id = CrateId::new("foo");
     let workspace = create_local_package(&p_id);
     let workspace = workspace.path();
     let test_sys = test_sysroot();
@@ -1876,7 +1879,7 @@ fn test_optimized_build() {
 }
 
 #[test]
-fn pkgid_pointing_to_subdir() {
+fn crateid_pointing_to_subdir() {
     // The actual repo is mockgithub.com/mozilla/some_repo
     // rustpkg should recognize that and treat the part after some_repo/ as a subdir
     let workspace = TempDir::new("parent_repo").expect("Couldn't create temp dir");
@@ -1912,9 +1915,9 @@ fn pkgid_pointing_to_subdir() {
 
 #[test]
 fn test_recursive_deps() {
-    let a_id = PkgId::new("a");
-    let b_id = PkgId::new("b");
-    let c_id = PkgId::new("c");
+    let a_id = CrateId::new("a");
+    let b_id = CrateId::new("b");
+    let c_id = CrateId::new("c");
     let b_workspace = create_local_package_with_dep(&b_id, &c_id);
     let b_workspace = b_workspace.path();
     writeFile(&b_workspace.join_many(["src", "c-0.0", "lib.rs"]),
@@ -1938,7 +1941,7 @@ fn test_recursive_deps() {
 
 #[test]
 fn test_install_to_rust_path() {
-    let p_id = PkgId::new("foo");
+    let p_id = CrateId::new("foo");
     let second_workspace = create_local_package(&p_id);
     let second_workspace = second_workspace.path();
     let first_workspace = mk_empty_workspace(&Path::new("p"), &NoVersion, "dest");
@@ -1962,7 +1965,7 @@ fn test_install_to_rust_path() {
 
 #[test]
 fn test_target_specific_build_dir() {
-    let p_id = PkgId::new("foo");
+    let p_id = CrateId::new("foo");
     let workspace = create_local_package(&p_id);
     let workspace = workspace.path();
     let test_sys = test_sysroot();
@@ -1978,7 +1981,7 @@ fn test_target_specific_build_dir() {
 
 #[test]
 fn test_target_specific_install_dir() {
-    let p_id = PkgId::new("foo");
+    let p_id = CrateId::new("foo");
     let workspace = create_local_package(&p_id);
     let workspace = workspace.path();
     let test_sys = test_sysroot();
@@ -1997,7 +2000,7 @@ fn test_target_specific_install_dir() {
 #[test]
 #[ignore(reason = "See #7240")]
 fn test_dependencies_terminate() {
-    let b_id = PkgId::new("b");
+    let b_id = CrateId::new("b");
     let workspace = create_local_package(&b_id);
     let workspace = workspace.path();
     let b_dir = workspace.join_many(["src", "b-0.0"]);
@@ -2010,7 +2013,7 @@ fn test_dependencies_terminate() {
 
 #[test]
 fn install_after_build() {
-    let b_id = PkgId::new("b");
+    let b_id = CrateId::new("b");
     let workspace = create_local_package(&b_id);
     let workspace = workspace.path();
     command_line_test([~"build", ~"b"], workspace);
@@ -2021,7 +2024,7 @@ fn install_after_build() {
 
 #[test]
 fn reinstall() {
-    let b = PkgId::new("b");
+    let b = CrateId::new("b");
     let workspace = create_local_package(&b);
     let workspace = workspace.path();
     // 1. Install, then remove executable file, then install again,
@@ -2060,8 +2063,8 @@ fn correct_package_name_with_rust_path_hack() {
     */
 
     // Set RUST_PATH to something containing only the sources for foo
-    let foo_id = PkgId::new("foo");
-    let bar_id = PkgId::new("bar");
+    let foo_id = CrateId::new("foo");
+    let bar_id = CrateId::new("bar");
     let foo_workspace = create_local_package(&foo_id);
     let foo_workspace = foo_workspace.path();
     let dest_workspace = mk_empty_workspace(&Path::new("bar"), &NoVersion, "dest_workspace");
@@ -2090,7 +2093,7 @@ fn correct_package_name_with_rust_path_hack() {
 
 #[test]
 fn test_rustpkg_test_creates_exec() {
-    let foo_id = PkgId::new("foo");
+    let foo_id = CrateId::new("foo");
     let foo_workspace = create_local_package(&foo_id);
     let foo_workspace = foo_workspace.path();
     writeFile(&foo_workspace.join_many(["src", "foo-0.0", "test.rs"]),
@@ -2101,7 +2104,7 @@ fn test_rustpkg_test_creates_exec() {
 
 #[test]
 fn test_rustpkg_test_output() {
-    let workspace = create_local_package_with_test(&PkgId::new("foo"));
+    let workspace = create_local_package_with_test(&CrateId::new("foo"));
     let output = command_line_test([~"test", ~"foo"], workspace.path());
     let output_str = str::from_utf8(output.output);
     // The first two assertions are separate because test output may
@@ -2113,7 +2116,7 @@ fn test_rustpkg_test_output() {
 
 #[test]
 fn test_rustpkg_test_failure_exit_status() {
-    let foo_id = PkgId::new("foo");
+    let foo_id = CrateId::new("foo");
     let foo_workspace = create_local_package(&foo_id);
     let foo_workspace = foo_workspace.path();
     writeFile(&foo_workspace.join_many(["src", "foo-0.0", "test.rs"]),
@@ -2127,7 +2130,7 @@ fn test_rustpkg_test_failure_exit_status() {
 
 #[test]
 fn test_rustpkg_test_cfg() {
-    let foo_id = PkgId::new("foo");
+    let foo_id = CrateId::new("foo");
     let foo_workspace = create_local_package(&foo_id);
     let foo_workspace = foo_workspace.path();
     writeFile(&foo_workspace.join_many(["src", "foo-0.0", "test.rs"]),
@@ -2140,7 +2143,7 @@ fn test_rustpkg_test_cfg() {
 
 #[test]
 fn test_rebuild_when_needed() {
-    let foo_id = PkgId::new("foo");
+    let foo_id = CrateId::new("foo");
     let foo_workspace = create_local_package(&foo_id);
     let foo_workspace = foo_workspace.path();
     let test_crate = foo_workspace.join_many(["src", "foo-0.0", "test.rs"]);
@@ -2161,7 +2164,7 @@ fn test_rebuild_when_needed() {
 #[test]
 #[ignore] // FIXME (#10257): This doesn't work as is since a read only file can't execute
 fn test_no_rebuilding() {
-    let foo_id = PkgId::new("foo");
+    let foo_id = CrateId::new("foo");
     let foo_workspace = create_local_package(&foo_id);
     let foo_workspace = foo_workspace.path();
     let test_crate = foo_workspace.join_many(["src", "foo-0.0", "test.rs"]);
@@ -2195,7 +2198,7 @@ fn test_installed_read_only() {
     writeFile(&repo_subdir.join("lib.rs"),
               "pub fn f() { let _x = (); }");
     add_git_tag(&repo_subdir, ~"0.1"); // this has the effect of committing the files
-    // update pkgid to what will be auto-detected
+    // update crateid to what will be auto-detected
     temp_pkg_id.version = ExactRevision(~"0.1");
 
     // FIXME (#9639): This needs to handle non-utf8 paths
@@ -2280,7 +2283,7 @@ fn test_installed_local_changes() {
 
 #[test]
 fn test_7402() {
-    let dir = create_local_package(&PkgId::new("foo"));
+    let dir = create_local_package(&CrateId::new("foo"));
     let dest_workspace = TempDir::new("more_rust").expect("test_7402");
     let dest_workspace = dest_workspace.path();
     // FIXME (#9639): This needs to handle non-utf8 paths
@@ -2294,7 +2297,7 @@ fn test_7402() {
 
 #[test]
 fn test_compile_error() {
-    let foo_id = PkgId::new("foo");
+    let foo_id = CrateId::new("foo");
     let foo_workspace = create_local_package(&foo_id);
     let foo_workspace = foo_workspace.path();
     let main_crate = foo_workspace.join_many(["src", "foo-0.0", "main.rs"]);
@@ -2328,7 +2331,7 @@ fn test_c_dependency_ok() {
     // registers a hook to build it if it's not fresh
     // After running `build`, test that the C library built
 
-    let dir = create_local_package(&PkgId::new("cdep"));
+    let dir = create_local_package(&CrateId::new("cdep"));
     let dir = dir.path();
     writeFile(&dir.join_many(["src", "cdep-0.0", "main.rs"]),
               "#[link_args = \"-lfoo\"]\nextern { fn f(); } \
@@ -2351,7 +2354,7 @@ fn test_c_dependency_ok() {
 #[test]
 #[ignore(reason="busted")]
 fn test_c_dependency_no_rebuilding() {
-    let dir = create_local_package(&PkgId::new("cdep"));
+    let dir = create_local_package(&CrateId::new("cdep"));
     let dir = dir.path();
     writeFile(&dir.join_many(["src", "cdep-0.0", "main.rs"]),
               "#[link_args = \"-lfoo\"]\nextern { fn f(); } \
@@ -2385,7 +2388,7 @@ fn test_c_dependency_no_rebuilding() {
 #[test]
 #[ignore(reason="busted")]
 fn test_c_dependency_yes_rebuilding() {
-    let dir = create_local_package(&PkgId::new("cdep"));
+    let dir = create_local_package(&CrateId::new("cdep"));
     let dir = dir.path();
     writeFile(&dir.join_many(["src", "cdep-0.0", "main.rs"]),
               "#[link_args = \"-lfoo\"]\nextern { fn f(); } \
@@ -2406,7 +2409,7 @@ fn test_c_dependency_yes_rebuilding() {
     assert!(c_library_path.exists());
 
     // Now, make the Rust library read-only so rebuilding will fail
-    match built_library_in_workspace(&PkgId::new("cdep"), dir) {
+    match built_library_in_workspace(&CrateId::new("cdep"), dir) {
         Some(ref pth) => assert!(chmod_read_only(pth)),
         None => assert_built_library_exists(dir, "cdep")
     }
@@ -2424,7 +2427,7 @@ fn test_c_dependency_yes_rebuilding() {
 fn correct_error_dependency() {
     // Supposing a package we're trying to install via a dependency doesn't
     // exist, we should throw a condition, and not ICE
-    let workspace_dir = create_local_package(&PkgId::new("badpkg"));
+    let workspace_dir = create_local_package(&CrateId::new("badpkg"));
 
     let dir = workspace_dir.path();
     let main_rs = dir.join_many(["src", "badpkg-0.0", "main.rs"]);

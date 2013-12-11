@@ -9,18 +9,19 @@
 // except according to those terms.
 
 use c_str::{ToCStr, CString};
+use container::Container;
+use iter::Iterator;
 use libc::{c_char, size_t};
 use option::{Option, None, Some};
 use ptr::RawPtr;
-use rt::env;
+use rt;
 use rt::local::Local;
-use rt::task;
 use rt::task::Task;
 use str::OwnedStr;
 use str;
 use uint;
 use unstable::raw;
-use vec::ImmutableVector;
+use vec::{ImmutableVector, OwnedVector};
 
 pub static FROZEN_BIT: uint = 1 << (uint::bits - 1);
 pub static MUT_BIT: uint = 1 << (uint::bits - 2);
@@ -62,7 +63,7 @@ unsafe fn fail_borrowed(alloc: *mut raw::Box<()>, file: *c_char, line: size_t)
     match try_take_task_borrow_list() {
         None => { // not recording borrows
             let msg = "borrowed";
-            msg.with_c_str(|msg_p| task::begin_unwind_raw(msg_p, file, line))
+            msg.with_c_str(|msg_p| rt::begin_unwind_raw(msg_p, file, line))
         }
         Some(borrow_list) => { // recording borrows
             let mut msg = ~"borrowed";
@@ -76,7 +77,7 @@ unsafe fn fail_borrowed(alloc: *mut raw::Box<()>, file: *c_char, line: size_t)
                     sep = " and at ";
                 }
             }
-            msg.with_c_str(|msg_p| task::begin_unwind_raw(msg_p, file, line))
+            msg.with_c_str(|msg_p| rt::begin_unwind_raw(msg_p, file, line))
         }
     }
 }
@@ -95,7 +96,7 @@ unsafe fn debug_borrow<T,P:RawPtr<T>>(tag: &'static str,
     //! A useful debugging function that prints a pointer + tag + newline
     //! without allocating memory.
 
-    if ENABLE_DEBUG && env::debug_borrow() {
+    if ENABLE_DEBUG && rt::env::debug_borrow() {
         debug_borrow_slow(tag, p, old_bits, new_bits, filename, line);
     }
 
@@ -180,7 +181,7 @@ pub unsafe fn unrecord_borrow(a: *u8,
             if br.alloc != a || br.file != file || br.line != line {
                 let err = format!("wrong borrow found, br={:?}", br);
                 err.with_c_str(|msg_p| {
-                    task::begin_unwind_raw(msg_p, file, line)
+                    rt::begin_unwind_raw(msg_p, file, line)
                 })
             }
             borrow_list

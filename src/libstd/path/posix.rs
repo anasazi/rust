@@ -21,7 +21,8 @@ use str;
 use str::Str;
 use to_bytes::IterBytes;
 use vec;
-use vec::{CopyableVector, RSplitIterator, SplitIterator, Vector, VectorVector};
+use vec::{CopyableVector, RSplitIterator, SplitIterator, Vector, VectorVector,
+          ImmutableEqVector, OwnedVector, ImmutableVector, OwnedCopyableVector};
 use super::{BytesContainer, GenericPath, GenericPathUnsafe};
 
 /// Iterator that yields successive components of a Path as &[u8]
@@ -441,11 +442,9 @@ static dot_dot_static: &'static [u8] = bytes!("..");
 
 #[cfg(test)]
 mod tests {
+    use prelude::*;
     use super::*;
-    use option::{Option, Some, None};
-    use iter::Iterator;
     use str;
-    use vec::Vector;
 
     macro_rules! t(
         (s: $path:expr, $exp:expr) => (
@@ -1324,6 +1323,7 @@ mod tests {
 mod bench {
     use extra::test::BenchHarness;
     use super::*;
+    use prelude::*;
 
     #[bench]
     fn join_home_dir(bh: &mut BenchHarness) {
@@ -1402,6 +1402,47 @@ mod bench {
         let posix_home_path = Path::new("/home");
         bh.iter(|| {
             posix_home_path.ends_with_path(&Path::new("jome"));
+        });
+    }
+
+    #[bench]
+    fn is_ancestor_of_path_with_10_dirs(bh: &mut BenchHarness) {
+        let path = Path::new("/home/1/2/3/4/5/6/7/8/9");
+        let mut sub = path.clone();
+        sub.pop();
+        bh.iter(|| {
+            path.is_ancestor_of(&sub);
+        });
+    }
+
+    #[bench]
+    fn path_relative_from_forward(bh: &mut BenchHarness) {
+        let path = Path::new("/a/b/c");
+        let mut other = path.clone();
+        other.pop();
+        bh.iter(|| {
+            path.path_relative_from(&other);
+        });
+    }
+
+    #[bench]
+    fn path_relative_from_same_level(bh: &mut BenchHarness) {
+        let path = Path::new("/a/b/c");
+        let mut other = path.clone();
+        other.pop();
+        other.push("d");
+        bh.iter(|| {
+            path.path_relative_from(&other);
+        });
+    }
+
+    #[bench]
+    fn path_relative_from_backward(bh: &mut BenchHarness) {
+        let path = Path::new("/a/b");
+        let mut other = path.clone();
+        other.push("c");
+        bh.iter(|| {
+            path.path_relative_from(&other);
         });
     }
 }

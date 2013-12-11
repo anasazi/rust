@@ -10,6 +10,8 @@
 
 /*!
 
+The standard module imported by default into all Rust modules
+
 Many programming languages have a 'prelude': a particular subset of the
 libraries that come with the language. Every program imports the prelude by
 default.
@@ -27,7 +29,6 @@ Rust's prelude has three main parts:
 */
 
 // Reexported core operators
-pub use either::{Either, Left, Right};
 pub use kinds::{Freeze, Pod, Send, Sized};
 pub use ops::{Add, Sub, Mul, Div, Rem, Neg, Not};
 pub use ops::{BitAnd, BitOr, BitXor};
@@ -49,18 +50,16 @@ pub use bool::Bool;
 pub use c_str::ToCStr;
 pub use char::Char;
 pub use clone::{Clone, DeepClone};
-pub use cmp::{Eq, ApproxEq, Ord, TotalEq, TotalOrd, Ordering, Less, Equal, Greater, Equiv};
+pub use cmp::{Eq, Ord, TotalEq, TotalOrd, Ordering, Less, Equal, Greater, Equiv};
 pub use container::{Container, Mutable, Map, MutableMap, Set, MutableSet};
 pub use default::Default;
 pub use from_str::FromStr;
 pub use hash::Hash;
 pub use iter::{FromIterator, Extendable};
-pub use iter::{Iterator, DoubleEndedIterator, RandomAccessIterator, ClonableIterator};
+pub use iter::{Iterator, DoubleEndedIterator, RandomAccessIterator, CloneableIterator};
 pub use iter::{OrdIterator, MutableDoubleEndedIterator, ExactSize};
 pub use num::Times;
-pub use num::{Algebraic, Trigonometric, Exponential, Hyperbolic};
-pub use num::{Bitwise, BitCount, Bounded};
-pub use num::{Integer, Fractional, Real, RealExt};
+pub use num::{Bitwise, BitCount, Bounded, Integer, Real};
 pub use num::{Num, NumCast, CheckedAdd, CheckedSub, CheckedMul};
 pub use num::{Orderable, Signed, Unsigned, Round};
 pub use num::{Primitive, Int, Float, ToStrRadix, ToPrimitive, FromPrimitive};
@@ -79,12 +78,17 @@ pub use tuple::{Tuple1, Tuple2, Tuple3, Tuple4};
 pub use tuple::{Tuple5, Tuple6, Tuple7, Tuple8};
 pub use tuple::{Tuple9, Tuple10, Tuple11, Tuple12};
 pub use vec::{ImmutableEqVector, ImmutableTotalOrdVector, ImmutableCopyableVector};
-pub use vec::{OwnedVector, OwnedCopyableVector,OwnedEqVector, MutableVector};
+pub use vec::{OwnedVector, OwnedCopyableVector,OwnedEqVector};
+pub use vec::{MutableVector, MutableTotalOrdVector};
 pub use vec::{Vector, VectorVector, CopyableVector, ImmutableVector};
 
 // Reexported runtime types
 pub use comm::{Port, Chan, SharedChan};
 pub use task::spawn;
+
+// Reexported statics
+#[cfg(not(test))]
+pub use gc::GC;
 
 /// Disposes of a value.
 #[inline]

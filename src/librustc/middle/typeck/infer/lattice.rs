@@ -35,6 +35,7 @@
 
 use middle::ty::{RegionVid, TyVar, Vid};
 use middle::ty;
+use middle::typeck::infer::{then, ToUres};
 use middle::typeck::infer::*;
 use middle::typeck::infer::combine::*;
 use middle::typeck::infer::glb::Glb;
@@ -335,7 +336,7 @@ pub trait TyLatticeDir {
 }
 
 impl LatticeDir for Lub {
-    fn combine_fields(&self) -> CombineFields { **self }
+    fn combine_fields(&self) -> CombineFields { *self.get_ref() }
     fn bnd<T:Clone>(&self, b: &Bounds<T>) -> Option<T> { b.ub.clone() }
     fn with_bnd<T:Clone>(&self, b: &Bounds<T>, t: T) -> Bounds<T> {
         Bounds { ub: Some(t), ..(*b).clone() }
@@ -349,7 +350,7 @@ impl TyLatticeDir for Lub {
 }
 
 impl LatticeDir for Glb {
-    fn combine_fields(&self) -> CombineFields { **self }
+    fn combine_fields(&self) -> CombineFields { *self.get_ref() }
     fn bnd<T:Clone>(&self, b: &Bounds<T>) -> Option<T> { b.lb.clone() }
     fn with_bnd<T:Clone>(&self, b: &Bounds<T>, t: T) -> Bounds<T> {
         Bounds { lb: Some(t), ..(*b).clone() }

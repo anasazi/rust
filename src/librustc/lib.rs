@@ -8,13 +8,24 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// NOTE: remove after snapshot
-#[pkgid = "rustc#0.9-pre"];
-#[crate_id = "rustc#0.9-pre"];
+/*!
+
+The Rust compiler.
+
+# Note
+
+This API is completely unstable and subject to change.
+
+*/
+
+#[crate_id = "rustc#0.9"];
 #[comment = "The Rust compiler"];
 #[license = "MIT/ASL2"];
 #[crate_type = "dylib"];
 #[crate_type = "rlib"];
+#[doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk.png",
+      html_favicon_url = "http://www.rust-lang.org/favicon.ico",
+      html_root_url = "http://static.rust-lang.org/doc/master")];
 
 #[feature(macro_rules, globs, struct_variant, managed_boxes)];
 
@@ -83,16 +94,14 @@ pub mod front {
     pub mod config;
     pub mod test;
     pub mod std_inject;
-    pub mod assign_node_ids;
+    pub mod assign_node_ids_and_map;
     pub mod feature_gate;
 }
 
 pub mod back {
     pub mod archive;
     pub mod link;
-    pub mod manifest;
     pub mod abi;
-    pub mod upcall;
     pub mod arm;
     pub mod mips;
     pub mod x86;
@@ -151,7 +160,6 @@ Additional help:
 }
 
 pub fn describe_warnings() {
-    use extra::sort::Sort;
     println("
 Available lint options:
     -W <foo>           Warn about <foo>
@@ -164,7 +172,7 @@ Available lint options:
     let mut lint_dict = lint_dict.move_iter()
                                  .map(|(k, v)| (v, k))
                                  .collect::<~[(lint::LintSpec, &'static str)]>();
-    lint_dict.qsort();
+    lint_dict.sort();
 
     let mut max_key = 0;
     for &(_, name) in lint_dict.iter() {
@@ -202,7 +210,7 @@ pub fn describe_debug_flags() {
 
 pub fn run_compiler(args: &[~str], demitter: @diagnostic::Emitter) {
     let mut args = args.to_owned();
-    let binary = args.shift().to_managed();
+    let binary = args.shift();
 
     if args.is_empty() { usage(binary); return; }
 
@@ -279,8 +287,9 @@ pub fn run_compiler(args: &[~str], demitter: @diagnostic::Emitter) {
     if ls {
         match input {
           d::file_input(ref ifile) => {
+            let mut stdout = io::stdout();
             d::list_metadata(sess, &(*ifile),
-                                  @mut io::stdout() as @mut io::Writer);
+                                  &mut stdout as &mut io::Writer);
           }
           d::str_input(_) => {
             d::early_error(demitter, "can not list metadata for stdin");
@@ -295,25 +304,25 @@ pub fn run_compiler(args: &[~str], demitter: @diagnostic::Emitter) {
         let t_outputs = d::build_output_filenames(&input, &odir, &ofile,
                                                   attrs, sess);
         if crate_id || crate_name {
-            let pkgid = match attr::find_pkgid(attrs) {
-                Some(pkgid) => pkgid,
+            let crateid = match attr::find_crateid(attrs) {
+                Some(crateid) => crateid,
                 None => {
                     sess.fatal("No crate_id and --crate-id or \
                                 --crate-name requested")
                 }
             };
             if crate_id {
-                println(pkgid.to_str());
+                println(crateid.to_str());
             }
             if crate_name {
-                println(pkgid.name);
+                println(crateid.name);
             }
         }
 
         if crate_file_name {
             let lm = link::build_link_meta(sess, attrs, &t_outputs.obj_filename,
                                            &mut ::util::sha2::Sha256::new());
-            let outputs = session::collect_outputs(sopts, attrs);
+            let outputs = session::collect_outputs(&sess, attrs);
             for &style in outputs.iter() {
                 let fname = link::filename_for_input(&sess, style, &lm,
                                                      &t_outputs.out_filename);
@@ -352,10 +361,10 @@ struct RustcEmitter {
 
 impl diagnostic::Emitter for RustcEmitter {
     fn emit(&self,
-            cmsp: Option<(@codemap::CodeMap, codemap::Span)>,
+            cmsp: Option<(&codemap::CodeMap, codemap::Span)>,
             msg: &str,
-            lvl: diagnostic::level) {
-        if lvl == diagnostic::fatal {
+            lvl: diagnostic::Level) {
+        if lvl == diagnostic::Fatal {
             let this = unsafe { cast::transmute_mut(self) };
             this.ch_capture.send(fatal)
         }
@@ -425,7 +434,7 @@ pub fn monitor(f: proc(@diagnostic::Emitter)) {
                 diagnostic::DefaultEmitter.emit(
                     None,
                     diagnostic::ice_msg("unexpected failure"),
-                    diagnostic::error);
+                    diagnostic::Error);
 
                 let xs = [
                     ~"the compiler hit an unexpected failure path. \
@@ -437,7 +446,7 @@ pub fn monitor(f: proc(@diagnostic::Emitter)) {
                 for note in xs.iter() {
                     diagnostic::DefaultEmitter.emit(None,
                                                     *note,
-                                                    diagnostic::note)
+                                                    diagnostic::Note)
                 }
             }
             // Fail so the process returns a failure code

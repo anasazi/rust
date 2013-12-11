@@ -86,7 +86,7 @@ impl Sudoku {
         return Sudoku::new(g)
     }
 
-    pub fn write(&self, writer: @mut io::Writer) {
+    pub fn write(&self, writer: &mut io::Writer) {
         for row in range(0u8, 9u8) {
             write!(writer, "{}", self.grid[row][0]);
             for col in range(1u8, 9u8) {
@@ -172,7 +172,8 @@ impl Colors {
     }
 
     fn next(&self) -> u8 {
-        let val = **self & HEADS;
+        let Colors(c) = *self;
+        let val = c & HEADS;
         if (0u16 == val) {
             return 0u8;
         } else {
@@ -184,7 +185,7 @@ impl Colors {
 
     fn remove(&mut self, color: u8) {
         if color != 0u8 {
-            let val  = **self;
+            let Colors(val) = *self;
             let mask = !(1u16 << color);
             *self    = Colors(val & mask);
         }
@@ -280,5 +281,5 @@ fn main() {
         Sudoku::read(BufferedReader::new(io::stdin()))
     };
     sudoku.solve();
-    sudoku.write(@mut io::stdout() as @mut io::Writer);
+    sudoku.write(&mut io::stdout());
 }

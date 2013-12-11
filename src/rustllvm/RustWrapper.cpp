@@ -149,28 +149,6 @@ extern "C" LLVMValueRef LLVMInlineAsm(LLVMTypeRef Ty,
                                IsAlignStack, (InlineAsm::AsmDialect) Dialect));
 }
 
-/**
- * This function is intended to be a threadsafe interface into enabling a
- * multithreaded LLVM. This is invoked at the start of the translation phase of
- * compilation to ensure that LLVM is ready.
- *
- * All of trans properly isolates LLVM with the use of a different
- * LLVMContextRef per task, thus allowing parallel compilation of different
- * crates in the same process. At the time of this writing, the use case for
- * this is unit tests for rusti, but there are possible other applications.
- */
-extern "C" bool LLVMRustStartMultithreading() {
-    static Mutex lock;
-    bool ret = true;
-    assert(lock.acquire());
-    if (!LLVMIsMultithreaded()) {
-        ret = LLVMStartMultithreaded();
-    }
-    assert(lock.release());
-    return ret;
-}
-
-
 typedef DIBuilder* DIBuilderRef;
 
 template<typename DIT>
@@ -442,7 +420,8 @@ extern "C" LLVMValueRef LLVMDIBuilderCreateUnionType(
     uint64_t AlignInBits,
     unsigned Flags,
     LLVMValueRef Elements,
-    unsigned RunTimeLang)
+    unsigned RunTimeLang,
+    const char* UniqueId)
 {
     return wrap(Builder->createUnionType(
         unwrapDI<DIDescriptor>(Scope),
@@ -453,7 +432,8 @@ extern "C" LLVMValueRef LLVMDIBuilderCreateUnionType(
         AlignInBits,
         Flags,
         unwrapDI<DIArray>(Elements),
-        RunTimeLang));
+        RunTimeLang,
+        UniqueId));
 }
 
 extern "C" void LLVMSetUnnamedAddr(LLVMValueRef Value, LLVMBool Unnamed) {

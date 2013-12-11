@@ -44,7 +44,7 @@ clean-misc:
 	$(Q)rm -Rf $(DOCS)
 	$(Q)rm -Rf $(GENERATED)
 	$(Q)rm -Rf tmp/*
-	$(Q)rm -Rf rust-stage0-*.tar.bz2 $(PKG_NAME)-*.tar.gz dist
+	$(Q)rm -Rf rust-stage0-*.tar.bz2 $(PKG_NAME)-*.tar.gz $(PKG_NAME)-*.exe dist
 	$(Q)rm -Rf $(foreach ext, \
                  html aux cp fn ky log pdf pg toc tp vr cps epub, \
                  $(wildcard doc/*.$(ext)))
@@ -63,6 +63,7 @@ clean-generic-$(2)-$(1):
          -name '*.[odasS]' -o \
          -name '*.so' -o      \
          -name '*.dylib' -o   \
+         -name '*.lib' -o     \
          -name '*.dll' -o     \
          -name '*.def' -o     \
          -name '*.bc'         \
@@ -89,6 +90,8 @@ clean$(1)_H_$(2):
 	$(Q)rm -f $$(HLIB$(1)_H_$(2))/$(CFG_STDLIB_$(2))
 	$(Q)rm -f $$(HLIB$(1)_H_$(2))/$(CFG_EXTRALIB_$(2))
 	$(Q)rm -f $$(HLIB$(1)_H_$(2))/$(CFG_LIBRUSTUV_$(2))
+	$(Q)rm -f $$(HLIB$(1)_H_$(2))/$(CFG_LIBNATIVE_$(2))
+	$(Q)rm -f $$(HLIB$(1)_H_$(2))/$(CFG_LIBGREEN_$(2))
 	$(Q)rm -f $$(HLIB$(1)_H_$(2))/$(CFG_LIBRUSTC_$(2))
 	$(Q)rm -f $$(HLIB$(1)_H_$(2))/$(CFG_LIBSYNTAX_$(2))
 	$(Q)rm -f $$(HLIB$(1)_H_$(2))/$(STDLIB_GLOB_$(2))
@@ -97,6 +100,10 @@ clean$(1)_H_$(2):
 	$(Q)rm -f $$(HLIB$(1)_H_$(2))/$(EXTRALIB_RGLOB_$(2))
 	$(Q)rm -f $$(HLIB$(1)_H_$(2))/$(LIBRUSTUV_GLOB_$(2))
 	$(Q)rm -f $$(HLIB$(1)_H_$(2))/$(LIBRUSTUV_RGLOB_$(2))
+	$(Q)rm -f $$(HLIB$(1)_H_$(2))/$(LIBNATIVE_GLOB_$(2))
+	$(Q)rm -f $$(HLIB$(1)_H_$(2))/$(LIBNATIVE_RGLOB_$(2))
+	$(Q)rm -f $$(HLIB$(1)_H_$(2))/$(LIBGREEN_GLOB_$(2))
+	$(Q)rm -f $$(HLIB$(1)_H_$(2))/$(LIBGREEN_RGLOB_$(2))
 	$(Q)rm -f $$(HLIB$(1)_H_$(2))/$(LIBRUSTC_GLOB_$(2))
 	$(Q)rm -f $$(HLIB$(1)_H_$(2))/$(LIBSYNTAX_GLOB_$(2))
 	$(Q)rm -f $$(HLIB$(1)_H_$(2))/$(LIBRUSTPKG_GLOB_$(2))
@@ -123,6 +130,8 @@ clean$(1)_T_$(2)_H_$(3):
 	$(Q)rm -f $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_STDLIB_$(2))
 	$(Q)rm -f $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_EXTRALIB_$(2))
 	$(Q)rm -f $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_LIBRUSTUV_$(2))
+	$(Q)rm -f $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_LIBGREEN_$(2))
+	$(Q)rm -f $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_LIBNATIVE_$(2))
 	$(Q)rm -f $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_LIBRUSTC_$(2))
 	$(Q)rm -f $$(TLIB$(1)_T_$(2)_H_$(3))/$(CFG_LIBSYNTAX_$(2))
 	$(Q)rm -f $$(TLIB$(1)_T_$(2)_H_$(3))/$(STDLIB_GLOB_$(2))
@@ -131,6 +140,10 @@ clean$(1)_T_$(2)_H_$(3):
 	$(Q)rm -f $$(TLIB$(1)_T_$(2)_H_$(3))/$(EXTRALIB_RGLOB_$(2))
 	$(Q)rm -f $$(TLIB$(1)_T_$(2)_H_$(3))/$(LIBRUSTUV_GLOB_$(2))
 	$(Q)rm -f $$(TLIB$(1)_T_$(2)_H_$(3))/$(LIBRUSTUV_RGLOB_$(2))
+	$(Q)rm -f $$(TLIB$(1)_T_$(2)_H_$(3))/$(LIBNATIVE_GLOB_$(2))
+	$(Q)rm -f $$(TLIB$(1)_T_$(2)_H_$(3))/$(LIBNATIVE_RGLOB_$(2))
+	$(Q)rm -f $$(TLIB$(1)_T_$(2)_H_$(3))/$(LIBGREEN_GLOB_$(2))
+	$(Q)rm -f $$(TLIB$(1)_T_$(2)_H_$(3))/$(LIBGREEN_RGLOB_$(2))
 	$(Q)rm -f $$(TLIB$(1)_T_$(2)_H_$(3))/$(LIBRUSTC_GLOB_$(2))
 	$(Q)rm -f $$(TLIB$(1)_T_$(2)_H_$(3))/$(LIBRUSTC_RGLOB_$(2))
 	$(Q)rm -f $$(TLIB$(1)_T_$(2)_H_$(3))/$(LIBSYNTAX_GLOB_$(2))

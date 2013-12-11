@@ -51,6 +51,7 @@ use middle::ty::{FloatVar, FnSig, IntVar, TyVar};
 use middle::ty::{IntType, UintType, substs};
 use middle::ty::{BuiltinBounds};
 use middle::ty;
+use middle::typeck::infer::{then, ToUres};
 use middle::typeck::infer::glb::Glb;
 use middle::typeck::infer::lub::Lub;
 use middle::typeck::infer::sub::Sub;
@@ -59,15 +60,16 @@ use middle::typeck::infer::unify::InferCtxtMethods;
 use middle::typeck::infer::{InferCtxt, cres, ures};
 use middle::typeck::infer::{TypeTrace};
 use util::common::indent;
+use util::ppaux::Repr;
 
 use std::result;
-use syntax::ast::{Onceness, purity};
+use syntax::ast::{Onceness, Purity};
 use syntax::ast;
 use syntax::opt_vec;
 use syntax::abi::AbiSet;
 
 pub trait Combine {
-    fn infcx(&self) -> @mut InferCtxt;
+    fn infcx(&self) -> @InferCtxt;
     fn tag(&self) -> ~str;
     fn a_is_expected(&self) -> bool;
     fn trace(&self) -> TypeTrace;
@@ -243,7 +245,7 @@ pub trait Combine {
         }
     }
 
-    fn purities(&self, a: purity, b: purity) -> cres<purity>;
+    fn purities(&self, a: Purity, b: Purity) -> cres<Purity>;
 
     fn abis(&self, a: AbiSet, b: AbiSet) -> cres<AbiSet> {
         if a == b {
@@ -328,7 +330,7 @@ pub trait Combine {
 }
 
 pub struct CombineFields {
-    infcx: @mut InferCtxt,
+    infcx: @InferCtxt,
     a_is_expected: bool,
     trace: TypeTrace,
 }
@@ -515,8 +517,8 @@ pub fn super_tys<C:Combine>(this: &C, a: ty::t, b: ty::t) -> cres<ty::t> {
             Ok(ty::mk_struct(tcx, a_id, substs))
       }
 
-      (&ty::ty_box(ref a_mt), &ty::ty_box(ref b_mt)) => {
-        this.mts(a_mt, b_mt).and_then(|mt| Ok(ty::mk_box(tcx, mt)))
+      (&ty::ty_box(a_inner), &ty::ty_box(b_inner)) => {
+        this.tys(a_inner, b_inner).and_then(|typ| Ok(ty::mk_box(tcx, typ)))
       }
 
       (&ty::ty_uniq(ref a_mt), &ty::ty_uniq(ref b_mt)) => {
@@ -589,7 +591,7 @@ pub fn super_tys<C:Combine>(this: &C, a: ty::t, b: ty::t) -> cres<ty::t> {
         this: &C,
         vid_is_expected: bool,
         vid: ty::FloatVid,
-        val: ast::float_ty) -> cres<ty::t>
+        val: ast::FloatTy) -> cres<ty::t>
     {
         if_ok!(this.infcx().simple_var_t(vid_is_expected, vid, val));
         Ok(ty::mk_mach_float(val))

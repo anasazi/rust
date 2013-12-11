@@ -19,6 +19,7 @@
 
 use cast;
 use ops::Drop;
+use ptr::RawPtr;
 
 #[cfg(windows)]               // mingw-w32 doesn't like thread_local things
 #[cfg(target_os = "android")] // see #10686
@@ -42,7 +43,7 @@ impl<T> Drop for Borrowed<T> {
             }
             let val: ~T = cast::transmute(self.val);
             put::<T>(val);
-            assert!(exists());
+            rtassert!(exists());
         }
     }
 }
@@ -79,6 +80,7 @@ pub unsafe fn borrow<T>() -> Borrowed<T> {
 pub mod compiled {
     use cast;
     use option::{Option, Some, None};
+    use ptr::RawPtr;
     #[cfg(not(test))] use libc::c_void;
 
     #[cfg(test)]
@@ -109,10 +111,30 @@ pub mod compiled {
     /// Does not validate the pointer type.
     #[inline]
     pub unsafe fn take<T>() -> ~T {
-        let ptr: ~T = cast::transmute(RT_TLS_PTR);
+        let ptr = RT_TLS_PTR;
+        rtassert!(!ptr.is_null());
+        let ptr: ~T = cast::transmute(ptr);
         // can't use `as`, due to type not matching with `cfg(test)`
         RT_TLS_PTR = cast::transmute(0);
         ptr
+    }
+
+    /// Optionally take ownership of a pointer from thread-local storage.
+    ///
+    /// # Safety note
+    ///
+    /// Does not validate the pointer type.
+    #[inline]
+    pub unsafe fn try_take<T>() -> Option<~T> {
+        let ptr = RT_TLS_PTR;
+        if ptr.is_null() {
+            None
+        } else {
+            let ptr: ~T = cast::transmute(ptr);
+            // can't use `as`, due to type not matching with `cfg(test)`
+            RT_TLS_PTR = cast::transmute(0);
+            Some(ptr)
+        }
     }
 
     /// Take ownership of a pointer from thread-local storage.
@@ -157,31 +179,22 @@ pub mod native {
     use libc::c_void;
     use option::{Option, Some, None};
     use ptr;
+    use ptr::RawPtr;
     use tls = rt::thread_local_storage;
-    use unstable::mutex::{Mutex, MUTEX_INIT};
 
-    static mut LOCK: Mutex = MUTEX_INIT;
-    static mut INITIALIZED: bool = false;
     static mut RT_TLS_KEY: tls::Key = -1;
 
     /// Initialize the TLS key. Other ops will fail if this isn't executed
     /// first.
     pub fn init() {
         unsafe {
-            LOCK.lock();
-            if !INITIALIZED {
-                tls::create(&mut RT_TLS_KEY);
-                INITIALIZED = true;
-            }
-            LOCK.unlock();
+            tls::create(&mut RT_TLS_KEY);
         }
     }
 
     pub unsafe fn cleanup() {
-        assert!(INITIALIZED);
+        rtassert!(RT_TLS_KEY != -1);
         tls::destroy(RT_TLS_KEY);
-        LOCK.destroy();
-        INITIALIZED = false;
     }
 
     /// Give a pointer to thread-local storage.
@@ -211,6 +224,28 @@ pub mod native {
         let ptr: ~T = cast::transmute(void_ptr);
         tls::set(key, ptr::mut_null());
         return ptr;
+    }
+
+    /// Optionally take ownership of a pointer from thread-local storage.
+    ///
+    /// # Safety note
+    ///
+    /// Does not validate the pointer type.
+    #[inline]
+    pub unsafe fn try_take<T>() -> Option<~T> {
+        match maybe_tls_key() {
+            Some(key) => {
+                let void_ptr: *mut c_void = tls::get(key);
+                if void_ptr.is_null() {
+                    None
+                } else {
+                    let ptr: ~T = cast::transmute(void_ptr);
+                    tls::set(key, ptr::mut_null());
+                    Some(ptr)
+                }
+            }
+            None => None
+        }
     }
 
     /// Take ownership of a pointer from thread-local storage.

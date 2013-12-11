@@ -24,7 +24,7 @@ use std::vec;
 use std::hashmap::HashMap;
 use syntax::ast;
 use syntax::ast_util;
-use syntax::ast_util::id_range;
+use syntax::ast_util::IdRange;
 use syntax::print::{pp, pprust};
 use middle::ty;
 use middle::typeck;
@@ -87,13 +87,13 @@ struct LoopScope<'a> {
     break_bits: ~[uint]
 }
 
-impl<O:DataFlowOperator> pprust::pp_ann for DataFlowContext<O> {
-    fn pre(&self, node: pprust::ann_node) {
+impl<O:DataFlowOperator> pprust::PpAnn for DataFlowContext<O> {
+    fn pre(&self, node: pprust::AnnNode) {
         let (ps, id) = match node {
-            pprust::node_expr(ps, expr) => (ps, expr.id),
-            pprust::node_block(ps, blk) => (ps, blk.id),
-            pprust::node_item(ps, _) => (ps, 0),
-            pprust::node_pat(ps, pat) => (ps, pat.id)
+            pprust::NodeExpr(ps, expr) => (ps, expr.id),
+            pprust::NodeBlock(ps, blk) => (ps, blk.id),
+            pprust::NodeItem(ps, _) => (ps, 0),
+            pprust::NodePat(ps, pat) => (ps, pat.id)
         };
 
         if self.nodeid_to_bitset.contains_key(&id) {
@@ -118,7 +118,7 @@ impl<O:DataFlowOperator> pprust::pp_ann for DataFlowContext<O> {
             let comment_str = format!("id {}: {}{}{}",
                                       id, entry_str, gens_str, kills_str);
             pprust::synth_comment(ps, comment_str);
-            pp::space(ps.s);
+            pp::space(&mut ps.s);
         }
     }
 }
@@ -127,7 +127,7 @@ impl<O:DataFlowOperator> DataFlowContext<O> {
     pub fn new(tcx: ty::ctxt,
                method_map: typeck::method_map,
                oper: O,
-               id_range: id_range,
+               id_range: IdRange,
                bits_per_id: uint) -> DataFlowContext<O> {
         let words_per_id = (bits_per_id + uint::bits - 1) / uint::bits;
 
@@ -347,19 +347,18 @@ impl<O:DataFlowOperator+Clone+'static> DataFlowContext<O> {
         debug!("Dataflow result:");
         debug!("{}", {
             let this = @(*self).clone();
-            this.pretty_print_to(@mut io::stderr() as @mut io::Writer, blk);
+            this.pretty_print_to(~io::stderr() as ~io::Writer, blk);
             ""
         });
     }
 
-    fn pretty_print_to(@self, wr: @mut io::Writer, blk: &ast::Block) {
-        let ps = pprust::rust_printer_annotated(wr,
-                                                self.tcx.sess.intr(),
-                                                self as @pprust::pp_ann);
-        pprust::cbox(ps, pprust::indent_unit);
-        pprust::ibox(ps, 0u);
-        pprust::print_block(ps, blk);
-        pp::eof(ps.s);
+    fn pretty_print_to(@self, wr: ~io::Writer, blk: &ast::Block) {
+        let mut ps = pprust::rust_printer_annotated(wr, self.tcx.sess.intr(),
+                                                    self as @pprust::PpAnn);
+        pprust::cbox(&mut ps, pprust::indent_unit);
+        pprust::ibox(&mut ps, 0u);
+        pprust::print_block(&mut ps, blk);
+        pp::eof(&mut ps.s);
     }
 }
 
@@ -721,6 +720,11 @@ impl<'a, O:DataFlowOperator> PropagationContext<'a, O> {
                 self.walk_expr(e, in_out, loop_scopes);
             }
 
+            ast::ExprBox(s, e) => {
+                self.walk_expr(s, in_out, loop_scopes);
+                self.walk_expr(e, in_out, loop_scopes);
+            }
+
             ast::ExprInlineAsm(ref inline_asm) => {
                 for &(_, expr) in inline_asm.inputs.iter() {
                     self.walk_expr(expr, in_out, loop_scopes);
@@ -753,7 +757,6 @@ impl<'a, O:DataFlowOperator> PropagationContext<'a, O> {
         //! concern items that are going out of scope).
 
         let tcx = self.tcx();
-        let region_maps = tcx.region_maps;
 
         debug!("pop_scopes(from_expr={}, to_scope={:?}, in_out={})",
                from_expr.repr(tcx), to_scope.loop_id,
@@ -763,7 +766,7 @@ impl<'a, O:DataFlowOperator> PropagationContext<'a, O> {
         while id != to_scope.loop_id {
             self.dfcx.apply_kill(id, in_out);
 
-            match region_maps.opt_encl_scope(id) {
+            match tcx.region_maps.opt_encl_scope(id) {
                 Some(i) => { id = i; }
                 None => {
                     tcx.sess.span_bug(
@@ -874,7 +877,8 @@ impl<'a, O:DataFlowOperator> PropagationContext<'a, O> {
             }
 
             Some(_) => {
-                match self.tcx().def_map.find(&expr.id) {
+                let def_map = self.tcx().def_map.borrow();
+                match def_map.get().find(&expr.id) {
                     Some(&ast::DefLabel(loop_id)) => {
                         match loop_scopes.iter().position(|l| l.loop_id == loop_id) {
                             Some(i) => i,
@@ -899,7 +903,8 @@ impl<'a, O:DataFlowOperator> PropagationContext<'a, O> {
     }
 
     fn is_method_call(&self, expr: &ast::Expr) -> bool {
-        self.dfcx.method_map.contains_key(&expr.id)
+        let method_map = self.dfcx.method_map.borrow();
+        method_map.get().contains_key(&expr.id)
     }
 
     fn reset(&mut self, bits: &mut [uint]) {

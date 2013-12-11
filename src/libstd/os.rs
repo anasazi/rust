@@ -28,8 +28,6 @@
 
 #[allow(missing_doc)];
 
-#[cfg(unix)]
-use c_str::CString;
 use clone::Clone;
 use container::Container;
 #[cfg(target_os = "macos")]
@@ -43,8 +41,7 @@ use ptr;
 use str;
 use to_str;
 use unstable::finally::Finally;
-
-pub use os::consts::*;
+use sync::atomics::{AtomicInt, INIT_ATOMIC_INT, SeqCst};
 
 /// Delegates to the libc close() function, returning the same return value.
 pub fn close(fd: c_int) -> c_int {
@@ -58,6 +55,8 @@ static BUF_BYTES : uint = 2048u;
 
 #[cfg(unix)]
 pub fn getcwd() -> Path {
+    use c_str::CString;
+
     let mut buf = [0 as libc::c_char, ..BUF_BYTES];
     unsafe {
         if libc::getcwd(buf.as_mut_ptr(), buf.len() as size_t).is_null() {
@@ -82,13 +81,15 @@ pub fn getcwd() -> Path {
 
 #[cfg(windows)]
 pub mod win32 {
+    use libc::types::os::arch::extra::DWORD;
     use libc;
-    use vec;
-    use str;
     use option::{None, Option};
     use option;
     use os::TMPBUF_SZ;
-    use libc::types::os::arch::extra::DWORD;
+    use str::StrSlice;
+    use str;
+    use vec::{MutableVector, ImmutableVector, OwnedVector};
+    use vec;
 
     pub fn fill_utf16_buf_and_decode(f: |*mut u16, DWORD| -> DWORD)
         -> Option<~str> {
@@ -333,7 +334,7 @@ pub fn pipe() -> Pipe {
 
 /// Returns the proper dll filename for the given basename of a file.
 pub fn dll_filename(base: &str) -> ~str {
-    format!("{}{}{}", DLL_PREFIX, base, DLL_SUFFIX)
+    format!("{}{}{}", consts::DLL_PREFIX, base, consts::DLL_SUFFIX)
 }
 
 /// Optionally returns the filesystem path to the current executable which is
@@ -675,17 +676,26 @@ pub fn last_os_error() -> ~str {
     strerror()
 }
 
+static mut EXIT_STATUS: AtomicInt = INIT_ATOMIC_INT;
+
 /**
  * Sets the process exit code
  *
  * Sets the exit code returned by the process if all supervised tasks
  * terminate successfully (without failing). If the current root task fails
  * and is supervised by the scheduler then any user-specified exit status is
- * ignored and the process exits with the default failure status
+ * ignored and the process exits with the default failure status.
+ *
+ * Note that this is not synchronized against modifications of other threads.
  */
 pub fn set_exit_status(code: int) {
-    use rt;
-    rt::set_exit_status(code);
+    unsafe { EXIT_STATUS.store(code, SeqCst) }
+}
+
+/// Fetches the process's current exit code. This defaults to 0 and can change
+/// by calling `set_exit_status`.
+pub fn get_exit_status() -> int {
+    unsafe { EXIT_STATUS.load(SeqCst) }
 }
 
 #[cfg(target_os = "macos")]
@@ -1229,16 +1239,14 @@ pub mod consts {
 
 #[cfg(test)]
 mod tests {
+    use prelude::*;
     use c_str::ToCStr;
-    use option::Some;
     use option;
     use os::{env, getcwd, getenv, make_absolute, args};
     use os::{setenv, unsetenv};
     use os;
-    use path::Path;
     use rand::Rng;
     use rand;
-    use str::StrSlice;
 
 
     #[test]

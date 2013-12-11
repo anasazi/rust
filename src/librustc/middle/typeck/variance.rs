@@ -204,6 +204,7 @@ use syntax::parse::token;
 use syntax::opt_vec;
 use syntax::visit;
 use syntax::visit::Visitor;
+use util::ppaux::Repr;
 
 pub fn infer_variance(tcx: ty::ctxt,
                       crate: &ast::Crate) {
@@ -242,7 +243,7 @@ impl<'a> ToStr for VarianceTerm<'a> {
             ConstantTerm(c1) => format!("{}", c1.to_str()),
             TransformTerm(v1, v2) => format!("({} \u00D7 {})",
                                           v1.to_str(), v2.to_str()),
-            InferredTerm(id) => format!("[{}]", *id)
+            InferredTerm(id) => format!("[{}]", { let InferredIndex(i) = id; i })
         }
     }
 }
@@ -327,9 +328,7 @@ impl<'a> TermsContext<'a> {
 }
 
 impl<'a> Visitor<()> for TermsContext<'a> {
-    fn visit_item(&mut self,
-                  item: @ast::item,
-                  (): ()) {
+    fn visit_item(&mut self, item: &ast::Item, _: ()) {
         debug!("add_inferreds for item {}", item.repr(self.tcx));
 
         let inferreds_on_entry = self.num_inferred();
@@ -338,16 +337,16 @@ impl<'a> Visitor<()> for TermsContext<'a> {
         // tcx, we rely on the fact that all inferreds for a particular
         // item are assigned continuous indices.
         match item.node {
-            ast::item_trait(..) => {
+            ast::ItemTrait(..) => {
                 self.add_inferred(item.id, SelfParam, 0, item.id);
             }
             _ => { }
         }
 
         match item.node {
-            ast::item_enum(_, ref generics) |
-            ast::item_struct(_, ref generics) |
-            ast::item_trait(ref generics, _, _) => {
+            ast::ItemEnum(_, ref generics) |
+            ast::ItemStruct(_, ref generics) |
+            ast::ItemTrait(ref generics, _, _) => {
                 for (i, p) in generics.lifetimes.iter().enumerate() {
                     self.add_inferred(item.id, RegionParam, i, p.id);
                 }
@@ -363,7 +362,10 @@ impl<'a> Visitor<()> for TermsContext<'a> {
                 // "invalid item id" from "item id with no
                 // parameters".
                 if self.num_inferred() == inferreds_on_entry {
-                    let newly_added = self.tcx.item_variance_map.insert(
+                    let mut item_variance_map = self.tcx
+                                                    .item_variance_map
+                                                    .borrow_mut();
+                    let newly_added = item_variance_map.get().insert(
                         ast_util::local_def(item.id),
                         self.empty_variances);
                     assert!(newly_added);
@@ -372,13 +374,13 @@ impl<'a> Visitor<()> for TermsContext<'a> {
                 visit::walk_item(self, item, ());
             }
 
-            ast::item_impl(..) |
-            ast::item_static(..) |
-            ast::item_fn(..) |
-            ast::item_mod(..) |
-            ast::item_foreign_mod(..) |
-            ast::item_ty(..) |
-            ast::item_mac(..) => {
+            ast::ItemImpl(..) |
+            ast::ItemStatic(..) |
+            ast::ItemFn(..) |
+            ast::ItemMod(..) |
+            ast::ItemForeignMod(..) |
+            ast::ItemTy(..) |
+            ast::ItemMac(..) => {
                 visit::walk_item(self, item, ());
             }
         }
@@ -431,14 +433,12 @@ fn add_constraints_from_crate<'a>(terms_cx: TermsContext<'a>,
 }
 
 impl<'a> Visitor<()> for ConstraintContext<'a> {
-    fn visit_item(&mut self,
-                  item: @ast::item,
-                  (): ()) {
+    fn visit_item(&mut self, item: &ast::Item, _: ()) {
         let did = ast_util::local_def(item.id);
         let tcx = self.terms_cx.tcx;
 
         match item.node {
-            ast::item_enum(ref enum_definition, _) => {
+            ast::ItemEnum(ref enum_definition, _) => {
                 // Hack: If we directly call `ty::enum_variants`, it
                 // annoyingly takes it upon itself to run off and
                 // evaluate the discriminants eagerly (*grumpy* that's
@@ -460,7 +460,7 @@ impl<'a> Visitor<()> for ConstraintContext<'a> {
                 }
             }
 
-            ast::item_struct(..) => {
+            ast::ItemStruct(..) => {
                 let struct_fields = ty::lookup_struct_fields(tcx, did);
                 for field_info in struct_fields.iter() {
                     assert_eq!(field_info.id.crate, ast::LOCAL_CRATE);
@@ -469,7 +469,7 @@ impl<'a> Visitor<()> for ConstraintContext<'a> {
                 }
             }
 
-            ast::item_trait(..) => {
+            ast::ItemTrait(..) => {
                 let methods = ty::trait_methods(tcx, did);
                 for method in methods.iter() {
                     match method.transformed_self_ty {
@@ -493,13 +493,13 @@ impl<'a> Visitor<()> for ConstraintContext<'a> {
                 }
             }
 
-            ast::item_static(..) |
-            ast::item_fn(..) |
-            ast::item_mod(..) |
-            ast::item_foreign_mod(..) |
-            ast::item_ty(..) |
-            ast::item_impl(..) |
-            ast::item_mac(..) => {
+            ast::ItemStatic(..) |
+            ast::ItemFn(..) |
+            ast::ItemMod(..) |
+            ast::ItemForeignMod(..) |
+            ast::ItemTy(..) |
+            ast::ItemImpl(..) |
+            ast::ItemMac(..) => {
                 visit::walk_item(self, item, ());
             }
         }
@@ -540,8 +540,8 @@ impl<'a> ConstraintContext<'a> {
             // Parameter on an item defined within current crate:
             // variance not yet inferred, so return a symbolic
             // variance.
-            let index = self.inferred_index(param_def_id.node);
-            self.terms_cx.inferred_infos[*index].term
+            let InferredIndex(index) = self.inferred_index(param_def_id.node);
+            self.terms_cx.inferred_infos[index].term
         } else {
             // Parameter on an item defined within another crate:
             // variance already inferred, just look it up.
@@ -556,11 +556,11 @@ impl<'a> ConstraintContext<'a> {
     }
 
     fn add_constraint(&mut self,
-                      index: InferredIndex,
+                      InferredIndex(index): InferredIndex,
                       variance: VarianceTermPtr<'a>) {
         debug!("add_constraint(index={}, variance={})",
-                *index, variance.to_str());
-        self.constraints.push(Constraint { inferred: index,
+                index, variance.to_str());
+        self.constraints.push(Constraint { inferred: InferredIndex(index),
                                            variance: variance });
     }
 
@@ -634,7 +634,10 @@ impl<'a> ConstraintContext<'a> {
                 self.add_constraints_from_mt(mt, variance);
             }
 
-            ty::ty_box(ref mt) |
+            ty::ty_box(typ) => {
+                self.add_constraints_from_ty(typ, variance);
+            }
+
             ty::ty_uniq(ref mt) |
             ty::ty_ptr(ref mt) => {
                 self.add_constraints_from_mt(mt, variance);
@@ -846,19 +849,20 @@ impl<'a> SolveContext<'a> {
 
             for constraint in self.constraints.iter() {
                 let Constraint { inferred, variance: term } = *constraint;
+                let InferredIndex(inferred) = inferred;
                 let variance = self.evaluate(term);
-                let old_value = self.solutions[*inferred];
+                let old_value = self.solutions[inferred];
                 let new_value = glb(variance, old_value);
                 if old_value != new_value {
                     debug!("Updating inferred {} (node {}) \
                             from {:?} to {:?} due to {}",
-                            *inferred,
-                            self.terms_cx.inferred_infos[*inferred].param_id,
+                            inferred,
+                            self.terms_cx.inferred_infos[inferred].param_id,
                             old_value,
                             new_value,
                             term.to_str());
 
-                    self.solutions[*inferred] = new_value;
+                    self.solutions[inferred] = new_value;
                     changed = true;
                 }
             }
@@ -876,7 +880,6 @@ impl<'a> SolveContext<'a> {
         // item id).
 
         let tcx = self.terms_cx.tcx;
-        let item_variance_map = tcx.item_variance_map;
         let solutions = &self.solutions;
         let inferred_infos = &self.terms_cx.inferred_infos;
         let mut index = 0;
@@ -919,8 +922,9 @@ impl<'a> SolveContext<'a> {
                 tcx.sess.span_err(ast_map::node_span(tcx.items, item_id), found);
             }
 
-            let newly_added = item_variance_map.insert(item_def_id,
-                                                       @item_variances);
+            let mut item_variance_map = tcx.item_variance_map.borrow_mut();
+            let newly_added = item_variance_map.get().insert(item_def_id,
+                                                             @item_variances);
             assert!(newly_added);
         }
     }
@@ -937,8 +941,8 @@ impl<'a> SolveContext<'a> {
                 v1.xform(v2)
             }
 
-            InferredTerm(index) => {
-                self.solutions[*index]
+            InferredTerm(InferredIndex(index)) => {
+                self.solutions[index]
             }
         }
     }

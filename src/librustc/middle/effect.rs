@@ -29,8 +29,8 @@ enum UnsafeContext {
 
 fn type_is_unsafe_function(ty: ty::t) -> bool {
     match ty::get(ty).sty {
-        ty::ty_bare_fn(ref f) => f.purity == ast::unsafe_fn,
-        ty::ty_closure(ref f) => f.purity == ast::unsafe_fn,
+        ty::ty_bare_fn(ref f) => f.purity == ast::UnsafeFn,
+        ty::ty_closure(ref f) => f.purity == ast::UnsafeFn,
         _ => false,
     }
 }
@@ -56,7 +56,8 @@ impl EffectCheckVisitor {
             UnsafeBlock(block_id) => {
                 // OK, but record this.
                 debug!("effect: recording unsafe block as used: {:?}", block_id);
-                let _ = self.tcx.used_unsafe.insert(block_id);
+                let mut used_unsafe = self.tcx.used_unsafe.borrow_mut();
+                let _ = used_unsafe.get().insert(block_id);
             }
             UnsafeFn => {}
         }
@@ -80,14 +81,14 @@ impl EffectCheckVisitor {
 }
 
 impl Visitor<()> for EffectCheckVisitor {
-    fn visit_fn(&mut self, fn_kind: &visit::fn_kind, fn_decl: &ast::fn_decl,
-                block: ast::P<ast::Block>, span: Span, node_id: ast::NodeId, _:()) {
+    fn visit_fn(&mut self, fn_kind: &visit::FnKind, fn_decl: &ast::FnDecl,
+                block: &ast::Block, span: Span, node_id: ast::NodeId, _:()) {
 
         let (is_item_fn, is_unsafe_fn) = match *fn_kind {
-            visit::fk_item_fn(_, _, purity, _) =>
-                (true, purity == ast::unsafe_fn),
-            visit::fk_method(_, _, method) =>
-                (true, method.purity == ast::unsafe_fn),
+            visit::FkItemFn(_, _, purity, _) =>
+                (true, purity == ast::UnsafeFn),
+            visit::FkMethod(_, _, method) =>
+                (true, method.purity == ast::UnsafeFn),
             _ => (false, false),
         };
 
@@ -103,7 +104,7 @@ impl Visitor<()> for EffectCheckVisitor {
         self.unsafe_context = old_unsafe_context
     }
 
-    fn visit_block(&mut self, block: ast::P<ast::Block>, _:()) {
+    fn visit_block(&mut self, block: &ast::Block, _:()) {
         let old_unsafe_context = self.unsafe_context;
         let is_unsafe = match block.rules {
             ast::UnsafeBlock(..) => true, ast::DefaultBlock => false
@@ -117,7 +118,7 @@ impl Visitor<()> for EffectCheckVisitor {
         self.unsafe_context = old_unsafe_context
     }
 
-    fn visit_expr(&mut self, expr: @ast::Expr, _:()) {
+    fn visit_expr(&mut self, expr: &ast::Expr, _:()) {
         match expr.node {
             ast::ExprMethodCall(callee_id, _, _, _, _, _) => {
                 let base_type = ty::node_id_to_type(self.tcx, callee_id);

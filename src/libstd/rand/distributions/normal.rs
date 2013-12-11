@@ -10,6 +10,7 @@
 
 //! The normal and derived distributions.
 
+use num::Real;
 use rand::{Rng, Rand, Open01};
 use rand::distributions::{ziggurat, ziggurat_tables, Sample, IndependentSample};
 
@@ -32,7 +33,7 @@ impl Rand for StandardNormal {
     fn rand<R:Rng>(rng: &mut R) -> StandardNormal {
         #[inline]
         fn pdf(x: f64) -> f64 {
-            ((-x*x/2.0) as f64).exp()
+            (-x*x/2.0).exp()
         }
         #[inline]
         fn zero_case<R:Rng>(rng: &mut R, u: f64) -> f64 {
@@ -46,8 +47,8 @@ impl Rand for StandardNormal {
             let mut y = 0.0f64;
 
             while -2.0 * y < x * x {
-                let x_ = *rng.gen::<Open01<f64>>();
-                let y_ = *rng.gen::<Open01<f64>>();
+                let Open01(x_) = rng.gen::<Open01<f64>>();
+                let Open01(y_) = rng.gen::<Open01<f64>>();
 
                 x = x_.ln() / ziggurat_tables::ZIG_NORM_R;
                 y = y_.ln();
@@ -76,12 +77,10 @@ impl Rand for StandardNormal {
 /// use std::rand;
 /// use std::rand::distributions::{Normal, IndependentSample};
 ///
-/// fn main() {
-///     // mean 2, standard deviation 3
-///     let normal = Normal::new(2.0, 3.0);
-///     let v = normal.ind_sample(&mut rand::task_rng());
-///     println!("{} is from a N(2, 9) distribution", v)
-/// }
+/// // mean 2, standard deviation 3
+/// let normal = Normal::new(2.0, 3.0);
+/// let v = normal.ind_sample(&mut rand::task_rng());
+/// println!("{} is from a N(2, 9) distribution", v)
 /// ```
 pub struct Normal {
     priv mean: f64,
@@ -104,7 +103,8 @@ impl Sample<f64> for Normal {
 }
 impl IndependentSample<f64> for Normal {
     fn ind_sample<R: Rng>(&self, rng: &mut R) -> f64 {
-        self.mean + self.std_dev * (*rng.gen::<StandardNormal>())
+        let StandardNormal(n) = rng.gen::<StandardNormal>();
+        self.mean + self.std_dev * n
     }
 }
 
@@ -120,12 +120,10 @@ impl IndependentSample<f64> for Normal {
 /// use std::rand;
 /// use std::rand::distributions::{LogNormal, IndependentSample};
 ///
-/// fn main() {
-///     // mean 2, standard deviation 3
-///     let log_normal = LogNormal::new(2.0, 3.0);
-///     let v = normal.ind_sample(&mut rand::task_rng());
-///     println!("{} is from an ln N(2, 9) distribution", v)
-/// }
+/// // mean 2, standard deviation 3
+/// let log_normal = LogNormal::new(2.0, 3.0);
+/// let v = log_normal.ind_sample(&mut rand::task_rng());
+/// println!("{} is from an ln N(2, 9) distribution", v)
 /// ```
 pub struct LogNormal {
     priv norm: Normal
@@ -150,10 +148,10 @@ impl IndependentSample<f64> for LogNormal {
 
 #[cfg(test)]
 mod tests {
+    use prelude::*;
     use rand::*;
     use super::*;
-    use iter::range;
-    use option::{Some, None};
+    use rand::distributions::*;
 
     #[test]
     fn test_normal() {
@@ -190,11 +188,11 @@ mod tests {
 #[cfg(test)]
 mod bench {
     use extra::test::BenchHarness;
-    use rand::{XorShiftRng, RAND_BENCH_N};
-    use super::*;
-    use iter::range;
-    use option::{Some, None};
     use mem::size_of;
+    use prelude::*;
+    use rand::{XorShiftRng, RAND_BENCH_N};
+    use rand::distributions::*;
+    use super::*;
 
     #[bench]
     fn rand_normal(bh: &mut BenchHarness) {

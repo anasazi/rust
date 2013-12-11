@@ -19,7 +19,7 @@ use middle::lint;
 
 use syntax::attr::AttrMetaMethods;
 use syntax::ast::NodeId;
-use syntax::ast::{int_ty, uint_ty};
+use syntax::ast::{IntTy, UintTy};
 use syntax::codemap::Span;
 use syntax::diagnostic;
 use syntax::parse::ParseSess;
@@ -28,14 +28,15 @@ use syntax::abi;
 use syntax::parse::token;
 use syntax;
 
+use std::cell::{Cell, RefCell};
 use std::hashmap::{HashMap,HashSet};
 
 pub struct config {
     os: abi::Os,
     arch: abi::Architecture,
     target_strs: target_strs::t,
-    int_type: int_ty,
-    uint_type: uint_ty,
+    int_type: IntTy,
+    uint_type: UintTy,
 }
 
 pub static verbose:                 uint = 1 <<  0;
@@ -144,12 +145,12 @@ pub struct options {
     llvm_args: ~[~str],
     debuginfo: bool,
     extra_debuginfo: bool,
-    lint_opts: ~[(lint::lint, lint::level)],
+    lint_opts: ~[(lint::Lint, lint::level)],
     save_temps: bool,
-    output_type: back::link::output_type,
-    addl_lib_search_paths: @mut HashSet<Path>, // This is mutable for rustpkg, which
-                                               // updates search paths based on the
-                                               // parsed code
+    output_type: back::link::OutputType,
+    // This is mutable for rustpkg, which updates search paths based on the
+    // parsed code.
+    addl_lib_search_paths: @RefCell<HashSet<Path>>,
     ar: Option<~str>,
     linker: Option<~str>,
     linker_args: ~[~str],
@@ -162,14 +163,15 @@ pub struct options {
     // will be added to the crate AST node.  This should not be used for
     // anything except building the full crate config prior to parsing.
     cfg: ast::CrateConfig,
-    binary: @str,
+    binary: ~str,
     test: bool,
     parse_only: bool,
     no_trans: bool,
+    no_analysis: bool,
     debugging_opts: uint,
     android_cross_path: Option<~str>,
-    /// Whether to write .d dependency files
-    write_dependency_info: bool,
+    /// Whether to write dependency files. It's (enabled, optional filename).
+    write_dependency_info: (bool, Option<Path>),
     /// Crate id-related things to maybe print. It's (crate_id, crate_name, crate_file_name).
     print_metas: (bool, bool, bool),
 }
@@ -190,7 +192,7 @@ pub enum EntryFnType {
     EntryNone,
 }
 
-#[deriving(Eq, Clone)]
+#[deriving(Eq, Clone, TotalOrd, TotalEq)]
 pub enum OutputStyle {
     OutputExecutable,
     OutputDylib,
@@ -201,19 +203,20 @@ pub enum OutputStyle {
 pub struct Session_ {
     targ_cfg: @config,
     opts: @options,
-    cstore: @mut metadata::cstore::CStore,
-    parse_sess: @mut ParseSess,
+    cstore: @metadata::cstore::CStore,
+    parse_sess: @ParseSess,
     codemap: @codemap::CodeMap,
     // For a library crate, this is always none
-    entry_fn: @mut Option<(NodeId, codemap::Span)>,
-    entry_type: @mut Option<EntryFnType>,
-    span_diagnostic: @mut diagnostic::span_handler,
+    entry_fn: RefCell<Option<(NodeId, codemap::Span)>>,
+    entry_type: Cell<Option<EntryFnType>>,
+    span_diagnostic: @diagnostic::SpanHandler,
     filesearch: @filesearch::FileSearch,
-    building_library: @mut bool,
+    building_library: Cell<bool>,
     working_dir: Path,
-    lints: @mut HashMap<ast::NodeId, ~[(lint::lint, codemap::Span, ~str)]>,
-    node_id: @mut ast::NodeId,
-    outputs: @mut ~[OutputStyle],
+    lints: RefCell<HashMap<ast::NodeId,
+                           ~[(lint::Lint, codemap::Span, ~str)]>>,
+    node_id: Cell<ast::NodeId>,
+    outputs: @RefCell<~[OutputStyle]>,
 }
 
 pub type Session = @Session_;
@@ -265,30 +268,31 @@ impl Session_ {
         self.span_diagnostic.handler().unimpl(msg)
     }
     pub fn add_lint(&self,
-                    lint: lint::lint,
+                    lint: lint::Lint,
                     id: ast::NodeId,
                     sp: Span,
                     msg: ~str) {
-        match self.lints.find_mut(&id) {
+        let mut lints = self.lints.borrow_mut();
+        match lints.get().find_mut(&id) {
             Some(arr) => { arr.push((lint, sp, msg)); return; }
             None => {}
         }
-        self.lints.insert(id, ~[(lint, sp, msg)]);
+        lints.get().insert(id, ~[(lint, sp, msg)]);
     }
     pub fn next_node_id(&self) -> ast::NodeId {
         self.reserve_node_ids(1)
     }
     pub fn reserve_node_ids(&self, count: ast::NodeId) -> ast::NodeId {
-        let v = *self.node_id;
+        let v = self.node_id.get();
 
         match v.checked_add(&count) {
-            Some(next) => { *self.node_id = next; }
+            Some(next) => { self.node_id.set(next); }
             None => self.bug("Input too large, ran out of node ids!")
         }
 
         v
     }
-    pub fn diagnostic(&self) -> @mut diagnostic::span_handler {
+    pub fn diagnostic(&self) -> @diagnostic::SpanHandler {
         self.span_diagnostic
     }
     pub fn debugging_opt(&self, opt: uint) -> bool {
@@ -364,7 +368,7 @@ impl Session_ {
     }
 
     // pointless function, now...
-    pub fn intr(&self) -> @syntax::parse::token::ident_interner {
+    pub fn intr(&self) -> @syntax::parse::token::IdentInterner {
         token::get_ident_interner()
     }
 }
@@ -381,8 +385,8 @@ pub fn basic_options() -> @options {
         extra_debuginfo: false,
         lint_opts: ~[],
         save_temps: false,
-        output_type: link::output_type_exe,
-        addl_lib_search_paths: @mut HashSet::new(),
+        output_type: link::OutputTypeExe,
+        addl_lib_search_paths: @RefCell::new(HashSet::new()),
         ar: None,
         linker: None,
         linker_args: ~[],
@@ -391,13 +395,14 @@ pub fn basic_options() -> @options {
         target_cpu: ~"generic",
         target_feature: ~"",
         cfg: ~[],
-        binary: @"rustc",
+        binary: ~"rustc",
         test: false,
         parse_only: false,
         no_trans: false,
+        no_analysis: false,
         debugging_opts: 0u,
         android_cross_path: None,
-        write_dependency_info: false,
+        write_dependency_info: (false, None),
         print_metas: (false, false, false),
     }
 }
@@ -421,14 +426,14 @@ pub fn building_library(options: &options, crate: &ast::Crate) -> bool {
     }
 }
 
-pub fn collect_outputs(options: &options,
+pub fn collect_outputs(session: &Session,
                        attrs: &[ast::Attribute]) -> ~[OutputStyle] {
     // If we're generating a test executable, then ignore all other output
     // styles at all other locations
-    if options.test {
+    if session.opts.test {
         return ~[OutputExecutable];
     }
-    let mut base = options.outputs.clone();
+    let mut base = session.opts.outputs.clone();
     let mut iter = attrs.iter().filter_map(|a| {
         if "crate_type" == a.name() {
             match a.value_str() {
@@ -437,7 +442,16 @@ pub fn collect_outputs(options: &options,
                 Some(n) if "lib" == n => Some(OutputDylib),
                 Some(n) if "staticlib" == n => Some(OutputStaticlib),
                 Some(n) if "bin" == n => Some(OutputExecutable),
-                _ => None
+                Some(_) => {
+                    session.add_lint(lint::UnknownCrateType, ast::CRATE_NODE_ID,
+                                     a.span, ~"invalid `crate_type` value");
+                    None
+                }
+                _ => {
+                    session.add_lint(lint::UnknownCrateType, ast::CRATE_NODE_ID,
+                                    a.span, ~"`crate_type` requires a value");
+                    None
+                }
             }
         } else {
             None
@@ -447,6 +461,8 @@ pub fn collect_outputs(options: &options,
     if base.len() == 0 {
         base.push(OutputExecutable);
     }
+    base.sort();
+    base.dedup();
     return base;
 }
 

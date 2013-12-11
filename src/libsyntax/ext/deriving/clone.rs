@@ -8,17 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use ast::{MetaItem, item, Expr};
+use ast::{MetaItem, Item, Expr};
 use codemap::Span;
 use ext::base::ExtCtxt;
 use ext::build::AstBuilder;
 use ext::deriving::generic::*;
 
-pub fn expand_deriving_clone(cx: @ExtCtxt,
+pub fn expand_deriving_clone(cx: &ExtCtxt,
                              span: Span,
                              mitem: @MetaItem,
-                             in_items: ~[@item])
-                          -> ~[@item] {
+                             in_items: ~[@Item])
+                          -> ~[@Item] {
     let trait_def = TraitDef {
         cx: cx, span: span,
 
@@ -42,11 +42,11 @@ pub fn expand_deriving_clone(cx: @ExtCtxt,
     trait_def.expand(mitem, in_items)
 }
 
-pub fn expand_deriving_deep_clone(cx: @ExtCtxt,
+pub fn expand_deriving_deep_clone(cx: &ExtCtxt,
                                   span: Span,
                                   mitem: @MetaItem,
-                                  in_items: ~[@item])
-    -> ~[@item] {
+                                  in_items: ~[@Item])
+    -> ~[@Item] {
     let trait_def = TraitDef {
         cx: cx, span: span,
 
@@ -74,7 +74,7 @@ pub fn expand_deriving_deep_clone(cx: @ExtCtxt,
 
 fn cs_clone(
     name: &str,
-    cx: @ExtCtxt, span: Span,
+    cx: &ExtCtxt, span: Span,
     substr: &Substructure) -> @Expr {
     let clone_ident = substr.method_ident;
     let ctor_ident;

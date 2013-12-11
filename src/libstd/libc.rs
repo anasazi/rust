@@ -76,6 +76,7 @@ pub use libc::types::common::posix01::*;
 pub use libc::types::common::posix08::*;
 pub use libc::types::common::bsd44::*;
 pub use libc::types::os::common::posix01::*;
+pub use libc::types::os::common::bsd44::*;
 pub use libc::types::os::arch::c95::*;
 pub use libc::types::os::arch::c99::*;
 pub use libc::types::os::arch::posix88::*;
@@ -111,6 +112,7 @@ pub use libc::funcs::posix01::glob::*;
 pub use libc::funcs::posix01::mman::*;
 pub use libc::funcs::posix08::unistd::*;
 
+pub use libc::funcs::bsd43::*;
 pub use libc::funcs::bsd44::*;
 pub use libc::funcs::extra::*;
 
@@ -224,7 +226,8 @@ pub mod types {
         pub mod common {
             pub mod posix01 {
                 use libc::types::common::c95::{c_void};
-                use libc::types::os::arch::c95::{c_char, c_ulong, size_t};
+                use libc::types::os::arch::c95::{c_char, c_ulong, size_t,
+                                                 time_t, suseconds_t, c_long};
 
                 pub type pthread_t = c_ulong;
 
@@ -238,6 +241,62 @@ pub mod types {
                     __unused3: *c_void,
                     __unused4: *c_void,
                     __unused5: *c_void,
+                }
+
+                pub struct timeval {
+                    tv_sec: time_t,
+                    tv_usec: suseconds_t,
+                }
+
+                pub struct timespec {
+                    tv_sec: time_t,
+                    tv_nsec: c_long,
+                }
+
+                pub enum timezone {}
+            }
+            pub mod bsd44 {
+                use libc::types::os::arch::c95::c_uint;
+
+                pub type socklen_t = u32;
+                pub type sa_family_t = u16;
+                pub type in_port_t = u16;
+                pub type in_addr_t = u32;
+                pub struct sockaddr {
+                    sa_family: sa_family_t,
+                    sa_data: [u8, ..14],
+                }
+                pub struct sockaddr_storage {
+                    ss_family: sa_family_t,
+                    __ss_align: i64,
+                    __ss_pad2: [u8, ..112],
+                }
+                pub struct sockaddr_in {
+                    sin_family: sa_family_t,
+                    sin_port: in_port_t,
+                    sin_addr: in_addr,
+                    sin_zero: [u8, ..8],
+                }
+                pub struct in_addr {
+                    s_addr: in_addr_t,
+                }
+                pub struct sockaddr_in6 {
+                    sin6_family: sa_family_t,
+                    sin6_port: in_port_t,
+                    sin6_flowinfo: u32,
+                    sin6_addr: in6_addr,
+                    sin6_scope_id: u32,
+                }
+                pub struct in6_addr {
+                    s6_addr: [u16, ..8]
+                }
+                pub struct ip_mreq {
+                    imr_multiaddr: in_addr,
+                    imr_interface: in_addr,
+                }
+                pub struct ip6_mreq {
+                    ipv6mr_multiaddr: in6_addr,
+                    ipv6mr_interface: c_uint,
                 }
             }
         }
@@ -262,6 +321,7 @@ pub mod types {
                 pub type ptrdiff_t = i32;
                 pub type clock_t = i32;
                 pub type time_t = i32;
+                pub type suseconds_t = i32;
                 pub type wchar_t = i32;
             }
             pub mod c99 {
@@ -445,6 +505,7 @@ pub mod types {
                 pub type ptrdiff_t = i64;
                 pub type clock_t = i64;
                 pub type time_t = i64;
+                pub type suseconds_t = i64;
                 pub type wchar_t = i32;
             }
             pub mod c99 {
@@ -517,7 +578,8 @@ pub mod types {
         pub mod common {
             pub mod posix01 {
                 use libc::types::common::c95::{c_void};
-                use libc::types::os::arch::c95::{c_char, c_int, size_t};
+                use libc::types::os::arch::c95::{c_char, c_int, size_t,
+                                                 time_t, suseconds_t, c_long};
                 use libc::types::os::arch::c99::{uintptr_t};
 
                 pub type pthread_t = uintptr_t;
@@ -536,6 +598,67 @@ pub mod types {
                     __unused6: *c_void,
                     __unused7: *c_void,
                     __unused8: *c_void,
+                }
+
+                pub struct timeval {
+                    tv_sec: time_t,
+                    tv_usec: suseconds_t,
+                }
+
+                pub struct timespec {
+                    tv_sec: time_t,
+                    tv_nsec: c_long,
+                }
+
+                pub enum timezone {}
+            }
+            pub mod bsd44 {
+                use libc::types::os::arch::c95::c_uint;
+
+                pub type socklen_t = u32;
+                pub type sa_family_t = u8;
+                pub type in_port_t = u16;
+                pub type in_addr_t = u32;
+                pub struct sockaddr {
+                    sa_len: u8,
+                    sa_family: sa_family_t,
+                    sa_data: [u8, ..14],
+                }
+                pub struct sockaddr_storage {
+                    ss_len: u8,
+                    ss_family: sa_family_t,
+                    __ss_pad1: [u8, ..6],
+                    __ss_align: i64,
+                    __ss_pad2: [u8, ..112],
+                }
+                pub struct sockaddr_in {
+                    sin_len: u8,
+                    sin_family: sa_family_t,
+                    sin_port: in_port_t,
+                    sin_addr: in_addr,
+                    sin_zero: [u8, ..8],
+                }
+                pub struct in_addr {
+                    s_addr: in_addr_t,
+                }
+                pub struct sockaddr_in6 {
+                    sin6_len: u8,
+                    sin6_family: sa_family_t,
+                    sin6_port: in_port_t,
+                    sin6_flowinfo: u32,
+                    sin6_addr: in6_addr,
+                    sin6_scope_id: u32,
+                }
+                pub struct in6_addr {
+                    s6_addr: [u16, ..8]
+                }
+                pub struct ip_mreq {
+                    imr_multiaddr: in_addr,
+                    imr_interface: in_addr,
+                }
+                pub struct ip6_mreq {
+                    ipv6mr_multiaddr: in6_addr,
+                    ipv6mr_interface: c_uint,
                 }
             }
         }
@@ -558,6 +681,7 @@ pub mod types {
                 pub type ptrdiff_t = i64;
                 pub type clock_t = i32;
                 pub type time_t = i64;
+                pub type suseconds_t = i64;
                 pub type wchar_t = i32;
             }
             pub mod c99 {
@@ -634,7 +758,8 @@ pub mod types {
     pub mod os {
         pub mod common {
             pub mod posix01 {
-                use libc::types::os::arch::c95::c_short;
+                use libc::types::os::arch::c95::{c_short, time_t, suseconds_t,
+                                                 c_long};
                 use libc::types::os::arch::extra::{int64, time64_t};
                 use libc::types::os::arch::posix88::{dev_t, ino_t};
                 use libc::types::os::arch::posix88::mode_t;
@@ -659,6 +784,64 @@ pub mod types {
                 pub struct utimbuf {
                     actime: time64_t,
                     modtime: time64_t,
+                }
+
+                pub struct timeval {
+                    tv_sec: time_t,
+                    tv_usec: suseconds_t,
+                }
+
+                pub struct timespec {
+                    tv_sec: time_t,
+                    tv_nsec: c_long,
+                }
+
+                pub enum timezone {}
+            }
+
+            pub mod bsd44 {
+                use libc::types::os::arch::c95::{c_int, c_uint};
+
+                pub type SOCKET = c_uint;
+                pub type socklen_t = c_int;
+                pub type sa_family_t = u16;
+                pub type in_port_t = u16;
+                pub type in_addr_t = u32;
+                pub struct sockaddr {
+                    sa_family: sa_family_t,
+                    sa_data: [u8, ..14],
+                }
+                pub struct sockaddr_storage {
+                    ss_family: sa_family_t,
+                    __ss_align: i64,
+                    __ss_pad2: [u8, ..112],
+                }
+                pub struct sockaddr_in {
+                    sin_family: sa_family_t,
+                    sin_port: in_port_t,
+                    sin_addr: in_addr,
+                    sin_zero: [u8, ..8],
+                }
+                pub struct in_addr {
+                    s_addr: in_addr_t,
+                }
+                pub struct sockaddr_in6 {
+                    sin6_family: sa_family_t,
+                    sin6_port: in_port_t,
+                    sin6_flowinfo: u32,
+                    sin6_addr: in6_addr,
+                    sin6_scope_id: u32,
+                }
+                pub struct in6_addr {
+                    s6_addr: [u16, ..8]
+                }
+                pub struct ip_mreq {
+                    imr_multiaddr: in_addr,
+                    imr_interface: in_addr,
+                }
+                pub struct ip6_mreq {
+                    ipv6mr_multiaddr: in6_addr,
+                    ipv6mr_interface: c_uint,
                 }
             }
         }
@@ -693,6 +876,11 @@ pub mod types {
                 pub type time_t = i32;
                 #[cfg(target_arch = "x86_64")]
                 pub type time_t = i64;
+
+                #[cfg(target_arch = "x86")]
+                pub type suseconds_t = i32;
+                #[cfg(target_arch = "x86_64")]
+                pub type suseconds_t = i64;
 
                 pub type wchar_t = u16;
             }
@@ -870,6 +1058,13 @@ pub mod types {
                 }
 
                 pub type LPOVERLAPPED = *mut OVERLAPPED;
+
+                pub struct FILETIME {
+                    dwLowDateTime: DWORD,
+                    dwHighDateTime: DWORD,
+                }
+
+                pub type LPFILETIME = *mut FILETIME;
             }
         }
     }
@@ -878,8 +1073,9 @@ pub mod types {
     pub mod os {
         pub mod common {
             pub mod posix01 {
-                use libc::types::common::c95::{c_void};
-                use libc::types::os::arch::c95::{c_char, c_int, size_t};
+                use libc::types::common::c95::c_void;
+                use libc::types::os::arch::c95::{c_char, c_int, size_t,
+                                                 time_t, suseconds_t, c_long};
                 use libc::types::os::arch::c99::{uintptr_t};
 
                 pub type pthread_t = uintptr_t;
@@ -898,6 +1094,68 @@ pub mod types {
                     __unused6: *c_void,
                     __unused7: *c_void,
                     __unused8: *c_void,
+                }
+
+                pub struct timeval {
+                    tv_sec: time_t,
+                    tv_usec: suseconds_t,
+                }
+
+                pub struct timespec {
+                    tv_sec: time_t,
+                    tv_nsec: c_long,
+                }
+
+                pub enum timezone {}
+            }
+
+            pub mod bsd44 {
+                use libc::types::os::arch::c95::{c_int, c_uint};
+
+                pub type socklen_t = c_int;
+                pub type sa_family_t = u8;
+                pub type in_port_t = u16;
+                pub type in_addr_t = u32;
+                pub struct sockaddr {
+                    sa_len: u8,
+                    sa_family: sa_family_t,
+                    sa_data: [u8, ..14],
+                }
+                pub struct sockaddr_storage {
+                    ss_len: u8,
+                    ss_family: sa_family_t,
+                    __ss_pad1: [u8, ..6],
+                    __ss_align: i64,
+                    __ss_pad2: [u8, ..112],
+                }
+                pub struct sockaddr_in {
+                    sin_len: u8,
+                    sin_family: sa_family_t,
+                    sin_port: in_port_t,
+                    sin_addr: in_addr,
+                    sin_zero: [u8, ..8],
+                }
+                pub struct in_addr {
+                    s_addr: in_addr_t,
+                }
+                pub struct sockaddr_in6 {
+                    sin6_len: u8,
+                    sin6_family: sa_family_t,
+                    sin6_port: in_port_t,
+                    sin6_flowinfo: u32,
+                    sin6_addr: in6_addr,
+                    sin6_scope_id: u32,
+                }
+                pub struct in6_addr {
+                    s6_addr: [u16, ..8]
+                }
+                pub struct ip_mreq {
+                    imr_multiaddr: in_addr,
+                    imr_interface: in_addr,
+                }
+                pub struct ip6_mreq {
+                    ipv6mr_multiaddr: in6_addr,
+                    ipv6mr_interface: c_uint,
                 }
             }
         }
@@ -920,6 +1178,7 @@ pub mod types {
                 pub type ptrdiff_t = i32;
                 pub type clock_t = u32;
                 pub type time_t = i32;
+                pub type suseconds_t = i32;
                 pub type wchar_t = i32;
             }
             pub mod c99 {
@@ -989,6 +1248,12 @@ pub mod types {
             pub mod bsd44 {
             }
             pub mod extra {
+                pub struct mach_timebase_info {
+                    numer: u32,
+                    denom: u32,
+                }
+
+                pub type mach_timebase_info_data_t = mach_timebase_info;
             }
         }
 
@@ -1010,6 +1275,7 @@ pub mod types {
                 pub type ptrdiff_t = i64;
                 pub type clock_t = u64;
                 pub type time_t = i64;
+                pub type suseconds_t = i32;
                 pub type wchar_t = i32;
             }
             pub mod c99 {
@@ -1080,6 +1346,12 @@ pub mod types {
             pub mod bsd44 {
             }
             pub mod extra {
+                pub struct mach_timebase_info {
+                    numer: u32,
+                    denom: u32,
+                }
+
+                pub type mach_timebase_info_data_t = mach_timebase_info;
             }
         }
     }
@@ -1109,6 +1381,59 @@ pub mod consts {
             pub static FILENAME_MAX : c_uint = 260_u32;
             pub static L_tmpnam : c_uint = 16_u32;
             pub static TMP_MAX : c_uint = 32767_u32;
+
+            pub static WSAEINTR: c_int = 10004;
+            pub static WSAEBADF: c_int = 10009;
+            pub static WSAEACCES: c_int = 10013;
+            pub static WSAEFAULT: c_int = 10014;
+            pub static WSAEINVAL: c_int = 10022;
+            pub static WSAEMFILE: c_int = 10024;
+            pub static WSAEWOULDBLOCK: c_int = 10035;
+            pub static WSAEINPROGRESS: c_int = 10036;
+            pub static WSAEALREADY: c_int = 10037;
+            pub static WSAENOTSOCK: c_int = 10038;
+            pub static WSAEDESTADDRREQ: c_int = 10039;
+            pub static WSAEMSGSIZE: c_int = 10040;
+            pub static WSAEPROTOTYPE: c_int = 10041;
+            pub static WSAENOPROTOOPT: c_int = 10042;
+            pub static WSAEPROTONOSUPPORT: c_int = 10043;
+            pub static WSAESOCKTNOSUPPORT: c_int = 10044;
+            pub static WSAEOPNOTSUPP: c_int = 10045;
+            pub static WSAEPFNOSUPPORT: c_int = 10046;
+            pub static WSAEAFNOSUPPORT: c_int = 10047;
+            pub static WSAEADDRINUSE: c_int = 10048;
+            pub static WSAEADDRNOTAVAIL: c_int = 10049;
+            pub static WSAENETDOWN: c_int = 10050;
+            pub static WSAENETUNREACH: c_int = 10051;
+            pub static WSAENETRESET: c_int = 10052;
+            pub static WSAECONNABORTED: c_int = 10053;
+            pub static WSAECONNRESET: c_int = 10054;
+            pub static WSAENOBUFS: c_int = 10055;
+            pub static WSAEISCONN: c_int = 10056;
+            pub static WSAENOTCONN: c_int = 10057;
+            pub static WSAESHUTDOWN: c_int = 10058;
+            pub static WSAETOOMANYREFS: c_int = 10059;
+            pub static WSAETIMEDOUT: c_int = 10060;
+            pub static WSAECONNREFUSED: c_int = 10061;
+            pub static WSAELOOP: c_int = 10062;
+            pub static WSAENAMETOOLONG: c_int = 10063;
+            pub static WSAEHOSTDOWN: c_int = 10064;
+            pub static WSAEHOSTUNREACH: c_int = 10065;
+            pub static WSAENOTEMPTY: c_int = 10066;
+            pub static WSAEPROCLIM: c_int = 10067;
+            pub static WSAEUSERS: c_int = 10068;
+            pub static WSAEDQUOT: c_int = 10069;
+            pub static WSAESTALE: c_int = 10070;
+            pub static WSAEREMOTE: c_int = 10071;
+            pub static WSASYSNOTREADY: c_int = 10091;
+            pub static WSAVERNOTSUPPORTED: c_int = 10092;
+            pub static WSANOTINITIALISED: c_int = 10093;
+            pub static WSAEDISCON: c_int = 10101;
+            pub static WSAENOMORE: c_int = 10102;
+            pub static WSAECANCELLED: c_int = 10103;
+            pub static WSAEINVALIDPROCTABLE: c_int = 10104;
+            pub static WSAEINVALIDPROVIDER: c_int = 10105;
+            pub static WSAEPROVIDERFAILEDINIT: c_int = 10106;
         }
         pub mod c99 {
         }
@@ -1149,6 +1474,27 @@ pub mod consts {
         pub mod posix08 {
         }
         pub mod bsd44 {
+            use libc::types::os::arch::c95::c_int;
+
+            pub static AF_INET: c_int = 2;
+            pub static AF_INET6: c_int = 23;
+            pub static SOCK_STREAM: c_int = 1;
+            pub static SOCK_DGRAM: c_int = 2;
+            pub static IPPROTO_TCP: c_int = 6;
+            pub static IPPROTO_IP: c_int = 0;
+            pub static IPPROTO_IPV6: c_int = 41;
+            pub static IP_MULTICAST_TTL: c_int = 3;
+            pub static IP_MULTICAST_LOOP: c_int = 4;
+            pub static IP_ADD_MEMBERSHIP: c_int = 5;
+            pub static IP_DROP_MEMBERSHIP: c_int = 6;
+            pub static IPV6_ADD_MEMBERSHIP: c_int = 5;
+            pub static IPV6_DROP_MEMBERSHIP: c_int = 6;
+            pub static IP_TTL: c_int = 4;
+
+            pub static TCP_NODELAY: c_int = 0x0001;
+            pub static SOL_SOCKET: c_int = 0xffff;
+            pub static SO_KEEPALIVE: c_int = 8;
+            pub static SO_BROADCAST: c_int = 32;
         }
         pub mod extra {
             use libc::types::os::arch::c95::c_int;
@@ -1828,6 +2174,9 @@ pub mod consts {
 
             pub static PTHREAD_CREATE_JOINABLE: c_int = 0;
             pub static PTHREAD_CREATE_DETACHED: c_int = 1;
+
+            pub static CLOCK_REALTIME: c_int = 0;
+            pub static CLOCK_MONOTONIC: c_int = 1;
         }
         pub mod posix08 {
         }
@@ -1845,6 +2194,26 @@ pub mod consts {
             pub static MADV_MERGEABLE : c_int = 12;
             pub static MADV_UNMERGEABLE : c_int = 13;
             pub static MADV_HWPOISON : c_int = 100;
+
+            pub static AF_INET: c_int = 2;
+            pub static AF_INET6: c_int = 10;
+            pub static SOCK_STREAM: c_int = 1;
+            pub static SOCK_DGRAM: c_int = 2;
+            pub static IPPROTO_TCP: c_int = 6;
+            pub static IPPROTO_IP: c_int = 0;
+            pub static IPPROTO_IPV6: c_int = 41;
+            pub static IP_MULTICAST_TTL: c_int = 33;
+            pub static IP_MULTICAST_LOOP: c_int = 34;
+            pub static IP_TTL: c_int = 2;
+            pub static IP_ADD_MEMBERSHIP: c_int = 35;
+            pub static IP_DROP_MEMBERSHIP: c_int = 36;
+            pub static IPV6_ADD_MEMBERSHIP: c_int = 20;
+            pub static IPV6_DROP_MEMBERSHIP: c_int = 21;
+
+            pub static TCP_NODELAY: c_int = 1;
+            pub static SOL_SOCKET: c_int = 1;
+            pub static SO_KEEPALIVE: c_int = 9;
+            pub static SO_BROADCAST: c_int = 6;
         }
         #[cfg(target_arch = "x86")]
         #[cfg(target_arch = "x86_64")]
@@ -2238,6 +2607,9 @@ pub mod consts {
 
             pub static PTHREAD_CREATE_JOINABLE: c_int = 0;
             pub static PTHREAD_CREATE_DETACHED: c_int = 1;
+
+            pub static CLOCK_REALTIME: c_int = 0;
+            pub static CLOCK_MONOTONIC: c_int = 4;
         }
         pub mod posix08 {
         }
@@ -2262,6 +2634,27 @@ pub mod consts {
             pub static MINCORE_REFERENCED_OTHER : c_int = 0x8;
             pub static MINCORE_MODIFIED_OTHER : c_int = 0x10;
             pub static MINCORE_SUPER : c_int = 0x20;
+
+            pub static AF_INET: c_int = 2;
+            pub static AF_INET6: c_int = 28;
+            pub static SOCK_STREAM: c_int = 1;
+            pub static SOCK_DGRAM: c_int = 2;
+            pub static IPPROTO_TCP: c_int = 6;
+            pub static IPPROTO_IP: c_int = 0;
+            pub static IPPROTO_IPV6: c_int = 41;
+            pub static IP_MULTICAST_TTL: c_int = 10;
+            pub static IP_MULTICAST_LOOP: c_int = 11;
+            pub static IP_TTL: c_int = 4;
+            pub static IP_ADD_MEMBERSHIP: c_int = 12;
+            pub static IP_DROP_MEMBERSHIP: c_int = 13;
+            pub static IPV6_ADD_MEMBERSHIP: c_int = 12;
+            pub static IPV6_DROP_MEMBERSHIP: c_int = 13;
+
+            pub static TCP_NODELAY: c_int = 1;
+            pub static TCP_KEEPIDLE: c_int = 256;
+            pub static SOL_SOCKET: c_int = 0xffff;
+            pub static SO_KEEPALIVE: c_int = 0x0008;
+            pub static SO_BROADCAST: c_int = 0x0020;
         }
         pub mod extra {
             use libc::types::os::arch::c95::c_int;
@@ -2616,6 +3009,27 @@ pub mod consts {
             pub static MINCORE_MODIFIED : c_int = 0x4;
             pub static MINCORE_REFERENCED_OTHER : c_int = 0x8;
             pub static MINCORE_MODIFIED_OTHER : c_int = 0x10;
+
+            pub static AF_INET: c_int = 2;
+            pub static AF_INET6: c_int = 30;
+            pub static SOCK_STREAM: c_int = 1;
+            pub static SOCK_DGRAM: c_int = 2;
+            pub static IPPROTO_TCP: c_int = 6;
+            pub static IPPROTO_IP: c_int = 0;
+            pub static IPPROTO_IPV6: c_int = 41;
+            pub static IP_MULTICAST_TTL: c_int = 10;
+            pub static IP_MULTICAST_LOOP: c_int = 11;
+            pub static IP_TTL: c_int = 4;
+            pub static IP_ADD_MEMBERSHIP: c_int = 12;
+            pub static IP_DROP_MEMBERSHIP: c_int = 13;
+            pub static IPV6_ADD_MEMBERSHIP: c_int = 12;
+            pub static IPV6_DROP_MEMBERSHIP: c_int = 13;
+
+            pub static TCP_NODELAY: c_int = 0x01;
+            pub static TCP_KEEPALIVE: c_int = 0x10;
+            pub static SOL_SOCKET: c_int = 0xffff;
+            pub static SO_KEEPALIVE: c_int = 0x0008;
+            pub static SO_BROADCAST: c_int = 0x0020;
         }
         pub mod extra {
             use libc::types::os::arch::c95::c_int;
@@ -3296,13 +3710,82 @@ pub mod funcs {
         }
     }
 
+    #[cfg(not(windows))]
+    pub mod bsd43 {
+        use libc::types::common::c95::{c_void};
+        use libc::types::os::common::bsd44::{socklen_t, sockaddr};
+        use libc::types::os::arch::c95::{c_int, size_t};
+        use libc::types::os::arch::posix88::ssize_t;
+
+        extern "system" {
+            pub fn socket(domain: c_int, ty: c_int, protocol: c_int) -> c_int;
+            pub fn connect(socket: c_int, address: *sockaddr,
+                           len: socklen_t) -> c_int;
+            pub fn bind(socket: c_int, address: *sockaddr,
+                        address_len: socklen_t) -> c_int;
+            pub fn listen(socket: c_int, backlog: c_int) -> c_int;
+            pub fn accept(socket: c_int, address: *mut sockaddr,
+                          address_len: *mut socklen_t) -> c_int;
+            pub fn getpeername(socket: c_int, address: *mut sockaddr,
+                               address_len: *mut socklen_t) -> c_int;
+            pub fn getsockname(socket: c_int, address: *mut sockaddr,
+                               address_len: *mut socklen_t) -> c_int;
+            pub fn setsockopt(socket: c_int, level: c_int, name: c_int,
+                              value: *c_void, option_len: socklen_t) -> c_int;
+            pub fn recv(socket: c_int, buf: *mut c_void, len: size_t,
+                        flags: c_int) -> ssize_t;
+            pub fn send(socket: c_int, buf: *mut c_void, len: size_t,
+                        flags: c_int) -> ssize_t;
+            pub fn recvfrom(socket: c_int, buf: *mut c_void, len: size_t,
+                            flags: c_int, addr: *mut sockaddr,
+                            addrlen: *mut socklen_t) -> ssize_t;
+            pub fn sendto(socket: c_int, buf: *c_void, len: size_t,
+                          flags: c_int, addr: *sockaddr,
+                          addrlen: socklen_t) -> ssize_t;
+        }
+    }
+
+    #[cfg(windows)]
+    pub mod bsd43 {
+        use libc::types::common::c95::{c_void};
+        use libc::types::os::common::bsd44::{socklen_t, sockaddr, SOCKET};
+        use libc::types::os::arch::c95::c_int;
+        use libc::types::os::arch::posix88::ssize_t;
+
+        extern "system" {
+            pub fn socket(domain: c_int, ty: c_int, protocol: c_int) -> SOCKET;
+            pub fn connect(socket: SOCKET, address: *sockaddr,
+                           len: socklen_t) -> c_int;
+            pub fn bind(socket: SOCKET, address: *sockaddr,
+                        address_len: socklen_t) -> c_int;
+            pub fn listen(socket: SOCKET, backlog: c_int) -> c_int;
+            pub fn accept(socket: SOCKET, address: *mut sockaddr,
+                          address_len: *mut socklen_t) -> SOCKET;
+            pub fn getpeername(socket: SOCKET, address: *mut sockaddr,
+                               address_len: *mut socklen_t) -> c_int;
+            pub fn getsockname(socket: SOCKET, address: *mut sockaddr,
+                               address_len: *mut socklen_t) -> c_int;
+            pub fn setsockopt(socket: SOCKET, level: c_int, name: c_int,
+                              value: *c_void, option_len: socklen_t) -> c_int;
+            pub fn closesocket(socket: SOCKET) -> c_int;
+            pub fn recv(socket: SOCKET, buf: *mut c_void, len: c_int,
+                        flags: c_int) -> c_int;
+            pub fn send(socket: SOCKET, buf: *mut c_void, len: c_int,
+                        flags: c_int) -> c_int;
+            pub fn recvfrom(socket: SOCKET, buf: *mut c_void, len: c_int,
+                            flags: c_int, addr: *mut sockaddr,
+                            addrlen: *mut c_int) -> ssize_t;
+            pub fn sendto(socket: SOCKET, buf: *c_void, len: c_int,
+                          flags: c_int, addr: *sockaddr,
+                          addrlen: c_int) -> c_int;
+        }
+    }
 
     #[cfg(target_os = "macos")]
     #[cfg(target_os = "freebsd")]
     pub mod bsd44 {
         use libc::types::common::c95::{c_void};
-        use libc::types::os::arch::c95::{c_char, c_uchar, c_int, c_uint,
-                                         size_t};
+        use libc::types::os::arch::c95::{c_char, c_uchar, c_int, c_uint, size_t};
 
         extern {
             pub fn sysctl(name: *c_int,
@@ -3386,7 +3869,7 @@ pub mod funcs {
                                                LPMEMORY_BASIC_INFORMATION,
                                                LPSYSTEM_INFO};
             use libc::types::os::arch::extra::{HANDLE, LPHANDLE, LARGE_INTEGER,
-                                               PLARGE_INTEGER};
+                                               PLARGE_INTEGER, LPFILETIME};
 
             extern "system" {
                 pub fn GetEnvironmentVariableW(n: LPCWSTR,
@@ -3530,6 +4013,14 @@ pub mod funcs {
                                         lpNewFilePointer: PLARGE_INTEGER,
                                         dwMoveMethod: DWORD) -> BOOL;
                 pub fn SetEndOfFile(hFile: HANDLE) -> BOOL;
+
+                pub fn GetSystemTimeAsFileTime(
+                            lpSystemTimeAsFileTime: LPFILETIME);
+
+                pub fn QueryPerformanceFrequency(
+                            lpFrequency: *mut LARGE_INTEGER) -> BOOL;
+                pub fn QueryPerformanceCounter(
+                            lpPerformanceCount: *mut LARGE_INTEGER) -> BOOL;
             }
         }
 

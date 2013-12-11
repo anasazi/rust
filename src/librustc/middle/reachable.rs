@@ -19,6 +19,7 @@ use middle::ty;
 use middle::typeck;
 use middle::privacy;
 
+use std::cell::RefCell;
 use std::hashmap::HashSet;
 use syntax::ast;
 use syntax::ast_map;
@@ -43,31 +44,36 @@ fn generics_require_inlining(generics: &ast::Generics) -> bool {
 // Returns true if the given item must be inlined because it may be
 // monomorphized or it was marked with `#[inline]`. This will only return
 // true for functions.
-fn item_might_be_inlined(item: @ast::item) -> bool {
+fn item_might_be_inlined(item: &ast::Item) -> bool {
     if attributes_specify_inlining(item.attrs) {
         return true
     }
 
     match item.node {
-        ast::item_impl(ref generics, _, _, _) |
-        ast::item_fn(_, _, _, ref generics, _) => {
+        ast::ItemImpl(ref generics, _, _, _) |
+        ast::ItemFn(_, _, _, ref generics, _) => {
             generics_require_inlining(generics)
         }
         _ => false,
     }
 }
 
-fn method_might_be_inlined(tcx: ty::ctxt, method: &ast::method,
+fn method_might_be_inlined(tcx: ty::ctxt, method: &ast::Method,
                            impl_src: ast::DefId) -> bool {
     if attributes_specify_inlining(method.attrs) ||
         generics_require_inlining(&method.generics) {
         return true
     }
     if is_local(impl_src) {
-        match tcx.items.find(&impl_src.node) {
-            Some(&ast_map::node_item(item, _)) => item_might_be_inlined(item),
-            Some(..) | None => {
-                tcx.sess.span_bug(method.span, "impl did is not an item")
+        {
+            let items = tcx.items.borrow();
+            match items.get().find(&impl_src.node) {
+                Some(&ast_map::NodeItem(item, _)) => {
+                    item_might_be_inlined(item)
+                }
+                Some(..) | None => {
+                    tcx.sess.span_bug(method.span, "impl did is not an item")
+                }
             }
         }
     } else {
@@ -84,26 +90,27 @@ struct ReachableContext {
     // methods they've been resolved to.
     method_map: typeck::method_map,
     // The set of items which must be exported in the linkage sense.
-    reachable_symbols: @mut HashSet<ast::NodeId>,
+    reachable_symbols: @RefCell<HashSet<ast::NodeId>>,
     // A worklist of item IDs. Each item ID in this worklist will be inlined
     // and will be scanned for further references.
-    worklist: @mut ~[ast::NodeId],
+    worklist: @RefCell<~[ast::NodeId]>,
 }
 
 struct MarkSymbolVisitor {
-    worklist: @mut ~[ast::NodeId],
+    worklist: @RefCell<~[ast::NodeId]>,
     method_map: typeck::method_map,
     tcx: ty::ctxt,
-    reachable_symbols: @mut HashSet<ast::NodeId>,
+    reachable_symbols: @RefCell<HashSet<ast::NodeId>>,
 }
 
 impl Visitor<()> for MarkSymbolVisitor {
 
-    fn visit_expr(&mut self, expr:@ast::Expr, _:()) {
+    fn visit_expr(&mut self, expr: &ast::Expr, _: ()) {
 
         match expr.node {
             ast::ExprPath(_) => {
-                let def = match self.tcx.def_map.find(&expr.id) {
+                let def_map = self.tcx.def_map.borrow();
+                let def = match def_map.get().find(&expr.id) {
                     Some(&def) => def,
                     None => {
                         self.tcx.sess.span_bug(expr.span,
@@ -115,7 +122,10 @@ impl Visitor<()> for MarkSymbolVisitor {
                 if is_local(def_id) {
                     if ReachableContext::
                         def_id_represents_local_inlined_item(self.tcx, def_id) {
-                            self.worklist.push(def_id.node)
+                            {
+                                let mut worklist = self.worklist.borrow_mut();
+                                worklist.get().push(def_id.node)
+                            }
                     } else {
                         match def {
                             // If this path leads to a static, then we may have
@@ -123,20 +133,24 @@ impl Visitor<()> for MarkSymbolVisitor {
                             // is indeed reachable (address_insignificant
                             // statics are *never* reachable).
                             ast::DefStatic(..) => {
-                                self.worklist.push(def_id.node);
+                                let mut worklist = self.worklist.borrow_mut();
+                                worklist.get().push(def_id.node);
                             }
 
                             // If this wasn't a static, then this destination is
                             // surely reachable.
                             _ => {
-                                self.reachable_symbols.insert(def_id.node);
+                                let mut reachable_symbols =
+                                    self.reachable_symbols.borrow_mut();
+                                reachable_symbols.get().insert(def_id.node);
                             }
                         }
                     }
                 }
             }
             ast::ExprMethodCall(..) => {
-                match self.method_map.find(&expr.id) {
+                let method_map = self.method_map.borrow();
+                match method_map.get().find(&expr.id) {
                     Some(&typeck::method_map_entry {
                         origin: typeck::method_static(def_id),
                         ..
@@ -146,9 +160,17 @@ impl Visitor<()> for MarkSymbolVisitor {
                                 def_id_represents_local_inlined_item(
                                     self.tcx,
                                     def_id) {
-                                    self.worklist.push(def_id.node)
+                                {
+                                    let mut worklist = self.worklist
+                                                           .borrow_mut();
+                                    worklist.get().push(def_id.node)
                                 }
-                            self.reachable_symbols.insert(def_id.node);
+                            }
+                            {
+                                let mut reachable_symbols =
+                                    self.reachable_symbols.borrow_mut();
+                                reachable_symbols.get().insert(def_id.node);
+                            }
                         }
                     }
                     Some(_) => {}
@@ -165,7 +187,7 @@ impl Visitor<()> for MarkSymbolVisitor {
         visit::walk_expr(self, expr, ())
     }
 
-    fn visit_item(&mut self, _item: @ast::item, _: ()) {
+    fn visit_item(&mut self, _item: &ast::Item, _: ()) {
         // Do not recurse into items. These items will be added to the worklist
         // and recursed into manually if necessary.
     }
@@ -177,8 +199,8 @@ impl ReachableContext {
         ReachableContext {
             tcx: tcx,
             method_map: method_map,
-            reachable_symbols: @mut HashSet::new(),
-            worklist: @mut ~[],
+            reachable_symbols: @RefCell::new(HashSet::new()),
+            worklist: @RefCell::new(~[]),
         }
     }
 
@@ -191,20 +213,21 @@ impl ReachableContext {
         }
 
         let node_id = def_id.node;
-        match tcx.items.find(&node_id) {
-            Some(&ast_map::node_item(item, _)) => {
+        let items = tcx.items.borrow();
+        match items.get().find(&node_id) {
+            Some(&ast_map::NodeItem(item, _)) => {
                 match item.node {
-                    ast::item_fn(..) => item_might_be_inlined(item),
+                    ast::ItemFn(..) => item_might_be_inlined(item),
                     _ => false,
                 }
             }
-            Some(&ast_map::node_trait_method(trait_method, _, _)) => {
+            Some(&ast_map::NodeTraitMethod(trait_method, _, _)) => {
                 match *trait_method {
-                    ast::required(_) => false,
-                    ast::provided(_) => true,
+                    ast::Required(_) => false,
+                    ast::Provided(_) => true,
                 }
             }
-            Some(&ast_map::node_method(method, impl_did, _)) => {
+            Some(&ast_map::NodeMethod(method, impl_did, _)) => {
                 if generics_require_inlining(&method.generics) ||
                         attributes_specify_inlining(method.attrs) {
                     true
@@ -212,10 +235,10 @@ impl ReachableContext {
                     // Check the impl. If the generics on the self type of the
                     // impl require inlining, this method does too.
                     assert!(impl_did.crate == ast::LOCAL_CRATE);
-                    match tcx.items.find(&impl_did.node) {
-                        Some(&ast_map::node_item(item, _)) => {
+                    match items.get().find(&impl_did.node) {
+                        Some(&ast_map::NodeItem(item, _)) => {
                             match item.node {
-                                ast::item_impl(ref generics, _, _, _) => {
+                                ast::ItemImpl(ref generics, _, _, _) => {
                                     generics_require_inlining(generics)
                                 }
                                 _ => false
@@ -257,13 +280,22 @@ impl ReachableContext {
     fn propagate(&self) {
         let mut visitor = self.init_visitor();
         let mut scanned = HashSet::new();
-        while self.worklist.len() > 0 {
-            let search_item = self.worklist.pop();
-            if scanned.contains(&search_item) {
-                continue
-            }
+        loop {
+            let search_item = {
+                let mut worklist = self.worklist.borrow_mut();
+                if worklist.get().len() == 0 {
+                    break
+                }
+                let search_item = worklist.get().pop();
+                if scanned.contains(&search_item) {
+                    continue
+                }
+                search_item
+            };
+
             scanned.insert(search_item);
-            match self.tcx.items.find(&search_item) {
+            let items = self.tcx.items.borrow();
+            match items.get().find(&search_item) {
                 Some(item) => self.propagate_node(item, search_item,
                                                   &mut visitor),
                 None if search_item == ast::CRATE_NODE_ID => {}
@@ -276,20 +308,22 @@ impl ReachableContext {
         }
     }
 
-    fn propagate_node(&self, node: &ast_map::ast_node,
+    fn propagate_node(&self, node: &ast_map::Node,
                       search_item: ast::NodeId,
                       visitor: &mut MarkSymbolVisitor) {
-        if !*self.tcx.sess.building_library {
+        if !self.tcx.sess.building_library.get() {
             // If we are building an executable, then there's no need to flag
             // anything as external except for `extern fn` types. These
             // functions may still participate in some form of native interface,
             // but all other rust-only interfaces can be private (they will not
             // participate in linkage after this product is produced)
             match *node {
-                ast_map::node_item(item, _) => {
+                ast_map::NodeItem(item, _) => {
                     match item.node {
-                        ast::item_fn(_, ast::extern_fn, _, _, _) => {
-                            self.reachable_symbols.insert(search_item);
+                        ast::ItemFn(_, ast::ExternFn, _, _, _) => {
+                            let mut reachable_symbols =
+                                self.reachable_symbols.borrow_mut();
+                            reachable_symbols.get().insert(search_item);
                         }
                         _ => {}
                     }
@@ -301,13 +335,14 @@ impl ReachableContext {
             // continue to participate in linkage after this product is
             // produced. In this case, we traverse the ast node, recursing on
             // all reachable nodes from this one.
-            self.reachable_symbols.insert(search_item);
+            let mut reachable_symbols = self.reachable_symbols.borrow_mut();
+            reachable_symbols.get().insert(search_item);
         }
 
         match *node {
-            ast_map::node_item(item, _) => {
+            ast_map::NodeItem(item, _) => {
                 match item.node {
-                    ast::item_fn(_, _, _, _, search_block) => {
+                    ast::ItemFn(_, _, _, _, search_block) => {
                         if item_might_be_inlined(item) {
                             visit::walk_block(visitor, search_block, ())
                         }
@@ -315,20 +350,22 @@ impl ReachableContext {
 
                     // Statics with insignificant addresses are not reachable
                     // because they're inlined specially into all other crates.
-                    ast::item_static(..) => {
+                    ast::ItemStatic(..) => {
                         if attr::contains_name(item.attrs,
                                                "address_insignificant") {
-                            self.reachable_symbols.remove(&search_item);
+                            let mut reachable_symbols =
+                                self.reachable_symbols.borrow_mut();
+                            reachable_symbols.get().remove(&search_item);
                         }
                     }
 
                     // These are normal, nothing reachable about these
                     // inherently and their children are already in the
                     // worklist, as determined by the privacy pass
-                    ast::item_ty(..) |
-                    ast::item_mod(..) | ast::item_foreign_mod(..) |
-                    ast::item_impl(..) | ast::item_trait(..) |
-                    ast::item_struct(..) | ast::item_enum(..) => {}
+                    ast::ItemTy(..) |
+                    ast::ItemMod(..) | ast::ItemForeignMod(..) |
+                    ast::ItemImpl(..) | ast::ItemTrait(..) |
+                    ast::ItemStruct(..) | ast::ItemEnum(..) => {}
 
                     _ => {
                         self.tcx.sess.span_bug(item.span,
@@ -337,25 +374,25 @@ impl ReachableContext {
                     }
                 }
             }
-            ast_map::node_trait_method(trait_method, _, _) => {
+            ast_map::NodeTraitMethod(trait_method, _, _) => {
                 match *trait_method {
-                    ast::required(..) => {
+                    ast::Required(..) => {
                         // Keep going, nothing to get exported
                     }
-                    ast::provided(ref method) => {
+                    ast::Provided(ref method) => {
                         visit::walk_block(visitor, method.body, ())
                     }
                 }
             }
-            ast_map::node_method(method, did, _) => {
+            ast_map::NodeMethod(method, did, _) => {
                 if method_might_be_inlined(self.tcx, method, did) {
                     visit::walk_block(visitor, method.body, ())
                 }
             }
             // Nothing to recurse on for these
-            ast_map::node_foreign_item(..) |
-            ast_map::node_variant(..) |
-            ast_map::node_struct_ctor(..) => {}
+            ast_map::NodeForeignItem(..) |
+            ast_map::NodeVariant(..) |
+            ast_map::NodeStructCtor(..) => {}
             _ => {
                 let ident_interner = token::get_ident_interner();
                 let desc = ast_map::node_id_to_str(self.tcx.items,
@@ -374,9 +411,12 @@ impl ReachableContext {
     // this properly would result in the necessity of computing *type*
     // reachability, which might result in a compile time loss.
     fn mark_destructors_reachable(&self) {
-        for (_, destructor_def_id) in self.tcx.destructor_for_type.iter() {
+        let destructor_for_type = self.tcx.destructor_for_type.borrow();
+        for (_, destructor_def_id) in destructor_for_type.get().iter() {
             if destructor_def_id.crate == ast::LOCAL_CRATE {
-                self.reachable_symbols.insert(destructor_def_id.node);
+                let mut reachable_symbols = self.reachable_symbols
+                                                .borrow_mut();
+                reachable_symbols.get().insert(destructor_def_id.node);
             }
         }
     }
@@ -385,13 +425,14 @@ impl ReachableContext {
 pub fn find_reachable(tcx: ty::ctxt,
                       method_map: typeck::method_map,
                       exported_items: &privacy::ExportedItems)
-                      -> @mut HashSet<ast::NodeId> {
+                      -> @RefCell<HashSet<ast::NodeId>> {
     let reachable_context = ReachableContext::new(tcx, method_map);
 
     // Step 1: Seed the worklist with all nodes which were found to be public as
     //         a result of the privacy pass
     for &id in exported_items.iter() {
-        reachable_context.worklist.push(id);
+        let mut worklist = reachable_context.worklist.borrow_mut();
+        worklist.get().push(id);
     }
 
     // Step 2: Mark all symbols that the symbols on the worklist touch.

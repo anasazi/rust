@@ -11,7 +11,7 @@
 
 use driver::session;
 use driver::session::Session;
-use syntax::ast::{Crate, NodeId, item, item_fn};
+use syntax::ast::{Crate, NodeId, Item, ItemFn};
 use syntax::ast_map;
 use syntax::attr;
 use syntax::codemap::Span;
@@ -22,7 +22,7 @@ use syntax::visit::Visitor;
 struct EntryContext {
     session: Session,
 
-    ast_map: ast_map::map,
+    ast_map: ast_map::Map,
 
     // The top-level function called 'main'
     main_fn: Option<(NodeId, Span)>,
@@ -39,20 +39,20 @@ struct EntryContext {
 }
 
 impl Visitor<()> for EntryContext {
-    fn visit_item(&mut self, item:@item, _:()) {
+    fn visit_item(&mut self, item: &Item, _:()) {
         find_item(item, self);
     }
 }
 
-pub fn find_entry_point(session: Session, crate: &Crate, ast_map: ast_map::map) {
-    if *session.building_library {
+pub fn find_entry_point(session: Session, crate: &Crate, ast_map: ast_map::Map) {
+    if session.building_library.get() {
         // No need to find a main function
         return;
     }
 
     // If the user wants no main function at all, then stop here.
     if attr::contains_name(crate.attrs, "no_main") {
-        *session.entry_type = Some(session::EntryNone);
+        session.entry_type.set(Some(session::EntryNone));
         return
     }
 
@@ -70,27 +70,30 @@ pub fn find_entry_point(session: Session, crate: &Crate, ast_map: ast_map::map) 
     configure_main(&mut ctxt);
 }
 
-fn find_item(item: @item, ctxt: &mut EntryContext) {
+fn find_item(item: &Item, ctxt: &mut EntryContext) {
     match item.node {
-        item_fn(..) => {
+        ItemFn(..) => {
             if item.ident.name == special_idents::main.name {
-                match ctxt.ast_map.find(&item.id) {
-                    Some(&ast_map::node_item(_, path)) => {
-                        if path.len() == 0 {
-                            // This is a top-level function so can be 'main'
-                            if ctxt.main_fn.is_none() {
-                                ctxt.main_fn = Some((item.id, item.span));
+                {
+                    let ast_map = ctxt.ast_map.borrow();
+                    match ast_map.get().find(&item.id) {
+                        Some(&ast_map::NodeItem(_, path)) => {
+                            if path.len() == 0 {
+                                // This is a top-level function so can be 'main'
+                                if ctxt.main_fn.is_none() {
+                                    ctxt.main_fn = Some((item.id, item.span));
+                                } else {
+                                    ctxt.session.span_err(
+                                        item.span,
+                                        "multiple 'main' functions");
+                                }
                             } else {
-                                ctxt.session.span_err(
-                                    item.span,
-                                    "multiple 'main' functions");
+                                // This isn't main
+                                ctxt.non_main_fns.push((item.id, item.span));
                             }
-                        } else {
-                            // This isn't main
-                            ctxt.non_main_fns.push((item.id, item.span));
                         }
+                        _ => unreachable!()
                     }
-                    _ => unreachable!()
                 }
             }
 
@@ -122,16 +125,16 @@ fn find_item(item: @item, ctxt: &mut EntryContext) {
 
 fn configure_main(this: &mut EntryContext) {
     if this.start_fn.is_some() {
-        *this.session.entry_fn = this.start_fn;
-        *this.session.entry_type = Some(session::EntryStart);
+        this.session.entry_fn.set(this.start_fn);
+        this.session.entry_type.set(Some(session::EntryStart));
     } else if this.attr_main_fn.is_some() {
-        *this.session.entry_fn = this.attr_main_fn;
-        *this.session.entry_type = Some(session::EntryMain);
+        this.session.entry_fn.set(this.attr_main_fn);
+        this.session.entry_type.set(Some(session::EntryMain));
     } else if this.main_fn.is_some() {
-        *this.session.entry_fn = this.main_fn;
-        *this.session.entry_type = Some(session::EntryMain);
+        this.session.entry_fn.set(this.main_fn);
+        this.session.entry_type.set(Some(session::EntryMain));
     } else {
-        if !*this.session.building_library {
+        if !this.session.building_library.get() {
             // No main function
             this.session.err("main function not found");
             if !this.non_main_fns.is_empty() {
