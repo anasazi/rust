@@ -14,16 +14,15 @@
 
 use prelude::*;
 
-use cmath::c_double_utils;
+use cmath;
 use default::Default;
 use libc::{c_double, c_int};
 use num::{FPCategory, FPNaN, FPInfinite , FPZero, FPSubnormal, FPNormal};
-use num::{Zero, One, RealExt, strconv};
+use num::{Zero, One, Bounded, strconv};
 use num;
 use to_str;
 use unstable::intrinsics;
 
-pub use cmath::c_double_targ_consts::*;
 pub use cmp::{min, max};
 
 macro_rules! delegate(
@@ -64,8 +63,8 @@ delegate!(
     fn sqrt(n: f64) -> f64 = intrinsics::sqrtf64,
 
     // LLVM 3.3 required to use intrinsics for these four
-    fn ceil(n: c_double) -> c_double = c_double_utils::ceil,
-    fn trunc(n: c_double) -> c_double = c_double_utils::trunc,
+    fn ceil(n: c_double) -> c_double = cmath::c_double::ceil,
+    fn trunc(n: c_double) -> c_double = cmath::c_double::trunc,
     /*
     fn ceil(n: f64) -> f64 = intrinsics::ceilf64,
     fn trunc(n: f64) -> f64 = intrinsics::truncf64,
@@ -74,44 +73,36 @@ delegate!(
     */
 
     // cmath
-    fn acos(n: c_double) -> c_double = c_double_utils::acos,
-    fn asin(n: c_double) -> c_double = c_double_utils::asin,
-    fn atan(n: c_double) -> c_double = c_double_utils::atan,
-    fn atan2(a: c_double, b: c_double) -> c_double = c_double_utils::atan2,
-    fn cbrt(n: c_double) -> c_double = c_double_utils::cbrt,
-    fn copysign(x: c_double, y: c_double) -> c_double = c_double_utils::copysign,
-    fn cosh(n: c_double) -> c_double = c_double_utils::cosh,
-    // fn erf(n: c_double) -> c_double = c_double_utils::erf,
-    // fn erfc(n: c_double) -> c_double = c_double_utils::erfc,
-    fn exp_m1(n: c_double) -> c_double = c_double_utils::exp_m1,
-    fn abs_sub(a: c_double, b: c_double) -> c_double = c_double_utils::abs_sub,
-    fn next_after(x: c_double, y: c_double) -> c_double = c_double_utils::next_after,
-    fn frexp(n: c_double, value: &mut c_int) -> c_double = c_double_utils::frexp,
-    fn hypot(x: c_double, y: c_double) -> c_double = c_double_utils::hypot,
-    fn ldexp(x: c_double, n: c_int) -> c_double = c_double_utils::ldexp,
-    fn lgamma(n: c_double, sign: &mut c_int) -> c_double = c_double_utils::lgamma,
-    // fn log_radix(n: c_double) -> c_double = c_double_utils::log_radix,
-    fn ln_1p(n: c_double) -> c_double = c_double_utils::ln_1p,
-    // fn ilog_radix(n: c_double) -> c_int = c_double_utils::ilog_radix,
-    // fn modf(n: c_double, iptr: &mut c_double) -> c_double = c_double_utils::modf,
-    fn round(n: c_double) -> c_double = c_double_utils::round,
-    // fn ldexp_radix(n: c_double, i: c_int) -> c_double = c_double_utils::ldexp_radix,
-    fn sinh(n: c_double) -> c_double = c_double_utils::sinh,
-    fn tan(n: c_double) -> c_double = c_double_utils::tan,
-    fn tanh(n: c_double) -> c_double = c_double_utils::tanh,
-    fn tgamma(n: c_double) -> c_double = c_double_utils::tgamma,
-    fn j0(n: c_double) -> c_double = c_double_utils::j0,
-    fn j1(n: c_double) -> c_double = c_double_utils::j1,
-    fn jn(i: c_int, n: c_double) -> c_double = c_double_utils::jn,
-    fn y0(n: c_double) -> c_double = c_double_utils::y0,
-    fn y1(n: c_double) -> c_double = c_double_utils::y1,
-    fn yn(i: c_int, n: c_double) -> c_double = c_double_utils::yn
+    fn acos(n: c_double) -> c_double = cmath::c_double::acos,
+    fn asin(n: c_double) -> c_double = cmath::c_double::asin,
+    fn atan(n: c_double) -> c_double = cmath::c_double::atan,
+    fn atan2(a: c_double, b: c_double) -> c_double = cmath::c_double::atan2,
+    fn cbrt(n: c_double) -> c_double = cmath::c_double::cbrt,
+    fn copysign(x: c_double, y: c_double) -> c_double = cmath::c_double::copysign,
+    fn cosh(n: c_double) -> c_double = cmath::c_double::cosh,
+    // fn erf(n: c_double) -> c_double = cmath::c_double::erf,
+    // fn erfc(n: c_double) -> c_double = cmath::c_double::erfc,
+    fn exp_m1(n: c_double) -> c_double = cmath::c_double::exp_m1,
+    fn abs_sub(a: c_double, b: c_double) -> c_double = cmath::c_double::abs_sub,
+    fn next_after(x: c_double, y: c_double) -> c_double = cmath::c_double::next_after,
+    fn frexp(n: c_double, value: &mut c_int) -> c_double = cmath::c_double::frexp,
+    fn hypot(x: c_double, y: c_double) -> c_double = cmath::c_double::hypot,
+    fn ldexp(x: c_double, n: c_int) -> c_double = cmath::c_double::ldexp,
+    // fn log_radix(n: c_double) -> c_double = cmath::c_double::log_radix,
+    fn ln_1p(n: c_double) -> c_double = cmath::c_double::ln_1p,
+    // fn ilog_radix(n: c_double) -> c_int = cmath::c_double::ilog_radix,
+    // fn modf(n: c_double, iptr: &mut c_double) -> c_double = cmath::c_double::modf,
+    fn round(n: c_double) -> c_double = cmath::c_double::round,
+    // fn ldexp_radix(n: c_double, i: c_int) -> c_double = cmath::c_double::ldexp_radix,
+    fn sinh(n: c_double) -> c_double = cmath::c_double::sinh,
+    fn tan(n: c_double) -> c_double = cmath::c_double::tan,
+    fn tanh(n: c_double) -> c_double = cmath::c_double::tanh
 )
 
 // FIXME (#1433): obtain these in a different way
 
-// These are not defined inside consts:: for consistency with
-// the integer types
+// FIXME(#11621): These constants should be deprecated once CTFE is implemented
+// in favour of calling their respective functions in `Bounded` and `Float`.
 
 pub static RADIX: uint = 2u;
 
@@ -141,6 +132,10 @@ pub static NEG_INFINITY: f64 = -1.0_f64/0.0_f64;
 pub mod consts {
     // FIXME (requires Issue #1433 to fix): replace with mathematical
     // constants from cmath.
+
+    // FIXME(#11621): These constants should be deprecated once CTFE is
+    // implemented in favour of calling their respective functions in `Real`.
+
     /// Archimedes' constant
     pub static PI: f64 = 3.14159265358979323846264338327950288_f64;
 
@@ -423,7 +418,7 @@ impl Real for f64 {
     fn recip(&self) -> f64 { 1.0 / *self }
 
     #[inline]
-    fn pow(&self, n: &f64) -> f64 { pow(*self, *n) }
+    fn powf(&self, n: &f64) -> f64 { pow(*self, *n) }
 
     #[inline]
     fn sqrt(&self) -> f64 { sqrt(*self) }
@@ -560,36 +555,6 @@ impl Real for f64 {
     }
 }
 
-impl RealExt for f64 {
-    #[inline]
-    fn lgamma(&self) -> (int, f64) {
-        let mut sign = 0;
-        let result = lgamma(*self, &mut sign);
-        (sign as int, result)
-    }
-
-    #[inline]
-    fn tgamma(&self) -> f64 { tgamma(*self) }
-
-    #[inline]
-    fn j0(&self) -> f64 { j0(*self) }
-
-    #[inline]
-    fn j1(&self) -> f64 { j1(*self) }
-
-    #[inline]
-    fn jn(&self, n: int) -> f64 { jn(n as c_int, *self) }
-
-    #[inline]
-    fn y0(&self) -> f64 { y0(*self) }
-
-    #[inline]
-    fn y1(&self) -> f64 { y1(*self) }
-
-    #[inline]
-    fn yn(&self, n: int) -> f64 { yn(n as c_int, *self) }
-}
-
 impl Bounded for f64 {
     #[inline]
     fn min_value() -> f64 { 2.2250738585072014e-308 }
@@ -598,16 +563,7 @@ impl Bounded for f64 {
     fn max_value() -> f64 { 1.7976931348623157e+308 }
 }
 
-impl Primitive for f64 {
-    #[inline]
-    fn bits(_: Option<f64>) -> uint { 64 }
-
-    #[inline]
-    fn bytes(_: Option<f64>) -> uint { Primitive::bits(Some(0f64)) / 8 }
-
-    #[inline]
-    fn is_signed(_: Option<f64>) -> bool { true }
-}
+impl Primitive for f64 {}
 
 impl Float for f64 {
     #[inline]
@@ -1221,13 +1177,6 @@ mod tests {
     }
 
     #[test]
-    fn test_primitive() {
-        let none: Option<f64> = None;
-        assert_eq!(Primitive::bits(none), mem::size_of::<f64>() * 8);
-        assert_eq!(Primitive::bytes(none), mem::size_of::<f64>());
-    }
-
-    #[test]
     fn test_is_normal() {
         let nan: f64 = Float::nan();
         let inf: f64 = Float::infinity();
@@ -1311,7 +1260,7 @@ mod tests {
     fn test_integer_decode() {
         assert_eq!(3.14159265359f64.integer_decode(), (7074237752028906u64, -51i16, 1i8));
         assert_eq!((-8573.5918555f64).integer_decode(), (4713381968463931u64, -39i16, -1i8));
-        assert_eq!(2f64.pow(&100.0).integer_decode(), (4503599627370496u64, 48i16, 1i8));
+        assert_eq!(2f64.powf(&100.0).integer_decode(), (4503599627370496u64, 48i16, 1i8));
         assert_eq!(0f64.integer_decode(), (0u64, -1075i16, 1i8));
         assert_eq!((-0f64).integer_decode(), (0u64, -1075i16, -1i8));
         assert_eq!(INFINITY.integer_decode(), (4503599627370496u64, 972i16, 1i8));

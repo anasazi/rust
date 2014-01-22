@@ -70,7 +70,6 @@ pub fn default_sched_threads() -> uint {
 
 pub fn dumb_println(args: &fmt::Arguments) {
     use io;
-    use libc;
 
     struct Stderr;
     impl io::Writer for Stderr {
@@ -141,6 +140,7 @@ memory and partly incapable of presentation to others.",
     abort();
 
     fn abort() -> ! {
-        unsafe { libc::abort() }
+        use std::unstable::intrinsics;
+        unsafe { intrinsics::abort() }
     }
 }

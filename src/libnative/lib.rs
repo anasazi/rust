@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -14,7 +14,7 @@
 //! runtime. In addition, all I/O provided by this crate is the thread blocking
 //! version of I/O.
 
-#[crate_id = "native#0.9"];
+#[crate_id = "native#0.10-pre"];
 #[license = "MIT/ASL2"];
 #[crate_type = "rlib"];
 #[crate_type = "dylib"];
@@ -29,7 +29,7 @@
 use std::os;
 use std::rt;
 
-mod bookeeping;
+mod bookkeeping;
 pub mod io;
 pub mod task;
 
@@ -38,30 +38,6 @@ pub mod task;
 static OS_DEFAULT_STACK_ESTIMATE: uint = 1 << 20;
 #[cfg(unix, not(android))]
 static OS_DEFAULT_STACK_ESTIMATE: uint = 2 * (1 << 20);
-
-
-// XXX: this should not exist here
-#[cfg(stage0, nativestart)]
-#[lang = "start"]
-pub fn lang_start(main: *u8, argc: int, argv: **u8) -> int {
-    use std::cast;
-    use std::task;
-
-    do start(argc, argv) {
-        // Instead of invoking main directly on this thread, invoke it on
-        // another spawned thread that we are guaranteed to know the size of the
-        // stack of. Currently, we do not have a method of figuring out the size
-        // of the main thread's stack, so for stack overflow detection to work
-        // we must spawn the task in a subtask which we know the stack size of.
-        let main: extern "Rust" fn() = unsafe { cast::transmute(main) };
-        let mut task = task::task();
-        task.name("<main>");
-        match do task.try { main() } {
-            Ok(()) => { os::set_exit_status(0); }
-            Err(..) => { os::set_exit_status(rt::DEFAULT_ERROR_CODE); }
-        }
-    }
-}
 
 /// Executes the given procedure after initializing the runtime with the given
 /// argc/argv.
@@ -99,6 +75,6 @@ pub fn start(argc: int, argv: **u8, main: proc()) -> int {
 /// number of arguments.
 pub fn run(main: proc()) -> int {
     main();
-    bookeeping::wait_for_other_tasks();
+    bookkeeping::wait_for_other_tasks();
     os::get_exit_status()
 }

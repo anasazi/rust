@@ -150,11 +150,8 @@ pub fn register_foreign_item_fn(ccx: @CrateContext,
     let llfn;
     {
         let mut externs = ccx.externs.borrow_mut();
-        llfn = base::get_extern_fn(externs.get(),
-                                   ccx.llmod,
-                                   lname,
-                                   cc,
-                                   llfn_ty);
+        llfn = base::get_extern_fn(externs.get(), ccx.llmod, lname,
+                                   cc, llfn_ty, tys.fn_sig.output);
     };
     add_argument_attributes(&tys, llfn);
 
@@ -201,7 +198,7 @@ pub fn trans_native_call<'a>(
         _ => ccx.sess.bug("trans_native_call called on non-function type")
     };
     let llsig = foreign_signature(ccx, &fn_sig, passed_arg_tys);
-    let ret_def = !ty::type_is_voidish(bcx.tcx(), fn_sig.output);
+    let ret_def = !return_type_is_void(bcx.ccx(), fn_sig.output);
     let fn_type = cabi::compute_abi_info(ccx,
                                          llsig.llarg_tys,
                                          llsig.llret_ty,
@@ -285,20 +282,20 @@ pub fn trans_native_call<'a>(
             // FIXME(#8357) We really ought to report a span here
             ccx.sess.fatal(
                 format!("ABI string `{}` has no suitable ABI \
-                      for target architecture",
-                     fn_abis.user_string(ccx.tcx)));
+                        for target architecture",
+                        fn_abis.user_string(ccx.tcx)));
         }
     };
 
     // A function pointer is called without the declaration available, so we have to apply
     // any attributes with ABI implications directly to the call instruction. Right now, the
     // only attribute we need to worry about is `sret`.
-    let attrs;
-    if fn_type.ret_ty.is_indirect() {
-        attrs = &[(1, StructRetAttribute)];
+    let sret_attr = if fn_type.ret_ty.is_indirect() {
+        Some((1, StructRetAttribute))
     } else {
-        attrs = &[];
-    }
+        None
+    };
+    let attrs = sret_attr.as_slice();
     let llforeign_retval = CallWithConv(bcx, llfn, llargs_foreign, cc, attrs);
 
     // If the function we just called does not use an outpointer,
@@ -357,9 +354,8 @@ pub fn trans_foreign_mod(ccx: @CrateContext,
     for &foreign_item in foreign_mod.items.iter() {
         match foreign_item.node {
             ast::ForeignItemFn(..) => {
-                let items = ccx.tcx.items.borrow();
                 let (abis, mut path) =
-                    match items.get().get_copy(&foreign_item.id) {
+                    match ccx.tcx.items.get(foreign_item.id) {
                         ast_map::NodeForeignItem(_, abis, _, path) => {
                             (abis, (*path).clone())
                         }
@@ -417,19 +413,14 @@ pub fn register_rust_fn_with_foreign_abi(ccx: @CrateContext,
     let tys = foreign_types_for_id(ccx, node_id);
     let llfn_ty = lltype_for_fn_from_foreign_types(&tys);
     let t = ty::node_id_to_type(ccx.tcx, node_id);
-    let cconv = match ty::get(t).sty {
+    let (cconv, output) = match ty::get(t).sty {
         ty::ty_bare_fn(ref fn_ty) => {
             let c = llvm_calling_convention(ccx, fn_ty.abis);
-            c.unwrap_or(lib::llvm::CCallConv)
+            (c.unwrap_or(lib::llvm::CCallConv), fn_ty.sig.output)
         }
-        _ => lib::llvm::CCallConv
+        _ => fail!("expected bare fn in register_rust_fn_with_foreign_abi")
     };
-    let llfn = base::register_fn_llvmty(ccx,
-                                        sp,
-                                        sym,
-                                        node_id,
-                                        cconv,
-                                        llfn_ty);
+    let llfn = base::register_fn_llvmty(ccx, sp, sym, node_id, cconv, llfn_ty, output);
     add_argument_attributes(&tys, llfn);
     debug!("register_rust_fn_with_foreign_abi(node_id={:?}, llfn_ty={}, llfn={})",
            node_id, ccx.tn.type_to_str(llfn_ty), ccx.tn.val_to_str(llfn));
@@ -489,14 +480,14 @@ pub fn trans_rust_fn_with_foreign_abi(ccx: @CrateContext,
                id,
                t.repr(tcx));
 
-        let llfndecl = base::decl_internal_rust_fn(ccx, f.sig.inputs, f.sig.output, ps);
+        let llfndecl = base::decl_internal_rust_fn(ccx, None, f.sig.inputs, f.sig.output, ps);
         base::set_llvm_fn_attrs(attrs, llfndecl);
         base::trans_fn(ccx,
                        (*path).clone(),
                        decl,
                        body,
                        llfndecl,
-                       base::no_self,
+                       None,
                        None,
                        id,
                        []);
@@ -786,7 +777,7 @@ fn foreign_types_for_fn_ty(ccx: &CrateContext,
         _ => ccx.sess.bug("foreign_types_for_fn_ty called on non-function type")
     };
     let llsig = foreign_signature(ccx, &fn_sig, fn_sig.inputs);
-    let ret_def = !ty::type_is_voidish(ccx.tcx, fn_sig.output);
+    let ret_def = !return_type_is_void(ccx, fn_sig.output);
     let fn_ty = cabi::compute_abi_info(ccx,
                                        llsig.llarg_tys,
                                        llsig.llret_ty,

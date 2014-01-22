@@ -34,7 +34,7 @@ via `close` and `delete` methods.
 
 */
 
-#[crate_id = "rustuv#0.9"];
+#[crate_id = "rustuv#0.10-pre"];
 #[license = "MIT/ASL2"];
 #[crate_type = "rlib"];
 #[crate_type = "dylib"];
@@ -46,7 +46,7 @@ via `close` and `delete` methods.
 use std::cast;
 use std::io;
 use std::io::IoError;
-use std::libc::{c_int, malloc};
+use std::libc::c_int;
 use std::ptr::null;
 use std::ptr;
 use std::rt::local::Local;

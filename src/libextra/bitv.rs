@@ -269,14 +269,23 @@ impl Bitv {
 
 impl Bitv {
     pub fn new(nbits: uint, init: bool) -> Bitv {
-        let rep = if nbits <= uint::bits {
+        let rep = if nbits < uint::bits {
+            Small(SmallBitv::new(if init {(1<<nbits)-1} else {0}))
+        } else if nbits == uint::bits {
             Small(SmallBitv::new(if init {!0} else {0}))
-        }
-        else {
-            let nelems = nbits/uint::bits +
-                         if nbits % uint::bits == 0 {0} else {1};
-            let elem = if init {!0u} else {0u};
-            let s = vec::from_elem(nelems, elem);
+        } else {
+            let exact = nbits % uint::bits == 0;
+            let nelems = nbits/uint::bits + if exact {0} else {1};
+            let s =
+                if init {
+                    if exact {
+                        vec::from_elem(nelems, !0u)
+                    } else {
+                        let mut v = vec::from_elem(nelems-1, !0u);
+                        v.push((1<<nbits % uint::bits)-1);
+                        v
+                    }
+                } else { vec::from_elem(nelems, 0u)};
             Big(BigBitv::new(s))
         };
         Bitv {rep: rep, nbits: nbits}
@@ -414,12 +423,12 @@ impl Bitv {
     }
 
     #[inline]
-    pub fn iter<'a>(&'a self) -> BitvIterator<'a> {
-        BitvIterator {bitv: self, next_idx: 0, end_idx: self.nbits}
+    pub fn iter<'a>(&'a self) -> Bits<'a> {
+        Bits {bitv: self, next_idx: 0, end_idx: self.nbits}
     }
 
     #[inline]
-    pub fn rev_iter<'a>(&'a self) -> Invert<BitvIterator<'a>> {
+    pub fn rev_iter<'a>(&'a self) -> Invert<Bits<'a>> {
         self.iter().invert()
     }
 
@@ -578,13 +587,13 @@ fn iterate_bits(base: uint, bits: uint, f: |uint| -> bool) -> bool {
 }
 
 /// An iterator for `Bitv`.
-pub struct BitvIterator<'a> {
+pub struct Bits<'a> {
     priv bitv: &'a Bitv,
     priv next_idx: uint,
     priv end_idx: uint,
 }
 
-impl<'a> Iterator<bool> for BitvIterator<'a> {
+impl<'a> Iterator<bool> for Bits<'a> {
     #[inline]
     fn next(&mut self) -> Option<bool> {
         if self.next_idx != self.end_idx {
@@ -602,7 +611,7 @@ impl<'a> Iterator<bool> for BitvIterator<'a> {
     }
 }
 
-impl<'a> DoubleEndedIterator<bool> for BitvIterator<'a> {
+impl<'a> DoubleEndedIterator<bool> for Bits<'a> {
     #[inline]
     fn next_back(&mut self) -> Option<bool> {
         if self.next_idx != self.end_idx {
@@ -614,9 +623,9 @@ impl<'a> DoubleEndedIterator<bool> for BitvIterator<'a> {
     }
 }
 
-impl<'a> ExactSize<bool> for BitvIterator<'a> {}
+impl<'a> ExactSize<bool> for Bits<'a> {}
 
-impl<'a> RandomAccessIterator<bool> for BitvIterator<'a> {
+impl<'a> RandomAccessIterator<bool> for Bits<'a> {
     #[inline]
     fn indexable(&self) -> uint {
         self.end_idx - self.next_idx
@@ -724,8 +733,8 @@ impl BitvSet {
         self.other_op(other, |w1, w2| w1 ^ w2);
     }
 
-    pub fn iter<'a>(&'a self) -> BitvSetIterator<'a> {
-        BitvSetIterator {set: self, next_idx: 0}
+    pub fn iter<'a>(&'a self) -> BitPositions<'a> {
+        BitPositions {set: self, next_idx: 0}
     }
 
     pub fn difference(&self, other: &BitvSet, f: |&uint| -> bool) -> bool {
@@ -871,7 +880,7 @@ impl BitvSet {
     /// and w1/w2 are the words coming from the two vectors self, other.
     fn commons<'a>(&'a self, other: &'a BitvSet)
         -> Map<'static, ((uint, &'a uint), &'a ~[uint]), (uint, uint, uint),
-               Zip<Enumerate<vec::VecIterator<'a, uint>>, Repeat<&'a ~[uint]>>> {
+               Zip<Enumerate<vec::Items<'a, uint>>, Repeat<&'a ~[uint]>>> {
         let min = num::min(self.bitv.storage.len(), other.bitv.storage.len());
         self.bitv.storage.slice(0, min).iter().enumerate()
             .zip(Repeat::new(&other.bitv.storage))
@@ -887,7 +896,7 @@ impl BitvSet {
     /// `other`.
     fn outliers<'a>(&'a self, other: &'a BitvSet)
         -> Map<'static, ((uint, &'a uint), uint), (bool, uint, uint),
-               Zip<Enumerate<vec::VecIterator<'a, uint>>, Repeat<uint>>> {
+               Zip<Enumerate<vec::Items<'a, uint>>, Repeat<uint>>> {
         let slen = self.bitv.storage.len();
         let olen = other.bitv.storage.len();
 
@@ -903,12 +912,12 @@ impl BitvSet {
     }
 }
 
-pub struct BitvSetIterator<'a> {
+pub struct BitPositions<'a> {
     priv set: &'a BitvSet,
     priv next_idx: uint
 }
 
-impl<'a> Iterator<uint> for BitvSetIterator<'a> {
+impl<'a> Iterator<uint> for BitPositions<'a> {
     #[inline]
     fn next(&mut self) -> Option<uint> {
         while self.next_idx < self.set.capacity() {
@@ -1327,6 +1336,20 @@ mod tests {
 
         let idxs: ~[uint] = bitv.iter().collect();
         assert_eq!(idxs, ~[0, 2, 3]);
+    }
+
+    #[test]
+    fn test_bitv_set_frombitv_init() {
+        let bools = [true, false];
+        let lengths = [10, 64, 100];
+        for &b in bools.iter() {
+            for &l in lengths.iter() {
+                let bitset = BitvSet::from_bitv(Bitv::new(l, b));
+                assert_eq!(bitset.contains(&1u), b)
+                assert_eq!(bitset.contains(&(l-1u)), b)
+                assert!(!bitset.contains(&l))
+            }
+        }
     }
 
     #[test]

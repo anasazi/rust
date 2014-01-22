@@ -124,11 +124,6 @@ endif
 ifdef TRACE
   CFG_RUSTC_FLAGS += -Z trace
 endif
-ifndef DEBUG_BORROWS
-  RUSTFLAGS_STAGE0 += -Z no-debug-borrows
-  RUSTFLAGS_STAGE1 += -Z no-debug-borrows
-  RUSTFLAGS_STAGE2 += -Z no-debug-borrows
-endif
 
 # The executables crated during this compilation process have no need to include
 # static copies of libstd and libextra. We also generate dynamic versions of all
@@ -154,11 +149,11 @@ endif
 
 # version-string calculation
 CFG_GIT_DIR := $(CFG_SRC_DIR).git
-CFG_RELEASE = 0.9
+CFG_RELEASE = 0.10-pre
 CFG_VERSION = $(CFG_RELEASE)
 # windows exe's need numeric versions - don't use anything but
 # numbers and dots here
-CFG_VERSION_WIN = 0.9
+CFG_VERSION_WIN = 0.10
 
 # since $(CFG_GIT) may contain spaces (especially on Windows),
 # we need to escape them. (" " to r"\ ")
@@ -371,6 +366,9 @@ DRIVER_CRATE := $(S)src/driver/driver.rs
 LLVM_COMPONENTS=x86 arm mips ipo bitreader bitwriter linker asmparser jit mcjit \
                 interpreter instrumentation
 
+# Only build these LLVM tools
+LLVM_TOOLS=bugpoint llc llvm-ar llvm-as llvm-dis llvm-mc opt
+
 define DEF_LLVM_VARS
 # The configure script defines these variables with the target triples
 # separated by Z. This defines new ones with the expected format.
@@ -417,7 +415,8 @@ export CFG_ENABLE_MINGW_CROSS
 export CFG_PREFIX
 export CFG_LIBDIR
 export CFG_RUSTLIBDIR
-export LIBDIR_RELATIVE
+export CFG_LIBDIR_RELATIVE
+export CFG_DISABLE_INJECT_STD_VERSION
 
 ######################################################################
 # Subprograms
@@ -435,7 +434,7 @@ define SREQ
 # Destinations of artifacts for the host compiler
 HROOT$(1)_H_$(3) = $(3)/stage$(1)
 HBIN$(1)_H_$(3) = $$(HROOT$(1)_H_$(3))/bin
-HLIB$(1)_H_$(3) = $$(HROOT$(1)_H_$(3))/$$(LIBDIR_RELATIVE)
+HLIB$(1)_H_$(3) = $$(HROOT$(1)_H_$(3))/$$(CFG_LIBDIR_RELATIVE)
 
 # Destinations of artifacts for target architectures
 TROOT$(1)_T_$(2)_H_$(3) = $$(HLIB$(1)_H_$(3))/$$(CFG_RUSTLIBDIR)/$(2)

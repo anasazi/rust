@@ -71,7 +71,7 @@ pub fn const_lit(cx: &CrateContext, e: &ast::Expr, lit: ast::Lit)
         }
         ast::LitBool(b) => C_bool(b),
         ast::LitNil => C_nil(),
-        ast::LitStr(s, _) => C_estr_slice(cx, s),
+        ast::LitStr(s, _) => C_str_slice(cx, s),
         ast::LitBinary(data) => C_binary_slice(cx, data),
     }
 }
@@ -166,16 +166,16 @@ pub fn get_const_val(cx: @CrateContext,
             def_id = inline::maybe_instantiate_inline(cx, def_id);
         }
 
-        let opt_item = {
-            let items = cx.tcx.items.borrow();
-            items.get().get_copy(&def_id.node)
-        };
+        let opt_item = cx.tcx.items.get(def_id.node);
 
         match opt_item {
-            ast_map::NodeItem(@ast::Item {
-                node: ast::ItemStatic(_, ast::MutImmutable, _), ..
-            }, _) => {
-                trans_const(cx, ast::MutImmutable, def_id.node);
+            ast_map::NodeItem(item, _) => {
+                match item.node {
+                    ast::ItemStatic(_, ast::MutImmutable, _) => {
+                        trans_const(cx, ast::MutImmutable, def_id.node);
+                    }
+                    _ => {}
+                }
             }
             _ => cx.tcx.sess.bug("expected a const to be an item")
         }
@@ -198,59 +198,78 @@ pub fn const_expr(cx: @CrateContext, e: &ast::Expr) -> (ValueRef, bool) {
     };
     match adjustment {
         None => { }
-        Some(@ty::AutoAddEnv(ty::ReStatic, ast::BorrowedSigil)) => {
-            llconst = C_struct([llconst, C_null(Type::opaque_box(cx).ptr_to())], false)
-        }
-        Some(@ty::AutoAddEnv(ref r, ref s)) => {
-            cx.sess.span_bug(e.span, format!("unexpected static function: \
-                                           region {:?} sigil {:?}", *r, *s))
-        }
-        Some(@ty::AutoObject(..)) => {
-            cx.sess.span_unimpl(e.span, "unimplemented const coercion to trait object");
-        }
-        Some(@ty::AutoDerefRef(ref adj)) => {
-            let mut ty = ety;
-            let mut maybe_ptr = None;
-            adj.autoderefs.times(|| {
-                let (dv, dt) = const_deref(cx, llconst, ty, false);
-                maybe_ptr = Some(llconst);
-                llconst = dv;
-                ty = dt;
-            });
+        Some(adj) => {
+            match *adj {
+                ty::AutoAddEnv(ty::ReStatic, ast::BorrowedSigil) => {
+                    llconst = C_struct([
+                        llconst,
+                        C_null(Type::opaque_box(cx).ptr_to())
+                    ], false)
+                }
+                ty::AutoAddEnv(ref r, ref s) => {
+                    cx.sess
+                      .span_bug(e.span,
+                                format!("unexpected static function: region \
+                                         {:?} sigil {:?}",
+                                        *r,
+                                        *s))
+                }
+                ty::AutoObject(..) => {
+                    cx.sess
+                      .span_unimpl(e.span,
+                                   "unimplemented const coercion to trait \
+                                    object");
+                }
+                ty::AutoDerefRef(ref adj) => {
+                    let mut ty = ety;
+                    let mut maybe_ptr = None;
+                    adj.autoderefs.times(|| {
+                        let (dv, dt) = const_deref(cx, llconst, ty, false);
+                        maybe_ptr = Some(llconst);
+                        llconst = dv;
+                        ty = dt;
+                    });
 
-            match adj.autoref {
-                None => { }
-                Some(ref autoref) => {
-                    // Don't copy data to do a deref+ref.
-                    let llptr = match maybe_ptr {
-                        Some(ptr) => ptr,
-                        None => {
-                            inlineable = false;
-                            const_addr_of(cx, llconst)
-                        }
-                    };
-                    match *autoref {
-                        ty::AutoUnsafe(m) |
-                        ty::AutoPtr(ty::ReStatic, m) => {
-                            assert!(m != ast::MutMutable);
-                            llconst = llptr;
-                        }
-                        ty::AutoBorrowVec(ty::ReStatic, m) => {
-                            assert!(m != ast::MutMutable);
-                            assert_eq!(abi::slice_elt_base, 0);
-                            assert_eq!(abi::slice_elt_len, 1);
-
-                            match ty::get(ty).sty {
-                                ty::ty_evec(_, ty::vstore_fixed(len)) => {
-                                    llconst = C_struct([llptr, C_uint(cx, len)], false);
+                    match adj.autoref {
+                        None => { }
+                        Some(ref autoref) => {
+                            // Don't copy data to do a deref+ref.
+                            let llptr = match maybe_ptr {
+                                Some(ptr) => ptr,
+                                None => {
+                                    inlineable = false;
+                                    const_addr_of(cx, llconst)
                                 }
-                                _ => {}
+                            };
+                            match *autoref {
+                                ty::AutoUnsafe(m) |
+                                ty::AutoPtr(ty::ReStatic, m) => {
+                                    assert!(m != ast::MutMutable);
+                                    llconst = llptr;
+                                }
+                                ty::AutoBorrowVec(ty::ReStatic, m) => {
+                                    assert!(m != ast::MutMutable);
+                                    assert_eq!(abi::slice_elt_base, 0);
+                                    assert_eq!(abi::slice_elt_len, 1);
+                                    match ty::get(ty).sty {
+                                        ty::ty_vec(_,
+                                                   ty::vstore_fixed(len)) => {
+                                            llconst = C_struct([
+                                                llptr,
+                                                C_uint(cx, len)
+                                            ], false);
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                _ => {
+                                    cx.sess.span_bug(e.span,
+                                                     format!("unimplemented \
+                                                              const autoref \
+                                                              {:?}",
+                                                             autoref))
+                                }
                             }
-                        }
-                        _ => {
-                            cx.sess.span_bug(e.span,
-                                             format!("unimplemented const \
-                                                   autoref {:?}", autoref))
                         }
                     }
                 }
@@ -419,7 +438,7 @@ fn const_expr_unadjusted(cx: @CrateContext,
                                         "index is not an integer-constant expression")
               };
               let (arr, len) = match ty::get(bt).sty {
-                  ty::ty_evec(_, vstore) | ty::ty_estr(vstore) =>
+                  ty::ty_vec(_, vstore) | ty::ty_str(vstore) =>
                       match vstore {
                       ty::vstore_fixed(u) =>
                           (bv, C_uint(cx, u)),
@@ -437,7 +456,7 @@ fn const_expr_unadjusted(cx: @CrateContext,
 
               let len = llvm::LLVMConstIntGetZExtValue(len) as u64;
               let len = match ty::get(bt).sty {
-                  ty::ty_estr(..) => {assert!(len > 0); len - 1},
+                  ty::ty_str(..) => {assert!(len > 0); len - 1},
                   _ => len
               };
               if iv >= len {

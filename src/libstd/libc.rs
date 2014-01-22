@@ -159,7 +159,7 @@ pub use libc::funcs::c95::stdio::{fread, freopen, fseek, fsetpos, ftell};
 pub use libc::funcs::c95::stdio::{fwrite, perror, puts, remove, rewind};
 pub use libc::funcs::c95::stdio::{setbuf, setvbuf, tmpfile, ungetc};
 
-pub use libc::funcs::c95::stdlib::{abort, abs, atof, atoi, calloc, exit};
+pub use libc::funcs::c95::stdlib::{abs, atof, atoi, calloc, exit};
 pub use libc::funcs::c95::stdlib::{free, getenv, labs, malloc, rand};
 pub use libc::funcs::c95::stdlib::{realloc, srand, strtod, strtol};
 pub use libc::funcs::c95::stdlib::{strtoul, system};
@@ -194,8 +194,19 @@ pub mod types {
             This type is only useful as a pointer target. Do not use it as a
             return type for FFI functions which have the `void` return type in
             C. Use the unit type `()` or omit the return type instead.
+
+            For LLVM to recognize the void pointer type and by extension
+            functions like malloc(), we need to have it represented as i8* in
+            LLVM bitcode. The enum used here ensures this and prevents misuse
+            of the "raw" type by only having private variants.. We need two
+            variants, because the compiler complains about the repr attribute
+            otherwise.
             */
-            pub enum c_void {}
+            #[repr(u8)]
+            pub enum c_void {
+                priv variant1,
+                priv variant2
+            }
             pub enum FILE {}
             pub enum fpos_t {}
         }
@@ -1160,6 +1171,7 @@ pub mod types {
             }
         }
 
+        #[cfg(target_arch = "arm")]
         #[cfg(target_arch = "x86")]
         pub mod arch {
             pub mod c95 {
@@ -3211,10 +3223,9 @@ pub mod funcs {
                 pub fn strtoul(s: *c_char, endp: **c_char, base: c_int)
                                -> c_ulong;
                 pub fn calloc(nobj: size_t, size: size_t) -> *c_void;
-                pub fn malloc(size: size_t) -> *c_void;
+                pub fn malloc(size: size_t) -> *mut c_void;
                 pub fn realloc(p: *mut c_void, size: size_t) -> *mut c_void;
                 pub fn free(p: *c_void);
-                pub fn abort() -> !;
                 pub fn exit(status: c_int) -> !;
                 // Omitted: atexit.
                 pub fn system(s: *c_char) -> c_int;

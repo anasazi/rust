@@ -110,10 +110,9 @@ impl AstConv for CrateCtxt {
             return csearch::get_type(self.tcx, id)
         }
 
-        let items = self.tcx.items.borrow();
-        match items.get().find(&id.node) {
-            Some(&ast_map::NodeItem(item, _)) => ty_of_item(self, item),
-            Some(&ast_map::NodeForeignItem(foreign_item, abis, _, _)) => {
+        match self.tcx.items.find(id.node) {
+            Some(ast_map::NodeItem(item, _)) => ty_of_item(self, item),
+            Some(ast_map::NodeForeignItem(foreign_item, abis, _, _)) => {
                 ty_of_foreign_item(self, foreign_item, abis)
             }
             ref x => {
@@ -183,59 +182,62 @@ pub fn get_enum_variant_types(ccx: &CrateCtxt,
     }
 }
 
-pub fn ensure_trait_methods(ccx: &CrateCtxt,
-                            trait_id: ast::NodeId)
-{
+pub fn ensure_trait_methods(ccx: &CrateCtxt, trait_id: ast::NodeId) {
     let tcx = ccx.tcx;
-    let items = tcx.items.borrow();
-    match items.get().get_copy(&trait_id) {
-        ast_map::NodeItem(@ast::Item {
-            node: ast::ItemTrait(ref generics, _, ref ms),
-            ..
-        }, _) => {
-            let trait_ty_generics =
-                ty_generics(ccx, generics, 0);
+    match tcx.items.get(trait_id) {
+        ast_map::NodeItem(item, _) => {
+            match item.node {
+                ast::ItemTrait(ref generics, _, ref ms) => {
+                    let trait_ty_generics = ty_generics(ccx, generics, 0);
 
-            // For each method, construct a suitable ty::Method and
-            // store it into the `tcx.methods` table:
-            for m in ms.iter() {
-                let ty_method = @match m {
-                    &ast::Required(ref m) => {
-                        ty_method_of_trait_method(
-                            ccx, trait_id, &trait_ty_generics,
-                            &m.id, &m.ident, &m.explicit_self,
-                            &m.generics, &m.purity, m.decl)
+                    // For each method, construct a suitable ty::Method and
+                    // store it into the `tcx.methods` table:
+                    for m in ms.iter() {
+                        let ty_method = @match m {
+                            &ast::Required(ref m) => {
+                                ty_method_of_trait_method(
+                                    ccx, trait_id, &trait_ty_generics,
+                                    &m.id, &m.ident, &m.explicit_self,
+                                    &m.generics, &m.purity, m.decl)
+                            }
+
+                            &ast::Provided(ref m) => {
+                                ty_method_of_trait_method(
+                                    ccx, trait_id, &trait_ty_generics,
+                                    &m.id, &m.ident, &m.explicit_self,
+                                    &m.generics, &m.purity, m.decl)
+                            }
+                        };
+
+                        if ty_method.explicit_self == ast::SelfStatic {
+                            make_static_method_ty(ccx, trait_id, ty_method,
+                                                  &trait_ty_generics);
+                        }
+
+                        let mut methods = tcx.methods.borrow_mut();
+                        methods.get().insert(ty_method.def_id, ty_method);
                     }
 
-                    &ast::Provided(ref m) => {
-                        ty_method_of_trait_method(
-                            ccx, trait_id, &trait_ty_generics,
-                            &m.id, &m.ident, &m.explicit_self,
-                            &m.generics, &m.purity, m.decl)
-                    }
-                };
+                    // Add an entry mapping
+                    let method_def_ids = @ms.map(|m| {
+                        match m {
+                            &ast::Required(ref ty_method) => {
+                                local_def(ty_method.id)
+                            }
+                            &ast::Provided(ref method) => {
+                                local_def(method.id)
+                            }
+                        }
+                    });
 
-                if ty_method.explicit_self == ast::SelfStatic {
-                    make_static_method_ty(ccx, trait_id, ty_method,
-                                          &trait_ty_generics);
+                    let trait_def_id = local_def(trait_id);
+                    let mut trait_method_def_ids = tcx.trait_method_def_ids
+                                                      .borrow_mut();
+                    trait_method_def_ids.get().insert(trait_def_id,
+                                                      method_def_ids);
                 }
-
-                let mut methods = tcx.methods.borrow_mut();
-                methods.get().insert(ty_method.def_id, ty_method);
+                _ => {} // Ignore things that aren't traits.
             }
-
-            // Add an entry mapping
-            let method_def_ids = @ms.map(|m| {
-                match m {
-                    &ast::Required(ref ty_method) => local_def(ty_method.id),
-                    &ast::Provided(ref method) => local_def(method.id)
-                }
-            });
-
-            let trait_def_id = local_def(trait_id);
-            let mut trait_method_def_ids = tcx.trait_method_def_ids
-                                              .borrow_mut();
-            trait_method_def_ids.get().insert(trait_def_id, method_def_ids);
         }
         _ => { /* Ignore things that aren't traits */ }
     }
@@ -556,7 +558,7 @@ pub fn convert(ccx: &CrateCtxt, it: &ast::Item) {
     debug!("convert: item {} with id {}", tcx.sess.str_of(it.ident), it.id);
     match it.node {
       // These don't define types.
-      ast::ItemForeignMod(_) | ast::ItemMod(_) => {}
+      ast::ItemForeignMod(_) | ast::ItemMod(_) | ast::ItemMac(_) => {}
       ast::ItemEnum(ref enum_definition, ref generics) => {
           ensure_no_ty_param_bounds(ccx, it.span, generics, "enumeration");
           let tpt = ty_of_item(ccx, it);
@@ -716,9 +718,8 @@ pub fn convert_foreign(ccx: &CrateCtxt, i: &ast::ForeignItem) {
     // map, and I regard each time that I use it as a personal and
     // moral failing, but at the moment it seems like the only
     // convenient way to extract the ABI. - ndm
-    let items = ccx.tcx.items.borrow();
-    let abis = match items.get().find(&i.id) {
-        Some(&ast_map::NodeForeignItem(_, abis, _, _)) => abis,
+    let abis = match ccx.tcx.items.find(i.id) {
+        Some(ast_map::NodeForeignItem(_, abis, _, _)) => abis,
         ref x => {
             ccx.tcx.sess.bug(format!("unexpected sort of item \
                                    in get_item_ty(): {:?}", (*x)));
@@ -770,9 +771,8 @@ fn get_trait_def(ccx: &CrateCtxt, trait_id: ast::DefId) -> @ty::TraitDef {
         return ty::lookup_trait_def(ccx.tcx, trait_id)
     }
 
-    let items = ccx.tcx.items.borrow();
-    match items.get().get(&trait_id.node) {
-        &ast_map::NodeItem(item, _) => trait_def_of_item(ccx, item),
+    match ccx.tcx.items.get(trait_id.node) {
+        ast_map::NodeItem(item, _) => trait_def_of_item(ccx, item),
         _ => ccx.tcx.sess.bug(format!("get_trait_def({}): not an item",
                                    trait_id.node))
     }
@@ -909,8 +909,7 @@ pub fn ty_of_item(ccx: &CrateCtxt, it: &ast::Item)
             return tpt;
         }
         ast::ItemImpl(..) | ast::ItemMod(_) |
-        ast::ItemForeignMod(_) => fail!(),
-        ast::ItemMac(..) => fail!("item macros unimplemented")
+        ast::ItemForeignMod(_) | ast::ItemMac(_) => fail!(),
     }
 }
 

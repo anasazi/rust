@@ -10,7 +10,7 @@
 
 // rustpkg - a package manager and build system for Rust
 
-#[crate_id = "rustpkg#0.9"];
+#[crate_id = "rustpkg#0.10-pre"];
 #[license = "MIT/ASL2"];
 #[crate_type = "dylib"];
 
@@ -28,6 +28,7 @@ pub use std::path::Path;
 
 use extra::workcache;
 use rustc::driver::{driver, session};
+use rustc::metadata::creader::Loader;
 use rustc::metadata::filesearch;
 use rustc::metadata::filesearch::rust_path;
 use rustc::util::sha2;
@@ -43,7 +44,7 @@ use workspace::{each_pkg_parent_workspace, pkg_parent_workspaces, cwd_to_workspa
 use workspace::determine_destination;
 use context::{BuildContext, Trans, Nothing, Pretty, Analysis,
               LLVMAssemble, LLVMCompileBitcode};
-use context::{Command, BuildCmd, CleanCmd, DoCmd, InfoCmd, InstallCmd, ListCmd,
+use context::{Command, BuildCmd, CleanCmd, DoCmd, HelpCmd, InfoCmd, InstallCmd, ListCmd,
     PreferCmd, TestCmd, InitCmd, UninstallCmd, UnpreferCmd};
 use crate_id::CrateId;
 use package_source::PkgSrc;
@@ -106,19 +107,23 @@ impl<'a> PkgScript<'a> {
         // Build the rustc session data structures to pass
         // to the compiler
         debug!("pkgscript parse: {}", sysroot.display());
-        let options = @session::options {
+        let options = @session::Options {
             binary: binary,
             maybe_sysroot: Some(@sysroot),
             outputs: ~[session::OutputExecutable],
             .. (*session::basic_options()).clone()
         };
-        let input = driver::file_input(script.clone());
+        let input = driver::FileInput(script.clone());
         let sess = driver::build_session(options,
                                          @diagnostic::DefaultEmitter as
                                             @diagnostic::Emitter);
         let cfg = driver::build_configuration(sess);
         let crate = driver::phase_1_parse_input(sess, cfg.clone(), &input);
-        let crate_and_map = driver::phase_2_configure_and_expand(sess, cfg.clone(), crate);
+        let loader = &mut Loader::new(sess);
+        let crate_and_map = driver::phase_2_configure_and_expand(sess,
+                                                         cfg.clone(),
+                                                         loader,
+                                                         crate);
         let work_dir = build_pkg_id_in_workspace(id, workspace);
 
         debug!("Returning package script with id {}", id.to_str());
@@ -141,7 +146,7 @@ impl<'a> PkgScript<'a> {
         let (crate, ast_map) = self.crate_and_map.take_unwrap();
         let crate = util::ready_crate(sess, crate);
         debug!("Building output filenames with script name {}",
-               driver::source_name(&driver::file_input(self.input.clone())));
+               driver::source_name(&driver::FileInput(self.input.clone())));
         let exe = self.build_dir.join("pkg" + util::exe_suffix());
         util::compile_crate_from_input(&self.input,
                                        exec,
@@ -188,7 +193,7 @@ impl<'a> PkgScript<'a> {
                         Some(output) => {
                             debug!("run_custom: second pkg command did {:?}", output.status);
                             // Run the configs() function to get the configs
-                            let cfgs = str::from_utf8(output.output).words()
+                            let cfgs = str::from_utf8(output.output).unwrap().words()
                                 .map(|w| w.to_owned()).collect();
                             Some((cfgs, output.status))
                         },
@@ -314,6 +319,18 @@ impl CtxMethods for BuildContext {
 
                 self.do_cmd(args[0].clone(), args[1].clone());
             }
+            HelpCmd => {
+                if args.len() != 1 {
+                    return usage::general();
+                }
+                match FromStr::from_str(args[0]) {
+                    Some(help_cmd) => usage::usage_for_command(help_cmd),
+                    None => {
+                        usage::general();
+                        error(format!("{} is not a recognized command", args[0]))
+                    }
+                }
+            }
             InfoCmd => {
                 self.info();
             }
@@ -364,15 +381,15 @@ impl CtxMethods for BuildContext {
                 }
             }
             ListCmd => {
-                println("Installed packages:");
+                println!("Installed packages:");
                 installed_packages::list_installed_packages(|pkg_id| {
-                    pkg_id.path.display().with_str(|s| println(s));
+                    pkg_id.path.display().with_str(|s| println!("{}", s));
                     true
                 });
             }
             PreferCmd => {
                 if args.len() < 1 {
-                    return usage::uninstall();
+                    return usage::prefer();
                 }
 
                 self.prefer(args[0], None);
@@ -747,7 +764,7 @@ impl CtxMethods for BuildContext {
 }
 
 pub fn main() {
-    println("WARNING: The Rust package manager is experimental and may be unstable");
+    println!("WARNING: The Rust package manager is experimental and may be unstable");
     os::set_exit_status(main_args(os::args()));
 }
 

@@ -20,13 +20,13 @@ use extra::arc::Arc;
 use extra::arc::RWArc;
 use extra::tempfile::TempDir;
 use extra::workcache;
-use extra::workcache::{Database, Logger};
+use extra::workcache::{Database};
 use extra::treemap::TreeMap;
 use extra::getopts::groups::getopts;
 use std::run::ProcessOutput;
 use installed_packages::list_installed_packages;
 use crate_id::{CrateId};
-use version::{ExactRevision, NoVersion, Version, Tagged};
+use version::{ExactRevision, NoVersion, Version};
 use path_util::{target_executable_in_workspace, target_test_in_workspace,
                target_bench_in_workspace, make_dir_rwx,
                library_in_workspace, installed_library_in_workspace,
@@ -35,7 +35,6 @@ use path_util::{target_executable_in_workspace, target_test_in_workspace,
                chmod_read_only, platform_library_name};
 use rustc::back::link::get_cc_prog;
 use rustc::metadata::filesearch::{rust_path, libdir, rustlibdir};
-use rustc::driver::session;
 use rustc::driver::driver::{build_session, build_session_options, host_triple, optgroups};
 use syntax::diagnostic;
 use target::*;
@@ -46,7 +45,6 @@ use exit_codes::{BAD_FLAG_CODE, COPY_FAILED_CODE};
 fn fake_ctxt(sysroot: Path, workspace: &Path) -> BuildContext {
     let context = workcache::Context::new(
         RWArc::new(Database::new(workspace.join("rustpkg_db.json"))),
-        RWArc::new(Logger::new()),
         Arc::new(TreeMap::new()));
     BuildContext {
         workcache_context: context,
@@ -74,14 +72,6 @@ fn git_repo_pkg() -> CrateId {
         path: Path::new("mockgithub.com/catamorphism/test-pkg"),
         short_name: ~"test-pkg",
         version: NoVersion
-    }
-}
-
-fn git_repo_pkg_with_tag(a_tag: ~str) -> CrateId {
-    CrateId {
-        path: Path::new("mockgithub.com/catamorphism/test-pkg"),
-        short_name: ~"test-pkg",
-        version: Tagged(a_tag)
     }
 }
 
@@ -153,7 +143,7 @@ fn run_git(args: &[~str], env: Option<~[(~str, ~str)]>, cwd: &Path, err_msg: &st
     let rslt = prog.finish_with_output();
     if !rslt.status.success() {
         fail!("{} [git returned {:?}, output = {}, error = {}]", err_msg,
-           rslt.status, str::from_utf8(rslt.output), str::from_utf8(rslt.error));
+           rslt.status, str::from_utf8(rslt.output).unwrap(), str::from_utf8(rslt.error).unwrap());
     }
 }
 
@@ -289,13 +279,13 @@ fn command_line_test_with_env(args: &[~str], cwd: &Path, env: Option<~[(~str, ~s
     }).expect(format!("failed to exec `{}`", cmd));
     let output = prog.finish_with_output();
     debug!("Output from command {} with args {:?} was {} \\{{}\\}[{:?}]",
-           cmd, args, str::from_utf8(output.output),
-           str::from_utf8(output.error),
+           cmd, args, str::from_utf8(output.output).unwrap(),
+           str::from_utf8(output.error).unwrap(),
            output.status);
     if !output.status.success() {
         debug!("Command {} {:?} failed with exit code {:?}; its output was --- {} {} ---",
               cmd, args, output.status,
-              str::from_utf8(output.output), str::from_utf8(output.error));
+              str::from_utf8(output.output).unwrap(), str::from_utf8(output.error).unwrap());
         Fail(output)
     }
     else {
@@ -455,7 +445,7 @@ fn built_library_exists(repo: &Path, short_name: &str) -> bool {
 fn command_line_test_output(args: &[~str]) -> ~[~str] {
     let mut result = ~[];
     let p_output = command_line_test(args, &os::getcwd());
-    let test_output = str::from_utf8(p_output.output);
+    let test_output = str::from_utf8(p_output.output).unwrap();
     for s in test_output.split('\n') {
         result.push(s.to_owned());
     }
@@ -469,7 +459,7 @@ fn command_line_test_output_with_env(args: &[~str], env: ~[(~str, ~str)]) -> ~[~
         Fail(_) => fail!("Command-line test failed"),
         Success(r) => r
     };
-    let test_output = str::from_utf8(p_output.output);
+    let test_output = str::from_utf8(p_output.output).unwrap();
     for s in test_output.split('\n') {
         result.push(s.to_owned());
     }
@@ -486,12 +476,6 @@ fn lib_output_file_name(workspace: &Path, short_name: &str) -> Path {
                          workspace,
                          "build",
                          &NoVersion).expect("lib_output_file_name")
-}
-
-fn output_file_name(workspace: &Path, short_name: ~str) -> Path {
-    target_build_dir(workspace).join(short_name.as_slice())
-                               .join(format!("{}{}", short_name,
-                                             os::consts::EXE_SUFFIX))
 }
 
 #[cfg(target_os = "linux")]
@@ -747,8 +731,8 @@ fn test_crate_ids_must_be_relative_path_like() {
             CrateId::new("github.com/catamorphism/test-pkg").to_str());
 
     cond.trap(|(p, e)| {
-        assert!(p.filename().is_none())
-        assert!("0-length crate_id" == e);
+        assert!(p.filename().is_none());
+        assert!("bad crateid" == e);
         whatever.clone()
     }).inside(|| {
         let x = CrateId::new("");
@@ -758,7 +742,7 @@ fn test_crate_ids_must_be_relative_path_like() {
     cond.trap(|(p, e)| {
         let abs = os::make_absolute(&Path::new("foo/bar/quux"));
         assert_eq!(p, abs);
-        assert!("absolute crate_id" == e);
+        assert!("bad crateid" == e);
         whatever.clone()
     }).inside(|| {
         let zp = os::make_absolute(&Path::new("foo/bar/quux"));
@@ -1207,7 +1191,7 @@ fn test_info() {
     let expected_info = ~"package foo"; // fill in
     let workspace = create_local_package(&CrateId::new("foo"));
     let output = command_line_test([~"info", ~"foo"], workspace.path());
-    assert_eq!(str::from_utf8_owned(output.output), expected_info);
+    assert_eq!(str::from_utf8_owned(output.output).unwrap(), expected_info);
 }
 
 #[test]
@@ -1215,7 +1199,7 @@ fn test_uninstall() {
     let workspace = create_local_package(&CrateId::new("foo"));
     command_line_test([~"uninstall", ~"foo"], workspace.path());
     let output = command_line_test([~"list"], workspace.path());
-    assert!(!str::from_utf8(output.output).contains("foo"));
+    assert!(!str::from_utf8(output.output).unwrap().contains("foo"));
 }
 
 #[test]
@@ -1285,8 +1269,8 @@ fn test_extern_mod() {
     let outp = prog.finish_with_output();
     if !outp.status.success() {
         fail!("output was {}, error was {}",
-              str::from_utf8(outp.output),
-              str::from_utf8(outp.error));
+              str::from_utf8(outp.output).unwrap(),
+              str::from_utf8(outp.error).unwrap());
     }
     assert!(exec_file.exists() && is_executable(&exec_file));
 }
@@ -1340,8 +1324,8 @@ fn test_extern_mod_simpler() {
     let outp = prog.finish_with_output();
     if !outp.status.success() {
         fail!("output was {}, error was {}",
-              str::from_utf8(outp.output),
-              str::from_utf8(outp.error));
+              str::from_utf8(outp.output).unwrap(),
+              str::from_utf8(outp.error).unwrap());
     }
     assert!(exec_file.exists() && is_executable(&exec_file));
 }
@@ -1895,9 +1879,11 @@ fn crateid_pointing_to_subdir() {
     fs::mkdir_recursive(&foo_dir, io::UserRWX);
     fs::mkdir_recursive(&bar_dir, io::UserRWX);
     writeFile(&foo_dir.join("lib.rs"),
-              "#[crate_id=\"mockgithub.com/mozilla/some_repo/extras/foo\"]; pub fn f() {}");
+              "#[crate_id=\"mockgithub.com/mozilla/some_repo/extras/rust-foo#foo:0.0\"];" +
+              "pub fn f() {}");
     writeFile(&bar_dir.join("lib.rs"),
-              "#[crate_id=\"mockgithub.com/mozilla/some_repo/extras/bar\"]; pub fn g() {}");
+              "#[crate_id=\"mockgithub.com/mozilla/some_repo/extras/rust-bar#bar:0.0\"];" +
+              "pub fn g() {}");
 
     debug!("Creating a file in {}", workspace.display());
     let testpkg_dir = workspace.join_many(["src", "testpkg-0.0"]);
@@ -2106,7 +2092,7 @@ fn test_rustpkg_test_creates_exec() {
 fn test_rustpkg_test_output() {
     let workspace = create_local_package_with_test(&CrateId::new("foo"));
     let output = command_line_test([~"test", ~"foo"], workspace.path());
-    let output_str = str::from_utf8(output.output);
+    let output_str = str::from_utf8(output.output).unwrap();
     // The first two assertions are separate because test output may
     // contain color codes, which could appear between "test f" and "ok".
     assert!(output_str.contains("test f"));
@@ -2137,7 +2123,7 @@ fn test_rustpkg_test_cfg() {
               "#[test] #[cfg(not(foobar))] fn f() { assert!('a' != 'a'); }");
     let output = command_line_test([~"test", ~"--cfg", ~"foobar", ~"foo"],
                                    foo_workspace);
-    let output_str = str::from_utf8(output.output);
+    let output_str = str::from_utf8(output.output).unwrap();
     assert!(output_str.contains("0 passed; 0 failed; 0 ignored; 0 measured"));
 }
 
@@ -2319,7 +2305,7 @@ fn find_sources_in_cwd() {
     let source_dir = temp_dir.join("foo");
     fs::mkdir_recursive(&source_dir, io::UserRWX);
     writeFile(&source_dir.join("main.rs"),
-              r#"#[crate_id="foo"]; fn main() { let _x = (); }"#);
+              r#"#[crate_id="rust-foo#foo:0.0"]; fn main() { let _x = (); }"#);
     command_line_test([~"install", ~"foo"], &source_dir);
     assert_executable_exists(&source_dir.join(".rust"), "foo");
 }
@@ -2438,8 +2424,8 @@ fn correct_error_dependency() {
         Fail(ProcessOutput{ error: error, output: output, .. }) => {
             assert!(str::is_utf8(error));
             assert!(str::is_utf8(output));
-            let error_str = str::from_utf8(error);
-            let out_str   = str::from_utf8(output);
+            let error_str = str::from_utf8(error).unwrap();
+            let out_str   = str::from_utf8(output).unwrap();
             debug!("ss = {}", error_str);
             debug!("out_str = {}", out_str);
             if out_str.contains("Package badpkg depends on some_package_that_doesnt_exist") &&

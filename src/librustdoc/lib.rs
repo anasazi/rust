@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[crate_id = "rustdoc#0.9"];
+#[crate_id = "rustdoc#0.10-pre"];
 #[desc = "rustdoc, the Rust documentation extractor"];
 #[license = "MIT/ASL2"];
 #[crate_type = "dylib"];
@@ -21,8 +21,7 @@ extern mod extra;
 
 use std::local_data;
 use std::io;
-use std::io::File;
-use std::io::mem::MemWriter;
+use std::io::{File, MemWriter};
 use std::str;
 use extra::getopts;
 use extra::getopts::groups;
@@ -83,6 +82,7 @@ pub fn opts() -> ~[groups::OptGroup] {
     use extra::getopts::groups::*;
     ~[
         optflag("h", "help", "show this help message"),
+        optflag("", "version", "print rustdoc's version"),
         optopt("r", "input-format", "the input type of the specified file",
                "[rust|json]"),
         optopt("w", "output-format", "the output type to write",
@@ -105,27 +105,30 @@ pub fn opts() -> ~[groups::OptGroup] {
 }
 
 pub fn usage(argv0: &str) {
-    println(groups::usage(format!("{} [options] <input>", argv0), opts()));
+    println!("{}", groups::usage(format!("{} [options] <input>", argv0), opts()));
 }
 
 pub fn main_args(args: &[~str]) -> int {
     let matches = match groups::getopts(args.tail(), opts()) {
         Ok(m) => m,
         Err(err) => {
-            println(err.to_err_msg());
+            println!("{}", err.to_err_msg());
             return 1;
         }
     };
     if matches.opt_present("h") || matches.opt_present("help") {
         usage(args[0]);
         return 0;
+    } else if matches.opt_present("version") {
+        rustc::version(args[0]);
+        return 0;
     }
 
     if matches.free.len() == 0 {
-        println("expected an input file to act on");
+        println!("expected an input file to act on");
         return 1;
     } if matches.free.len() > 1 {
-        println("only one input file may be specified");
+        println!("only one input file may be specified");
         return 1;
     }
     let input = matches.free[0].as_slice();
@@ -135,11 +138,11 @@ pub fn main_args(args: &[~str]) -> int {
     }
 
     if matches.opt_strs("passes") == ~[~"list"] {
-        println("Available passes for running rustdoc:");
+        println!("Available passes for running rustdoc:");
         for &(name, _, description) in PASSES.iter() {
             println!("{:>20s} - {}", name, description);
         }
-        println("\nDefault passes for rustdoc:");
+        println!("{}", "\nDefault passes for rustdoc:"); // FIXME: #9970
         for &name in DEFAULT_PASSES.iter() {
             println!("{:>20s}", name);
         }
@@ -327,7 +330,7 @@ fn json_output(crate: clean::Crate, res: ~[plugins::PluginJson], dst: Path) {
             let mut encoder = json::Encoder::new(&mut w as &mut io::Writer);
             crate.encode(&mut encoder);
         }
-        str::from_utf8_owned(w.unwrap())
+        str::from_utf8_owned(w.unwrap()).unwrap()
     };
     let crate_json = match json::from_str(crate_json_str) {
         Ok(j) => j,

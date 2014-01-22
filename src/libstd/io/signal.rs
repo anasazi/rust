@@ -68,7 +68,7 @@ pub enum Signum {
 /// do spawn {
 ///     loop {
 ///         match listener.port.recv() {
-///             Interrupt => println("Got Interrupt'ed"),
+///             Interrupt => println!("Got Interrupt'ed"),
 ///             _ => (),
 ///         }
 ///     }
@@ -144,6 +144,7 @@ impl Listener {
 #[cfg(test)]
 mod test {
     use libc;
+    use comm::Empty;
     use io::timer;
     use super::{Listener, Interrupt};
 
@@ -194,7 +195,7 @@ mod test {
         s2.unregister(Interrupt);
         sigint();
         timer::sleep(10);
-        assert!(s2.port.try_recv().is_none());
+        assert_eq!(s2.port.try_recv(), Empty);
     }
 
     #[cfg(windows)]

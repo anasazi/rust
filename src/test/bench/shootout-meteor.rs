@@ -187,17 +187,17 @@ fn to_utf8(raw_sol: &List<u64>) -> ~str {
             if m & 1 << i != 0 {sol[i] = '0' as u8 + id;}
         }
     }
-    std::str::from_utf8_owned(sol)
+    std::str::from_utf8_owned(sol).unwrap()
 }
 
 // Prints a solution in ~str form.
 fn print_sol(sol: &str) {
     for (i, c) in sol.chars().enumerate() {
-        if (i) % 5 == 0 {println("");}
-        if (i + 5) % 10 == 0 {print(" ");}
+        if (i) % 5 == 0 { println!(""); }
+        if (i + 5) % 10 == 0 { print!(" "); }
         print!("{} ", c);
     }
-    println("");
+    println!("");
 }
 
 // The data managed during the search
@@ -277,5 +277,5 @@ fn main () {
     println!("{} solutions found", data.nb);
     print_sol(data.min);
     print_sol(data.max);
-    println("");
+    println!("");
 }

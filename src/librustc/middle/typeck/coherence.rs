@@ -20,8 +20,8 @@ use metadata::csearch;
 use middle::ty::get;
 use middle::ty::{ImplContainer, lookup_item_type, subst};
 use middle::ty::{substs, t, ty_bool, ty_char, ty_bot, ty_box, ty_enum, ty_err};
-use middle::ty::{ty_estr, ty_evec, ty_float, ty_infer, ty_int, ty_nil};
-use middle::ty::{ty_opaque_box, ty_param, ty_param_bounds_and_ty, ty_ptr};
+use middle::ty::{ty_str, ty_vec, ty_float, ty_infer, ty_int, ty_nil};
+use middle::ty::{ty_param, ty_param_bounds_and_ty, ty_ptr};
 use middle::ty::{ty_rptr, ty_self, ty_struct, ty_trait, ty_tup};
 use middle::ty::{ty_type, ty_uint, ty_uniq, ty_bare_fn, ty_closure};
 use middle::ty::{ty_opaque_closure_ptr, ty_unboxed_vec};
@@ -82,8 +82,8 @@ pub fn get_base_type(inference_context: @InferCtxt,
         }
 
         ty_nil | ty_bot | ty_bool | ty_char | ty_int(..) | ty_uint(..) | ty_float(..) |
-        ty_estr(..) | ty_evec(..) | ty_bare_fn(..) | ty_closure(..) | ty_tup(..) |
-        ty_infer(..) | ty_param(..) | ty_self(..) | ty_type | ty_opaque_box |
+        ty_str(..) | ty_vec(..) | ty_bare_fn(..) | ty_closure(..) | ty_tup(..) |
+        ty_infer(..) | ty_param(..) | ty_self(..) | ty_type |
         ty_opaque_closure_ptr(..) | ty_unboxed_vec(..) | ty_err | ty_box(_) |
         ty_uniq(_) | ty_ptr(_) | ty_rptr(_, _) => {
             debug!("(getting base type) no base type; found {:?}",
@@ -570,14 +570,13 @@ impl CoherenceChecker {
 
                         // Make sure that this type precisely names a nominal
                         // type.
-                        let items = self.crate_context.tcx.items.borrow();
-                        match items.get().find(&def_id.node) {
+                        match self.crate_context.tcx.items.find(def_id.node) {
                             None => {
                                 self.crate_context.tcx.sess.span_bug(
                                     original_type.span,
                                     "resolve didn't resolve this type?!");
                             }
-                            Some(&NodeItem(item, _)) => {
+                            Some(NodeItem(item, _)) => {
                                 match item.node {
                                     ItemStruct(..) | ItemEnum(..) => true,
                                     _ => false,
@@ -628,9 +627,8 @@ impl CoherenceChecker {
 
     pub fn span_of_impl(&self, implementation: @Impl) -> Span {
         assert_eq!(implementation.did.crate, LOCAL_CRATE);
-        let items = self.crate_context.tcx.items.borrow();
-        match items.get().find(&implementation.did.node) {
-            Some(&NodeItem(item, _)) => {
+        match self.crate_context.tcx.items.find(implementation.did.node) {
+            Some(NodeItem(item, _)) => {
                 return item.span;
             }
             _ => {
@@ -734,9 +732,8 @@ impl CoherenceChecker {
                     // Destructors only work on nominal types.
                     if impl_info.did.crate == ast::LOCAL_CRATE {
                         {
-                            let items = tcx.items.borrow();
-                            match items.get().find(&impl_info.did.node) {
-                                Some(&ast_map::NodeItem(@ref item, _)) => {
+                            match tcx.items.find(impl_info.did.node) {
+                                Some(ast_map::NodeItem(item, _)) => {
                                     tcx.sess.span_err((*item).span,
                                                       "the Drop trait may \
                                                        only be implemented \

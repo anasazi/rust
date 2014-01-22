@@ -18,7 +18,7 @@ This API is completely unstable and subject to change.
 
 */
 
-#[crate_id = "syntax#0.9"];
+#[crate_id = "syntax#0.10-pre"];
 #[license = "MIT/ASL2"];
 #[crate_type = "dylib"];
 #[crate_type = "rlib"];
@@ -68,6 +68,7 @@ pub mod ext {
     pub mod asm;
     pub mod base;
     pub mod expand;
+    pub mod registrar;
 
     pub mod quote;
 

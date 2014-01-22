@@ -22,7 +22,7 @@ A `BigInt` is a combination of `BigUint` and `Sign`.
 use std::cmp::{Eq, Ord, TotalEq, TotalOrd, Ordering, Less, Equal, Greater};
 use std::num;
 use std::num::{Zero, One, ToStrRadix, FromStrRadix, Orderable};
-use std::num::{ToPrimitive, FromPrimitive};
+use std::num::{Bitwise, ToPrimitive, FromPrimitive};
 use std::rand::Rng;
 use std::str;
 use std::uint;
@@ -385,7 +385,7 @@ impl Integer for BigUint {
         }
 
         let mut shift = 0;
-        let mut n = *other.data.last();
+        let mut n = *other.data.last().unwrap();
         while n < (1 << BigDigit::bits - 2) {
             n <<= 1;
             shift += 1;
@@ -434,7 +434,7 @@ impl Integer for BigUint {
             }
 
             let an = a.data.slice(a.data.len() - n, a.data.len());
-            let bn = *b.data.last();
+            let bn = *b.data.last().unwrap();
             let mut d = ~[];
             let mut carry = 0;
             for elt in an.rev_iter() {
@@ -561,9 +561,9 @@ impl ToPrimitive for BigUint {
 impl FromPrimitive for BigUint {
     #[inline]
     fn from_i64(n: i64) -> Option<BigUint> {
-        if (n > 0) {
+        if n > 0 {
             FromPrimitive::from_u64(n as u64)
-        } else if (n == 0) {
+        } else if n == 0 {
             Some(Zero::zero())
         } else {
             None
@@ -798,7 +798,7 @@ impl BigUint {
     /// Determines the fewest bits necessary to express the `BigUint`.
     pub fn bits(&self) -> uint {
         if self.is_zero() { return 0; }
-        let zeros = self.data.last().leading_zeros();
+        let zeros = self.data.last().unwrap().leading_zeros();
         return self.data.len()*BigDigit::bits - (zeros as uint);
     }
 }

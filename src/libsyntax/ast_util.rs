@@ -31,7 +31,7 @@ pub fn path_name_i(idents: &[Ident]) -> ~str {
 // totally scary function: ignores all but the last element, should have
 // a different name
 pub fn path_to_ident(path: &Path) -> Ident {
-    path.segments.last().identifier
+    path.segments.last().unwrap().identifier
 }
 
 pub fn local_def(id: NodeId) -> DefId {
@@ -567,11 +567,7 @@ pub fn visit_ids_for_inlined_item<O: IdVisitingOperation>(item: &InlinedItem,
         visited_outermost: false,
     };
 
-    match *item {
-        IIItem(i) => id_visitor.visit_item(i, ()),
-        IIForeign(i) => id_visitor.visit_foreign_item(i, ()),
-        IIMethod(_, _, m) => visit::walk_method_helper(&mut id_visitor, m, ()),
-    }
+    visit::walk_inlined_item(&mut id_visitor, item, ());
 }
 
 struct IdRangeComputingVisitor {
@@ -614,7 +610,7 @@ pub fn walk_pat(pat: &Pat, it: |&Pat| -> bool) -> bool {
         PatEnum(_, Some(ref s)) | PatTup(ref s) => {
             s.iter().advance(|&p| walk_pat(p, |p| it(p)))
         }
-        PatBox(s) | PatUniq(s) | PatRegion(s) => {
+        PatUniq(s) | PatRegion(s) => {
             walk_pat(s, it)
         }
         PatVec(ref before, ref slice, ref after) => {
@@ -833,9 +829,9 @@ pub fn resolve_internal(id : Ident,
                             resolve_internal(Ident{name:name,ctxt:ctxt},table,resolve_table);
                         let resolvedthis =
                             resolve_internal(Ident{name:id.name,ctxt:subctxt},table,resolve_table);
-                        if ((resolvedthis == resolvedfrom)
+                        if (resolvedthis == resolvedfrom)
                             && (marksof(ctxt,resolvedthis,table)
-                                == marksof(subctxt,resolvedthis,table))) {
+                                == marksof(subctxt,resolvedthis,table)) {
                             toname
                         } else {
                             resolvedthis
@@ -872,15 +868,17 @@ pub fn marksof(ctxt: SyntaxContext, stopname: Name, table: &SCTable) -> ~[Mrk] {
             table.get()[loopvar]
         };
         match table_entry {
-            EmptyCtxt => {return result;},
-            Mark(mark,tl) => {
-                xorPush(&mut result,mark);
+            EmptyCtxt => {
+                return result;
+            },
+            Mark(mark, tl) => {
+                xorPush(&mut result, mark);
                 loopvar = tl;
             },
             Rename(_,name,tl) => {
                 // see MTWT for details on the purpose of the stopname.
                 // short version: it prevents duplication of effort.
-                if (name == stopname) {
+                if name == stopname {
                     return result;
                 } else {
                     loopvar = tl;
@@ -905,8 +903,8 @@ pub fn mtwt_outer_mark(ctxt: SyntaxContext) -> Mrk {
 /// Push a name... unless it matches the one on top, in which
 /// case pop and discard (so two of the same marks cancel)
 pub fn xorPush(marks: &mut ~[Mrk], mark: Mrk) {
-    if ((marks.len() > 0) && (getLast(marks) == mark)) {
-        marks.pop();
+    if (marks.len() > 0) && (getLast(marks) == mark) {
+        marks.pop().unwrap();
     } else {
         marks.push(mark);
     }
@@ -915,7 +913,7 @@ pub fn xorPush(marks: &mut ~[Mrk], mark: Mrk) {
 // get the last element of a mutable array.
 // FIXME #4903: , must be a separate procedure for now.
 pub fn getLast(arr: &~[Mrk]) -> Mrk {
-    *arr.last()
+    *arr.last().unwrap()
 }
 
 // are two paths equal when compared unhygienically?
@@ -929,7 +927,7 @@ pub fn path_name_eq(a : &ast::Path, b : &ast::Path) -> bool {
 
 // are two arrays of segments equal when compared unhygienically?
 pub fn segments_name_eq(a : &[ast::PathSegment], b : &[ast::PathSegment]) -> bool {
-    if (a.len() != b.len()) {
+    if a.len() != b.len() {
         false
     } else {
         for (idx,seg) in a.iter().enumerate() {
@@ -944,6 +942,15 @@ pub fn segments_name_eq(a : &[ast::PathSegment], b : &[ast::PathSegment]) -> boo
         true
     }
 }
+
+// Returns true if this literal is a string and false otherwise.
+pub fn lit_is_str(lit: @Lit) -> bool {
+    match lit.node {
+        LitStr(..) => true,
+        _ => false,
+    }
+}
+
 
 #[cfg(test)]
 mod test {
@@ -971,20 +978,20 @@ mod test {
 
     #[test] fn xorpush_test () {
         let mut s = ~[];
-        xorPush(&mut s,14);
-        assert_eq!(s.clone(),~[14]);
-        xorPush(&mut s,14);
-        assert_eq!(s.clone(),~[]);
-        xorPush(&mut s,14);
-        assert_eq!(s.clone(),~[14]);
-        xorPush(&mut s,15);
-        assert_eq!(s.clone(),~[14,15]);
-        xorPush (&mut s,16);
-        assert_eq!(s.clone(),~[14,15,16]);
-        xorPush (&mut s,16);
-        assert_eq!(s.clone(),~[14,15]);
-        xorPush (&mut s,15);
-        assert_eq!(s.clone(),~[14]);
+        xorPush(&mut s, 14);
+        assert_eq!(s.clone(), ~[14]);
+        xorPush(&mut s, 14);
+        assert_eq!(s.clone(), ~[]);
+        xorPush(&mut s, 14);
+        assert_eq!(s.clone(), ~[14]);
+        xorPush(&mut s, 15);
+        assert_eq!(s.clone(), ~[14, 15]);
+        xorPush(&mut s, 16);
+        assert_eq!(s.clone(), ~[14, 15, 16]);
+        xorPush(&mut s, 16);
+        assert_eq!(s.clone(), ~[14, 15]);
+        xorPush(&mut s, 15);
+        assert_eq!(s.clone(), ~[14]);
     }
 
     fn id(n: Name, s: SyntaxContext) -> Ident {
@@ -1127,7 +1134,7 @@ mod test {
         // - two renames of the same var.. can only happen if you use
         // local-expand to prevent the inner binding from being renamed
         // during the rename-pass caused by the first:
-        println("about to run bad test");
+        println!("about to run bad test");
         { let sc = unfold_test_sc(~[R(id(a,EMPTY_CTXT),50),
                                     R(id(a,EMPTY_CTXT),51)],
                                   EMPTY_CTXT,&mut t);

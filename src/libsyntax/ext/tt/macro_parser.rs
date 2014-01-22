@@ -183,8 +183,8 @@ pub fn nameize(p_s: @ParseSess, ms: &[Matcher], res: &[@NamedMatch])
                 node: MatchNonterminal(ref bind_name, _, idx), span: sp
           } => {
             if ret_val.contains_key(bind_name) {
-                p_s.span_diagnostic.span_fatal(sp, ~"Duplicated bind name: "+
-                                               ident_to_str(bind_name))
+                p_s.span_diagnostic.span_fatal(sp,
+                                               "Duplicated bind name: "+ ident_to_str(bind_name))
             }
             ret_val.insert(*bind_name, res[idx]);
           }
@@ -238,8 +238,11 @@ pub fn parse(sess: @ParseSess,
         let TokenAndSpan {tok: tok, sp: sp} = rdr.peek();
 
         /* we append new items to this while we go */
-        while !cur_eis.is_empty() { /* for each Earley Item */
-            let ei = cur_eis.pop();
+        loop {
+            let ei = match cur_eis.pop() {
+                None => break, /* for each Earley Item */
+                Some(ei) => ei,
+            };
 
             let idx = ei.idx;
             let len = ei.elts.len();
@@ -333,7 +336,7 @@ pub fn parse(sess: @ParseSess,
                   MatchTok(ref t) => {
                     let mut ei_t = ei.clone();
                     //if (token_name_eq(t,&tok)) {
-                    if (token::mtwt_token_eq(t,&tok)) {
+                    if token::mtwt_token_eq(t,&tok) {
                         ei_t.idx += 1;
                         next_eis.push(ei_t);
                     }
@@ -347,13 +350,13 @@ pub fn parse(sess: @ParseSess,
             if eof_eis.len() == 1u {
                 let mut v = ~[];
                 for dv in eof_eis[0u].matches.mut_iter() {
-                    v.push(dv.pop());
+                    v.push(dv.pop().unwrap());
                 }
                 return Success(nameize(sess, ms, v));
             } else if eof_eis.len() > 1u {
-                return Error(sp, ~"Ambiguity: multiple successful parses");
+                return Error(sp, ~"ambiguity: multiple successful parses");
             } else {
-                return Failure(sp, ~"Unexpected end of macro invocation");
+                return Failure(sp, ~"unexpected end of macro invocation");
             }
         } else {
             if (bb_eis.len() > 0u && next_eis.len() > 0u)
@@ -367,22 +370,22 @@ pub fn parse(sess: @ParseSess,
                       _ => fail!()
                     } }).connect(" or ");
                 return Error(sp, format!(
-                    "Local ambiguity: multiple parsing options: \
+                    "local ambiguity: multiple parsing options: \
                      built-in NTs {} or {} other options.",
                     nts, next_eis.len()));
-            } else if (bb_eis.len() == 0u && next_eis.len() == 0u) {
-                return Failure(sp, ~"No rules expected the token: "
-                            + to_str(get_ident_interner(), &tok));
-            } else if (next_eis.len() > 0u) {
+            } else if bb_eis.len() == 0u && next_eis.len() == 0u {
+                return Failure(sp, format!("no rules expected the token `{}`",
+                            to_str(get_ident_interner(), &tok)));
+            } else if next_eis.len() > 0u {
                 /* Now process the next token */
-                while(next_eis.len() > 0u) {
-                    cur_eis.push(next_eis.pop());
+                while next_eis.len() > 0u {
+                    cur_eis.push(next_eis.pop().unwrap());
                 }
                 rdr.next_token();
             } else /* bb_eis.len() == 1 */ {
                 let mut rust_parser = Parser(sess, cfg.clone(), rdr.dup());
 
-                let mut ei = bb_eis.pop();
+                let mut ei = bb_eis.pop().unwrap();
                 match ei.elts[ei.idx].node {
                   MatchNonterminal(_, ref name, idx) => {
                     ei.matches[idx].push(@MatchedNonterminal(

@@ -12,13 +12,14 @@
 use c = metadata::common;
 use cstore = metadata::cstore;
 use driver::session::Session;
-use e = metadata::encoder;
 use metadata::decoder;
+use e = metadata::encoder;
+use middle::freevars::freevar_entry;
+use middle::region;
 use metadata::tydecode;
 use metadata::tydecode::{DefIdSource, NominalType, TypeWithId, TypeParameter,
                          RegionParameter};
 use metadata::tyencode;
-use middle::freevars::freevar_entry;
 use middle::typeck::{method_origin, method_map_entry};
 use middle::{ty, typeck, moves};
 use middle;
@@ -107,6 +108,13 @@ pub fn encode_inlined_item(ecx: &e::EncodeContext,
            ebml_w.writer.tell());
 }
 
+pub fn encode_exported_macro(ebml_w: &mut writer::Encoder, i: &ast::Item) {
+    match i.node {
+        ast::ItemMac(..) => encode_ast(ebml_w, ast::IIItem(@i.clone())),
+        _ => fail!("expected a macro")
+    }
+}
+
 pub fn decode_inlined_item(cdata: @cstore::crate_metadata,
                            tcx: ty::ctxt,
                            maps: Maps,
@@ -146,6 +154,7 @@ pub fn decode_inlined_item(cdata: @cstore::crate_metadata,
         debug!("< Decoded inlined fn: {}::{}",
                ast_map::path_to_str(path, token::get_ident_interner()),
                tcx.sess.str_of(ident));
+        region::resolve_inlined_item(tcx.sess, &tcx.region_maps, &ii);
         decode_side_tables(xcx, ast_doc);
         match ii {
           ast::IIItem(i) => {
@@ -156,6 +165,13 @@ pub fn decode_inlined_item(cdata: @cstore::crate_metadata,
         }
         Some(ii)
       }
+    }
+}
+
+pub fn decode_exported_macro(par_doc: ebml::Doc) -> @ast::Item {
+    match decode_ast(par_doc) {
+        ast::IIItem(item) => item,
+        _ => fail!("expected item")
     }
 }
 
@@ -308,15 +324,13 @@ impl Folder for NestedItemsDropper {
     fn fold_block(&mut self, blk: ast::P<ast::Block>) -> ast::P<ast::Block> {
         let stmts_sans_items = blk.stmts.iter().filter_map(|stmt| {
             match stmt.node {
-                ast::StmtExpr(_, _) | ast::StmtSemi(_, _) |
-                ast::StmtDecl(@codemap::Spanned {
-                    node: ast::DeclLocal(_),
-                    span: _
-                }, _) => Some(*stmt),
-                ast::StmtDecl(@codemap::Spanned {
-                    node: ast::DeclItem(_),
-                    span: _
-                }, _) => None,
+                ast::StmtExpr(_, _) | ast::StmtSemi(_, _) => Some(*stmt),
+                ast::StmtDecl(decl, _) => {
+                    match decl.node {
+                        ast::DeclLocal(_) => Some(*stmt),
+                        ast::DeclItem(_) => None,
+                    }
+                }
                 ast::StmtMac(..) => fail!("unexpanded macro in astencode")
             }
         }).collect();
@@ -578,9 +592,6 @@ fn encode_method_map_entry(ecx: &e::EncodeContext,
         ebml_w.emit_struct_field("origin", 1u, |ebml_w| {
             mme.origin.encode(ebml_w);
         });
-        ebml_w.emit_struct_field("self_mode", 3, |ebml_w| {
-            mme.self_mode.encode(ebml_w);
-        });
     })
 }
 
@@ -602,11 +613,7 @@ impl<'a> read_method_map_entry_helper for reader::Decoder<'a> {
                     let method_origin: method_origin =
                         Decodable::decode(this);
                     method_origin.tr(xcx)
-                }),
-                self_mode: this.read_struct_field("self_mode", 3, |this| {
-                    let self_mode: ty::SelfMode = Decodable::decode(this);
-                    self_mode
-                }),
+                })
             }
         })
     }
@@ -1465,7 +1472,7 @@ fn mk_ctxt() -> @fake_ext_ctxt {
 
 #[cfg(test)]
 fn roundtrip(in_item: Option<@ast::Item>) {
-    use std::io::mem::MemWriter;
+    use std::io::MemWriter;
 
     let in_item = in_item.unwrap();
     let mut wr = MemWriter::new();

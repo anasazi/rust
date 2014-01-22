@@ -169,14 +169,12 @@ impl Integer for $T {
 
     /// Returns `true` if the number is divisible by `2`
     #[inline]
-    fn is_even(&self) -> bool { self.is_multiple_of(&2) }
+    fn is_even(&self) -> bool { self & 1 == 0 }
 
     /// Returns `true` if the number is not divisible by `2`
     #[inline]
     fn is_odd(&self) -> bool { !self.is_even() }
 }
-
-impl Bitwise for $T {}
 
 #[cfg(not(test))]
 impl BitOr<$T,$T> for $T {
@@ -287,18 +285,9 @@ impl ToStrRadix for $T {
     }
 }
 
-impl Primitive for $T {
-    #[inline]
-    fn bits(_: Option<$T>) -> uint { bits }
+impl Primitive for $T {}
 
-    #[inline]
-    fn bytes(_: Option<$T>) -> uint { bits / 8 }
-
-    #[inline]
-    fn is_signed(_: Option<$T>) -> bool { false }
-}
-
-impl BitCount for $T {
+impl Bitwise for $T {
     /// Counts the number of bits set. Wraps LLVM's `ctpop` intrinsic.
     #[inline]
     fn population_count(&self) -> $T {
@@ -325,6 +314,7 @@ mod tests {
 
     use num;
     use num::CheckedDiv;
+    use num::Bitwise;
     use mem;
     use u16;
 
@@ -414,13 +404,6 @@ mod tests {
     #[test]
     fn test_bitcount() {
         assert_eq!((0b010101 as $T).population_count(), 3);
-    }
-
-    #[test]
-    fn test_primitive() {
-        let none: Option<$T> = None;
-        assert_eq!(Primitive::bits(none), mem::size_of::<$T>() * 8);
-        assert_eq!(Primitive::bytes(none), mem::size_of::<$T>());
     }
 
     #[test]

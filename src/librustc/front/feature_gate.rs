@@ -43,6 +43,9 @@ static KNOWN_FEATURES: &'static [(&'static str, Status)] = &[
     ("non_ascii_idents", Active),
     ("thread_local", Active),
     ("link_args", Active),
+    ("phase", Active),
+    ("macro_registrar", Active),
+    ("log_syntax", Active),
 
     // These are used to test this portion of the compiler, they don't actually
     // mean anything
@@ -114,7 +117,15 @@ impl Visitor<()> for Context {
                     }
                 }
             }
-            _ => {}
+            ast::ViewItemExternMod(..) => {
+                for attr in i.attrs.iter() {
+                    if "phase" == attr.name() {
+                        self.gate_feature("phase", attr.span,
+                                          "compile time crate loading is \
+                                           experimental and possibly buggy");
+                    }
+                }
+            }
         }
         visit::walk_view_item(self, i, ())
     }
@@ -151,6 +162,14 @@ impl Visitor<()> for Context {
                 }
             }
 
+            ast::ItemFn(..) => {
+                if attr::contains_name(i.attrs, "macro_registrar") {
+                    self.gate_feature("macro_registrar", i.span,
+                                      "cross-crate macro exports are \
+                                       experimental and possibly buggy");
+                }
+            }
+
             _ => {}
         }
 
@@ -160,13 +179,18 @@ impl Visitor<()> for Context {
     fn visit_mac(&mut self, macro: &ast::Mac, _: ()) {
         let ast::MacInvocTT(ref path, _, _) = macro.node;
 
-        if path.segments.last().identifier == self.sess.ident_of("macro_rules") {
+        if path.segments.last().unwrap().identifier == self.sess.ident_of("macro_rules") {
             self.gate_feature("macro_rules", path.span, "macro definitions are \
                 not stable enough for use and are subject to change");
         }
 
-        else if path.segments.last().identifier == self.sess.ident_of("asm") {
+        else if path.segments.last().unwrap().identifier == self.sess.ident_of("asm") {
             self.gate_feature("asm", path.span, "inline assembly is not \
+                stable enough for use and is subject to change");
+        }
+
+        else if path.segments.last().unwrap().identifier == self.sess.ident_of("log_syntax") {
+            self.gate_feature("log_syntax", path.span, "`log_syntax!` is not \
                 stable enough for use and is subject to change");
         }
     }

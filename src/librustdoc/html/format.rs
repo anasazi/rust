@@ -164,7 +164,7 @@ fn path(w: &mut io::Writer, path: &clean::Path, print_all: bool,
         info: |&render::Cache| -> Option<(~[~str], &'static str)>) {
     // The generics will get written to both the title and link
     let mut generics = ~"";
-    let last = path.segments.last();
+    let last = path.segments.last().unwrap();
     if last.lifetimes.len() > 0 || last.types.len() > 0 {
         let mut counter = 0;
         generics.push_str("&lt;");
@@ -230,13 +230,13 @@ fn path(w: &mut io::Writer, path: &clean::Path, print_all: bool,
                     }
                     match shortty {
                         "mod" => {
-                            url.push_str(*fqp.last());
+                            url.push_str(*fqp.last().unwrap());
                             url.push_str("/index.html");
                         }
                         _ => {
                             url.push_str(shortty);
                             url.push_str(".");
-                            url.push_str(*fqp.last());
+                            url.push_str(*fqp.last().unwrap());
                             url.push_str(".html");
                         }
                     }
@@ -405,8 +405,7 @@ impl<'a> fmt::Default for Method<'a> {
             clean::SelfStatic => {},
             clean::SelfValue => args.push_str("self"),
             clean::SelfOwned => args.push_str("~self"),
-            clean::SelfManaged(clean::Mutable) => args.push_str("@mut self"),
-            clean::SelfManaged(clean::Immutable) => args.push_str("@self"),
+            clean::SelfManaged => args.push_str("@self"),
             clean::SelfBorrowed(Some(ref lt), clean::Immutable) => {
                 args.push_str(format!("&amp;{} self", *lt));
             }
@@ -458,7 +457,7 @@ impl fmt::Default for clean::ViewPath {
     fn fmt(v: &clean::ViewPath, f: &mut fmt::Formatter) {
         match *v {
             clean::SimpleImport(ref name, ref src) => {
-                if *name == src.path.segments.last().name {
+                if *name == src.path.segments.last().unwrap().name {
                     write!(f.buf, "use {};", *src);
                 } else {
                     write!(f.buf, "use {} = {};", *name, *src);

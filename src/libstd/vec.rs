@@ -25,7 +25,7 @@ This is a big module, but for a high-level overview:
 
 ## Structs
 
-Several structs that are useful for vectors, such as `VecIterator`, which
+Several structs that are useful for vectors, such as `Items`, which
 represents iteration over a vector.
 
 ## Traits
@@ -109,21 +109,18 @@ use cmp::{Eq, TotalOrd, Ordering, Less, Equal, Greater};
 use cmp;
 use default::Default;
 use iter::*;
-use libc::{c_char, c_void};
 use num::{Integer, CheckedAdd, Saturating};
 use option::{None, Option, Some};
 use ptr::to_unsafe_ptr;
 use ptr;
 use ptr::RawPtr;
 use rt::global_heap::{malloc_raw, realloc_raw, exchange_free};
-use rt::local_heap::local_free;
 use mem;
 use mem::size_of;
 use uint;
 use unstable::finally::Finally;
 use unstable::intrinsics;
-use unstable::intrinsics::{get_tydesc, owns_managed};
-use unstable::raw::{Box, Repr, Slice, Vec};
+use unstable::raw::{Repr, Slice, Vec};
 use util;
 
 /**
@@ -180,21 +177,15 @@ pub fn from_elem<T:Clone>(n_elts: uint, t: T) -> ~[T] {
 #[inline]
 pub fn with_capacity<T>(capacity: uint) -> ~[T] {
     unsafe {
-        if owns_managed::<T>() {
-            let mut vec = ~[];
-            vec.reserve(capacity);
-            vec
-        } else {
-            let alloc = capacity * mem::nonzero_size_of::<T>();
-            let size = alloc + mem::size_of::<Vec<()>>();
-            if alloc / mem::nonzero_size_of::<T>() != capacity || size < alloc {
-                fail!("vector size is too large: {}", capacity);
-            }
-            let ptr = malloc_raw(size) as *mut Vec<()>;
-            (*ptr).alloc = alloc;
-            (*ptr).fill = 0;
-            cast::transmute(ptr)
+        let alloc = capacity * mem::nonzero_size_of::<T>();
+        let size = alloc + mem::size_of::<Vec<()>>();
+        if alloc / mem::nonzero_size_of::<T>() != capacity || size < alloc {
+            fail!("vector size is too large: {}", capacity);
         }
+        let ptr = malloc_raw(size) as *mut Vec<()>;
+        (*ptr).alloc = alloc;
+        (*ptr).fill = 0;
+        cast::transmute(ptr)
     }
 }
 
@@ -217,16 +208,35 @@ pub fn build<A>(size: Option<uint>, builder: |push: |v: A||) -> ~[A] {
     vec
 }
 
+/**
+ * Converts a pointer to A into a slice of length 1 (without copying).
+ */
+pub fn ref_slice<'a, A>(s: &'a A) -> &'a [A] {
+    unsafe {
+        cast::transmute(Slice { data: s, len: 1 })
+    }
+}
+
+/**
+ * Converts a pointer to A into a slice of length 1 (without copying).
+ */
+pub fn mut_ref_slice<'a, A>(s: &'a mut A) -> &'a mut [A] {
+    unsafe {
+        let ptr: *A = cast::transmute(s);
+        cast::transmute(Slice { data: ptr, len: 1 })
+    }
+}
+
 /// An iterator over the slices of a vector separated by elements that
 /// match a predicate function.
-pub struct SplitIterator<'a, T> {
+pub struct Splits<'a, T> {
     priv v: &'a [T],
     priv n: uint,
     priv pred: 'a |t: &T| -> bool,
     priv finished: bool
 }
 
-impl<'a, T> Iterator<&'a [T]> for SplitIterator<'a, T> {
+impl<'a, T> Iterator<&'a [T]> for Splits<'a, T> {
     #[inline]
     fn next(&mut self) -> Option<&'a [T]> {
         if self.finished { return None; }
@@ -268,14 +278,14 @@ impl<'a, T> Iterator<&'a [T]> for SplitIterator<'a, T> {
 
 /// An iterator over the slices of a vector separated by elements that
 /// match a predicate function, from back to front.
-pub struct RSplitIterator<'a, T> {
+pub struct RevSplits<'a, T> {
     priv v: &'a [T],
     priv n: uint,
     priv pred: 'a |t: &T| -> bool,
     priv finished: bool
 }
 
-impl<'a, T> Iterator<&'a [T]> for RSplitIterator<'a, T> {
+impl<'a, T> Iterator<&'a [T]> for RevSplits<'a, T> {
     #[inline]
     fn next(&mut self) -> Option<&'a [T]> {
         if self.finished { return None; }
@@ -503,12 +513,12 @@ impl<T: Clone> Iterator<~[T]> for Permutations<T> {
 /// An iterator over the (overlapping) slices of length `size` within
 /// a vector.
 #[deriving(Clone)]
-pub struct WindowIter<'a, T> {
+pub struct Windows<'a, T> {
     priv v: &'a [T],
     priv size: uint
 }
 
-impl<'a, T> Iterator<&'a [T]> for WindowIter<'a, T> {
+impl<'a, T> Iterator<&'a [T]> for Windows<'a, T> {
     #[inline]
     fn next(&mut self) -> Option<&'a [T]> {
         if self.size > self.v.len() {
@@ -537,12 +547,12 @@ impl<'a, T> Iterator<&'a [T]> for WindowIter<'a, T> {
 /// When the vector len is not evenly divided by the chunk size,
 /// the last slice of the iteration will be the remainder.
 #[deriving(Clone)]
-pub struct ChunkIter<'a, T> {
+pub struct Chunks<'a, T> {
     priv v: &'a [T],
     priv size: uint
 }
 
-impl<'a, T> Iterator<&'a [T]> for ChunkIter<'a, T> {
+impl<'a, T> Iterator<&'a [T]> for Chunks<'a, T> {
     #[inline]
     fn next(&mut self) -> Option<&'a [T]> {
         if self.v.len() == 0 {
@@ -568,7 +578,7 @@ impl<'a, T> Iterator<&'a [T]> for ChunkIter<'a, T> {
     }
 }
 
-impl<'a, T> DoubleEndedIterator<&'a [T]> for ChunkIter<'a, T> {
+impl<'a, T> DoubleEndedIterator<&'a [T]> for Chunks<'a, T> {
     #[inline]
     fn next_back(&mut self) -> Option<&'a [T]> {
         if self.v.len() == 0 {
@@ -584,7 +594,7 @@ impl<'a, T> DoubleEndedIterator<&'a [T]> for ChunkIter<'a, T> {
     }
 }
 
-impl<'a, T> RandomAccessIterator<&'a [T]> for ChunkIter<'a, T> {
+impl<'a, T> RandomAccessIterator<&'a [T]> for Chunks<'a, T> {
     #[inline]
     fn indexable(&self) -> uint {
         self.v.len()/self.size + if self.v.len() % self.size != 0 { 1 } else { 0 }
@@ -784,7 +794,7 @@ impl<T> Container for ~[T] {
     /// Returns the length of a vector
     #[inline]
     fn len(&self) -> uint {
-        self.repr().len
+        self.as_slice().len()
     }
 }
 
@@ -855,29 +865,29 @@ pub trait ImmutableVector<'a, T> {
      */
     fn slice_to(&self, end: uint) -> &'a [T];
     /// Returns an iterator over the vector
-    fn iter(self) -> VecIterator<'a, T>;
+    fn iter(self) -> Items<'a, T>;
     /// Returns a reversed iterator over a vector
-    fn rev_iter(self) -> RevIterator<'a, T>;
+    fn rev_iter(self) -> RevItems<'a, T>;
     /// Returns an iterator over the subslices of the vector which are
     /// separated by elements that match `pred`.  The matched element
     /// is not contained in the subslices.
-    fn split(self, pred: 'a |&T| -> bool) -> SplitIterator<'a, T>;
+    fn split(self, pred: 'a |&T| -> bool) -> Splits<'a, T>;
     /// Returns an iterator over the subslices of the vector which are
     /// separated by elements that match `pred`, limited to splitting
     /// at most `n` times.  The matched element is not contained in
     /// the subslices.
-    fn splitn(self, n: uint, pred: 'a |&T| -> bool) -> SplitIterator<'a, T>;
+    fn splitn(self, n: uint, pred: 'a |&T| -> bool) -> Splits<'a, T>;
     /// Returns an iterator over the subslices of the vector which are
     /// separated by elements that match `pred`. This starts at the
     /// end of the vector and works backwards.  The matched element is
     /// not contained in the subslices.
-    fn rsplit(self, pred: 'a |&T| -> bool) -> RSplitIterator<'a, T>;
+    fn rsplit(self, pred: 'a |&T| -> bool) -> RevSplits<'a, T>;
     /// Returns an iterator over the subslices of the vector which are
     /// separated by elements that match `pred` limited to splitting
     /// at most `n` times. This starts at the end of the vector and
     /// works backwards.  The matched element is not contained in the
     /// subslices.
-    fn rsplitn(self,  n: uint, pred: 'a |&T| -> bool) -> RSplitIterator<'a, T>;
+    fn rsplitn(self,  n: uint, pred: 'a |&T| -> bool) -> RevSplits<'a, T>;
 
     /**
      * Returns an iterator over all contiguous windows of length
@@ -901,7 +911,7 @@ pub trait ImmutableVector<'a, T> {
      * ```
      *
      */
-    fn windows(self, size: uint) -> WindowIter<'a, T>;
+    fn windows(self, size: uint) -> Windows<'a, T>;
     /**
      *
      * Returns an iterator over `size` elements of the vector at a
@@ -926,15 +936,13 @@ pub trait ImmutableVector<'a, T> {
      * ```
      *
      */
-    fn chunks(self, size: uint) -> ChunkIter<'a, T>;
+    fn chunks(self, size: uint) -> Chunks<'a, T>;
 
     /// Returns the element of a vector at the given index, or `None` if the
     /// index is out of bounds
-    fn get_opt(&self, index: uint) -> Option<&'a T>;
-    /// Returns the first element of a vector, failing if the vector is empty.
-    fn head(&self) -> &'a T;
+    fn get(&self, index: uint) -> Option<&'a T>;
     /// Returns the first element of a vector, or `None` if it is empty
-    fn head_opt(&self) -> Option<&'a T>;
+    fn head(&self) -> Option<&'a T>;
     /// Returns all but the first element of a vector
     fn tail(&self) -> &'a [T];
     /// Returns all but the first `n' elements of a vector
@@ -943,10 +951,8 @@ pub trait ImmutableVector<'a, T> {
     fn init(&self) -> &'a [T];
     /// Returns all but the last `n' elements of a vector
     fn initn(&self, n: uint) -> &'a [T];
-    /// Returns the last element of a vector, failing if the vector is empty.
-    fn last(&self) -> &'a T;
     /// Returns the last element of a vector, or `None` if it is empty.
-    fn last_opt(&self) -> Option<&'a T>;
+    fn last(&self) -> Option<&'a T>;
     /**
      * Apply a function to each element of a vector and return a concatenation
      * of each result vector
@@ -1044,15 +1050,15 @@ impl<'a,T> ImmutableVector<'a, T> for &'a [T] {
     }
 
     #[inline]
-    fn iter(self) -> VecIterator<'a, T> {
+    fn iter(self) -> Items<'a, T> {
         unsafe {
             let p = self.as_ptr();
             if mem::size_of::<T>() == 0 {
-                VecIterator{ptr: p,
+                Items{ptr: p,
                             end: (p as uint + self.len()) as *T,
                             lifetime: None}
             } else {
-                VecIterator{ptr: p,
+                Items{ptr: p,
                             end: p.offset(self.len() as int),
                             lifetime: None}
             }
@@ -1060,18 +1066,18 @@ impl<'a,T> ImmutableVector<'a, T> for &'a [T] {
     }
 
     #[inline]
-    fn rev_iter(self) -> RevIterator<'a, T> {
+    fn rev_iter(self) -> RevItems<'a, T> {
         self.iter().invert()
     }
 
     #[inline]
-    fn split(self, pred: 'a |&T| -> bool) -> SplitIterator<'a, T> {
+    fn split(self, pred: 'a |&T| -> bool) -> Splits<'a, T> {
         self.splitn(uint::max_value, pred)
     }
 
     #[inline]
-    fn splitn(self, n: uint, pred: 'a |&T| -> bool) -> SplitIterator<'a, T> {
-        SplitIterator {
+    fn splitn(self, n: uint, pred: 'a |&T| -> bool) -> Splits<'a, T> {
+        Splits {
             v: self,
             n: n,
             pred: pred,
@@ -1080,13 +1086,13 @@ impl<'a,T> ImmutableVector<'a, T> for &'a [T] {
     }
 
     #[inline]
-    fn rsplit(self, pred: 'a |&T| -> bool) -> RSplitIterator<'a, T> {
+    fn rsplit(self, pred: 'a |&T| -> bool) -> RevSplits<'a, T> {
         self.rsplitn(uint::max_value, pred)
     }
 
     #[inline]
-    fn rsplitn(self, n: uint, pred: 'a |&T| -> bool) -> RSplitIterator<'a, T> {
-        RSplitIterator {
+    fn rsplitn(self, n: uint, pred: 'a |&T| -> bool) -> RevSplits<'a, T> {
+        RevSplits {
             v: self,
             n: n,
             pred: pred,
@@ -1095,30 +1101,24 @@ impl<'a,T> ImmutableVector<'a, T> for &'a [T] {
     }
 
     #[inline]
-    fn windows(self, size: uint) -> WindowIter<'a, T> {
+    fn windows(self, size: uint) -> Windows<'a, T> {
         assert!(size != 0);
-        WindowIter { v: self, size: size }
+        Windows { v: self, size: size }
     }
 
     #[inline]
-    fn chunks(self, size: uint) -> ChunkIter<'a, T> {
+    fn chunks(self, size: uint) -> Chunks<'a, T> {
         assert!(size != 0);
-        ChunkIter { v: self, size: size }
+        Chunks { v: self, size: size }
     }
 
     #[inline]
-    fn get_opt(&self, index: uint) -> Option<&'a T> {
+    fn get(&self, index: uint) -> Option<&'a T> {
         if index < self.len() { Some(&self[index]) } else { None }
     }
 
     #[inline]
-    fn head(&self) -> &'a T {
-        if self.len() == 0 { fail!("head: empty vector") }
-        &self[0]
-    }
-
-    #[inline]
-    fn head_opt(&self) -> Option<&'a T> {
+    fn head(&self) -> Option<&'a T> {
         if self.len() == 0 { None } else { Some(&self[0]) }
     }
 
@@ -1139,13 +1139,7 @@ impl<'a,T> ImmutableVector<'a, T> for &'a [T] {
     }
 
     #[inline]
-    fn last(&self) -> &'a T {
-        if self.len() == 0 { fail!("last: empty vector") }
-        &self[self.len() - 1]
-    }
-
-    #[inline]
-    fn last_opt(&self) -> Option<&'a T> {
+    fn last(&self) -> Option<&'a T> {
             if self.len() == 0 { None } else { Some(&self[self.len() - 1]) }
     }
 
@@ -1317,13 +1311,13 @@ pub trait OwnedVector<T> {
     /// let v = ~[~"a", ~"b"];
     /// for s in v.move_iter() {
     ///   // s has type ~str, not &~str
-    ///   println(s);
+    ///   println!("{}", s);
     /// }
     /// ```
-    fn move_iter(self) -> MoveIterator<T>;
+    fn move_iter(self) -> MoveItems<T>;
     /// Creates a consuming iterator that moves out of the vector in
     /// reverse order.
-    fn move_rev_iter(self) -> MoveRevIterator<T>;
+    fn move_rev_iter(self) -> RevMoveItems<T>;
 
     /**
      * Reserves capacity for exactly `n` elements in the given vector.
@@ -1386,14 +1380,10 @@ pub trait OwnedVector<T> {
     /// assert!(a == ~[~1, ~2, ~3, ~4]);
     /// ```
     fn push_all_move(&mut self, rhs: ~[T]);
-    /// Remove the last element from a vector and return it, failing if it is empty
-    fn pop(&mut self) -> T;
     /// Remove the last element from a vector and return it, or `None` if it is empty
-    fn pop_opt(&mut self) -> Option<T>;
-    /// Removes the first element from a vector and return it
-    fn shift(&mut self) -> T;
+    fn pop(&mut self) -> Option<T>;
     /// Removes the first element from a vector and return it, or `None` if it is empty
-    fn shift_opt(&mut self) -> Option<T>;
+    fn shift(&mut self) -> Option<T>;
     /// Prepend an element to the vector
     fn unshift(&mut self, x: T);
 
@@ -1408,18 +1398,14 @@ pub trait OwnedVector<T> {
     /// # Example
     /// ```rust
     /// let mut v = ~[1, 2, 3];
-    /// assert_eq!(v.remove_opt(1), Some(2));
+    /// assert_eq!(v.remove(1), Some(2));
     /// assert_eq!(v, ~[1, 3]);
     ///
-    /// assert_eq!(v.remove_opt(4), None);
+    /// assert_eq!(v.remove(4), None);
     /// // v is unchanged:
     /// assert_eq!(v, ~[1, 3]);
     /// ```
-    fn remove_opt(&mut self, i: uint) -> Option<T>;
-
-    /// Remove and return the element at position i within v, shifting
-    /// all elements after position i one position to the left.
-    fn remove(&mut self, i: uint) -> T;
+    fn remove(&mut self, i: uint) -> Option<T>;
 
     /**
      * Remove an element from anywhere in the vector and return it, replacing it
@@ -1468,16 +1454,16 @@ pub trait OwnedVector<T> {
 
 impl<T> OwnedVector<T> for ~[T] {
     #[inline]
-    fn move_iter(self) -> MoveIterator<T> {
+    fn move_iter(self) -> MoveItems<T> {
         unsafe {
             let iter = cast::transmute(self.iter());
             let ptr = cast::transmute(self);
-            MoveIterator { allocation: ptr, iter: iter }
+            MoveItems { allocation: ptr, iter: iter }
         }
     }
 
     #[inline]
-    fn move_rev_iter(self) -> MoveRevIterator<T> {
+    fn move_rev_iter(self) -> RevMoveItems<T> {
         self.move_iter().invert()
     }
 
@@ -1485,21 +1471,15 @@ impl<T> OwnedVector<T> for ~[T] {
         // Only make the (slow) call into the runtime if we have to
         if self.capacity() < n {
             unsafe {
-                let td = get_tydesc::<T>();
-                if owns_managed::<T>() {
-                    let ptr: *mut *mut Box<Vec<()>> = cast::transmute(self);
-                    ::at_vec::raw::reserve_raw(td, ptr, n);
-                } else {
-                    let ptr: *mut *mut Vec<()> = cast::transmute(self);
-                    let alloc = n * mem::nonzero_size_of::<T>();
-                    let size = alloc + mem::size_of::<Vec<()>>();
-                    if alloc / mem::nonzero_size_of::<T>() != n || size < alloc {
-                        fail!("vector size is too large: {}", n);
-                    }
-                    *ptr = realloc_raw(*ptr as *mut c_void, size)
-                           as *mut Vec<()>;
-                    (**ptr).alloc = alloc;
+                let ptr: *mut *mut Vec<()> = cast::transmute(self);
+                let alloc = n * mem::nonzero_size_of::<T>();
+                let size = alloc + mem::size_of::<Vec<()>>();
+                if alloc / mem::nonzero_size_of::<T>() != n || size < alloc {
+                    fail!("vector size is too large: {}", n);
                 }
+                *ptr = realloc_raw(*ptr as *mut u8, size)
+                                   as *mut Vec<()>;
+                (**ptr).alloc = alloc;
             }
         }
     }
@@ -1522,13 +1502,8 @@ impl<T> OwnedVector<T> for ~[T] {
     #[inline]
     fn capacity(&self) -> uint {
         unsafe {
-            if owns_managed::<T>() {
-                let repr: **Box<Vec<()>> = cast::transmute(self);
-                (**repr).data.alloc / mem::nonzero_size_of::<T>()
-            } else {
-                let repr: **Vec<()> = cast::transmute(self);
-                (**repr).alloc / mem::nonzero_size_of::<T>()
-            }
+            let repr: **Vec<()> = cast::transmute(self);
+            (**repr).alloc / mem::nonzero_size_of::<T>()
         }
     }
 
@@ -1537,7 +1512,7 @@ impl<T> OwnedVector<T> for ~[T] {
             let ptr: *mut *mut Vec<()> = cast::transmute(self);
             let alloc = (**ptr).fill;
             let size = alloc + mem::size_of::<Vec<()>>();
-            *ptr = realloc_raw(*ptr as *mut c_void, size) as *mut Vec<()>;
+            *ptr = realloc_raw(*ptr as *mut u8, size) as *mut Vec<()>;
             (**ptr).alloc = alloc;
         }
     }
@@ -1545,45 +1520,25 @@ impl<T> OwnedVector<T> for ~[T] {
     #[inline]
     fn push(&mut self, t: T) {
         unsafe {
-            if owns_managed::<T>() {
-                let repr: **Box<Vec<()>> = cast::transmute(&mut *self);
-                let fill = (**repr).data.fill;
-                if (**repr).data.alloc <= fill {
-                    self.reserve_additional(1);
-                }
-
-                push_fast(self, t);
-            } else {
-                let repr: **Vec<()> = cast::transmute(&mut *self);
-                let fill = (**repr).fill;
-                if (**repr).alloc <= fill {
-                    self.reserve_additional(1);
-                }
-
-                push_fast(self, t);
+            let repr: **Vec<()> = cast::transmute(&mut *self);
+            let fill = (**repr).fill;
+            if (**repr).alloc <= fill {
+                self.reserve_additional(1);
             }
+
+            push_fast(self, t);
         }
 
         // This doesn't bother to make sure we have space.
         #[inline] // really pretty please
         unsafe fn push_fast<T>(this: &mut ~[T], t: T) {
-            if owns_managed::<T>() {
-                let repr: **mut Box<Vec<u8>> = cast::transmute(this);
-                let fill = (**repr).data.fill;
-                (**repr).data.fill += mem::nonzero_size_of::<T>();
-                let p = to_unsafe_ptr(&((**repr).data.data));
-                let p = ptr::offset(p, fill as int) as *mut T;
-                intrinsics::move_val_init(&mut(*p), t);
-            } else {
-                let repr: **mut Vec<u8> = cast::transmute(this);
-                let fill = (**repr).fill;
-                (**repr).fill += mem::nonzero_size_of::<T>();
-                let p = to_unsafe_ptr(&((**repr).data));
-                let p = ptr::offset(p, fill as int) as *mut T;
-                intrinsics::move_val_init(&mut(*p), t);
-            }
+            let repr: **mut Vec<u8> = cast::transmute(this);
+            let fill = (**repr).fill;
+            (**repr).fill += mem::nonzero_size_of::<T>();
+            let p = to_unsafe_ptr(&((**repr).data));
+            let p = ptr::offset(p, fill as int) as *mut T;
+            intrinsics::move_val_init(&mut(*p), t);
         }
-
     }
 
     #[inline]
@@ -1601,7 +1556,7 @@ impl<T> OwnedVector<T> for ~[T] {
         }
     }
 
-    fn pop_opt(&mut self) -> Option<T> {
+    fn pop(&mut self) -> Option<T> {
         match self.len() {
             0  => None,
             ln => {
@@ -1616,19 +1571,11 @@ impl<T> OwnedVector<T> for ~[T] {
 
 
     #[inline]
-    fn pop(&mut self) -> T {
-        self.pop_opt().expect("pop: empty vector")
+    fn shift(&mut self) -> Option<T> {
+        self.remove(0)
     }
 
     #[inline]
-    fn shift(&mut self) -> T {
-        self.shift_opt().expect("shift: empty vector")
-    }
-
-    fn shift_opt(&mut self) -> Option<T> {
-        self.remove_opt(0)
-    }
-
     fn unshift(&mut self, x: T) {
         self.insert(0, x)
     }
@@ -1652,15 +1599,7 @@ impl<T> OwnedVector<T> for ~[T] {
         }
     }
 
-    #[inline]
-    fn remove(&mut self, i: uint) -> T {
-        match self.remove_opt(i) {
-            Some(t) => t,
-            None => fail!("remove: the len is {} but the index is {}", self.len(), i)
-        }
-    }
-
-    fn remove_opt(&mut self, i: uint) -> Option<T> {
+    fn remove(&mut self, i: uint) -> Option<T> {
         let len = self.len();
         if i < len {
             unsafe { // infallible
@@ -1688,7 +1627,7 @@ impl<T> OwnedVector<T> for ~[T] {
         if index < ln - 1 {
             self.swap(index, ln - 1);
         }
-        self.pop()
+        self.pop().unwrap()
     }
     fn truncate(&mut self, newlen: uint) {
         let oldlen = self.len();
@@ -1745,15 +1684,11 @@ impl<T> OwnedVector<T> for ~[T] {
             i += 1u;
         }
     }
+
     #[inline]
     unsafe fn set_len(&mut self, new_len: uint) {
-        if owns_managed::<T>() {
-            let repr: **mut Box<Vec<()>> = cast::transmute(self);
-            (**repr).data.fill = new_len * mem::nonzero_size_of::<T>();
-        } else {
-            let repr: **mut Vec<()> = cast::transmute(self);
-            (**repr).fill = new_len * mem::nonzero_size_of::<T>();
-        }
+        let repr: **mut Vec<()> = cast::transmute(self);
+        (**repr).fill = new_len * mem::nonzero_size_of::<T>();
     }
 }
 
@@ -1837,11 +1772,8 @@ impl<T:Eq> OwnedEqVector<T> for ~[T] {
     fn dedup(&mut self) {
         unsafe {
             // Although we have a mutable reference to `self`, we cannot make
-            // *arbitrary* changes. There exists the possibility that this
-            // vector is contained with an `@mut` box and hence is still
-            // readable by the outside world during the `Eq` comparisons.
-            // Moreover, those comparisons could fail, so we must ensure
-            // that the vector is in a valid state at all time.
+            // *arbitrary* changes. The `Eq` comparisons could fail, so we
+            // must ensure that the vector is in a valid state at all time.
             //
             // The way that we handle this is by using swaps; we iterate
             // over all the elements, swapping as we go so that at the end
@@ -2092,15 +2024,18 @@ pub trait MutableVector<'a, T> {
     fn mut_slice_to(self, end: uint) -> &'a mut [T];
 
     /// Returns an iterator that allows modifying each value
-    fn mut_iter(self) -> VecMutIterator<'a, T>;
+    fn mut_iter(self) -> MutItems<'a, T>;
+
+    /// Returns a mutable pointer to the last item in the vector.
+    fn mut_last(self) -> &'a mut T;
 
     /// Returns a reversed iterator that allows modifying each value
-    fn mut_rev_iter(self) -> MutRevIterator<'a, T>;
+    fn mut_rev_iter(self) -> RevMutItems<'a, T>;
 
     /// Returns an iterator over the mutable subslices of the vector
     /// which are separated by elements that match `pred`.  The
     /// matched element is not contained in the subslices.
-    fn mut_split(self, pred: 'a |&T| -> bool) -> MutSplitIterator<'a, T>;
+    fn mut_split(self, pred: 'a |&T| -> bool) -> MutSplits<'a, T>;
 
     /**
      * Returns an iterator over `size` elements of the vector at a time.
@@ -2112,7 +2047,7 @@ pub trait MutableVector<'a, T> {
      *
      * Fails if `size` is 0.
      */
-    fn mut_chunks(self, chunk_size: uint) -> MutChunkIter<'a, T>;
+    fn mut_chunks(self, chunk_size: uint) -> MutChunks<'a, T>;
 
     /**
      * Returns a mutable reference to the first element in this slice
@@ -2341,15 +2276,15 @@ impl<'a,T> MutableVector<'a, T> for &'a mut [T] {
     }
 
     #[inline]
-    fn mut_iter(self) -> VecMutIterator<'a, T> {
+    fn mut_iter(self) -> MutItems<'a, T> {
         unsafe {
             let p = self.as_mut_ptr();
             if mem::size_of::<T>() == 0 {
-                VecMutIterator{ptr: p,
+                MutItems{ptr: p,
                                end: (p as uint + self.len()) as *mut T,
                                lifetime: None}
             } else {
-                VecMutIterator{ptr: p,
+                MutItems{ptr: p,
                                end: p.offset(self.len() as int),
                                lifetime: None}
             }
@@ -2357,19 +2292,26 @@ impl<'a,T> MutableVector<'a, T> for &'a mut [T] {
     }
 
     #[inline]
-    fn mut_rev_iter(self) -> MutRevIterator<'a, T> {
+    fn mut_last(self) -> &'a mut T {
+        let len = self.len();
+        if len == 0 { fail!("mut_last: empty vector") }
+        &mut self[len - 1]
+    }
+
+    #[inline]
+    fn mut_rev_iter(self) -> RevMutItems<'a, T> {
         self.mut_iter().invert()
     }
 
     #[inline]
-    fn mut_split(self, pred: 'a |&T| -> bool) -> MutSplitIterator<'a, T> {
-        MutSplitIterator { v: self, pred: pred, finished: false }
+    fn mut_split(self, pred: 'a |&T| -> bool) -> MutSplits<'a, T> {
+        MutSplits { v: self, pred: pred, finished: false }
     }
 
     #[inline]
-    fn mut_chunks(self, chunk_size: uint) -> MutChunkIter<'a, T> {
+    fn mut_chunks(self, chunk_size: uint) -> MutChunks<'a, T> {
         assert!(chunk_size > 0);
-        MutChunkIter { v: self, chunk_size: chunk_size }
+        MutChunks { v: self, chunk_size: chunk_size }
     }
 
     fn mut_shift_ref(&mut self) -> &'a mut T {
@@ -2752,7 +2694,7 @@ macro_rules! iterator {
     }
 }
 
-impl<'a, T> RandomAccessIterator<&'a T> for VecIterator<'a, T> {
+impl<'a, T> RandomAccessIterator<&'a T> for Items<'a, T> {
     #[inline]
     fn indexable(&self) -> uint {
         let (exact, _) = self.size_hint();
@@ -2771,28 +2713,28 @@ impl<'a, T> RandomAccessIterator<&'a T> for VecIterator<'a, T> {
     }
 }
 
-iterator!{struct VecIterator -> *T, &'a T}
-pub type RevIterator<'a, T> = Invert<VecIterator<'a, T>>;
+iterator!{struct Items -> *T, &'a T}
+pub type RevItems<'a, T> = Invert<Items<'a, T>>;
 
-impl<'a, T> ExactSize<&'a T> for VecIterator<'a, T> {}
-impl<'a, T> ExactSize<&'a mut T> for VecMutIterator<'a, T> {}
+impl<'a, T> ExactSize<&'a T> for Items<'a, T> {}
+impl<'a, T> ExactSize<&'a mut T> for MutItems<'a, T> {}
 
-impl<'a, T> Clone for VecIterator<'a, T> {
-    fn clone(&self) -> VecIterator<'a, T> { *self }
+impl<'a, T> Clone for Items<'a, T> {
+    fn clone(&self) -> Items<'a, T> { *self }
 }
 
-iterator!{struct VecMutIterator -> *mut T, &'a mut T}
-pub type MutRevIterator<'a, T> = Invert<VecMutIterator<'a, T>>;
+iterator!{struct MutItems -> *mut T, &'a mut T}
+pub type RevMutItems<'a, T> = Invert<MutItems<'a, T>>;
 
 /// An iterator over the subslices of the vector which are separated
 /// by elements that match `pred`.
-pub struct MutSplitIterator<'a, T> {
+pub struct MutSplits<'a, T> {
     priv v: &'a mut [T],
     priv pred: 'a |t: &T| -> bool,
     priv finished: bool
 }
 
-impl<'a, T> Iterator<&'a mut [T]> for MutSplitIterator<'a, T> {
+impl<'a, T> Iterator<&'a mut [T]> for MutSplits<'a, T> {
     #[inline]
     fn next(&mut self) -> Option<&'a mut [T]> {
         if self.finished { return None; }
@@ -2827,7 +2769,7 @@ impl<'a, T> Iterator<&'a mut [T]> for MutSplitIterator<'a, T> {
     }
 }
 
-impl<'a, T> DoubleEndedIterator<&'a mut [T]> for MutSplitIterator<'a, T> {
+impl<'a, T> DoubleEndedIterator<&'a mut [T]> for MutSplits<'a, T> {
     #[inline]
     fn next_back(&mut self) -> Option<&'a mut [T]> {
         if self.finished { return None; }
@@ -2851,12 +2793,12 @@ impl<'a, T> DoubleEndedIterator<&'a mut [T]> for MutSplitIterator<'a, T> {
 /// An iterator over a vector in (non-overlapping) mutable chunks (`size`  elements at a time). When
 /// the vector len is not evenly divided by the chunk size, the last slice of the iteration will be
 /// the remainder.
-pub struct MutChunkIter<'a, T> {
+pub struct MutChunks<'a, T> {
     priv v: &'a mut [T],
     priv chunk_size: uint
 }
 
-impl<'a, T> Iterator<&'a mut [T]> for MutChunkIter<'a, T> {
+impl<'a, T> Iterator<&'a mut [T]> for MutChunks<'a, T> {
     #[inline]
     fn next(&mut self) -> Option<&'a mut [T]> {
         if self.v.len() == 0 {
@@ -2882,7 +2824,7 @@ impl<'a, T> Iterator<&'a mut [T]> for MutChunkIter<'a, T> {
     }
 }
 
-impl<'a, T> DoubleEndedIterator<&'a mut [T]> for MutChunkIter<'a, T> {
+impl<'a, T> DoubleEndedIterator<&'a mut [T]> for MutChunks<'a, T> {
     #[inline]
     fn next_back(&mut self) -> Option<&'a mut [T]> {
         if self.v.len() == 0 {
@@ -2900,12 +2842,12 @@ impl<'a, T> DoubleEndedIterator<&'a mut [T]> for MutChunkIter<'a, T> {
 }
 
 /// An iterator that moves out of a vector.
-pub struct MoveIterator<T> {
+pub struct MoveItems<T> {
     priv allocation: *mut u8, // the block of memory allocated for the vector
-    priv iter: VecIterator<'static, T>
+    priv iter: Items<'static, T>
 }
 
-impl<T> Iterator<T> for MoveIterator<T> {
+impl<T> Iterator<T> for MoveItems<T> {
     #[inline]
     fn next(&mut self) -> Option<T> {
         unsafe {
@@ -2919,7 +2861,7 @@ impl<T> Iterator<T> for MoveIterator<T> {
     }
 }
 
-impl<T> DoubleEndedIterator<T> for MoveIterator<T> {
+impl<T> DoubleEndedIterator<T> for MoveItems<T> {
     #[inline]
     fn next_back(&mut self) -> Option<T> {
         unsafe {
@@ -2929,22 +2871,18 @@ impl<T> DoubleEndedIterator<T> for MoveIterator<T> {
 }
 
 #[unsafe_destructor]
-impl<T> Drop for MoveIterator<T> {
+impl<T> Drop for MoveItems<T> {
     fn drop(&mut self) {
         // destroy the remaining elements
         for _x in *self {}
         unsafe {
-            if owns_managed::<T>() {
-                local_free(self.allocation as *u8 as *c_char)
-            } else {
-                exchange_free(self.allocation as *u8 as *c_char)
-            }
+            exchange_free(self.allocation as *u8)
         }
     }
 }
 
 /// An iterator that moves out of a vector in reverse order.
-pub type MoveRevIterator<T> = Invert<MoveIterator<T>>;
+pub type RevMoveItems<T> = Invert<MoveItems<T>>;
 
 impl<A> FromIterator<A> for ~[A] {
     fn from_iterator<T: Iterator<A>>(iterator: &mut T) -> ~[A] {
@@ -3064,38 +3002,23 @@ mod tests {
     }
 
     #[test]
-    fn test_get_opt() {
+    fn test_get() {
         let mut a = ~[11];
-        assert_eq!(a.get_opt(1), None);
+        assert_eq!(a.get(1), None);
         a = ~[11, 12];
-        assert_eq!(a.get_opt(1).unwrap(), &12);
+        assert_eq!(a.get(1).unwrap(), &12);
         a = ~[11, 12, 13];
-        assert_eq!(a.get_opt(1).unwrap(), &12);
+        assert_eq!(a.get(1).unwrap(), &12);
     }
 
     #[test]
     fn test_head() {
-        let mut a = ~[11];
-        assert_eq!(a.head(), &11);
-        a = ~[11, 12];
-        assert_eq!(a.head(), &11);
-    }
-
-    #[test]
-    #[should_fail]
-    fn test_head_empty() {
-        let a: ~[int] = ~[];
-        a.head();
-    }
-
-    #[test]
-    fn test_head_opt() {
         let mut a = ~[];
-        assert_eq!(a.head_opt(), None);
+        assert_eq!(a.head(), None);
         a = ~[11];
-        assert_eq!(a.head_opt().unwrap(), &11);
+        assert_eq!(a.head().unwrap(), &11);
         a = ~[11, 12];
-        assert_eq!(a.head_opt().unwrap(), &11);
+        assert_eq!(a.head().unwrap(), &11);
     }
 
     #[test]
@@ -3160,27 +3083,12 @@ mod tests {
 
     #[test]
     fn test_last() {
-        let mut a = ~[11];
-        assert_eq!(a.last(), &11);
-        a = ~[11, 12];
-        assert_eq!(a.last(), &12);
-    }
-
-    #[test]
-    #[should_fail]
-    fn test_last_empty() {
-        let a: ~[int] = ~[];
-        a.last();
-    }
-
-    #[test]
-    fn test_last_opt() {
         let mut a = ~[];
-        assert_eq!(a.last_opt(), None);
+        assert_eq!(a.last(), None);
         a = ~[11];
-        assert_eq!(a.last_opt().unwrap(), &11);
+        assert_eq!(a.last().unwrap(), &11);
         a = ~[11, 12];
-        assert_eq!(a.last_opt().unwrap(), &12);
+        assert_eq!(a.last().unwrap(), &12);
     }
 
     #[test]
@@ -3235,28 +3143,16 @@ mod tests {
         assert_eq!(vec.slice_to(0), &[]);
     }
 
-    #[test]
-    fn test_pop() {
-        // Test on-heap pop.
-        let mut v = ~[1, 2, 3, 4, 5];
-        let e = v.pop();
-        assert_eq!(v.len(), 4u);
-        assert_eq!(v[0], 1);
-        assert_eq!(v[1], 2);
-        assert_eq!(v[2], 3);
-        assert_eq!(v[3], 4);
-        assert_eq!(e, 5);
-    }
 
     #[test]
-    fn test_pop_opt() {
+    fn test_pop() {
         let mut v = ~[5];
-        let e = v.pop_opt();
+        let e = v.pop();
         assert_eq!(v.len(), 0);
         assert_eq!(e, Some(5));
-        let f = v.pop_opt();
+        let f = v.pop();
         assert_eq!(f, None);
-        let g = v.pop_opt();
+        let g = v.pop();
         assert_eq!(g, None);
     }
 
@@ -3666,21 +3562,11 @@ mod tests {
     #[test]
     fn test_shift() {
         let mut x = ~[1, 2, 3];
-        assert_eq!(x.shift(), 1);
+        assert_eq!(x.shift(), Some(1));
         assert_eq!(&x, &~[2, 3]);
-        assert_eq!(x.shift(), 2);
-        assert_eq!(x.shift(), 3);
-        assert_eq!(x.len(), 0);
-    }
-
-    #[test]
-    fn test_shift_opt() {
-        let mut x = ~[1, 2, 3];
-        assert_eq!(x.shift_opt(), Some(1));
-        assert_eq!(&x, &~[2, 3]);
-        assert_eq!(x.shift_opt(), Some(2));
-        assert_eq!(x.shift_opt(), Some(3));
-        assert_eq!(x.shift_opt(), None);
+        assert_eq!(x.shift(), Some(2));
+        assert_eq!(x.shift(), Some(3));
+        assert_eq!(x.shift(), None);
         assert_eq!(x.len(), 0);
     }
 
@@ -3718,48 +3604,26 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_opt() {
+    fn test_remove() {
         let mut a = ~[1,2,3,4];
 
-        assert_eq!(a.remove_opt(2), Some(3));
+        assert_eq!(a.remove(2), Some(3));
         assert_eq!(a, ~[1,2,4]);
 
-        assert_eq!(a.remove_opt(2), Some(4));
+        assert_eq!(a.remove(2), Some(4));
         assert_eq!(a, ~[1,2]);
 
-        assert_eq!(a.remove_opt(2), None);
+        assert_eq!(a.remove(2), None);
         assert_eq!(a, ~[1,2]);
 
-        assert_eq!(a.remove_opt(0), Some(1));
+        assert_eq!(a.remove(0), Some(1));
         assert_eq!(a, ~[2]);
 
-        assert_eq!(a.remove_opt(0), Some(2));
+        assert_eq!(a.remove(0), Some(2));
         assert_eq!(a, ~[]);
 
-        assert_eq!(a.remove_opt(0), None);
-        assert_eq!(a.remove_opt(10), None);
-    }
-
-    #[test]
-    fn test_remove() {
-        let mut a = ~[1, 2, 3, 4];
-        a.remove(2);
-        assert_eq!(a, ~[1, 2, 4]);
-
-        let mut a = ~[1, 2, 3];
-        a.remove(0);
-        assert_eq!(a, ~[2, 3]);
-
-        let mut a = ~[1];
-        a.remove(0);
-        assert_eq!(a, ~[]);
-    }
-
-    #[test]
-    #[should_fail]
-    fn test_remove_oob() {
-        let mut a = ~[1, 2, 3];
-        a.remove(3);
+        assert_eq!(a.remove(0), None);
+        assert_eq!(a.remove(10), None);
     }
 
     #[test]

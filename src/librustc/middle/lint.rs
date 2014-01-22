@@ -34,6 +34,7 @@
 //! Context itself, span_lint should be used instead of add_lint.
 
 use driver::session;
+use middle::dead::DEAD_CODE_LINT_STR;
 use middle::privacy;
 use middle::trans::adt; // for `adt::is_ffi_safe`
 use middle::ty;
@@ -61,7 +62,6 @@ use syntax::ast_map;
 use syntax::attr;
 use syntax::attr::{AttrMetaMethods, AttributeMethods};
 use syntax::codemap::Span;
-use syntax::codemap;
 use syntax::parse::token;
 use syntax::{ast, ast_util, visit};
 use syntax::ast_util::IdVisitingOperation;
@@ -78,6 +78,7 @@ pub enum Lint {
     NonCamelCaseTypes,
     NonUppercaseStatics,
     NonUppercasePatternStatics,
+    UnnecessaryParens,
     TypeLimits,
     TypeOverflow,
     UnusedUnsafe,
@@ -162,7 +163,7 @@ static lint_table: &'static [(&'static str, LintSpec)] = &[
     ("while_true",
      LintSpec {
         lint: WhileTrue,
-        desc: "suggest using loop { } instead of while(true) { }",
+        desc: "suggest using `loop { }` instead of `while true { }`",
         default: warn
      }),
 
@@ -199,6 +200,13 @@ static lint_table: &'static [(&'static str, LintSpec)] = &[
          lint: NonUppercasePatternStatics,
          desc: "static constants in match patterns should be all caps",
          default: warn
+     }),
+
+    ("unnecessary_parens",
+     LintSpec {
+        lint: UnnecessaryParens,
+        desc: "`if`, `match`, `while` and `return` do not need parentheses",
+        default: warn
      }),
 
     ("managed_heap_memory",
@@ -293,7 +301,7 @@ static lint_table: &'static [(&'static str, LintSpec)] = &[
         default: warn
     }),
 
-    ("dead_code",
+    (DEAD_CODE_LINT_STR,
      LintSpec {
         lint: DeadCode,
         desc: "detect piece of code that will never be used",
@@ -516,7 +524,7 @@ impl<'a> Context<'a> {
         // rollback
         self.is_doc_hidden = old_is_doc_hidden;
         pushed.times(|| {
-            let (lint, lvl, src) = self.lint_stack.pop();
+            let (lint, lvl, src) = self.lint_stack.pop().unwrap();
             self.set_level(lint, lvl, src);
         })
     }
@@ -531,6 +539,8 @@ impl<'a> Context<'a> {
     }
 }
 
+// Check that every lint from the list of attributes satisfies `f`.
+// Return true if that's the case. Otherwise return false.
 pub fn each_lint(sess: session::Session,
                  attrs: &[ast::Attribute],
                  f: |@ast::MetaItem, level, @str| -> bool)
@@ -564,15 +574,39 @@ pub fn each_lint(sess: session::Session,
     true
 }
 
+// Check from a list of attributes if it contains the appropriate
+// `#[level(lintname)]` attribute (e.g. `#[allow(dead_code)]).
+pub fn contains_lint(attrs: &[ast::Attribute],
+                    level: level, lintname: &'static str) -> bool {
+    let level_name = level_to_str(level);
+    for attr in attrs.iter().filter(|m| level_name == m.name()) {
+        if attr.meta_item_list().is_none() {
+            continue
+        }
+        let list = attr.meta_item_list().unwrap();
+        for meta_item in list.iter() {
+            if lintname == meta_item.name() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn check_while_true_expr(cx: &Context, e: &ast::Expr) {
     match e.node {
         ast::ExprWhile(cond, _) => {
             match cond.node {
-                ast::ExprLit(@codemap::Spanned {
-                    node: ast::LitBool(true), ..}) =>
-                {
-                    cx.span_lint(WhileTrue, e.span,
-                                 "denote infinite loops with loop { ... }");
+                ast::ExprLit(lit) => {
+                    match lit.node {
+                        ast::LitBool(true) => {
+                            cx.span_lint(WhileTrue,
+                                         e.span,
+                                         "denote infinite loops with loop \
+                                          { ... }");
+                        }
+                        _ => {}
+                    }
                 }
                 _ => ()
             }
@@ -819,13 +853,13 @@ fn check_heap_type(cx: &Context, span: Span, ty: ty::t) {
         let mut n_uniq = 0;
         ty::fold_ty(cx.tcx, ty, |t| {
             match ty::get(t).sty {
-                ty::ty_box(_) | ty::ty_estr(ty::vstore_box) |
-                ty::ty_evec(_, ty::vstore_box) |
+                ty::ty_box(_) | ty::ty_str(ty::vstore_box) |
+                ty::ty_vec(_, ty::vstore_box) |
                 ty::ty_trait(_, _, ty::BoxTraitStore, _, _) => {
                     n_box += 1;
                 }
-                ty::ty_uniq(_) | ty::ty_estr(ty::vstore_uniq) |
-                ty::ty_evec(_, ty::vstore_uniq) |
+                ty::ty_uniq(_) | ty::ty_str(ty::vstore_uniq) |
+                ty::ty_vec(_, ty::vstore_uniq) |
                 ty::ty_trait(_, _, ty::UniqTraitStore, _, _) => {
                     n_uniq += 1;
                 }
@@ -898,15 +932,16 @@ static other_attrs: &'static [&'static str] = &[
     "allow", "deny", "forbid", "warn", // lint options
     "deprecated", "experimental", "unstable", "stable", "locked", "frozen", //item stability
     "crate_map", "cfg", "doc", "export_name", "link_section", "no_freeze",
-    "no_mangle", "no_send", "static_assert", "unsafe_no_drop_flag",
-    "packed", "simd", "repr", "deriving", "unsafe_destructor", "link",
+    "no_mangle", "no_send", "static_assert", "unsafe_no_drop_flag", "packed",
+    "simd", "repr", "deriving", "unsafe_destructor", "link", "phase",
+    "macro_export",
 
     //mod-level
     "path", "link_name", "link_args", "nolink", "macro_escape", "no_implicit_prelude",
 
     // fn-level
     "test", "bench", "should_fail", "ignore", "inline", "lang", "main", "start",
-    "no_split_stack", "cold",
+    "no_split_stack", "cold", "macro_registrar",
 
     // internal attribute: bypass privacy inside items
     "!resolve_unexported",
@@ -967,9 +1002,15 @@ fn check_heap_expr(cx: &Context, e: &ast::Expr) {
 
 fn check_path_statement(cx: &Context, s: &ast::Stmt) {
     match s.node {
-        ast::StmtSemi(@ast::Expr { node: ast::ExprPath(_), .. }, _) => {
-            cx.span_lint(PathStatement, s.span,
-                         "path statement with no effect");
+        ast::StmtSemi(expr, _) => {
+            match expr.node {
+                ast::ExprPath(_) => {
+                    cx.span_lint(PathStatement,
+                                 s.span,
+                                 "path statement with no effect");
+                }
+                _ => {}
+            }
         }
         _ => ()
     }
@@ -1036,12 +1077,30 @@ fn check_pat_non_uppercase_statics(cx: &Context, p: &ast::Pat) {
     match (&p.node, def_map.get().find(&p.id)) {
         (&ast::PatIdent(_, ref path, _), Some(&ast::DefStatic(_, false))) => {
             // last identifier alone is right choice for this lint.
-            let ident = path.segments.last().identifier;
+            let ident = path.segments.last().unwrap().identifier;
             let s = cx.tcx.sess.str_of(ident);
             if s.chars().any(|c| c.is_lowercase()) {
                 cx.span_lint(NonUppercasePatternStatics, path.span,
                              "static constant in pattern should be all caps");
             }
+        }
+        _ => {}
+    }
+}
+
+fn check_unnecessary_parens(cx: &Context, e: &ast::Expr) {
+    let (value, msg) = match e.node {
+        ast::ExprIf(cond, _, _) => (cond, "`if` condition"),
+        ast::ExprWhile(cond, _) => (cond, "`while` condition"),
+        ast::ExprMatch(head, _) => (head, "`match` head expression"),
+        ast::ExprRet(Some(value)) => (value, "`return` value"),
+        _ => return
+    };
+
+    match value.node {
+        ast::ExprParen(_) => {
+            cx.span_lint(UnnecessaryParens, value.span,
+                         format!("unnecessary parentheses around {}", msg))
         }
         _ => {}
     }
@@ -1110,7 +1169,9 @@ fn check_unnecessary_allocation(cx: &Context, e: &ast::Expr) {
         ast::ExprVstore(e2, ast::ExprVstoreUniq) |
         ast::ExprVstore(e2, ast::ExprVstoreBox) => {
             match e2.node {
-                ast::ExprLit(@codemap::Spanned{node: ast::LitStr(..), ..}) |
+                ast::ExprLit(lit) if ast_util::lit_is_str(lit) => {
+                    VectorAllocation
+                }
                 ast::ExprVec(..) => VectorAllocation,
                 _ => return
             }
@@ -1130,18 +1191,27 @@ fn check_unnecessary_allocation(cx: &Context, e: &ast::Expr) {
         adjustments.get().find_copy(&e.id)
     };
     match adjustment {
-        Some(@ty::AutoDerefRef(ty::AutoDerefRef { autoref, .. })) => {
-            match (allocation, autoref) {
-                (VectorAllocation, Some(ty::AutoBorrowVec(..))) => {
-                    report("unnecessary allocation, the sigil can be removed");
+        Some(adjustment) => {
+            match *adjustment {
+                ty::AutoDerefRef(ty::AutoDerefRef { autoref, .. }) => {
+                    match (allocation, autoref) {
+                        (VectorAllocation, Some(ty::AutoBorrowVec(..))) => {
+                            report("unnecessary allocation, the sigil can be \
+                                    removed");
+                        }
+                        (BoxAllocation,
+                         Some(ty::AutoPtr(_, ast::MutImmutable))) => {
+                            report("unnecessary allocation, use & instead");
+                        }
+                        (BoxAllocation,
+                         Some(ty::AutoPtr(_, ast::MutMutable))) => {
+                            report("unnecessary allocation, use &mut \
+                                    instead");
+                        }
+                        _ => ()
+                    }
                 }
-                (BoxAllocation, Some(ty::AutoPtr(_, ast::MutImmutable))) => {
-                    report("unnecessary allocation, use & instead");
-                }
-                (BoxAllocation, Some(ty::AutoPtr(_, ast::MutMutable))) => {
-                    report("unnecessary allocation, use &mut instead");
-                }
-                _ => ()
+                _ => {}
             }
         }
 
@@ -1286,8 +1356,7 @@ fn check_stability(cx: &Context, e: &ast::Expr) {
 
     let stability = if ast_util::is_local(id) {
         // this crate
-        let items = cx.tcx.items.borrow();
-        match items.get().find(&id.node) {
+        match cx.tcx.items.find(id.node) {
             Some(ast_node) => {
                 let s = ast_node.with_attrs(|attrs| {
                     attrs.map(|a| {
@@ -1395,6 +1464,7 @@ impl<'a> Visitor<()> for Context<'a> {
 
         check_while_true_expr(self, e);
         check_stability(self, e);
+        check_unnecessary_parens(self, e);
         check_unused_unsafe(self, e);
         check_unsafe_block(self, e);
         check_unnecessary_allocation(self, e);

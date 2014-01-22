@@ -377,7 +377,7 @@ pub enum SelfTy {
     SelfStatic,
     SelfValue,
     SelfBorrowed(Option<Lifetime>, Mutability),
-    SelfManaged(Mutability),
+    SelfManaged,
     SelfOwned,
 }
 
@@ -388,7 +388,7 @@ impl Clean<SelfTy> for ast::ExplicitSelf {
             ast::SelfValue(_) => SelfValue,
             ast::SelfUniq(_) => SelfOwned,
             ast::SelfRegion(lt, mt) => SelfBorrowed(lt.clean(), mt.clean()),
-            ast::SelfBox(mt) => SelfManaged(mt.clean()),
+            ast::SelfBox => SelfManaged,
         }
     }
 }
@@ -1142,7 +1142,6 @@ fn name_from_pat(p: &ast::Pat) -> ~str {
         PatStruct(..) => fail!("tried to get argument name from pat_struct, \
                                 which is not allowed in function arguments"),
         PatTup(..) => ~"(tuple arg NYI)",
-        PatBox(p) => name_from_pat(p),
         PatUniq(p) => name_from_pat(p),
         PatRegion(p) => name_from_pat(p),
         PatLit(..) => {

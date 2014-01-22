@@ -1039,7 +1039,7 @@ impl Resolver {
                 let mut duplicate_type = NoError;
                 let ns = match duplicate_checking_mode {
                     ForbidDuplicateModules => {
-                        if (child.get_module_if_available().is_some()) {
+                        if child.get_module_if_available().is_some() {
                             duplicate_type = ModuleError;
                         }
                         Some(TypeNS)
@@ -1074,7 +1074,7 @@ impl Resolver {
                     }
                     OverwriteDuplicates => None
                 };
-                if (duplicate_type != NoError) {
+                if duplicate_type != NoError {
                     // Return an error here by looking up the namespace that
                     // had the duplicate.
                     let ns = ns.unwrap();
@@ -1400,10 +1400,7 @@ impl Resolver {
                 name_bindings.define_type(DefTrait(def_id), sp, is_public);
                 new_parent
             }
-
-            ItemMac(..) => {
-                fail!("item macros unimplemented")
-            }
+            ItemMac(..) => parent
         }
     }
 
@@ -1479,7 +1476,7 @@ impl Resolver {
                     match view_path.node {
                         ViewPathSimple(binding, ref full_path, id) => {
                             let source_ident =
-                                full_path.segments.last().identifier;
+                                full_path.segments.last().unwrap().identifier;
                             let subclass = @SingleImport(binding,
                                                          source_ident);
                             self.build_import_directive(module_,
@@ -2442,7 +2439,7 @@ impl Resolver {
         match type_result {
             BoundResult(target_module, name_bindings) => {
                 debug!("(resolving single import) found type target: {:?}",
-                        name_bindings.type_def.get().unwrap().type_def);
+                       {name_bindings.type_def.get().unwrap().type_def});
                 import_resolution.type_target.set(
                     Some(Target::new(target_module, name_bindings)));
                 import_resolution.type_id.set(directive.id);
@@ -3804,9 +3801,9 @@ impl Resolver {
                 });
             }
 
-            ItemMac(..) => {
-                fail!("item macros unimplemented")
-            }
+           ItemMac(..) => {
+                // do nothing, these are just around to be encoded
+           }
         }
     }
 
@@ -4306,7 +4303,7 @@ impl Resolver {
 
                 // First, check to see whether the name is a primitive type.
                 if path.segments.len() == 1 {
-                    let id = path.segments.last().identifier;
+                    let id = path.segments.last().unwrap().identifier;
 
                     match self.primitive_type_table
                             .primitive_types
@@ -4345,7 +4342,7 @@ impl Resolver {
                                 debug!("(resolving type) resolved `{}` to \
                                         type {:?}",
                                        self.session.str_of(path.segments
-                                                               .last()
+                                                               .last().unwrap()
                                                                .identifier),
                                        def);
                                 result_def = Some(def);
@@ -4564,7 +4561,7 @@ impl Resolver {
                                 path.span,
                                 format!("`{}` is not an enum variant or constant",
                                      self.session.str_of(
-                                         path.segments.last().identifier)))
+                                         path.segments.last().unwrap().identifier)))
                         }
                         None => {
                             self.resolve_error(path.span,
@@ -4595,7 +4592,7 @@ impl Resolver {
                                 format!("`{}` is not an enum variant, struct or const",
                                      self.session
                                          .str_of(path.segments
-                                                     .last()
+                                                     .last().unwrap()
                                                      .identifier)));
                         }
                         None => {
@@ -4604,7 +4601,7 @@ impl Resolver {
                                                     struct or const `{}`",
                                                     self.session
                                                         .str_of(path.segments
-                                                                    .last()
+                                                                    .last().unwrap()
                                                                     .identifier)));
                         }
                     }
@@ -4725,7 +4722,7 @@ impl Resolver {
 
         let unqualified_def =
                 self.resolve_identifier(path.segments
-                                            .last()
+                                            .last().unwrap()
                                             .identifier,
                                         namespace,
                                         check_ribs,
@@ -4886,7 +4883,7 @@ impl Resolver {
             }
         }
 
-        let ident = path.segments.last().identifier;
+        let ident = path.segments.last().unwrap().identifier;
         let def = match self.resolve_definition_of_name_in_module(containing_module,
                                                         ident,
                                                         namespace) {
@@ -4955,7 +4952,7 @@ impl Resolver {
             }
         }
 
-        let name = path.segments.last().identifier;
+        let name = path.segments.last().unwrap().identifier;
         match self.resolve_definition_of_name_in_module(containing_module,
                                                         name,
                                                         namespace) {

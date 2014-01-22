@@ -521,8 +521,8 @@ pub fn super_tys<C:Combine>(this: &C, a: ty::t, b: ty::t) -> cres<ty::t> {
         this.tys(a_inner, b_inner).and_then(|typ| Ok(ty::mk_box(tcx, typ)))
       }
 
-      (&ty::ty_uniq(ref a_mt), &ty::ty_uniq(ref b_mt)) => {
-        this.mts(a_mt, b_mt).and_then(|mt| Ok(ty::mk_uniq(tcx, mt)))
+      (&ty::ty_uniq(a_inner), &ty::ty_uniq(b_inner)) => {
+        this.tys(a_inner, b_inner).and_then(|typ| Ok(ty::mk_uniq(tcx, typ)))
       }
 
       (&ty::ty_ptr(ref a_mt), &ty::ty_ptr(ref b_mt)) => {
@@ -535,17 +535,17 @@ pub fn super_tys<C:Combine>(this: &C, a: ty::t, b: ty::t) -> cres<ty::t> {
           Ok(ty::mk_rptr(tcx, r, mt))
       }
 
-      (&ty::ty_evec(ref a_mt, vs_a), &ty::ty_evec(ref b_mt, vs_b)) => {
+      (&ty::ty_vec(ref a_mt, vs_a), &ty::ty_vec(ref b_mt, vs_b)) => {
         this.mts(a_mt, b_mt).and_then(|mt| {
             this.vstores(ty::terr_vec, vs_a, vs_b).and_then(|vs| {
-                Ok(ty::mk_evec(tcx, mt, vs))
+                Ok(ty::mk_vec(tcx, mt, vs))
             })
         })
       }
 
-      (&ty::ty_estr(vs_a), &ty::ty_estr(vs_b)) => {
+      (&ty::ty_str(vs_a), &ty::ty_str(vs_b)) => {
         let vs = if_ok!(this.vstores(ty::terr_str, vs_a, vs_b));
-        Ok(ty::mk_estr(tcx,vs))
+        Ok(ty::mk_str(tcx,vs))
       }
 
       (&ty::ty_tup(ref as_), &ty::ty_tup(ref bs)) => {

@@ -97,7 +97,7 @@ pub fn parse_ident(st: &mut PState, last: char) -> ast::Ident {
 
 fn parse_ident_(st: &mut PState, is_last: |char| -> bool) -> ast::Ident {
     scan(st, is_last, |bytes| {
-            st.tcx.sess.ident_of(str::from_utf8(bytes))
+            st.tcx.sess.ident_of(str::from_utf8(bytes).unwrap())
         })
 }
 
@@ -343,7 +343,7 @@ fn parse_ty(st: &mut PState, conv: conv_did) -> ty::t {
         return ty::mk_self(st.tcx, did);
       }
       '@' => return ty::mk_box(st.tcx, parse_ty(st, |x,y| conv(x,y))),
-      '~' => return ty::mk_uniq(st.tcx, parse_mt(st, |x,y| conv(x,y))),
+      '~' => return ty::mk_uniq(st.tcx, parse_ty(st, |x,y| conv(x,y))),
       '*' => return ty::mk_ptr(st.tcx, parse_mt(st, |x,y| conv(x,y))),
       '&' => {
         let r = parse_region(st, |x,y| conv(x,y));
@@ -354,11 +354,11 @@ fn parse_ty(st: &mut PState, conv: conv_did) -> ty::t {
       'V' => {
         let mt = parse_mt(st, |x,y| conv(x,y));
         let v = parse_vstore(st, |x,y| conv(x,y));
-        return ty::mk_evec(st.tcx, mt, v);
+        return ty::mk_vec(st.tcx, mt, v);
       }
       'v' => {
         let v = parse_vstore(st, |x,y| conv(x,y));
-        return ty::mk_estr(st.tcx, v);
+        return ty::mk_str(st.tcx, v);
       }
       'T' => {
         assert_eq!(next(st), '[');
@@ -410,7 +410,6 @@ fn parse_ty(st: &mut PState, conv: conv_did) -> ty::t {
         let inner = parse_ty(st, |x,y| conv(x,y));
         inner
       }
-      'B' => ty::mk_opaque_box(st.tcx),
       'a' => {
           assert_eq!(next(st), '[');
           let did = parse_def(st, NominalType, |x,y| conv(x,y));
@@ -477,7 +476,7 @@ fn parse_abi_set(st: &mut PState) -> AbiSet {
     let mut abis = AbiSet::empty();
     while peek(st) != ']' {
          scan(st, |c| c == ',', |bytes| {
-                 let abi_str = str::from_utf8(bytes).to_owned();
+                 let abi_str = str::from_utf8(bytes).unwrap().to_owned();
                  let abi = abi::lookup(abi_str).expect(abi_str);
                  abis.add(abi);
               });

@@ -72,15 +72,15 @@ closure in the new task.
 # use std::task::spawn;
 
 // Print something profound in a different task using a named function
-fn print_message() { println("I am running in a different task!"); }
+fn print_message() { println!("I am running in a different task!"); }
 spawn(print_message);
 
 // Print something more profound in a different task using a lambda expression
-spawn(proc() println("I am also running in a different task!") );
+spawn(proc() println!("I am also running in a different task!") );
 
 // The canonical way to spawn is using `do` notation
 do spawn {
-    println("I too am running in a different task!");
+    println!("I too am running in a different task!");
 }
 ~~~~
 
@@ -290,7 +290,7 @@ be distributed on the available cores.
 fn partial_sum(start: uint) -> f64 {
     let mut local_sum = 0f64;
     for num in range(start*100000, (start+1)*100000) {
-        local_sum += (num as f64 + 1.0).pow(&-2.0);
+        local_sum += (num as f64 + 1.0).powf(&-2.0);
     }
     local_sum
 }
@@ -326,7 +326,7 @@ a single large vector of floats. Each task needs the full vector to perform its 
 use extra::arc::Arc;
 
 fn pnorm(nums: &~[f64], p: uint) -> f64 {
-    nums.iter().fold(0.0, |a,b| a+(*b).pow(&(p as f64)) ).pow(&(1.0 / (p as f64)))
+    nums.iter().fold(0.0, |a,b| a+(*b).powf(&(p as f64)) ).powf(&(1.0 / (p as f64)))
 }
 
 fn main() {

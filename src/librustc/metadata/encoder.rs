@@ -24,7 +24,7 @@ use middle;
 use std::cast;
 use std::cell::{Cell, RefCell};
 use std::hashmap::{HashMap, HashSet};
-use std::io::mem::MemWriter;
+use std::io::MemWriter;
 use std::str;
 use std::vec;
 
@@ -79,6 +79,8 @@ struct Stats {
     dep_bytes: Cell<u64>,
     lang_item_bytes: Cell<u64>,
     native_lib_bytes: Cell<u64>,
+    macro_registrar_fn_bytes: Cell<u64>,
+    macro_defs_bytes: Cell<u64>,
     impl_bytes: Cell<u64>,
     misc_bytes: Cell<u64>,
     item_bytes: Cell<u64>,
@@ -494,9 +496,8 @@ fn encode_reexported_static_methods(ecx: &EncodeContext,
                                     ebml_w: &mut writer::Encoder,
                                     mod_path: &[ast_map::PathElem],
                                     exp: &middle::resolve::Export2) {
-    let items = ecx.tcx.items.borrow();
-    match items.get().find(&exp.def_id.node) {
-        Some(&ast_map::NodeItem(item, path)) => {
+    match ecx.tcx.items.find(exp.def_id.node) {
+        Some(ast_map::NodeItem(item, path)) => {
             let original_name = ecx.tcx.sess.str_of(item.ident);
 
             //
@@ -687,9 +688,8 @@ fn encode_explicit_self(ebml_w: &mut writer::Encoder, explicit_self: ast::Explic
             ebml_w.writer.write(&[ '&' as u8 ]);
             encode_mutability(ebml_w, m);
         }
-        SelfBox(m) => {
+        SelfBox => {
             ebml_w.writer.write(&[ '@' as u8 ]);
-            encode_mutability(ebml_w, m);
         }
         SelfUniq(m) => {
             ebml_w.writer.write(&[ '~' as u8 ]);
@@ -1195,6 +1195,7 @@ fn encode_info_for_item(ecx: &EncodeContext,
         encode_trait_ref(ebml_w, ecx, trait_def.trait_ref, tag_item_trait_ref);
         encode_name(ecx, ebml_w, item.ident);
         encode_attributes(ebml_w, item.attrs);
+        encode_visibility(ebml_w, vis);
         for &method_def_id in ty::trait_method_def_ids(tcx, def_id).iter() {
             ebml_w.start_tag(tag_item_trait_method);
             encode_def_id(ebml_w, method_def_id);
@@ -1288,7 +1289,9 @@ fn encode_info_for_item(ecx: &EncodeContext,
         // Encode inherent implementations for this trait.
         encode_inherent_implementations(ecx, ebml_w, def_id);
       }
-      ItemMac(..) => fail!("item macros unimplemented")
+      ItemMac(..) => {
+        // macros are encoded separately
+      }
     }
 }
 
@@ -1344,8 +1347,7 @@ fn my_visit_item(i: &Item,
                  ebml_w: &mut writer::Encoder,
                  ecx_ptr: *int,
                  index: @RefCell<~[entry<i64>]>) {
-    let items = items.borrow();
-    match items.get().get_copy(&i.id) {
+    match items.get(i.id) {
         ast_map::NodeItem(_, pt) => {
             let mut ebml_w = unsafe {
                 ebml_w.unsafe_clone()
@@ -1363,8 +1365,7 @@ fn my_visit_foreign_item(ni: &ForeignItem,
                          ebml_w: &mut writer::Encoder,
                          ecx_ptr:*int,
                          index: @RefCell<~[entry<i64>]>) {
-    let items = items.borrow();
-    match items.get().get_copy(&ni.id) {
+    match items.get(ni.id) {
         ast_map::NodeForeignItem(_, abi, _, pt) => {
             debug!("writing foreign item {}::{}",
                    ast_map::path_to_str(
@@ -1692,6 +1693,51 @@ fn encode_native_libraries(ecx: &EncodeContext, ebml_w: &mut writer::Encoder) {
     ebml_w.end_tag();
 }
 
+fn encode_macro_registrar_fn(ecx: &EncodeContext, ebml_w: &mut writer::Encoder) {
+    let ptr = ecx.tcx.sess.macro_registrar_fn.borrow();
+    match *ptr.get() {
+        Some(did) => {
+            ebml_w.start_tag(tag_macro_registrar_fn);
+            encode_def_id(ebml_w, did);
+            ebml_w.end_tag();
+        }
+        None => {}
+    }
+}
+
+struct MacroDefVisitor<'a, 'b> {
+    ecx: &'a EncodeContext<'a>,
+    ebml_w: &'a mut writer::Encoder<'b>
+}
+
+impl<'a, 'b> Visitor<()> for MacroDefVisitor<'a, 'b> {
+    fn visit_item(&mut self, item: &Item, _: ()) {
+        match item.node {
+            ItemMac(..) => {
+                self.ebml_w.start_tag(tag_macro_def);
+                astencode::encode_exported_macro(self.ebml_w, item);
+                self.ebml_w.end_tag();
+            }
+            _ => {}
+        }
+        visit::walk_item(self, item, ());
+    }
+}
+
+fn encode_macro_defs(ecx: &EncodeContext,
+                     crate: &Crate,
+                     ebml_w: &mut writer::Encoder) {
+    ebml_w.start_tag(tag_exported_macros);
+    {
+        let mut visitor = MacroDefVisitor {
+            ecx: ecx,
+            ebml_w: ebml_w,
+        };
+        visit::walk_crate(&mut visitor, crate, ());
+    }
+    ebml_w.end_tag();
+}
+
 struct ImplVisitor<'a,'b> {
     ecx: &'a EncodeContext<'a>,
     ebml_w: &'a mut writer::Encoder<'b>,
@@ -1816,6 +1862,8 @@ fn encode_metadata_inner(wr: &mut MemWriter, parms: EncodeParams, crate: &Crate)
         dep_bytes: Cell::new(0),
         lang_item_bytes: Cell::new(0),
         native_lib_bytes: Cell::new(0),
+        macro_registrar_fn_bytes: Cell::new(0),
+        macro_defs_bytes: Cell::new(0),
         impl_bytes: Cell::new(0),
         misc_bytes: Cell::new(0),
         item_bytes: Cell::new(0),
@@ -1874,6 +1922,16 @@ fn encode_metadata_inner(wr: &mut MemWriter, parms: EncodeParams, crate: &Crate)
     encode_native_libraries(&ecx, &mut ebml_w);
     ecx.stats.native_lib_bytes.set(ebml_w.writer.tell() - i);
 
+    // Encode the macro registrar function
+    i = ebml_w.writer.tell();
+    encode_macro_registrar_fn(&ecx, &mut ebml_w);
+    ecx.stats.macro_registrar_fn_bytes.set(ebml_w.writer.tell() - i);
+
+    // Encode macro definitions
+    i = ebml_w.writer.tell();
+    encode_macro_defs(&ecx, crate, &mut ebml_w);
+    ecx.stats.macro_defs_bytes.set(ebml_w.writer.tell() - i);
+
     // Encode the def IDs of impls, for coherence checking.
     i = ebml_w.writer.tell();
     encode_impls(&ecx, crate, &mut ebml_w);
@@ -1898,25 +1956,27 @@ fn encode_metadata_inner(wr: &mut MemWriter, parms: EncodeParams, crate: &Crate)
 
     ecx.stats.total_bytes.set(ebml_w.writer.tell());
 
-    if (tcx.sess.meta_stats()) {
+    if tcx.sess.meta_stats() {
         for e in ebml_w.writer.get_ref().iter() {
             if *e == 0 {
                 ecx.stats.zero_bytes.set(ecx.stats.zero_bytes.get() + 1);
             }
         }
 
-        println("metadata stats:");
-        println!("    inline bytes: {}", ecx.stats.inline_bytes.get());
-        println!(" attribute bytes: {}", ecx.stats.attr_bytes.get());
-        println!("       dep bytes: {}", ecx.stats.dep_bytes.get());
-        println!(" lang item bytes: {}", ecx.stats.lang_item_bytes.get());
-        println!("    native bytes: {}", ecx.stats.native_lib_bytes.get());
-        println!("      impl bytes: {}", ecx.stats.impl_bytes.get());
-        println!("      misc bytes: {}", ecx.stats.misc_bytes.get());
-        println!("      item bytes: {}", ecx.stats.item_bytes.get());
-        println!("     index bytes: {}", ecx.stats.index_bytes.get());
-        println!("      zero bytes: {}", ecx.stats.zero_bytes.get());
-        println!("     total bytes: {}", ecx.stats.total_bytes.get());
+        println!("metadata stats:");
+        println!("         inline bytes: {}", ecx.stats.inline_bytes.get());
+        println!("      attribute bytes: {}", ecx.stats.attr_bytes.get());
+        println!("            dep bytes: {}", ecx.stats.dep_bytes.get());
+        println!("      lang item bytes: {}", ecx.stats.lang_item_bytes.get());
+        println!("         native bytes: {}", ecx.stats.native_lib_bytes.get());
+        println!("macro registrar bytes: {}", ecx.stats.macro_registrar_fn_bytes.get());
+        println!("      macro def bytes: {}", ecx.stats.macro_defs_bytes.get());
+        println!("           impl bytes: {}", ecx.stats.impl_bytes.get());
+        println!("           misc bytes: {}", ecx.stats.misc_bytes.get());
+        println!("           item bytes: {}", ecx.stats.item_bytes.get());
+        println!("          index bytes: {}", ecx.stats.index_bytes.get());
+        println!("           zero bytes: {}", ecx.stats.zero_bytes.get());
+        println!("          total bytes: {}", ecx.stats.total_bytes.get());
     }
 }
 
@@ -1929,5 +1989,5 @@ pub fn encoded_ty(tcx: ty::ctxt, t: ty::t) -> ~str {
         abbrevs: tyencode::ac_no_abbrevs};
     let mut wr = MemWriter::new();
     tyencode::enc_ty(&mut wr, cx, t);
-    str::from_utf8_owned(wr.get_ref().to_owned())
+    str::from_utf8_owned(wr.get_ref().to_owned()).unwrap()
 }

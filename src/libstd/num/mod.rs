@@ -17,6 +17,7 @@
 
 use clone::{Clone, DeepClone};
 use cmp::{Eq, Ord};
+use mem::size_of;
 use ops::{Add, Sub, Mul, Div, Rem, Neg};
 use ops::{Not, BitAnd, BitOr, BitXor, Shl, Shr};
 use option::{Option, Some, None};
@@ -49,19 +50,59 @@ pub trait Orderable: Ord {
 /// Returns the number constrained within the range `mn <= self <= mx`.
 #[inline(always)] pub fn clamp<T: Orderable>(value: T, mn: T, mx: T) -> T { value.clamp(&mn, &mx) }
 
-pub trait Zero {
-    fn zero() -> Self;      // FIXME (#5527): This should be an associated constant
+/// Defines an additive identity element for `Self`.
+///
+/// # Deriving
+///
+/// This trait can be automatically be derived using `#[deriving(Zero)]`
+/// attribute. If you choose to use this, make sure that the laws outlined in
+/// the documentation for `Zero::zero` still hold.
+pub trait Zero: Add<Self, Self> {
+    /// Returns the additive identity element of `Self`, `0`.
+    ///
+    /// # Laws
+    ///
+    /// ~~~
+    /// a + 0 = a       ∀ a ∈ Self
+    /// 0 + a = a       ∀ a ∈ Self
+    /// ~~~
+    ///
+    /// # Purity
+    ///
+    /// This function should return the same result at all times regardless of
+    /// external mutable state, for example values stored in TLS or in
+    /// `static mut`s.
+    // FIXME (#5527): This should be an associated constant
+    fn zero() -> Self;
+
+    /// Returns `true` if `self` is equal to the additive identity.
     fn is_zero(&self) -> bool;
 }
 
-/// Returns `0` of appropriate type.
+/// Returns the additive identity, `0`.
 #[inline(always)] pub fn zero<T: Zero>() -> T { Zero::zero() }
 
-pub trait One {
-    fn one() -> Self;       // FIXME (#5527): This should be an associated constant
+/// Defines a multiplicative identity element for `Self`.
+pub trait One: Mul<Self, Self> {
+    /// Returns the multiplicative identity element of `Self`, `1`.
+    ///
+    /// # Laws
+    ///
+    /// ~~~
+    /// a * 1 = a       ∀ a ∈ Self
+    /// 1 * a = a       ∀ a ∈ Self
+    /// ~~~
+    ///
+    /// # Purity
+    ///
+    /// This function should return the same result at all times regardless of
+    /// external mutable state, for example values stored in TLS or in
+    /// `static mut`s.
+    // FIXME (#5527): This should be an associated constant
+    fn one() -> Self;
 }
 
-/// Returns `1` of appropriate type.
+/// Returns the multiplicative identity, `1`.
 #[inline(always)] pub fn one<T: One>() -> T { One::one() }
 
 pub trait Signed: Num
@@ -185,9 +226,9 @@ pub trait Real: Signed
     fn recip(&self) -> Self;
 
     // Algebraic functions
-
     /// Raise a number to a power.
-    fn pow(&self, n: &Self) -> Self;
+    fn powf(&self, n: &Self) -> Self;
+
     /// Take the square root of a number.
     fn sqrt(&self) -> Self;
     /// Take the reciprocal (inverse) square root of a number, `1/sqrt(x)`.
@@ -263,6 +304,31 @@ pub trait Real: Signed
     fn to_radians(&self) -> Self;
 }
 
+/// Raises a value to the power of exp, using exponentiation by squaring.
+///
+/// # Example
+///
+/// ```rust
+/// use std::num;
+///
+/// assert_eq!(num::pow(2, 4), 16);
+/// ```
+#[inline]
+pub fn pow<T: One + Mul<T, T>>(mut base: T, mut exp: uint) -> T {
+    if exp == 1 { base }
+    else {
+        let mut acc = one::<T>();
+        while exp > 0 {
+            if (exp & 1) == 1 {
+                acc = acc * base;
+            }
+            base = base * base;
+            exp = exp >> 1;
+        }
+        acc
+    }
+}
+
 /// Raise a number to a power.
 ///
 /// # Example
@@ -270,10 +336,10 @@ pub trait Real: Signed
 /// ```rust
 /// use std::num;
 ///
-/// let sixteen: f64 = num::pow(2.0, 4.0);
+/// let sixteen: f64 = num::powf(2.0, 4.0);
 /// assert_eq!(sixteen, 16.0);
 /// ```
-#[inline(always)] pub fn pow<T: Real>(value: T, n: T) -> T { value.pow(&n) }
+#[inline(always)] pub fn powf<T: Real>(value: T, n: T) -> T { value.powf(&n) }
 /// Take the square root of a number.
 #[inline(always)] pub fn sqrt<T: Real>(value: T) -> T { value.sqrt() }
 /// Take the reciprocal (inverse) square root of a number, `1/sqrt(x)`.
@@ -324,39 +390,27 @@ pub trait Real: Signed
 /// Inverse hyperbolic tangent function.
 #[inline(always)] pub fn atanh<T: Real>(value: T) -> T { value.atanh() }
 
-/// Methods that are harder to implement and not commonly used.
-pub trait RealExt: Real {
-    // FIXME (#5527): usages of `int` should be replaced with an associated
-    // integer type once these are implemented
-
-    // Gamma functions
-    fn lgamma(&self) -> (int, Self);
-    fn tgamma(&self) -> Self;
-
-    // Bessel functions
-    fn j0(&self) -> Self;
-    fn j1(&self) -> Self;
-    fn jn(&self, n: int) -> Self;
-    fn y0(&self) -> Self;
-    fn y1(&self) -> Self;
-    fn yn(&self, n: int) -> Self;
+pub trait Bounded {
+    // FIXME (#5527): These should be associated constants
+    fn min_value() -> Self;
+    fn max_value() -> Self;
 }
 
-/// Collects the bitwise operators under one trait.
-pub trait Bitwise: Not<Self>
+/// Numbers with a fixed binary representation.
+pub trait Bitwise: Bounded
+                 + Not<Self>
                  + BitAnd<Self,Self>
                  + BitOr<Self,Self>
                  + BitXor<Self,Self>
                  + Shl<Self,Self>
-                 + Shr<Self,Self> {}
-
-/// A trait for common counting operations on bits.
-pub trait BitCount {
+                 + Shr<Self,Self> {
     /// Returns the number of bits set in the number.
     ///
     /// # Example
     ///
     /// ```rust
+    /// use std::num::Bitwise;
+    ///
     /// let n = 0b0101000u16;
     /// assert_eq!(n.population_count(), 2);
     /// ```
@@ -366,6 +420,8 @@ pub trait BitCount {
     /// # Example
     ///
     /// ```rust
+    /// use std::num::Bitwise;
+    ///
     /// let n = 0b0101000u16;
     /// assert_eq!(n.leading_zeros(), 10);
     /// ```
@@ -375,16 +431,12 @@ pub trait BitCount {
     /// # Example
     ///
     /// ```rust
+    /// use std::num::Bitwise;
+    ///
     /// let n = 0b0101000u16;
     /// assert_eq!(n.trailing_zeros(), 3);
     /// ```
     fn trailing_zeros(&self) -> Self;
-}
-
-pub trait Bounded {
-    // FIXME (#5527): These should be associated constants
-    fn min_value() -> Self;
-    fn max_value() -> Self;
 }
 
 /// Specifies the available operations common to all of Rust's core numeric primitives.
@@ -395,25 +447,12 @@ pub trait Primitive: Clone
                    + Num
                    + NumCast
                    + Orderable
-                   + Bounded
-                   + Neg<Self>
-                   + Add<Self,Self>
-                   + Sub<Self,Self>
-                   + Mul<Self,Self>
-                   + Div<Self,Self>
-                   + Rem<Self,Self> {
-    // FIXME (#5527): These should be associated constants
-    // FIXME (#8888): Removing `unused_self` requires #8888 to be fixed.
-    fn bits(unused_self: Option<Self>) -> uint;
-    fn bytes(unused_self: Option<Self>) -> uint;
-    fn is_signed(unused_self: Option<Self>) -> bool;
-}
+                   + Bounded {}
 
 /// A collection of traits relevant to primitive signed and unsigned integers
 pub trait Int: Integer
              + Primitive
-             + Bitwise
-             + BitCount {}
+             + Bitwise {}
 
 /// Used for representing the classification of floating point numbers
 #[deriving(Eq)]
@@ -551,7 +590,7 @@ pub trait ToPrimitive {
 macro_rules! impl_to_primitive_int_to_int(
     ($SrcT:ty, $DstT:ty) => (
         {
-            if Primitive::bits(None::<$SrcT>) <= Primitive::bits(None::<$DstT>) {
+            if size_of::<$SrcT>() <= size_of::<$DstT>() {
                 Some(*self as $DstT)
             } else {
                 let n = *self as i64;
@@ -636,7 +675,7 @@ macro_rules! impl_to_primitive_uint_to_int(
 macro_rules! impl_to_primitive_uint_to_uint(
     ($SrcT:ty, $DstT:ty) => (
         {
-            if Primitive::bits(None::<$SrcT>) <= Primitive::bits(None::<$DstT>) {
+            if size_of::<$SrcT>() <= size_of::<$DstT>() {
                 Some(*self as $DstT)
             } else {
                 let zero: $SrcT = Zero::zero();
@@ -692,7 +731,7 @@ impl_to_primitive_uint!(u64)
 
 macro_rules! impl_to_primitive_float_to_float(
     ($SrcT:ty, $DstT:ty) => (
-        if Primitive::bits(None::<$SrcT>) <= Primitive::bits(None::<$DstT>) {
+        if size_of::<$SrcT>() <= size_of::<$DstT>() {
             Some(*self as $DstT)
         } else {
             let n = *self as f64;
@@ -975,47 +1014,6 @@ pub fn from_str_radix<T: FromStrRadix>(str: &str, radix: uint) -> Option<T> {
     FromStrRadix::from_str_radix(str, radix)
 }
 
-/// Calculates a power to a given radix, optimized for uint `pow` and `radix`.
-///
-/// Returns `radix^pow` as `T`.
-///
-/// Note:
-/// Also returns `1` for `0^0`, despite that technically being an
-/// undefined number. The reason for this is twofold:
-/// - If code written to use this function cares about that special case, it's
-///   probably going to catch it before making the call.
-/// - If code written to use this function doesn't care about it, it's
-///   probably assuming that `x^0` always equals `1`.
-///
-pub fn pow_with_uint<T:NumCast+One+Zero+Div<T,T>+Mul<T,T>>(radix: uint, pow: uint) -> T {
-    let _0: T = Zero::zero();
-    let _1: T = One::one();
-
-    if pow   == 0u { return _1; }
-    if radix == 0u { return _0; }
-    let mut my_pow     = pow;
-    let mut total      = _1;
-    let mut multiplier = cast(radix).unwrap();
-    while (my_pow > 0u) {
-        if my_pow % 2u == 1u {
-            total = total * multiplier;
-        }
-        my_pow = my_pow / 2u;
-        multiplier = multiplier * multiplier;
-    }
-    total
-}
-
-impl<T: Zero + 'static> Zero for @T {
-    fn zero() -> @T { @Zero::zero() }
-    fn is_zero(&self) -> bool { (**self).is_zero() }
-}
-
-impl<T: Zero> Zero for ~T {
-    fn zero() -> ~T { ~Zero::zero() }
-    fn is_zero(&self) -> bool { (**self).is_zero() }
-}
-
 /// Saturating math operations
 pub trait Saturating {
     /// Saturating addition operator.
@@ -1089,6 +1087,7 @@ pub fn test_num<T:Num + NumCast>(ten: T, two: T) {
 mod tests {
     use prelude::*;
     use super::*;
+    use num;
     use i8;
     use i16;
     use i32;
@@ -1648,5 +1647,42 @@ mod tests {
         assert_eq!(from_u64(5),    Some(Value { x: 5 }));
         assert_eq!(from_f32(5f32), Some(Value { x: 5 }));
         assert_eq!(from_f64(5f64), Some(Value { x: 5 }));
+    }
+
+    #[test]
+    fn test_pow() {
+        fn naive_pow<T: One + Mul<T, T>>(base: T, exp: uint) -> T {
+            range(0, exp).fold(one::<T>(), |acc, _| acc * base)
+        }
+        macro_rules! assert_pow(
+            (($num:expr, $exp:expr) => $expected:expr) => {{
+                let result = pow($num, $exp);
+                assert_eq!(result, $expected);
+                assert_eq!(result, naive_pow($num, $exp));
+            }}
+        )
+        assert_pow!((3,    0 ) => 1);
+        assert_pow!((5,    1 ) => 5);
+        assert_pow!((-4,   2 ) => 16);
+        assert_pow!((0.5,  5 ) => 0.03125);
+        assert_pow!((8,    3 ) => 512);
+        assert_pow!((8.0,  5 ) => 32768.0);
+        assert_pow!((8.5,  5 ) => 44370.53125);
+        assert_pow!((2u64, 50) => 1125899906842624);
+    }
+}
+
+
+#[cfg(test)]
+mod bench {
+    use num;
+    use vec;
+    use prelude::*;
+    use extra::test::BenchHarness;
+
+    #[bench]
+    fn bench_pow_function(b: &mut BenchHarness) {
+        let v = vec::from_fn(1024, |n| n);
+        b.iter(|| {v.iter().fold(0, |old, new| num::pow(old, *new));});
     }
 }

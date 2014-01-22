@@ -40,7 +40,7 @@ use ast::{LitBool, LitFloat, LitFloatUnsuffixed, LitInt, LitChar};
 use ast::{LitIntUnsuffixed, LitNil, LitStr, LitUint, Local};
 use ast::{MutImmutable, MutMutable, Mac_, MacInvocTT, Matcher, MatchNonterminal};
 use ast::{MatchSeq, MatchTok, Method, MutTy, BiMul, Mutability};
-use ast::{NamedField, UnNeg, NoReturn, UnNot, P, Pat, PatBox, PatEnum};
+use ast::{NamedField, UnNeg, NoReturn, UnNot, P, Pat, PatEnum};
 use ast::{PatIdent, PatLit, PatRange, PatRegion, PatStruct};
 use ast::{PatTup, PatUniq, PatWild, PatWildMulti, Private};
 use ast::{BiRem, Required};
@@ -60,7 +60,7 @@ use ast::{ViewItem_, ViewItemExternMod, ViewItemUse};
 use ast::{ViewPath, ViewPathGlob, ViewPathList, ViewPathSimple};
 use ast::Visibility;
 use ast;
-use ast_util::{as_prec, operator_prec};
+use ast_util::{as_prec, lit_is_str, operator_prec};
 use ast_util;
 use codemap::{Span, BytePos, Spanned, spanned, mk_sp};
 use codemap;
@@ -142,8 +142,6 @@ at INTERPOLATED tokens */
 macro_rules! maybe_whole_expr (
     ($p:expr) => (
         {
-            // This horrible convolution is brought to you by
-            // @mut, have a terrible day
             let mut maybe_path = match ($p).token {
                 INTERPOLATED(token::NtPath(ref pt)) => Some((**pt).clone()),
                 _ => None,
@@ -1755,19 +1753,19 @@ impl Parser {
                 return self.mk_expr(lo, hi, ExprLit(lit));
             }
             let mut es = ~[self.parse_expr()];
-            self.commit_expr(*es.last(), &[], &[token::COMMA, token::RPAREN]);
+            self.commit_expr(*es.last().unwrap(), &[], &[token::COMMA, token::RPAREN]);
             while self.token == token::COMMA {
                 self.bump();
                 if self.token != token::RPAREN {
                     es.push(self.parse_expr());
-                    self.commit_expr(*es.last(), &[], &[token::COMMA, token::RPAREN]);
+                    self.commit_expr(*es.last().unwrap(), &[], &[token::COMMA, token::RPAREN]);
                 }
                 else {
                     trailing_comma = true;
                 }
             }
             hi = self.span.hi;
-            self.commit_expr_expecting(*es.last(), token::RPAREN);
+            self.commit_expr_expecting(*es.last().unwrap(), token::RPAREN);
 
             return if es.len() == 1 && !trailing_comma {
                 self.mk_expr(lo, self.span.hi, ExprParen(es[0]))
@@ -1926,7 +1924,8 @@ impl Parser {
 
                     fields.push(self.parse_field());
                     while self.token != token::RBRACE {
-                        self.commit_expr(fields.last().expr, &[token::COMMA], &[token::RBRACE]);
+                        self.commit_expr(fields.last().unwrap().expr,
+                                         &[token::COMMA], &[token::RBRACE]);
 
                         if self.eat(&token::DOTDOT) {
                             base = Some(self.parse_expr());
@@ -1941,7 +1940,7 @@ impl Parser {
                     }
 
                     hi = pth.span.hi;
-                    self.commit_expr_expecting(fields.last().expr, token::RBRACE);
+                    self.commit_expr_expecting(fields.last().unwrap().expr, token::RBRACE);
                     ex = ExprStruct(pth, fields, base);
                     return self.mk_expr(lo, hi, ex);
                 }
@@ -2022,10 +2021,10 @@ impl Parser {
                 let es = self.parse_unspanned_seq(
                     &token::LPAREN,
                     &token::RPAREN,
-                    seq_sep_trailing_disallowed(token::COMMA),
+                    seq_sep_trailing_allowed(token::COMMA),
                     |p| p.parse_expr()
                 );
-                hi = self.span.hi;
+                hi = self.last_span.hi;
 
                 let nd = self.mk_call(e, es, NoSugar);
                 e = self.mk_expr(lo, hi, nd);
@@ -2035,7 +2034,7 @@ impl Parser {
               token::LBRACKET => {
                 self.bump();
                 let ix = self.parse_expr();
-                hi = ix.span.hi;
+                hi = self.span.hi;
                 self.commit_expr_expecting(ix, token::RBRACKET);
                 let index = self.mk_index(e, ix);
                 e = self.mk_expr(lo, hi, index)
@@ -2094,7 +2093,7 @@ impl Parser {
                   // This is a conservative error: only report the last unclosed delimiter. The
                   // previous unclosed delimiters could actually be closed! The parser just hasn't
                   // gotten to them yet.
-                  match p.open_braces.last_opt() {
+                  match p.open_braces.last() {
                       None => {}
                       Some(&sp) => p.span_note(sp, "unclosed delimiter"),
                   };
@@ -2159,7 +2158,7 @@ impl Parser {
 
                 // Parse the close delimiter.
                 result.push(parse_any_tt_tok(self));
-                self.open_braces.pop();
+                self.open_braces.pop().unwrap();
 
                 TTDelim(@result)
             }
@@ -2276,12 +2275,12 @@ impl Parser {
                 let m = self.parse_mutability();
                 let e = self.parse_prefix_expr();
                 hi = e.span.hi;
-                // HACK: turn &[...] into a &-evec
+                // HACK: turn &[...] into a &-vec
                 ex = match e.node {
-                  ExprVec(..) | ExprLit(@codemap::Spanned {
-                    node: LitStr(..), span: _
-                  })
-                  if m == MutImmutable => {
+                  ExprVec(..) if m == MutImmutable => {
+                    ExprVstore(e, ExprVstoreSlice)
+                  }
+                  ExprLit(lit) if lit_is_str(lit) && m == MutImmutable => {
                     ExprVstore(e, ExprVstoreSlice)
                   }
                   ExprVec(..) if m == MutMutable => {
@@ -2297,11 +2296,11 @@ impl Parser {
             self.bump();
             let e = self.parse_prefix_expr();
             hi = e.span.hi;
-            // HACK: turn @[...] into a @-evec
+            // HACK: turn @[...] into a @-vec
             ex = match e.node {
               ExprVec(..) |
-              ExprLit(@codemap::Spanned { node: LitStr(..), span: _}) |
               ExprRepeat(..) => ExprVstore(e, ExprVstoreBox),
+              ExprLit(lit) if lit_is_str(lit) => ExprVstore(e, ExprVstoreBox),
               _ => self.mk_unary(UnBox, e)
             };
           }
@@ -2310,11 +2309,12 @@ impl Parser {
 
             let e = self.parse_prefix_expr();
             hi = e.span.hi;
-            // HACK: turn ~[...] into a ~-evec
+            // HACK: turn ~[...] into a ~-vec
             ex = match e.node {
-              ExprVec(..) |
-              ExprLit(@codemap::Spanned { node: LitStr(..), span: _}) |
-              ExprRepeat(..) => ExprVstore(e, ExprVstoreUniq),
+              ExprVec(..) | ExprRepeat(..) => ExprVstore(e, ExprVstoreUniq),
+              ExprLit(lit) if lit_is_str(lit) => {
+                  ExprVstore(e, ExprVstoreUniq)
+              }
               _ => self.mk_unary(UnUniq, e)
             };
           }
@@ -2337,14 +2337,14 @@ impl Parser {
             // Otherwise, we use the unique pointer default.
             let subexpression = self.parse_prefix_expr();
             hi = subexpression.span.hi;
-            // HACK: turn `box [...]` into a boxed-evec
+            // HACK: turn `box [...]` into a boxed-vec
             ex = match subexpression.node {
-                ExprVec(..) |
-                ExprLit(@codemap::Spanned {
-                    node: LitStr(..),
-                    span: _
-                }) |
-                ExprRepeat(..) => ExprVstore(subexpression, ExprVstoreUniq),
+                ExprVec(..) | ExprRepeat(..) => {
+                    ExprVstore(subexpression, ExprVstoreUniq)
+                }
+                ExprLit(lit) if lit_is_str(lit) => {
+                    ExprVstore(subexpression, ExprVstoreUniq)
+                }
                 _ => self.mk_unary(UnUniq, subexpression)
             };
           }
@@ -2769,8 +2769,8 @@ impl Parser {
                     })
                 } else {
                     let subpat = self.parse_pat();
-                    match subpat {
-                        @ast::Pat { id, node: PatWild, span } => {
+                    match *subpat {
+                        ast::Pat { id, node: PatWild, span } => {
                             self.obsolete(self.span, ObsoleteVecDotDotWildcard);
                             slice = Some(@ast::Pat {
                                 id: id,
@@ -2778,10 +2778,10 @@ impl Parser {
                                 span: span
                             })
                         },
-                        @ast::Pat { node: PatIdent(_, _, _), .. } => {
+                        ast::Pat { node: PatIdent(_, _, _), .. } => {
                             slice = Some(subpat);
                         }
-                        @ast::Pat { span, .. } => self.span_fatal(
+                        ast::Pat { span, .. } => self.span_fatal(
                             span, "expected an identifier or nothing"
                         )
                     }
@@ -2891,19 +2891,26 @@ impl Parser {
             hi = sub.span.hi;
             // HACK: parse @"..." as a literal of a vstore @str
             pat = match sub.node {
-              PatLit(e@@Expr {
-                node: ExprLit(@codemap::Spanned {
-                    node: LitStr(..),
-                    span: _}), ..
-              }) => {
-                let vst = @Expr {
-                    id: ast::DUMMY_NODE_ID,
-                    node: ExprVstore(e, ExprVstoreBox),
-                    span: mk_sp(lo, hi),
-                };
-                PatLit(vst)
+              PatLit(e) => {
+                  match e.node {
+                      ExprLit(lit) if lit_is_str(lit) => {
+                        let vst = @Expr {
+                            id: ast::DUMMY_NODE_ID,
+                            node: ExprVstore(e, ExprVstoreBox),
+                            span: mk_sp(lo, hi),
+                        };
+                        PatLit(vst)
+                      }
+                      _ => {
+                        self.obsolete(self.span, ObsoleteManagedPattern);
+                        PatUniq(sub)
+                      }
+                  }
               }
-              _ => PatBox(sub)
+              _ => {
+                self.obsolete(self.span, ObsoleteManagedPattern);
+                PatUniq(sub)
+              }
             };
             hi = self.last_span.hi;
             return @ast::Pat {
@@ -2919,19 +2926,20 @@ impl Parser {
             hi = sub.span.hi;
             // HACK: parse ~"..." as a literal of a vstore ~str
             pat = match sub.node {
-              PatLit(e@@Expr {
-                node: ExprLit(@codemap::Spanned {
-                    node: LitStr(..),
-                    span: _}), ..
-              }) => {
-                let vst = @Expr {
-                    id: ast::DUMMY_NODE_ID,
-                    node: ExprVstore(e, ExprVstoreUniq),
-                    span: mk_sp(lo, hi),
-                };
-                PatLit(vst)
-              }
-              _ => PatUniq(sub)
+                PatLit(e) => {
+                    match e.node {
+                        ExprLit(lit) if lit_is_str(lit) => {
+                            let vst = @Expr {
+                                id: ast::DUMMY_NODE_ID,
+                                node: ExprVstore(e, ExprVstoreUniq),
+                                span: mk_sp(lo, hi),
+                            };
+                            PatLit(vst)
+                        }
+                        _ => PatUniq(sub)
+                    }
+                }
+                _ => PatUniq(sub)
             };
             hi = self.last_span.hi;
             return @ast::Pat {
@@ -2948,18 +2956,20 @@ impl Parser {
               hi = sub.span.hi;
               // HACK: parse &"..." as a literal of a borrowed str
               pat = match sub.node {
-                  PatLit(e@@Expr {
-                      node: ExprLit(@codemap::Spanned{ node: LitStr(..), .. }),
-                      ..
-                  }) => {
-                      let vst = @Expr {
-                          id: ast::DUMMY_NODE_ID,
-                          node: ExprVstore(e, ExprVstoreSlice),
-                          span: mk_sp(lo, hi)
-                      };
-                      PatLit(vst)
+                  PatLit(e) => {
+                      match e.node {
+                        ExprLit(lit) if lit_is_str(lit) => {
+                          let vst = @Expr {
+                              id: ast::DUMMY_NODE_ID,
+                              node: ExprVstore(e, ExprVstoreSlice),
+                              span: mk_sp(lo, hi)
+                          };
+                          PatLit(vst)
+                        }
+                        _ => PatRegion(sub),
+                      }
                   }
-              _ => PatRegion(sub)
+                  _ => PatRegion(sub),
             };
             hi = self.last_span.hi;
             return @ast::Pat {
@@ -2984,6 +2994,7 @@ impl Parser {
                 if self.look_ahead(1, |t| *t != token::RPAREN) {
                     while self.token == token::COMMA {
                         self.bump();
+                        if self.token == token::RPAREN { break; }
                         fields.push(self.parse_pat());
                     }
                 }
@@ -3384,7 +3395,7 @@ impl Parser {
 
         let mut attributes_box = attrs_remaining;
 
-        while (self.token != token::RBRACE) {
+        while self.token != token::RBRACE {
             // parsing items even when they're not allowed lets us give
             // better error messages and recover more gracefully.
             attributes_box.push_all(self.parse_outer_attributes());
@@ -3563,7 +3574,7 @@ impl Parser {
             self.parse_unspanned_seq(
                 &token::LPAREN,
                 &token::RPAREN,
-                seq_sep_trailing_disallowed(token::COMMA),
+                seq_sep_trailing_allowed(token::COMMA),
                 |p| {
                     if p.token == token::DOTDOTDOT {
                         p.bump();
@@ -3583,7 +3594,7 @@ impl Parser {
                 }
             );
 
-        let variadic = match args.pop_opt() {
+        let variadic = match args.pop() {
             Some(None) => true,
             Some(x) => {
                 // Need to put back that last arg
@@ -3636,20 +3647,14 @@ impl Parser {
     // that may have a self type.
     fn parse_fn_decl_with_self(&mut self, parse_arg_fn: |&mut Parser| -> Arg)
                                -> (ExplicitSelf, P<FnDecl>) {
-        fn maybe_parse_explicit_self(cnstr: |v: Mutability| ->
-                                        ast::ExplicitSelf_,
+        fn maybe_parse_explicit_self(explicit_self: ast::ExplicitSelf_,
                                      p: &mut Parser)
                                      -> ast::ExplicitSelf_ {
             // We need to make sure it isn't a type
-            if p.look_ahead(1, |t| token::is_keyword(keywords::Self, t)) ||
-                ((p.look_ahead(1, |t| token::is_keyword(keywords::Const, t)) ||
-                  p.look_ahead(1, |t| token::is_keyword(keywords::Mut, t))) &&
-                 p.look_ahead(2, |t| token::is_keyword(keywords::Self, t))) {
-
+            if p.look_ahead(1, |t| token::is_keyword(keywords::Self, t)) {
                 p.bump();
-                let mutability = p.parse_mutability();
                 p.expect_self_ident();
-                cnstr(mutability)
+                explicit_self
             } else {
                 SelfStatic
             }
@@ -3708,55 +3713,47 @@ impl Parser {
         // backwards compatible.
         let lo = self.span.lo;
         let explicit_self = match self.token {
-          token::BINOP(token::AND) => {
-            maybe_parse_borrowed_explicit_self(self)
-          }
-          token::AT => {
-            maybe_parse_explicit_self(SelfBox, self)
-          }
-          token::TILDE => {
-            maybe_parse_explicit_self(|mutability| {
-                if mutability != MutImmutable {
-                    self.span_err(self.last_span,
-                                  "mutability declaration not allowed here");
-                }
-                SelfUniq(MutImmutable)
-            }, self)
-          }
-          token::IDENT(..) if self.is_self_ident() => {
-            self.bump();
-            SelfValue(MutImmutable)
-          }
-          token::BINOP(token::STAR) => {
-            // Possibly "*self" or "*mut self" -- not supported. Try to avoid
-            // emitting cryptic "unexpected token" errors.
-            self.bump();
-            let mutability = if Parser::token_is_mutability(&self.token) {
-                self.parse_mutability()
-            } else { MutImmutable };
-            if self.is_self_ident() {
-                self.span_err(self.span, "cannot pass self by unsafe pointer");
-                self.bump();
+            token::BINOP(token::AND) => {
+                maybe_parse_borrowed_explicit_self(self)
             }
-            SelfValue(mutability)
-          }
-          _ if Parser::token_is_mutability(&self.token) &&
-               self.look_ahead(1, |t| token::is_keyword(keywords::Self, t)) => {
-            let mutability = self.parse_mutability();
-            self.expect_self_ident();
-            SelfValue(mutability)
-          }
-          _ if Parser::token_is_mutability(&self.token) &&
-               self.look_ahead(1, |t| *t == token::TILDE) &&
-               self.look_ahead(2, |t| token::is_keyword(keywords::Self, t)) => {
-            let mutability = self.parse_mutability();
-            self.bump();
-            self.expect_self_ident();
-            SelfUniq(mutability)
-          }
-          _ => {
-            SelfStatic
-          }
+            token::AT => {
+                maybe_parse_explicit_self(SelfBox, self)
+            }
+            token::TILDE => {
+                maybe_parse_explicit_self(SelfUniq(MutImmutable), self)
+            }
+            token::IDENT(..) if self.is_self_ident() => {
+                self.bump();
+                SelfValue(MutImmutable)
+            }
+            token::BINOP(token::STAR) => {
+                // Possibly "*self" or "*mut self" -- not supported. Try to avoid
+                // emitting cryptic "unexpected token" errors.
+                self.bump();
+                let mutability = if Parser::token_is_mutability(&self.token) {
+                    self.parse_mutability()
+                } else { MutImmutable };
+                if self.is_self_ident() {
+                    self.span_err(self.span, "cannot pass self by unsafe pointer");
+                    self.bump();
+                }
+                SelfValue(mutability)
+            }
+            _ if Parser::token_is_mutability(&self.token) &&
+                    self.look_ahead(1, |t| token::is_keyword(keywords::Self, t)) => {
+                let mutability = self.parse_mutability();
+                self.expect_self_ident();
+                SelfValue(mutability)
+            }
+            _ if Parser::token_is_mutability(&self.token) &&
+                    self.look_ahead(1, |t| *t == token::TILDE) &&
+                    self.look_ahead(2, |t| token::is_keyword(keywords::Self, t)) => {
+                let mutability = self.parse_mutability();
+                self.bump();
+                self.expect_self_ident();
+                SelfUniq(mutability)
+            }
+            _ => SelfStatic
         };
 
         // If we parsed a self type, expect a comma before the argument list.
@@ -4222,7 +4219,7 @@ impl Parser {
     }
 
     fn pop_mod_path(&mut self) {
-        self.mod_path_stack.pop();
+        self.mod_path_stack.pop().unwrap();
     }
 
     // read a module from a source file.
@@ -4378,7 +4375,7 @@ impl Parser {
             items: _,
             foreign_items: foreign_items
         } = self.parse_foreign_items(first_item_attrs, true);
-        if (! attrs_remaining.is_empty()) {
+        if ! attrs_remaining.is_empty() {
             self.span_err(self.last_span,
                           "expected item after attributes");
         }
@@ -4558,7 +4555,7 @@ impl Parser {
             if !self.eat(&token::COMMA) { break; }
         }
         self.expect(&token::RBRACE);
-        if (have_disr && !all_nullary) {
+        if have_disr && !all_nullary {
             self.fatal("discriminator values can only be used with a c-like \
                         enum");
         }

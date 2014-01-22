@@ -121,6 +121,17 @@ pub trait Visitor<E: Clone> {
     }
 }
 
+pub fn walk_inlined_item<E: Clone, V: Visitor<E>>(visitor: &mut V,
+                                                  item: &ast::InlinedItem,
+                                                  env: E) {
+    match *item {
+        IIItem(i) => visitor.visit_item(i, env),
+        IIForeign(i) => visitor.visit_foreign_item(i, env),
+        IIMethod(_, _, m) => walk_method_helper(visitor, m, env),
+    }
+}
+
+
 pub fn walk_crate<E: Clone, V: Visitor<E>>(visitor: &mut V, crate: &Crate, env: E) {
     visitor.visit_mod(&crate.module, crate.span, CRATE_NODE_ID, env)
 }
@@ -175,7 +186,7 @@ fn walk_explicit_self<E: Clone, V: Visitor<E>>(visitor: &mut V,
                                                explicit_self: &ExplicitSelf,
                                                env: E) {
     match explicit_self.node {
-        SelfStatic | SelfValue(_) | SelfBox(_) | SelfUniq(_) => {}
+        SelfStatic | SelfValue(_) | SelfBox | SelfUniq(_) => {}
         SelfRegion(ref lifetime, _) => {
             visitor.visit_opt_lifetime_ref(explicit_self.span, lifetime, env)
         }
@@ -223,12 +234,13 @@ pub fn walk_item<E: Clone, V: Visitor<E>>(visitor: &mut V, item: &Item, env: E) 
             walk_enum_def(visitor, enum_definition, type_parameters, env)
         }
         ItemImpl(ref type_parameters,
-                  ref trait_references,
-                  typ,
-                  ref methods) => {
+                 ref trait_reference,
+                 typ,
+                 ref methods) => {
             visitor.visit_generics(type_parameters, env.clone());
-            for trait_reference in trait_references.iter() {
-                walk_trait_ref(visitor, trait_reference, env.clone())
+            match *trait_reference {
+                Some(ref trait_reference) => walk_trait_ref(visitor, trait_reference, env.clone()),
+                None => ()
             }
             visitor.visit_ty(typ, env.clone());
             for method in methods.iter() {
@@ -396,7 +408,6 @@ pub fn walk_pat<E: Clone, V: Visitor<E>>(visitor: &mut V, pattern: &Pat, env: E)
                 visitor.visit_pat(*tuple_element, env.clone())
             }
         }
-        PatBox(subpattern) |
         PatUniq(subpattern) |
         PatRegion(subpattern) => {
             visitor.visit_pat(subpattern, env)

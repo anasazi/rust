@@ -958,6 +958,7 @@ fn new_sched_rng() -> XorShiftRng {
 
 #[cfg(test)]
 mod test {
+    use std::comm;
     use std::task::TaskOpts;
     use std::rt::Runtime;
     use std::rt::task::Task;
@@ -1284,8 +1285,11 @@ mod test {
                 ports.push(port);
             });
 
-            while !ports.is_empty() {
-                ports.pop().recv();
+            loop {
+                match ports.pop() {
+                    Some(port) => port.recv(),
+                    None => break,
+                }
             }
         }
     }
@@ -1322,7 +1326,7 @@ mod test {
         fn roundtrip(id: int, n_tasks: int,
                      p: &Port<(int, Chan<()>)>,
                      ch: &Chan<(int, Chan<()>)>) {
-            while (true) {
+            loop {
                 match p.recv() {
                     (1, end_chan) => {
                         debug!("{}\n", id);
@@ -1376,7 +1380,7 @@ mod test {
             // This task should not be able to starve the sender;
             // The sender should get stolen to another thread.
             do spawn {
-                while port.try_recv().is_none() { }
+                while port.try_recv() != comm::Data(()) { }
             }
 
             chan.send(());
@@ -1393,7 +1397,7 @@ mod test {
             // This task should not be able to starve the other task.
             // The sends should eventually yield.
             do spawn {
-                while port.try_recv().is_none() {
+                while port.try_recv() != comm::Data(()) {
                     chan2.send(());
                 }
             }

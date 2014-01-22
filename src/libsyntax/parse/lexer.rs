@@ -198,7 +198,7 @@ fn fatal_span_verbose(rdr: @StringReader,
 // EFFECT: advance peek_tok and peek_span to refer to the next token.
 // EFFECT: update the interner, maybe.
 fn string_advance_token(r: @StringReader) {
-    match (consume_whitespace_and_comments(r)) {
+    match consume_whitespace_and_comments(r) {
         Some(comment) => {
             r.peek_span.set(comment.sp);
             r.peek_tok.set(comment.tok);
@@ -463,6 +463,19 @@ fn scan_digits(rdr: @StringReader, radix: uint) -> ~str {
     };
 }
 
+fn check_float_base(rdr: @StringReader, start_bpos: BytePos, last_bpos: BytePos,
+                    base: uint) {
+    match base {
+      16u => fatal_span(rdr, start_bpos, last_bpos,
+                      ~"hexadecimal float literal is not supported"),
+      8u => fatal_span(rdr, start_bpos, last_bpos,
+                     ~"octal float literal is not supported"),
+      2u => fatal_span(rdr, start_bpos, last_bpos,
+                     ~"binary float literal is not supported"),
+      _ => ()
+    }
+}
+
 fn scan_number(c: char, rdr: @StringReader) -> token::Token {
     let mut num_str;
     let mut base = 10u;
@@ -540,17 +553,6 @@ fn scan_number(c: char, rdr: @StringReader) -> token::Token {
         num_str.push_char('.');
         num_str.push_str(dec_part);
     }
-    if is_float {
-        match base {
-          16u => fatal_span(rdr, start_bpos, rdr.last_pos.get(),
-                            ~"hexadecimal float literal is not supported"),
-          8u => fatal_span(rdr, start_bpos, rdr.last_pos.get(),
-                           ~"octal float literal is not supported"),
-          2u => fatal_span(rdr, start_bpos, rdr.last_pos.get(),
-                           ~"binary float literal is not supported"),
-          _ => ()
-        }
-    }
     match scan_exponent(rdr, start_bpos) {
       Some(ref s) => {
         is_float = true;
@@ -566,10 +568,12 @@ fn scan_number(c: char, rdr: @StringReader) -> token::Token {
         if c == '3' && n == '2' {
             bump(rdr);
             bump(rdr);
+            check_float_base(rdr, start_bpos, rdr.last_pos.get(), base);
             return token::LIT_FLOAT(str_to_ident(num_str), ast::TyF32);
         } else if c == '6' && n == '4' {
             bump(rdr);
             bump(rdr);
+            check_float_base(rdr, start_bpos, rdr.last_pos.get(), base);
             return token::LIT_FLOAT(str_to_ident(num_str), ast::TyF64);
             /* FIXME (#2252): if this is out of range for either a
             32-bit or 64-bit float, it won't be noticed till the
@@ -580,6 +584,7 @@ fn scan_number(c: char, rdr: @StringReader) -> token::Token {
         }
     }
     if is_float {
+        check_float_base(rdr, start_bpos, rdr.last_pos.get(), base);
         return token::LIT_FLOAT_UNSUFFIXED(str_to_ident(num_str));
     } else {
         if num_str.len() == 0u {
@@ -983,7 +988,7 @@ mod test {
     #[test] fn t1 () {
         let Env {string_reader} =
             setup(@"/* my source file */ \
-                    fn main() { io::println(~\"zebra\"); }\n");
+                    fn main() { println!(\"zebra\"); }\n");
         let id = str_to_ident("fn");
         let tok1 = string_reader.next_token();
         let tok2 = TokenAndSpan{

@@ -242,7 +242,7 @@ actually invoking the `write` function defined in this module. Example usage is:
 ```rust
 use std::io;
 
-let mut w = io::mem::MemWriter::new();
+let mut w = io::MemWriter::new();
 write!(&mut w as &mut io::Writer, "Hello {}!", "world");
 ```
 
@@ -470,7 +470,7 @@ use prelude::*;
 
 use cast;
 use char::Char;
-use io::mem::MemWriter;
+use io::MemWriter;
 use io;
 use str;
 use repr;
@@ -497,7 +497,7 @@ pub struct Formatter<'a> {
 
     /// Output buffer.
     buf: &'a mut io::Writer,
-    priv curarg: vec::VecIterator<'a, Argument<'a>>,
+    priv curarg: vec::Items<'a, Argument<'a>>,
     priv args: &'a [Argument<'a>],
 }
 
@@ -691,7 +691,7 @@ pub fn format(args: &Arguments) -> ~str {
 pub unsafe fn format_unsafe(fmt: &[rt::Piece], args: &[Argument]) -> ~str {
     let mut output = MemWriter::new();
     write_unsafe(&mut output as &mut io::Writer, fmt, args);
-    return str::from_utf8_owned(output.unwrap());
+    return str::from_utf8_owned(output.unwrap()).unwrap();
 }
 
 impl<'a> Formatter<'a> {
@@ -812,7 +812,7 @@ impl<'a> Formatter<'a> {
 
     fn runplural(&mut self, value: uint, pieces: &[rt::Piece]) {
         ::uint::to_str_bytes(value, 10, |buf| {
-            let valuestr = str::from_utf8(buf);
+            let valuestr = str::from_utf8(buf).unwrap();
             for piece in pieces.iter() {
                 self.run(piece, Some(valuestr));
             }

@@ -32,7 +32,7 @@ use std::cell::RefCell;
 use std::char;
 use std::str;
 use std::io;
-use std::io::mem::MemWriter;
+use std::io::MemWriter;
 
 // The &mut State is stored here to prevent recursive type.
 pub enum AnnNode<'a,'b> {
@@ -78,7 +78,7 @@ pub fn ibox(s: &mut State, u: uint) {
 pub fn end(s: &mut State) {
     {
         let mut boxes = s.boxes.borrow_mut();
-        boxes.get().pop();
+        boxes.get().pop().unwrap();
     }
     pp::end(&mut s.s);
 }
@@ -774,7 +774,7 @@ pub fn print_tt(s: &mut State, tt: &ast::TokenTree) {
         word(&mut s.s, "$(");
         for tt_elt in (*tts).iter() { print_tt(s, tt_elt); }
         word(&mut s.s, ")");
-        match (*sep) {
+        match *sep {
           Some(ref tk) => word(&mut s.s, parse::token::to_str(s.intr, tk)),
           None => ()
         }
@@ -1090,11 +1090,11 @@ pub fn print_call_pre(s: &mut State,
     match sugar {
         ast::DoSugar => {
             head(s, "do");
-            Some(base_args.pop())
+            Some(base_args.pop().unwrap())
         }
         ast::ForSugar => {
             head(s, "for");
-            Some(base_args.pop())
+            Some(base_args.pop().unwrap())
         }
         ast::NoSugar => None
     }
@@ -1709,10 +1709,6 @@ pub fn print_pat(s: &mut State, pat: &ast::Pat) {
         }
         pclose(s);
       }
-      ast::PatBox(inner) => {
-          word(&mut s.s, "@");
-          print_pat(s, inner);
-      }
       ast::PatUniq(inner) => {
           word(&mut s.s, "~");
           print_pat(s, inner);
@@ -1733,8 +1729,8 @@ pub fn print_pat(s: &mut State, pat: &ast::Pat) {
         commasep(s, Inconsistent, *before, |s, &p| print_pat(s, p));
         for &p in slice.iter() {
             if !before.is_empty() { word_space(s, ","); }
-            match p {
-                @ast::Pat { node: ast::PatWildMulti, .. } => {
+            match *p {
+                ast::Pat { node: ast::PatWildMulti, .. } => {
                     // this case is handled by print_pat
                 }
                 _ => word(&mut s.s, ".."),
@@ -1774,8 +1770,8 @@ pub fn print_explicit_self(s: &mut State, explicit_self: ast::ExplicitSelf_) -> 
             print_mutability(s, m);
             word(&mut s.s, "self");
         }
-        ast::SelfBox(m) => {
-            word(&mut s.s, "@"); print_mutability(s, m); word(&mut s.s, "self");
+        ast::SelfBox => {
+            word(&mut s.s, "@self");
         }
     }
     return true;
@@ -1951,7 +1947,7 @@ pub fn print_view_path(s: &mut State, vp: &ast::ViewPath) {
     match vp.node {
       ast::ViewPathSimple(ident, ref path, _) => {
         // FIXME(#6993) can't compare identifiers directly here
-        if path.segments.last().identifier.name != ident.name {
+        if path.segments.last().unwrap().identifier.name != ident.name {
             print_ident(s, ident);
             space(&mut s.s);
             word_space(s, "=");
@@ -2320,7 +2316,7 @@ pub fn print_string(s: &mut State, st: &str, style: ast::StrStyle) {
 // downcasts.
 unsafe fn get_mem_writer(writer: &mut ~io::Writer) -> ~str {
     let (_, wr): (uint, ~MemWriter) = cast::transmute_copy(writer);
-    let result = str::from_utf8_owned(wr.get_ref().to_owned());
+    let result = str::from_utf8_owned(wr.get_ref().to_owned()).unwrap();
     cast::forget(wr);
     result
 }

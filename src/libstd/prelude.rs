@@ -40,7 +40,6 @@ pub use result::{Result, Ok, Err};
 // Reexported functions
 pub use from_str::from_str;
 pub use iter::range;
-pub use io::stdio::{print, println};
 
 // Reexported types and traits
 
@@ -59,8 +58,7 @@ pub use iter::{FromIterator, Extendable};
 pub use iter::{Iterator, DoubleEndedIterator, RandomAccessIterator, CloneableIterator};
 pub use iter::{OrdIterator, MutableDoubleEndedIterator, ExactSize};
 pub use num::Times;
-pub use num::{Bitwise, BitCount, Bounded, Integer, Real};
-pub use num::{Num, NumCast, CheckedAdd, CheckedSub, CheckedMul};
+pub use num::{Integer, Real, Num, NumCast, CheckedAdd, CheckedSub, CheckedMul};
 pub use num::{Orderable, Signed, Unsigned, Round};
 pub use num::{Primitive, Int, Float, ToStrRadix, ToPrimitive, FromPrimitive};
 pub use path::{GenericPath, Path, PosixPath, WindowsPath};

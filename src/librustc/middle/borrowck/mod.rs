@@ -93,7 +93,7 @@ pub fn check_crate(tcx: ty::ctxt,
     visit::walk_crate(bccx, crate, ());
 
     if tcx.sess.borrowck_stats() {
-        println("--- borrowck stats ---");
+        println!("--- borrowck stats ---");
         println!("paths requiring guarantees: {}",
                  bccx.stats.guaranteed_paths.get());
         println!("paths requiring loans     : {}",
@@ -550,9 +550,8 @@ impl BorrowckCtxt {
             move_data::Declared => {}
 
             move_data::MoveExpr => {
-                let items = self.tcx.items.borrow();
-                let (expr_ty, expr_span) = match items.get().find(&move.id) {
-                    Some(&ast_map::NodeExpr(expr)) => {
+                let (expr_ty, expr_span) = match self.tcx.items.find(move.id) {
+                    Some(ast_map::NodeExpr(expr)) => {
                         (ty::expr_ty_adjusted(self.tcx, expr), expr.span)
                     }
                     r => self.tcx.sess.bug(format!("MoveExpr({:?}) maps to {:?}, not Expr",
@@ -578,9 +577,8 @@ impl BorrowckCtxt {
             }
 
             move_data::Captured => {
-                let items = self.tcx.items.borrow();
-                let (expr_ty, expr_span) = match items.get().find(&move.id) {
-                    Some(&ast_map::NodeExpr(expr)) => {
+                let (expr_ty, expr_span) = match self.tcx.items.find(move.id) {
+                    Some(ast_map::NodeExpr(expr)) => {
                         (ty::expr_ty_adjusted(self.tcx, expr), expr.span)
                     }
                     r => self.tcx.sess.bug(format!("Captured({:?}) maps to {:?}, not Expr",
@@ -768,9 +766,8 @@ impl BorrowckCtxt {
                                    out: &mut ~str) {
         match *loan_path {
             LpVar(id) => {
-                let items = self.tcx.items.borrow();
-                match items.get().find(&id) {
-                    Some(&ast_map::NodeLocal(ref ident, _)) => {
+                match self.tcx.items.find(id) {
+                    Some(ast_map::NodeLocal(ref ident, _)) => {
                         out.push_str(token::ident_to_str(ident));
                     }
                     r => {
@@ -872,7 +869,10 @@ impl Repr for LoanPath {
     fn repr(&self, tcx: ty::ctxt) -> ~str {
         match self {
             &LpVar(id) => {
-                format!("$({:?})", id)
+                format!("$({})",
+                        ast_map::node_id_to_str(tcx.items,
+                                                id,
+                                                token::get_ident_interner()))
             }
 
             &LpExtend(lp, _, LpDeref(_)) => {

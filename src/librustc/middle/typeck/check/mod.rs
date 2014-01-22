@@ -1334,7 +1334,7 @@ pub fn do_autoderef(fcx: @FnCtxt, sp: Span, t: ty::t) -> (ty::t, uint) {
 
         // Some extra checks to detect weird cycles and so forth:
         match *sty {
-            ty::ty_box(inner) => {
+            ty::ty_box(inner) | ty::ty_uniq(inner) => {
                 match ty::get(t1).sty {
                     ty::ty_infer(ty::TyVar(v1)) => {
                         ty::occurs_check(fcx.ccx.tcx, sp, v1,
@@ -1343,7 +1343,7 @@ pub fn do_autoderef(fcx: @FnCtxt, sp: Span, t: ty::t) -> (ty::t, uint) {
                     _ => ()
                 }
             }
-            ty::ty_uniq(inner) | ty::ty_rptr(_, inner) => {
+            ty::ty_rptr(_, inner) => {
                 match ty::get(t1).sty {
                     ty::ty_infer(ty::TyVar(v1)) => {
                         ty::occurs_check(fcx.ccx.tcx, sp, v1,
@@ -1386,10 +1386,10 @@ pub fn check_lit(fcx: @FnCtxt, lit: &ast::Lit) -> ty::t {
     let tcx = fcx.ccx.tcx;
 
     match lit.node {
-        ast::LitStr(..) => ty::mk_estr(tcx, ty::vstore_slice(ty::ReStatic)),
+        ast::LitStr(..) => ty::mk_str(tcx, ty::vstore_slice(ty::ReStatic)),
         ast::LitBinary(..) => {
-            ty::mk_evec(tcx, ty::mt{ ty: ty::mk_u8(), mutbl: ast::MutImmutable },
-                        ty::vstore_slice(ty::ReStatic))
+            ty::mk_vec(tcx, ty::mt{ ty: ty::mk_u8(), mutbl: ast::MutImmutable },
+                       ty::vstore_slice(ty::ReStatic))
         }
         ast::LitChar(_) => ty::mk_char(),
         ast::LitInt(_, t) => ty::mk_mach_int(t),
@@ -2131,7 +2131,7 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
             fcx.write_error(expr.id);
             fcx.write_error(rhs.id);
             fcx.type_error_message(expr.span, |actual| {
-                format!("binary operation {} cannot be applied \
+                format!("binary operation `{}` cannot be applied \
                       to type `{}`",
                      ast_util::binop_to_str(op), actual)},
                                    lhs_t, None)
@@ -2153,7 +2153,7 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
             fcx.type_error_message(expr.span,
                                    |actual| {
                                         format!("binary assignment operation \
-                                                {}= cannot be applied to type `{}`",
+                                                `{}=` cannot be applied to type `{}`",
                                                 ast_util::binop_to_str(op),
                                                 actual)
                                    },
@@ -2182,7 +2182,7 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
             Some(ref name) => {
                 let if_op_unbound = || {
                     fcx.type_error_message(ex.span, |actual| {
-                        format!("binary operation {} cannot be applied \
+                        format!("binary operation `{}` cannot be applied \
                               to type `{}`",
                              ast_util::binop_to_str(op), actual)},
                             lhs_resolved_t, None)
@@ -2627,9 +2627,9 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
     match expr.node {
       ast::ExprVstore(ev, vst) => {
         let typ = match ev.node {
-          ast::ExprLit(@codemap::Spanned { node: ast::LitStr(..), .. }) => {
+          ast::ExprLit(lit) if ast_util::lit_is_str(lit) => {
             let tt = ast_expr_vstore_to_vstore(fcx, ev, vst);
-            ty::mk_estr(tcx, tt)
+            ty::mk_str(tcx, tt)
           }
           ast::ExprVec(ref args, mutbl) => {
             let tt = ast_expr_vstore_to_vstore(fcx, ev, vst);
@@ -2655,7 +2655,7 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
             } else if any_bot {
                 ty::mk_bot()
             } else {
-                ty::mk_evec(tcx, ty::mt {ty: t, mutbl: mutability}, tt)
+                ty::mk_vec(tcx, ty::mt {ty: t, mutbl: mutability}, tt)
             }
           }
           ast::ExprRepeat(element, count_expr, mutbl) => {
@@ -2674,7 +2674,7 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
             } else if ty::type_is_bot(arg_t) {
                 ty::mk_bot()
             } else {
-                ty::mk_evec(tcx, ty::mt {ty: t, mutbl: mutability}, tt)
+                ty::mk_vec(tcx, ty::mt {ty: t, mutbl: mutability}, tt)
             }
           }
           _ =>
@@ -2697,10 +2697,8 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
                   let def_id = ast_util::def_id_of_def(definition);
                   match tcx.lang_items.items[ExchangeHeapLangItem as uint] {
                       Some(item_def_id) if def_id == item_def_id => {
-                          fcx.write_ty(id, ty::mk_uniq(tcx, ty::mt {
-                              ty: fcx.expr_ty(subexpr),
-                              mutbl: ast::MutImmutable,
-                          }));
+                          fcx.write_ty(id, ty::mk_uniq(tcx,
+                                                       fcx.expr_ty(subexpr)));
                           checked = true
                       }
                       Some(_) | None => {}
@@ -2806,13 +2804,12 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
       ast::ExprUnary(callee_id, unop, oprnd) => {
         let exp_inner = unpack_expected(fcx, expected, |sty| {
             match unop {
-              ast::UnBox | ast::UnUniq => match *sty {
-                ty::ty_box(ty) => Some(ty),
-                ty::ty_uniq(ref mt) => Some(mt.ty),
-                _ => None
-              },
-              ast::UnNot | ast::UnNeg => expected,
-              ast::UnDeref => None
+                ast::UnBox | ast::UnUniq => match *sty {
+                    ty::ty_box(ty) | ty::ty_uniq(ty) => Some(ty),
+                    _ => None
+                },
+                ast::UnNot | ast::UnNeg => expected,
+                ast::UnDeref => None
             }
         });
         check_expr_with_opt_hint(fcx, oprnd, exp_inner);
@@ -2824,9 +2821,7 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
                     oprnd_t = ty::mk_box(tcx, oprnd_t)
                 }
                 ast::UnUniq => {
-                    oprnd_t = ty::mk_uniq(tcx,
-                                          ty::mt {ty: oprnd_t,
-                                                  mutbl: ast::MutImmutable});
+                    oprnd_t = ty::mk_uniq(tcx, oprnd_t);
                 }
                 ast::UnDeref => {
                     let sty = structure_of(fcx, expr.span, oprnd_t);
@@ -2850,7 +2845,7 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
                                 _ => {
                                     fcx.type_error_message(expr.span,
                                         |actual| {
-                                            format!("type {} cannot be dereferenced", actual)
+                                            format!("type `{}` cannot be dereferenced", actual)
                                     }, oprnd_t, None);
                                 }
                             }
@@ -3166,7 +3161,7 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
 
                         fn is_vec(t: ty::t) -> bool {
                             match ty::get(t).sty {
-                                ty::ty_evec(_,_) => true,
+                                ty::ty_vec(..) => true,
                                 _ => false
                             }
                         }
@@ -3223,8 +3218,8 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
         for e in args.iter() {
             check_expr_has_type(fcx, *e, t);
         }
-        let typ = ty::mk_evec(tcx, ty::mt {ty: t, mutbl: mutbl},
-                              ty::vstore_fixed(args.len()));
+        let typ = ty::mk_vec(tcx, ty::mt {ty: t, mutbl: mutbl},
+                             ty::vstore_fixed(args.len()));
         fcx.write_ty(id, typ);
       }
       ast::ExprRepeat(element, count_expr, mutbl) => {
@@ -3240,8 +3235,8 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
             fcx.write_bot(id);
         }
         else {
-            let t = ty::mk_evec(tcx, ty::mt {ty: t, mutbl: mutbl},
-                                ty::vstore_fixed(count));
+            let t = ty::mk_vec(tcx, ty::mt {ty: t, mutbl: mutbl},
+                               ty::vstore_fixed(count));
             fcx.write_ty(id, t);
         }
       }
@@ -3487,11 +3482,13 @@ pub fn check_block_with_expected(fcx: @FnCtxt,
             let s_id = ast_util::stmt_id(*s);
             let s_ty = fcx.node_ty(s_id);
             if last_was_bot && !warned && match s.node {
-                  ast::StmtDecl(@codemap::Spanned { node: ast::DeclLocal(_),
-                                                 ..}, _) |
-                  ast::StmtExpr(_, _) | ast::StmtSemi(_, _) => {
-                    true
+                  ast::StmtDecl(decl, _) => {
+                      match decl.node {
+                          ast::DeclLocal(_) => true,
+                          _ => false,
+                      }
                   }
+                  ast::StmtExpr(_, _) | ast::StmtSemi(_, _) => true,
                   _ => false
                 } {
                 fcx.ccx.tcx.sess.add_lint(UnreachableCode, s_id, s.span,
@@ -3830,9 +3827,9 @@ pub fn instantiate_path(fcx: @FnCtxt,
     // determine the region parameters, using the value given by the user
     // (if any) and otherwise using a fresh region variable
     let num_expected_regions = tpt.generics.region_param_defs.len();
-    let num_supplied_regions = pth.segments.last().lifetimes.len();
+    let num_supplied_regions = pth.segments.last().unwrap().lifetimes.len();
     let regions = if num_expected_regions == num_supplied_regions {
-        pth.segments.last().lifetimes.map(
+        pth.segments.last().unwrap().lifetimes.map(
             |l| ast_region_to_region(fcx.tcx(), l))
     } else {
         if num_supplied_regions != 0 {
@@ -3986,8 +3983,31 @@ pub fn ast_expr_vstore_to_vstore(fcx: @FnCtxt,
         ast::ExprVstoreUniq => ty::vstore_uniq,
         ast::ExprVstoreBox => ty::vstore_box,
         ast::ExprVstoreSlice | ast::ExprVstoreMutSlice => {
-            let r = fcx.infcx().next_region_var(infer::AddrOfSlice(e.span));
-            ty::vstore_slice(r)
+            match e.node {
+                ast::ExprLit(..) |
+                ast::ExprVec([], _) => {
+                    // string literals and *empty slices* live in static memory
+                    ty::vstore_slice(ty::ReStatic)
+                }
+                ast::ExprRepeat(..) |
+                ast::ExprVec(..) => {
+                    // vector literals are temporaries on the stack
+                    match fcx.tcx().region_maps.temporary_scope(e.id) {
+                        Some(scope) => {
+                            let r = ty::ReScope(scope);
+                            ty::vstore_slice(r)
+                        }
+                        None => {
+                            // this slice occurs in a static somewhere
+                            ty::vstore_slice(ty::ReStatic)
+                        }
+                    }
+                }
+                _ => {
+                    fcx.ccx.tcx.sess.span_bug(
+                        e.span, format!("vstore with unexpected contents"))
+                }
+            }
         }
     }
 }
@@ -4106,7 +4126,7 @@ pub fn check_intrinsic_type(ccx: @CrateCtxt, it: &ast::ForeignItem) {
             "uninit" => (1u, ~[], param(ccx, 0u)),
             "forget" => (1u, ~[ param(ccx, 0) ], ty::mk_nil()),
             "transmute" => (2, ~[ param(ccx, 0) ], param(ccx, 1)),
-            "move_val" | "move_val_init" => {
+            "move_val_init" => {
                 (1u,
                  ~[
                     ty::mk_mut_rptr(tcx, ty::ReLateBound(it.id, ty::BrAnon(0)), param(ccx, 0)),

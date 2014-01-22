@@ -170,9 +170,9 @@ fn ast_path_substs<AC:AstConv,RS:RegionScope>(
     // region with the current anon region binding (in other words,
     // whatever & would get replaced with).
     let expected_num_region_params = decl_generics.region_param_defs.len();
-    let supplied_num_region_params = path.segments.last().lifetimes.len();
+    let supplied_num_region_params = path.segments.last().unwrap().lifetimes.len();
     let regions = if expected_num_region_params == supplied_num_region_params {
-        path.segments.last().lifetimes.map(
+        path.segments.last().unwrap().lifetimes.map(
             |l| ast_region_to_region(this.tcx(), l))
     } else {
         let anon_regions =
@@ -293,8 +293,8 @@ pub fn ast_ty_to_ty<AC:AstConv, RS:RegionScope>(
         ty::mt {ty: ast_ty_to_ty(this, rscope, mt.ty), mutbl: mt.mutbl}
     }
 
-    // Handle @, ~, and & being able to mean estrs and evecs.
-    // If a_seq_ty is a str or a vec, make it an estr/evec.
+    // Handle @, ~, and & being able to mean strs and vecs.
+    // If a_seq_ty is a str or a vec, make it an str/vec.
     // Also handle first-class trait types.
     fn mk_pointer<AC:AstConv,
                   RS:RegionScope>(
@@ -314,7 +314,7 @@ pub fn ast_ty_to_ty<AC:AstConv, RS:RegionScope>(
                     mt = ty::mt { ty: mt.ty, mutbl: a_seq_ty.mutbl };
                 }
                 debug!("&[]: vst={:?}", vst);
-                return ty::mk_evec(tcx, mt, vst);
+                return ty::mk_vec(tcx, mt, vst);
             }
             ast::TyPath(ref path, ref bounds, id) => {
                 // Note that the "bounds must be empty if path is not a trait"
@@ -324,7 +324,7 @@ pub fn ast_ty_to_ty<AC:AstConv, RS:RegionScope>(
                 match def_map.get().find(&id) {
                     Some(&ast::DefPrimTy(ast::TyStr)) if a_seq_ty.mutbl == ast::MutImmutable => {
                         check_path_args(tcx, path, NO_TPS | NO_REGIONS);
-                        return ty::mk_estr(tcx, vst);
+                        return ty::mk_str(tcx, vst);
                     }
                     Some(&ast::DefTrait(trait_def_id)) => {
                         let result = ast_path_to_trait_ref(
@@ -373,7 +373,7 @@ pub fn ast_ty_to_ty<AC:AstConv, RS:RegionScope>(
         }
 
         if (flags & NO_REGIONS) != 0u {
-            if !path.segments.last().lifetimes.is_empty() {
+            if !path.segments.last().unwrap().lifetimes.is_empty() {
                 tcx.sess.span_err(
                     path.span,
                     "region parameters are not allowed on this type");
@@ -410,12 +410,12 @@ pub fn ast_ty_to_ty<AC:AstConv, RS:RegionScope>(
       ast::TyUniq(ty) => {
         let mt = ast::MutTy { ty: ty, mutbl: ast::MutImmutable };
         mk_pointer(this, rscope, &mt, ty::vstore_uniq,
-                   |tmt| ty::mk_uniq(tcx, tmt))
+                   |tmt| ty::mk_uniq(tcx, tmt.ty))
       }
       ast::TyVec(ty) => {
         tcx.sess.span_err(ast_ty.span, "bare `[]` is not a type");
         // return /something/ so they can at least get more errors
-        ty::mk_evec(tcx, ast_ty_to_mt(this, rscope, ty), ty::vstore_uniq)
+        ty::mk_vec(tcx, ast_ty_to_mt(this, rscope, ty), ty::vstore_uniq)
       }
       ast::TyPtr(ref mt) => {
         ty::mk_ptr(tcx, ast_mt_to_mt(this, rscope, mt))
@@ -519,7 +519,7 @@ pub fn ast_ty_to_ty<AC:AstConv, RS:RegionScope>(
                 tcx.sess.span_err(ast_ty.span,
                                   "bare `str` is not a type");
                 // return /something/ so they can at least get more errors
-                ty::mk_estr(tcx, ty::vstore_uniq)
+                ty::mk_str(tcx, ty::vstore_uniq)
               }
             }
           }
@@ -552,11 +552,11 @@ pub fn ast_ty_to_ty<AC:AstConv, RS:RegionScope>(
           Ok(ref r) => {
             match *r {
               const_eval::const_int(i) =>
-                ty::mk_evec(tcx, ast_ty_to_mt(this, rscope, ty),
-                            ty::vstore_fixed(i as uint)),
+                ty::mk_vec(tcx, ast_ty_to_mt(this, rscope, ty),
+                           ty::vstore_fixed(i as uint)),
               const_eval::const_uint(i) =>
-                ty::mk_evec(tcx, ast_ty_to_mt(this, rscope, ty),
-                            ty::vstore_fixed(i as uint)),
+                ty::mk_vec(tcx, ast_ty_to_mt(this, rscope, ty),
+                           ty::vstore_fixed(i as uint)),
               _ => {
                 tcx.sess.span_fatal(
                     ast_ty.span, "expected constant expr for vector length");
@@ -691,13 +691,11 @@ fn ty_of_method_or_bare_fn<AC:AstConv>(
                                  ty::mt {ty: self_info.untransformed_self_ty,
                                          mutbl: mutability}))
             }
-            ast::SelfBox(_) => {
+            ast::SelfBox => {
                 Some(ty::mk_box(this.tcx(), self_info.untransformed_self_ty))
             }
             ast::SelfUniq(_) => {
-                Some(ty::mk_uniq(this.tcx(),
-                                 ty::mt {ty: self_info.untransformed_self_ty,
-                                         mutbl: ast::MutImmutable}))
+                Some(ty::mk_uniq(this.tcx(), self_info.untransformed_self_ty))
             }
         }
     }

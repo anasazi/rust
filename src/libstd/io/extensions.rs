@@ -24,7 +24,7 @@ use vec::{OwnedVector, ImmutableVector};
 ///
 /// # Notes about the Iteration Protocol
 ///
-/// The `ByteIterator` may yield `None` and thus terminate
+/// The `Bytes` may yield `None` and thus terminate
 /// an iteration, but continue to yield elements if iteration
 /// is attempted again.
 ///
@@ -33,17 +33,17 @@ use vec::{OwnedVector, ImmutableVector};
 /// Raises the same conditions as the `read` method, for
 /// each call to its `.next()` method.
 /// Yields `None` if the condition is handled.
-pub struct ByteIterator<'r, T> {
+pub struct Bytes<'r, T> {
     priv reader: &'r mut T,
 }
 
-impl<'r, R: Reader> ByteIterator<'r, R> {
-    pub fn new(r: &'r mut R) -> ByteIterator<'r, R> {
-        ByteIterator { reader: r }
+impl<'r, R: Reader> Bytes<'r, R> {
+    pub fn new(r: &'r mut R) -> Bytes<'r, R> {
+        Bytes { reader: r }
     }
 }
 
-impl<'r, R: Reader> Iterator<u8> for ByteIterator<'r, R> {
+impl<'r, R: Reader> Iterator<u8> for Bytes<'r, R> {
     #[inline]
     fn next(&mut self) -> Option<u8> {
         self.reader.read_byte()
@@ -141,7 +141,7 @@ pub fn u64_from_be_bytes(data: &[u8],
 mod test {
     use unstable::finally::Finally;
     use prelude::*;
-    use io::mem::{MemReader, MemWriter};
+    use io::{MemReader, MemWriter};
     use io::{io_error, placeholder_error};
 
     struct InitialZeroByteReader {
@@ -370,13 +370,13 @@ mod test {
             count: 0,
         };
         // FIXME (#7049): Figure out some other way to do this.
-        //let buf = @mut ~[8, 9];
+        //let buf = RefCell::new(~[8, 9]);
         (|| {
-            //reader.push_bytes(&mut *buf, 4);
+            //reader.push_bytes(buf.borrow_mut().get(), 4);
         }).finally(|| {
             // NB: Using rtassert here to trigger abort on failure since this is a should_fail test
             // FIXME: #7049 This fails because buf is still borrowed
-            //rtassert!(*buf == ~[8, 9, 10]);
+            //rtassert!(buf.borrow().get() == ~[8, 9, 10]);
         })
     }
 
@@ -518,7 +518,7 @@ mod bench {
             let mut sum = 0u64;
             bh.iter(|| {
                 let mut i = $start_index;
-                while (i < data.len()) {
+                while i < data.len() {
                     sum += u64_from_be_bytes(data, i, $size);
                     i += $stride;
                 }

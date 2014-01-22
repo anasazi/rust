@@ -17,7 +17,7 @@ pub use target::{OutputType, Main, Lib, Test, Bench, Target, Build, Install};
 pub use version::{Version, ExactRevision, NoVersion, split_version, split_version_general,
     try_parsing_version};
 pub use rustc::metadata::filesearch::rust_path;
-use rustc::metadata::filesearch::libdir;
+use rustc::metadata::filesearch::{libdir, relative_target_lib_path};
 use rustc::driver::driver::host_triple;
 
 use std::libc;
@@ -213,10 +213,9 @@ pub fn library_in_workspace(path: &Path, short_name: &str, where: Target,
     library_in(short_name, version, &dir_to_search)
 }
 
-// rustc doesn't use target-specific subdirectories
 pub fn system_library(sysroot: &Path, crate_id: &str) -> Option<Path> {
     let (lib_name, version) = split_crate_id(crate_id);
-    library_in(lib_name, &version, &sysroot.join(libdir()))
+    library_in(lib_name, &version, &sysroot.join(relative_target_lib_path(host_triple())))
 }
 
 fn library_in(short_name: &str, version: &Version, dir_to_search: &Path) -> Option<Path> {
@@ -227,10 +226,13 @@ fn library_in(short_name: &str, version: &Version, dir_to_search: &Path) -> Opti
     };
     debug!("dir has {:?} entries", dir_contents.len());
 
-    let lib_prefix = format!("{}{}", os::consts::DLL_PREFIX, short_name);
-    let lib_filetype = os::consts::DLL_EXTENSION;
+    let dll_prefix = format!("{}{}", os::consts::DLL_PREFIX, short_name);
+    let dll_filetype = os::consts::DLL_EXTENSION;
+    let rlib_prefix = format!("{}{}", "lib", short_name);
+    let rlib_filetype = "rlib";
 
-    debug!("lib_prefix = {} and lib_filetype = {}", lib_prefix, lib_filetype);
+    debug!("dll_prefix = {} and dll_filetype = {}", dll_prefix, dll_filetype);
+    debug!("rlib_prefix = {} and rlib_filetype = {}", rlib_prefix, rlib_filetype);
 
     // Find a filename that matches the pattern:
     // (lib_prefix)-hash-(version)(lib_suffix)
@@ -239,7 +241,7 @@ fn library_in(short_name: &str, version: &Version, dir_to_search: &Path) -> Opti
         debug!("p = {}, p's extension is {:?}", p.display(), extension);
         match extension {
             None => false,
-            Some(ref s) => lib_filetype == *s
+            Some(ref s) => dll_filetype == *s || rlib_filetype == *s,
         }
     });
 
@@ -259,17 +261,21 @@ fn library_in(short_name: &str, version: &Version, dir_to_search: &Path) -> Opti
                 Some(i) => {
                     debug!("Maybe {} is a version", f_name.slice(i + 1, f_name.len()));
                     match try_parsing_version(f_name.slice(i + 1, f_name.len())) {
-                       Some(ref found_vers) if version == found_vers => {
-                           match f_name.slice(0, i).rfind('-') {
-                               Some(j) => {
-                                   debug!("Maybe {} equals {}", f_name.slice(0, j), lib_prefix);
-                                   if f_name.slice(0, j) == lib_prefix {
-                                       result_filename = Some(p_path.clone());
-                                   }
-                                   break;
-                               }
-                               None => break
-                           }
+                        Some(ref found_vers) if version == found_vers => {
+                            match f_name.slice(0, i).rfind('-') {
+                                Some(j) => {
+                                    let lib_prefix = match p_path.extension_str() {
+                                        Some(ref s) if dll_filetype == *s => &dll_prefix,
+                                        _ => &rlib_prefix,
+                                    };
+                                    debug!("Maybe {} equals {}", f_name.slice(0, j), *lib_prefix);
+                                    if f_name.slice(0, j) == *lib_prefix {
+                                        result_filename = Some(p_path.clone());
+                                    }
+                                    break;
+                                }
+                                None => break
+                            }
 
                        }
                        _ => { f_name = f_name.slice(0, i); }

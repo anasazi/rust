@@ -148,9 +148,6 @@ pub struct method_map_entry {
     // (FIXME #3446)
     self_ty: ty::t,
 
-    // the mode of `self`
-    self_mode: ty::SelfMode,
-
     // the type of explicit self on the method
     explicit_self: ast::ExplicitSelf_,
 
@@ -350,9 +347,8 @@ fn check_main_fn_ty(ccx: &CrateCtxt,
     let main_t = ty::node_id_to_type(tcx, main_id);
     match ty::get(main_t).sty {
         ty::ty_bare_fn(..) => {
-            let items = tcx.items.borrow();
-            match items.get().find(&main_id) {
-                Some(&ast_map::NodeItem(it,_)) => {
+            match tcx.items.find(main_id) {
+                Some(ast_map::NodeItem(it,_)) => {
                     match it.node {
                         ast::ItemFn(_, _, _, ref ps, _)
                         if ps.is_parameterized() => {
@@ -396,9 +392,8 @@ fn check_start_fn_ty(ccx: &CrateCtxt,
     let start_t = ty::node_id_to_type(tcx, start_id);
     match ty::get(start_t).sty {
         ty::ty_bare_fn(_) => {
-            let items = tcx.items.borrow();
-            match items.get().find(&start_id) {
-                Some(&ast_map::NodeItem(it,_)) => {
+            match tcx.items.find(start_id) {
+                Some(ast_map::NodeItem(it,_)) => {
                     match it.node {
                         ast::ItemFn(_,_,_,ref ps,_)
                         if ps.is_parameterized() => {

@@ -226,10 +226,10 @@ fn optgroups() -> ~[getopts::groups::OptGroup] {
 
 fn usage(binary: &str, helpstr: &str) {
     let message = format!("Usage: {} [OPTIONS] [FILTER]", binary);
-    println(groups::usage(message, optgroups()));
-    println("");
+    println!("{}", groups::usage(message, optgroups()));
+    println!("");
     if helpstr == "help" {
-        println("\
+        println!("{}", "\
 The FILTER is matched against the name of all tests to run, and if any tests
 have a substring match, only those tests are run.
 
@@ -474,7 +474,7 @@ impl<T: Writer> ConsoleTestState<T> {
         match self.log_out {
             None => (),
             Some(ref mut o) => {
-                let s = format!("{} {}", match *result {
+                let s = format!("{} {}\n", match *result {
                         TrOk => ~"ok",
                         TrFailed => ~"failed",
                         TrIgnored => ~"ignored",
@@ -673,7 +673,7 @@ pub fn run_tests_console(opts: &TestOpts,
 
 #[test]
 fn should_sort_failures_before_printing_them() {
-    use std::io::mem::MemWriter;
+    use std::io::MemWriter;
     use std::str;
 
     let test_a = TestDesc {
@@ -704,7 +704,7 @@ fn should_sort_failures_before_printing_them() {
 
     st.write_failures();
     let s = match st.out {
-        Raw(ref m) => str::from_utf8(m.get_ref()),
+        Raw(ref m) => str::from_utf8(m.get_ref()).unwrap(),
         Pretty(_) => unreachable!()
     };
 
@@ -753,7 +753,7 @@ fn run_tests(opts: &TestOpts,
 
     while pending > 0 || !remaining.is_empty() {
         while pending < concurrency && !remaining.is_empty() {
-            let test = remaining.pop();
+            let test = remaining.pop().unwrap();
             if concurrency == 1 {
                 // We are doing one test at a time so we can print the name
                 // of the test before we run it. Useful for debugging tests
@@ -979,7 +979,7 @@ impl MetricMap {
                     if delta.abs() <= noise {
                         LikelyNoise
                     } else {
-                        let pct = delta.abs() / (vold.value).max(&f64::epsilon) * 100.0;
+                        let pct = delta.abs() / (vold.value).max(&f64::EPSILON) * 100.0;
                         if vold.noise < 0.0 {
                             // When 'noise' is negative, it means we want
                             // to see deltas that go up over time, and can

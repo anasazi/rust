@@ -484,6 +484,7 @@ include:
 
 * `fmt!` : format data into a string
 * `env!` : look up an environment variable's value at compile time
+* `file!`: return the path to the file being compiled
 * `stringify!` : pretty-print the Rust expression given as an argument
 * `include!` : include the Rust expression in the given file
 * `include_str!` : include the contents of the given file as a string
@@ -806,7 +807,9 @@ path_glob : ident [ "::" path_glob ] ?
 
 A _use declaration_ creates one or more local name bindings synonymous
 with some other [path](#paths).
-Usually a `use` declaration is used to shorten the path required to refer to a module item.
+Usually a `use` declaration is used to shorten the path required to refer to a
+module item. These declarations may appear at the top of [modules](#modules) and
+[blocks](#blocks).
 
 *Note*: Unlike in many languages,
 `use` declarations in Rust do *not* declare linkage dependency with external crates.
@@ -1215,7 +1218,7 @@ A static item must have a _constant expression_ giving its definition.
 
 Static items must be explicitly typed.
 The type may be ```bool```, ```char```, a number, or a type derived from those primitive types.
-The derived types are references with the `'static` lifetime,
+The derived types are references with the `static` lifetime,
 fixed-size arrays, tuples, and structs.
 
 ~~~~
@@ -1730,14 +1733,17 @@ names are effectively reserved. Some significant attributes include:
 
 * The `doc` attribute, for documenting code in-place.
 * The `cfg` attribute, for conditional-compilation by build-configuration.
-* The `lang` attribute, for custom definitions of traits and functions that are known to the Rust compiler (see [Language items](#language-items)).
-* The `link` attribute, for describing linkage metadata for a extern blocks.
 * The `crate_id` attribute, for describing the package ID of a crate.
+* The `lang` attribute, for custom definitions of traits and functions that are
+  known to the Rust compiler (see [Language items](#language-items)).
+* The `link` attribute, for describing linkage metadata for a extern blocks.
 * The `test` attribute, for marking functions as unit tests.
 * The `allow`, `warn`, `forbid`, and `deny` attributes, for
   controlling lint checks (see [Lint check attributes](#lint-check-attributes)).
 * The `deriving` attribute, for automatically generating
   implementations of certain traits.
+* The `inline` attribute, for expanding functions at caller location (see
+  [Inline attributes](#inline-attributes)).
 * The `static_assert` attribute, for asserting that a static bool is true at compiletime
 * The `thread_local` attribute, for defining a `static mut` as a thread-local. Note that this is
   only a low-level building block, and is not local to a *task*, nor does it provide safety.
@@ -1909,6 +1915,25 @@ A complete list of the built-in language items follows:
 
 > **Note:** This list is likely to become out of date. We should auto-generate it
 > from `librustc/middle/lang_items.rs`.
+
+### Inline attributes
+
+The inline attribute is used to suggest to the compiler to perform an inline
+expansion and place a copy of the function in the caller rather than generating
+code to call the function where it is defined.
+
+The compiler automatically inlines functions based on internal heuristics.
+Incorrectly inlining functions can actually making the program slower, so it
+should be used with care.
+
+`#[inline]` and `#[inline(always)]` always causes the function to be serialized
+into crate metadata to allow cross-crate inlining.
+
+There are three different types of inline attributes:
+
+* `#[inline]` hints the compiler to perform an inline expansion.
+* `#[inline(always)]` asks the compiler to always perform an inline expansion.
+* `#[inline(never)]` asks the compiler to never perform an inline expansion.
 
 ### Deriving
 
@@ -2187,12 +2212,9 @@ dereferences (`*expr`), [indexing expressions](#index-expressions)
 (`expr[expr]`), and [field references](#field-expressions) (`expr.f`).
 All other expressions are rvalues.
 
-The left operand of an [assignment](#assignment-expressions),
-[binary move](#binary-move-expressions) or
+The left operand of an [assignment](#assignment-expressions) or
 [compound-assignment](#compound-assignment-expressions) expression is an lvalue context,
-as is the single operand of a unary [borrow](#unary-operator-expressions),
-or [move](#unary-move-expressions) expression,
-and _both_ operands of a [swap](#swap-expressions) expression.
+as is the single operand of a unary [borrow](#unary-operator-expressions).
 All other expression contexts are rvalue contexts.
 
 When an lvalue is evaluated in an _lvalue context_, it denotes a memory location;
@@ -2205,9 +2227,8 @@ A temporary's lifetime equals the largest lifetime of any reference that points 
 
 When a [local variable](#memory-slots) is used
 as an [rvalue](#lvalues-rvalues-and-temporaries)
-the variable will either be [moved](#move-expressions) or copied,
-depending on its type.
-For types that contain [owning pointers](#owning-pointers)
+the variable will either be moved or copied, depending on its type.
+For types that contain [owning pointers](#pointer-types)
 or values that implement the special trait `Drop`,
 the variable is moved.
 All other types are copied.
@@ -2296,13 +2317,23 @@ let base = Point3d {x: 1, y: 2, z: 3};
 Point3d {y: 0, z: 10, .. base};
 ~~~~
 
-### Record expressions
+### Block expressions
 
 ~~~~ {.ebnf .gram}
-rec_expr : '{' ident ':' expr
-               [ ',' ident ':' expr ] *
-               [ ".." expr ] '}'
+block_expr : '{' [ view_item ] *
+                 [ stmt ';' | item ] *
+                 [ expr ] '}'
 ~~~~
+
+A _block expression_ is similar to a module in terms of the declarations that
+are possible. Each block conceptually introduces a new namespace scope. View
+items can bring new names into scopes and declared items are in scope for only
+the block itself.
+
+A block will execute each statement sequentially, and then execute the
+expression (if given). If the final expression is omitted, the type and return
+value of the block are `()`, but if it is provided, the type and return value
+of the block are that of the expression itself.
 
 ### Method-call expressions
 
@@ -2668,7 +2699,7 @@ An example:
 let mut i = 0;
 
 while i < 10 {
-    println("hello\n");
+    println!("hello");
     i = i + 1;
 }
 ~~~~
@@ -2843,40 +2874,50 @@ In a pattern whose head expression has an `enum` type, a placeholder (`_`) stand
 variant. For example:
 
 ~~~~
-enum List<X> { Nil, Cons(X, @List<X>) }
+enum List<X> { Nil, Cons(X, ~List<X>) }
 
-let x: List<int> = Cons(10, @Cons(11, @Nil));
+let x: List<int> = Cons(10, ~Cons(11, ~Nil));
 
 match x {
-    Cons(_, @Nil) => fail!("singleton list"),
+    Cons(_, ~Nil) => fail!("singleton list"),
     Cons(..)      => return,
     Nil           => fail!("empty list")
 }
 ~~~~
 
 The first pattern matches lists constructed by applying `Cons` to any head value, and a
-tail value of `@Nil`. The second pattern matches _any_ list constructed with `Cons`,
-ignoring the values of its arguments. The difference between `_` and `*` is that the pattern `C(_)` is only type-correct if
-`C` has exactly one argument, while the pattern `C(..)` is type-correct for any enum variant `C`, regardless of how many arguments `C` has.
+tail value of `~Nil`. The second pattern matches _any_ list constructed with `Cons`,
+ignoring the values of its arguments. The difference between `_` and `*` is that the pattern
+`C(_)` is only type-correct if `C` has exactly one argument, while the pattern `C(..)` is
+type-correct for any enum variant `C`, regardless of how many arguments `C` has.
 
-To execute an `match` expression, first the head expression is evaluated, then
-its value is sequentially compared to the patterns in the arms until a match
+A `match` behaves differently depending on whether or not the head expression
+is an [lvalue or an rvalue](#lvalues-rvalues-and-temporaries).
+If the head expression is an rvalue, it is
+first evaluated into a temporary location, and the resulting value
+is sequentially compared to the patterns in the arms until a match
 is found. The first arm with a matching pattern is chosen as the branch target
 of the `match`, any variables bound by the pattern are assigned to local
 variables in the arm's block, and control enters the block.
 
-An example of an `match` expression:
+When the head expression is an lvalue, the match does not allocate a
+temporary location (however, a by-value binding may copy or move from
+the lvalue). When possible, it is preferable to match on lvalues, as the
+lifetime of these matches inherits the lifetime of the lvalue, rather
+than being restricted to the inside of the match.
+
+An example of a `match` expression:
 
 ~~~~
 # fn process_pair(a: int, b: int) { }
 # fn process_ten() { }
 
-enum List<X> { Nil, Cons(X, @List<X>) }
+enum List<X> { Nil, Cons(X, ~List<X>) }
 
-let x: List<int> = Cons(10, @Cons(11, @Nil));
+let x: List<int> = Cons(10, ~Cons(11, ~Nil));
 
 match x {
-    Cons(a, @Cons(b, _)) => {
+    Cons(a, ~Cons(b, _)) => {
         process_pair(a,b);
     }
     Cons(10, _) => {
@@ -2895,19 +2936,31 @@ Patterns that bind variables
 default to binding to a copy or move of the matched value
 (depending on the matched value's type).
 This can be changed to bind to a reference by
-using the ```ref``` keyword,
-or to a mutable reference using ```ref mut```.
+using the `ref` keyword,
+or to a mutable reference using `ref mut`.
 
-A pattern that's just an identifier,
-like `Nil` in the previous answer,
-could either refer to an enum variant that's in scope,
-or bind a new variable.
-The compiler resolves this ambiguity by forbidding variable bindings that occur in ```match``` patterns from shadowing names of variants that are in scope.
-For example, wherever ```List``` is in scope,
-a ```match``` pattern would not be able to bind ```Nil``` as a new name.
-The compiler interprets a variable pattern `x` as a binding _only_ if there is no variant named `x` in scope.
-A convention you can use to avoid conflicts is simply to name variants with upper-case letters,
-and local variables with lower-case letters.
+Patterns can also dereference pointers by using the `&`,
+`~` or `@` symbols, as appropriate. For example, these two matches
+on `x: &int` are equivalent:
+
+~~~~
+# let x = &3;
+let y = match *x { 0 => "zero", _ => "some" };
+let z = match x { &0 => "zero", _ => "some" };
+
+assert_eq!(y, z);
+~~~~
+
+A pattern that's just an identifier, like `Nil` in the previous answer,
+could either refer to an enum variant that's in scope, or bind a new variable.
+The compiler resolves this ambiguity by forbidding variable bindings that occur
+in `match` patterns from shadowing names of variants that are in scope.
+For example, wherever `List` is in scope,
+a `match` pattern would not be able to bind `Nil` as a new name.
+The compiler interprets a variable pattern `x` as a binding _only_ if there is
+no variant named `x` in scope.
+A convention you can use to avoid conflicts is simply to name variants with
+upper-case letters, and local variables with lower-case letters.
 
 Multiple match patterns may be joined with the `|` operator.
 A range of values may be specified with `..`.
@@ -3088,19 +3141,20 @@ A `struct` *type* is a heterogeneous product of other types, called the *fields*
 the *record* types of the ML family,
 or the *structure* types of the Lisp family.]
 
-New instances of a `struct` can be constructed with a [struct expression](#struct-expressions).
+New instances of a `struct` can be constructed with a [struct expression](#structure-expressions).
 
 The memory order of fields in a `struct` is given by the item defining it.
 Fields may be given in any order in a corresponding struct *expression*;
 the resulting `struct` value will always be laid out in memory in the order specified by the corresponding *item*.
 
-The fields of a `struct` may be qualified by [visibility modifiers](#visibility-modifiers),
+The fields of a `struct` may be qualified by [visibility modifiers](#re-exporting-and-visibility),
 to restrict access to implementation-private data in a structure.
 
 A _tuple struct_ type is just like a structure type, except that the fields are anonymous.
 
 A _unit-like struct_ type is like a structure type, except that it has no fields.
-The one value constructed by the associated [structure expression](#structure-expression) is the only value that inhabits such a type.
+The one value constructed by the associated [structure expression](#structure-expressions)
+is the only value that inhabits such a type.
 
 ### Enumerated types
 
@@ -3223,12 +3277,12 @@ The type of a closure mapping an input of type `A` to an output of type `B` is `
 An example of creating and calling a closure:
 
 ```rust
-let captured_var = 10; 
+let captured_var = 10;
 
-let closure_no_args = || println!("captured_var={}", captured_var); 
+let closure_no_args = || println!("captured_var={}", captured_var);
 
 let closure_args = |arg: int| -> int {
-  println!("captured_var={}, arg={}", captured_var, arg); 
+  println!("captured_var={}, arg={}", captured_var, arg);
   arg // Note lack of semicolon after 'arg'
 };
 
@@ -3267,7 +3321,7 @@ impl Printable for int {
 }
 
 fn print(a: @Printable) {
-   println(a.to_string());
+   println!("{}", a.to_string());
 }
 
 fn main() {
@@ -3771,7 +3825,7 @@ over the output format of a Rust crate.
 ### Logging system
 
 The runtime contains a system for directing [logging
-expressions](#log-expressions) to a logging console and/or internal logging
+expressions](#logging-expressions) to a logging console and/or internal logging
 buffers. Logging can be enabled per module.
 
 Logging output is enabled by setting the `RUST_LOG` environment

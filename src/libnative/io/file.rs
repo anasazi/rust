@@ -13,7 +13,7 @@
 use std::c_str::CString;
 use std::io::IoError;
 use std::io;
-use std::libc::c_int;
+use std::libc::{c_int, c_void};
 use std::libc;
 use std::os;
 use std::rt::rtio;
@@ -508,11 +508,11 @@ pub fn readdir(p: &CString) -> IoResult<~[Path]> {
 
             let dir_ptr = p.with_ref(|buf| opendir(buf));
 
-            if (dir_ptr as uint != 0) {
+            if dir_ptr as uint != 0 {
                 let mut paths = ~[];
                 debug!("os::list_dir -- opendir() SUCCESS");
                 let mut entry_ptr = readdir(dir_ptr);
-                while (entry_ptr as uint != 0) {
+                while entry_ptr as uint != 0 {
                     let cstr = CString::new(rust_list_dir_val(entry_ptr), false);
                     paths.push(Path::new(cstr));
                     entry_ptr = readdir(dir_ptr);
@@ -548,7 +548,7 @@ pub fn readdir(p: &CString) -> IoResult<~[Path]> {
             let p = Path::new(p);
             let star = p.join("*");
             as_utf16_p(star.as_str().unwrap(), |path_ptr| {
-                let wfd_ptr = malloc_raw(rust_list_dir_wfd_size() as uint);
+                let wfd_ptr = malloc_raw(rust_list_dir_wfd_size() as uint) as *c_void;
                 let find_handle = FindFirstFileW(path_ptr, wfd_ptr as HANDLE);
                 if find_handle as libc::c_int != INVALID_HANDLE_VALUE {
                     let mut paths = ~[];

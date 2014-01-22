@@ -26,13 +26,13 @@ Some examples of obvious things you might want to do
 * Read lines from stdin
 
     ```rust
-    use std::io::buffered::BufferedReader;
+    use std::io::BufferedReader;
     use std::io::stdin;
 
     # let _g = ::std::io::ignore_io_error();
     let mut stdin = BufferedReader::new(stdin());
     for line in stdin.lines() {
-        print(line);
+        print!("{}", line);
     }
     ```
 
@@ -60,21 +60,21 @@ Some examples of obvious things you might want to do
 * Iterate over the lines of a file
 
     ```rust
-    use std::io::buffered::BufferedReader;
+    use std::io::BufferedReader;
     use std::io::File;
 
     # let _g = ::std::io::ignore_io_error();
     let path = Path::new("message.txt");
     let mut file = BufferedReader::new(File::open(&path));
     for line in file.lines() {
-        print(line);
+        print!("{}", line);
     }
     ```
 
 * Pull the lines of a file into a vector of strings
 
     ```rust
-    use std::io::buffered::BufferedReader;
+    use std::io::BufferedReader;
     use std::io::File;
 
     # let _g = ::std::io::ignore_io_error();
@@ -204,7 +204,7 @@ io_error::cond.trap(|e: IoError| {
 });
 
 if error.is_some() {
-    println("failed to write my diary");
+    println!("failed to write my diary");
 }
 # ::std::io::fs::unlink(&Path::new("diary.txt"));
 ```
@@ -321,6 +321,11 @@ pub use self::net::udp::UdpStream;
 pub use self::pipe::PipeStream;
 pub use self::process::Process;
 
+pub use self::mem::{MemReader, BufReader, MemWriter, BufWriter};
+pub use self::buffered::{BufferedReader, BufferedWriter, BufferedStream,
+                         LineBufferedWriter};
+pub use self::comm_adapters::{PortReader, ChanWriter};
+
 /// Various utility functions useful for writing I/O tests
 pub mod test;
 
@@ -337,16 +342,13 @@ pub mod process;
 pub mod net;
 
 /// Readers and Writers for memory buffers and strings.
-pub mod mem;
+mod mem;
 
 /// Non-blocking access to stdin, stdout, stderr
 pub mod stdio;
 
 /// Implementations for Option
 mod option;
-
-/// Basic stream compression. XXX: Belongs with other flate code
-pub mod flate;
 
 /// Extension traits
 pub mod extensions;
@@ -355,7 +357,7 @@ pub mod extensions;
 pub mod timer;
 
 /// Buffered I/O wrappers
-pub mod buffered;
+mod buffered;
 
 /// Signal handling
 pub mod signal;
@@ -364,9 +366,11 @@ pub mod signal;
 pub mod util;
 
 /// Adapatation of Chan/Port types to a Writer/Reader type.
-pub mod comm_adapters;
+mod comm_adapters;
 
 /// The default buffer size for various I/O operations
+// libuv recommends 64k buffers to maximize throughput
+// https://groups.google.com/forum/#!topic/libuv/oQO1HJAIDdA
 static DEFAULT_BUF_SIZE: uint = 1024 * 64;
 
 /// The type passed to I/O condition handlers to indicate error
@@ -603,7 +607,7 @@ pub trait Reader {
     /// This function will raise all the same conditions as the `read` method,
     /// along with raising a condition if the input is not valid UTF-8.
     fn read_to_str(&mut self) -> ~str {
-        match str::from_utf8_owned_opt(self.read_to_end()) {
+        match str::from_utf8_owned(self.read_to_end()) {
             Some(s) => s,
             None => {
                 io_error::cond.raise(standard_error(InvalidInput));
@@ -620,8 +624,8 @@ pub trait Reader {
     /// Raises the same conditions as the `read` method, for
     /// each call to its `.next()` method.
     /// Ends the iteration if the condition is handled.
-    fn bytes<'r>(&'r mut self) -> extensions::ByteIterator<'r, Self> {
-        extensions::ByteIterator::new(self)
+    fn bytes<'r>(&'r mut self) -> extensions::Bytes<'r, Self> {
+        extensions::Bytes::new(self)
     }
 
     // Byte conversion helpers
@@ -1049,7 +1053,7 @@ impl<T: Reader + Writer> Stream for T {}
 ///
 /// # Notes about the Iteration Protocol
 ///
-/// The `LineIterator` may yield `None` and thus terminate
+/// The `Lines` may yield `None` and thus terminate
 /// an iteration, but continue to yield elements if iteration
 /// is attempted again.
 ///
@@ -1058,11 +1062,11 @@ impl<T: Reader + Writer> Stream for T {}
 /// Raises the same conditions as the `read` method except for `EndOfFile`
 /// which is swallowed.
 /// Iteration yields `None` if the condition is handled.
-struct LineIterator<'r, T> {
+pub struct Lines<'r, T> {
     priv buffer: &'r mut T,
 }
 
-impl<'r, T: Buffer> Iterator<~str> for LineIterator<'r, T> {
+impl<'r, T: Buffer> Iterator<~str> for Lines<'r, T> {
     fn next(&mut self) -> Option<~str> {
         self.buffer.read_line()
     }
@@ -1098,11 +1102,10 @@ pub trait Buffer: Reader {
     /// # Example
     ///
     /// ```rust
-    /// use std::io::buffered::BufferedReader;
-    /// use std::io;
+    /// use std::io::{BufferedReader, stdin};
     /// # let _g = ::std::io::ignore_io_error();
     ///
-    /// let mut reader = BufferedReader::new(io::stdin());
+    /// let mut reader = BufferedReader::new(stdin());
     ///
     /// let input = reader.read_line().unwrap_or(~"nothing");
     /// ```
@@ -1114,7 +1117,7 @@ pub trait Buffer: Reader {
     /// The task will also fail if sequence of bytes leading up to
     /// the newline character are not valid UTF-8.
     fn read_line(&mut self) -> Option<~str> {
-        self.read_until('\n' as u8).map(str::from_utf8_owned)
+        self.read_until('\n' as u8).map(|line| str::from_utf8_owned(line).unwrap())
     }
 
     /// Create an iterator that reads a line on each iteration until EOF.
@@ -1123,8 +1126,8 @@ pub trait Buffer: Reader {
     ///
     /// Iterator raises the same conditions as the `read` method
     /// except for `EndOfFile`.
-    fn lines<'r>(&'r mut self) -> LineIterator<'r, Self> {
-        LineIterator {
+    fn lines<'r>(&'r mut self) -> Lines<'r, Self> {
+        Lines {
             buffer: self,
         }
     }
@@ -1199,7 +1202,7 @@ pub trait Buffer: Reader {
                 }
             }
         }
-        match str::from_utf8_opt(buf.slice_to(width)) {
+        match str::from_utf8(buf.slice_to(width)) {
             Some(s) => Some(s.char_at(0)),
             None => None
         }
@@ -1253,8 +1256,8 @@ pub trait Acceptor<T> {
     fn accept(&mut self) -> Option<T>;
 
     /// Create an iterator over incoming connection attempts
-    fn incoming<'r>(&'r mut self) -> IncomingIterator<'r, Self> {
-        IncomingIterator { inc: self }
+    fn incoming<'r>(&'r mut self) -> IncomingConnections<'r, Self> {
+        IncomingConnections { inc: self }
     }
 }
 
@@ -1265,11 +1268,11 @@ pub trait Acceptor<T> {
 /// The Some contains another Option representing whether the connection attempt was succesful.
 /// A successful connection will be wrapped in Some.
 /// A failed connection is represented as a None and raises a condition.
-struct IncomingIterator<'a, A> {
+struct IncomingConnections<'a, A> {
     priv inc: &'a mut A,
 }
 
-impl<'a, T, A: Acceptor<T>> Iterator<Option<T>> for IncomingIterator<'a, A> {
+impl<'a, T, A: Acceptor<T>> Iterator<Option<T>> for IncomingConnections<'a, A> {
     fn next(&mut self) -> Option<Option<T>> {
         Some(self.inc.accept())
     }

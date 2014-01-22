@@ -9,13 +9,14 @@
 // except according to those terms.
 
 // xfail-fast
+// xfail-android (FIXME #11419)
 // exec-env:RUST_LOG=info
 
 #[no_uv];
 extern mod native;
 
 use std::fmt;
-use std::io::comm_adapters::{PortReader, ChanWriter};
+use std::io::{PortReader, ChanWriter};
 use std::logging::{set_logger, Logger};
 
 struct MyWriter(ChanWriter);

@@ -17,8 +17,8 @@ use middle::ty::{mt, t, param_ty};
 use middle::ty::{ReFree, ReScope, ReInfer, ReStatic, Region,
                  ReEmpty};
 use middle::ty::{ty_bool, ty_char, ty_bot, ty_box, ty_struct, ty_enum};
-use middle::ty::{ty_err, ty_estr, ty_evec, ty_float, ty_bare_fn, ty_closure};
-use middle::ty::{ty_nil, ty_opaque_box, ty_opaque_closure_ptr, ty_param};
+use middle::ty::{ty_err, ty_str, ty_vec, ty_float, ty_bare_fn, ty_closure};
+use middle::ty::{ty_nil, ty_opaque_closure_ptr, ty_param};
 use middle::ty::{ty_ptr, ty_rptr, ty_self, ty_tup, ty_type, ty_uniq};
 use middle::ty::{ty_trait, ty_int};
 use middle::ty::{ty_uint, ty_unboxed_vec, ty_infer};
@@ -72,15 +72,14 @@ pub fn explain_region_and_span(cx: ctxt, region: ty::Region)
                             -> (~str, Option<Span>) {
     return match region {
       ReScope(node_id) => {
-        let items = cx.items.borrow();
-        match items.get().find(&node_id) {
-          Some(&ast_map::NodeBlock(ref blk)) => {
+        match cx.items.find(node_id) {
+          Some(ast_map::NodeBlock(ref blk)) => {
             explain_span(cx, "block", blk.span)
           }
-          Some(&ast_map::NodeCalleeScope(expr)) => {
+          Some(ast_map::NodeCalleeScope(expr)) => {
               explain_span(cx, "callee", expr.span)
           }
-          Some(&ast_map::NodeExpr(expr)) => {
+          Some(ast_map::NodeExpr(expr)) => {
             match expr.node {
               ast::ExprCall(..) => explain_span(cx, "call", expr.span),
               ast::ExprMethodCall(..) => {
@@ -90,10 +89,10 @@ pub fn explain_region_and_span(cx: ctxt, region: ty::Region)
               _ => explain_span(cx, "expression", expr.span)
             }
           }
-          Some(&ast_map::NodeStmt(stmt)) => {
+          Some(ast_map::NodeStmt(stmt)) => {
               explain_span(cx, "statement", stmt.span)
           }
-          Some(&ast_map::NodeItem(it, _)) if (match it.node {
+          Some(ast_map::NodeItem(it, _)) if (match it.node {
                 ast::ItemFn(..) => true, _ => false}) => {
               explain_span(cx, "function body", it.span)
           }
@@ -114,13 +113,12 @@ pub fn explain_region_and_span(cx: ctxt, region: ty::Region)
                     bound_region_ptr_to_str(cx, fr.bound_region))
         };
 
-        let items = cx.items.borrow();
-        match items.get().find(&fr.scope_id) {
-          Some(&ast_map::NodeBlock(ref blk)) => {
+        match cx.items.find(fr.scope_id) {
+          Some(ast_map::NodeBlock(ref blk)) => {
             let (msg, opt_span) = explain_span(cx, "block", blk.span);
             (format!("{} {}", prefix, msg), opt_span)
           }
-          Some(&ast_map::NodeItem(it, _)) if match it.node {
+          Some(ast_map::NodeItem(it, _)) if match it.node {
                 ast::ItemImpl(..) => true, _ => false} => {
             let (msg, opt_span) = explain_span(cx, "impl", it.span);
             (format!("{} {}", prefix, msg), opt_span)
@@ -174,13 +172,12 @@ pub fn bound_region_to_str(cx: ctxt,
 }
 
 pub fn ReScope_id_to_str(cx: ctxt, node_id: ast::NodeId) -> ~str {
-    let items = cx.items.borrow();
-    match items.get().find(&node_id) {
-      Some(&ast_map::NodeBlock(ref blk)) => {
+    match cx.items.find(node_id) {
+      Some(ast_map::NodeBlock(ref blk)) => {
         format!("<block at {}>",
              cx.sess.codemap.span_to_str(blk.span))
       }
-      Some(&ast_map::NodeExpr(expr)) => {
+      Some(ast_map::NodeExpr(expr)) => {
         match expr.node {
           ast::ExprCall(..) => {
             format!("<call at {}>",
@@ -455,7 +452,7 @@ pub fn ty_to_str(cx: ctxt, typ: t) -> ~str {
       ty_uint(t) => ast_util::uint_ty_to_str(t),
       ty_float(t) => ast_util::float_ty_to_str(t),
       ty_box(typ) => ~"@" + ty_to_str(cx, typ),
-      ty_uniq(ref tm) => ~"~" + mt_to_str(cx, tm),
+      ty_uniq(typ) => ~"~" + ty_to_str(cx, typ),
       ty_ptr(ref tm) => ~"*" + mt_to_str(cx, tm),
       ty_rptr(r, ref tm) => {
         region_ptr_to_str(cx, r) + mt_to_str(cx, tm)
@@ -501,11 +498,10 @@ pub fn ty_to_str(cx: ctxt, typ: t) -> ~str {
         format!("{}{}{}{}{}", trait_store_to_str(cx, s), mutability_to_str(mutbl), ty,
                            bound_sep, bound_str)
       }
-      ty_evec(ref mt, vs) => {
+      ty_vec(ref mt, vs) => {
         vstore_ty_to_str(cx, mt, vs)
       }
-      ty_estr(vs) => format!("{}{}", vstore_to_str(cx, vs), "str"),
-      ty_opaque_box => ~"@?",
+      ty_str(vs) => format!("{}{}", vstore_to_str(cx, vs), "str"),
       ty_opaque_closure_ptr(ast::BorrowedSigil) => ~"&closure",
       ty_opaque_closure_ptr(ast::ManagedSigil) => ~"@closure",
       ty_opaque_closure_ptr(ast::OwnedSigil) => ~"~closure",
@@ -674,6 +670,14 @@ impl Repr for ast::Item {
     }
 }
 
+impl Repr for ast::Stmt {
+    fn repr(&self, tcx: ctxt) -> ~str {
+        format!("stmt({}: {})",
+                ast_util::stmt_id(self),
+                pprust::stmt_to_str(self, tcx.sess.intr()))
+    }
+}
+
 impl Repr for ast::Pat {
     fn repr(&self, tcx: ctxt) -> ~str {
         format!("pat({}: {})",
@@ -744,14 +748,13 @@ impl Repr for ast::DefId {
         // and otherwise fallback to just printing the crate/node pair
         if self.crate == ast::LOCAL_CRATE {
             {
-                let items = tcx.items.borrow();
-                match items.get().find(&self.node) {
-                    Some(&ast_map::NodeItem(..)) |
-                    Some(&ast_map::NodeForeignItem(..)) |
-                    Some(&ast_map::NodeMethod(..)) |
-                    Some(&ast_map::NodeTraitMethod(..)) |
-                    Some(&ast_map::NodeVariant(..)) |
-                    Some(&ast_map::NodeStructCtor(..)) => {
+                match tcx.items.find(self.node) {
+                    Some(ast_map::NodeItem(..)) |
+                    Some(ast_map::NodeForeignItem(..)) |
+                    Some(ast_map::NodeMethod(..)) |
+                    Some(ast_map::NodeTraitMethod(..)) |
+                    Some(ast_map::NodeVariant(..)) |
+                    Some(ast_map::NodeStructCtor(..)) => {
                         return format!("{:?}:{}",
                                        *self,
                                        ty::item_path_str(tcx, *self));

@@ -38,12 +38,11 @@ use std::to_bytes;
 use std::to_str::ToStr;
 use std::vec;
 use syntax::ast::*;
-use syntax::ast_util::is_local;
+use syntax::ast_util::{is_local, lit_is_str};
 use syntax::ast_util;
 use syntax::attr;
 use syntax::attr::AttrMetaMethods;
 use syntax::codemap::Span;
-use syntax::codemap;
 use syntax::parse::token;
 use syntax::{ast, ast_map};
 use syntax::opt_vec::OptVec;
@@ -149,14 +148,6 @@ pub enum TraitStore {
     BoxTraitStore,              // @Trait
     UniqTraitStore,             // ~Trait
     RegionTraitStore(Region),   // &Trait
-}
-
-// XXX: This should probably go away at some point. Maybe after destructors
-// do?
-#[deriving(Clone, Eq, Encodable, Decodable)]
-pub enum SelfMode {
-    ByCopy,
-    ByRef,
 }
 
 pub struct field_ty {
@@ -635,11 +626,11 @@ pub enum sty {
     ty_int(ast::IntTy),
     ty_uint(ast::UintTy),
     ty_float(ast::FloatTy),
-    ty_estr(vstore),
+    ty_str(vstore),
     ty_enum(DefId, substs),
     ty_box(t),
-    ty_uniq(mt),
-    ty_evec(mt, vstore),
+    ty_uniq(t),
+    ty_vec(mt, vstore),
     ty_ptr(mt),
     ty_rptr(Region, mt),
     ty_bare_fn(BareFnTy),
@@ -659,8 +650,7 @@ pub enum sty {
 
     // "Fake" types, used for trans purposes
     ty_type, // type_desc*
-    ty_opaque_box, // used by monomorphizer to represent any @ box
-    ty_opaque_closure_ptr(Sigil), // ptr to env for ||, @fn, ~fn
+    ty_opaque_closure_ptr(Sigil), // ptr to env for || and proc
     ty_unboxed_vec(mt),
 }
 
@@ -819,7 +809,7 @@ impl Vid for TyVid {
 }
 
 impl ToStr for TyVid {
-    fn to_str(&self) -> ~str { format!("<V{}>", self.to_uint()) }
+    fn to_str(&self) -> ~str { format!("<generic \\#{}>", self.to_uint()) }
 }
 
 impl Vid for IntVid {
@@ -827,7 +817,7 @@ impl Vid for IntVid {
 }
 
 impl ToStr for IntVid {
-    fn to_str(&self) -> ~str { format!("<VI{}>", self.to_uint()) }
+    fn to_str(&self) -> ~str { format!("<generic integer \\#{}>", self.to_uint()) }
 }
 
 impl Vid for FloatVid {
@@ -835,7 +825,7 @@ impl Vid for FloatVid {
 }
 
 impl ToStr for FloatVid {
-    fn to_str(&self) -> ~str { format!("<VF{}>", self.to_uint()) }
+    fn to_str(&self) -> ~str { format!("<generic float \\#{}>", self.to_uint()) }
 }
 
 impl Vid for RegionVid {
@@ -1070,16 +1060,15 @@ pub fn mk_t(cx: ctxt, st: sty) -> t {
         return f;
     }
     match &st {
-      &ty_estr(vstore_slice(r)) => {
+      &ty_str(vstore_slice(r)) => {
         flags |= rflags(r);
       }
-      &ty_evec(ref mt, vstore_slice(r)) => {
+      &ty_vec(ref mt, vstore_slice(r)) => {
         flags |= rflags(r);
         flags |= get(mt.ty).flags;
       }
       &ty_nil | &ty_bool | &ty_char | &ty_int(_) | &ty_float(_) | &ty_uint(_) |
-      &ty_estr(_) | &ty_type | &ty_opaque_closure_ptr(_) |
-      &ty_opaque_box => (),
+      &ty_str(_) | &ty_type | &ty_opaque_closure_ptr(_) => {}
       // You might think that we could just return ty_err for
       // any type containing ty_err as a component, and get
       // rid of the has_ty_err flag -- likewise for ty_bot (with
@@ -1102,8 +1091,10 @@ pub fn mk_t(cx: ctxt, st: sty) -> t {
               _ => {}
           }
       }
-      &ty_box(ref tt) => flags |= get(*tt).flags,
-      &ty_uniq(ref m) | &ty_evec(ref m, _) | &ty_ptr(ref m) |
+      &ty_box(tt) | &ty_uniq(tt) => {
+        flags |= get(tt).flags
+      }
+      &ty_vec(ref m, _) | &ty_ptr(ref m) |
       &ty_unboxed_vec(ref m) => {
         flags |= get(m.ty).flags;
       }
@@ -1234,8 +1225,8 @@ pub fn mk_mach_float(tm: ast::FloatTy) -> t {
 #[inline]
 pub fn mk_char() -> t { mk_prim_t(&primitives::TY_CHAR) }
 
-pub fn mk_estr(cx: ctxt, t: vstore) -> t {
-    mk_t(cx, ty_estr(t))
+pub fn mk_str(cx: ctxt, t: vstore) -> t {
+    mk_t(cx, ty_str(t))
 }
 
 pub fn mk_enum(cx: ctxt, did: ast::DefId, substs: substs) -> t {
@@ -1245,15 +1236,7 @@ pub fn mk_enum(cx: ctxt, did: ast::DefId, substs: substs) -> t {
 
 pub fn mk_box(cx: ctxt, ty: t) -> t { mk_t(cx, ty_box(ty)) }
 
-pub fn mk_imm_box(cx: ctxt, ty: t) -> t {
-    mk_box(cx, ty)
-}
-
-pub fn mk_uniq(cx: ctxt, tm: mt) -> t { mk_t(cx, ty_uniq(tm)) }
-
-pub fn mk_imm_uniq(cx: ctxt, ty: t) -> t {
-    mk_uniq(cx, mt {ty: ty, mutbl: ast::MutImmutable})
-}
+pub fn mk_uniq(cx: ctxt, ty: t) -> t { mk_t(cx, ty_uniq(ty)) }
 
 pub fn mk_ptr(cx: ctxt, tm: mt) -> t { mk_t(cx, ty_ptr(tm)) }
 
@@ -1278,8 +1261,8 @@ pub fn mk_nil_ptr(cx: ctxt) -> t {
     mk_ptr(cx, mt {ty: mk_nil(), mutbl: ast::MutImmutable})
 }
 
-pub fn mk_evec(cx: ctxt, tm: mt, t: vstore) -> t {
-    mk_t(cx, ty_evec(tm, t))
+pub fn mk_vec(cx: ctxt, tm: mt, t: vstore) -> t {
+    mk_t(cx, ty_vec(tm, t))
 }
 
 pub fn mk_unboxed_vec(cx: ctxt, tm: mt) -> t {
@@ -1354,8 +1337,6 @@ pub fn mk_opaque_closure_ptr(cx: ctxt, sigil: ast::Sigil) -> t {
     mk_t(cx, ty_opaque_closure_ptr(sigil))
 }
 
-pub fn mk_opaque_box(cx: ctxt) -> t { mk_t(cx, ty_opaque_box) }
-
 pub fn walk_ty(ty: t, f: |t|) {
     maybe_walk_ty(ty, |t| { f(t); true });
 }
@@ -1366,14 +1347,11 @@ pub fn maybe_walk_ty(ty: t, f: |t| -> bool) {
     }
     match get(ty).sty {
       ty_nil | ty_bot | ty_bool | ty_char | ty_int(_) | ty_uint(_) | ty_float(_) |
-      ty_estr(_) | ty_type | ty_opaque_box | ty_self(_) |
-      ty_opaque_closure_ptr(_) | ty_infer(_) | ty_param(_) | ty_err => {
-      }
-      ty_box(ref ty) => {
-        maybe_walk_ty(*ty, f);
-      }
-      ty_evec(ref tm, _) | ty_unboxed_vec(ref tm) | ty_ptr(ref tm) |
-      ty_rptr(_, ref tm) | ty_uniq(ref tm) => {
+      ty_str(_) | ty_type | ty_self(_) |
+      ty_opaque_closure_ptr(_) | ty_infer(_) | ty_param(_) | ty_err => {}
+      ty_box(ty) | ty_uniq(ty) => maybe_walk_ty(ty, f),
+      ty_vec(ref tm, _) | ty_unboxed_vec(ref tm) | ty_ptr(ref tm) |
+      ty_rptr(_, ref tm) => {
         maybe_walk_ty(tm.ty, f);
       }
       ty_enum(_, ref substs) | ty_struct(_, ref substs) |
@@ -1477,11 +1455,6 @@ pub fn subst(cx: ctxt,
 
 // Type utilities
 
-pub fn type_is_voidish(tcx: ctxt, ty: t) -> bool {
-    //! "nil" and "bot" are void types in that they represent 0 bits of information
-    type_is_nil(ty) || type_is_bot(ty) || type_is_empty(tcx, ty)
-}
-
 pub fn type_is_nil(ty: t) -> bool { get(ty).sty == ty_nil }
 
 pub fn type_is_bot(ty: t) -> bool {
@@ -1520,8 +1493,8 @@ pub fn type_is_self(ty: t) -> bool {
 pub fn type_is_structural(ty: t) -> bool {
     match get(ty).sty {
       ty_struct(..) | ty_tup(_) | ty_enum(..) | ty_closure(_) | ty_trait(..) |
-      ty_evec(_, vstore_fixed(_)) | ty_estr(vstore_fixed(_)) |
-      ty_evec(_, vstore_slice(_)) | ty_estr(vstore_slice(_))
+      ty_vec(_, vstore_fixed(_)) | ty_str(vstore_fixed(_)) |
+      ty_vec(_, vstore_slice(_)) | ty_str(vstore_slice(_))
       => true,
       _ => false
     }
@@ -1529,7 +1502,7 @@ pub fn type_is_structural(ty: t) -> bool {
 
 pub fn type_is_sequence(ty: t) -> bool {
     match get(ty).sty {
-      ty_estr(_) | ty_evec(_, _) => true,
+      ty_str(_) | ty_vec(_, _) => true,
       _ => false
     }
 }
@@ -1543,15 +1516,15 @@ pub fn type_is_simd(cx: ctxt, ty: t) -> bool {
 
 pub fn type_is_str(ty: t) -> bool {
     match get(ty).sty {
-      ty_estr(_) => true,
+      ty_str(_) => true,
       _ => false
     }
 }
 
 pub fn sequence_element_type(cx: ctxt, ty: t) -> t {
     match get(ty).sty {
-      ty_estr(_) => return mk_mach_uint(ast::TyU8),
-      ty_evec(mt, _) | ty_unboxed_vec(mt) => return mt.ty,
+      ty_str(_) => return mk_mach_uint(ast::TyU8),
+      ty_vec(mt, _) | ty_unboxed_vec(mt) => return mt.ty,
       _ => cx.sess.bug("sequence_element_type called on non-sequence value"),
     }
 }
@@ -1592,8 +1565,7 @@ pub fn type_is_box(ty: t) -> bool {
 
 pub fn type_is_boxed(ty: t) -> bool {
     match get(ty).sty {
-      ty_box(_) | ty_opaque_box |
-      ty_evec(_, vstore_box) | ty_estr(vstore_box) => true,
+      ty_box(_) | ty_vec(_, vstore_box) | ty_str(vstore_box) => true,
       _ => false
     }
 }
@@ -1607,7 +1579,7 @@ pub fn type_is_region_ptr(ty: t) -> bool {
 
 pub fn type_is_slice(ty: t) -> bool {
     match get(ty).sty {
-      ty_evec(_, vstore_slice(_)) | ty_estr(vstore_slice(_)) => true,
+      ty_vec(_, vstore_slice(_)) | ty_str(vstore_slice(_)) => true,
       _ => return false
     }
 }
@@ -1628,8 +1600,8 @@ pub fn type_is_unsafe_ptr(ty: t) -> bool {
 
 pub fn type_is_vec(ty: t) -> bool {
     return match get(ty).sty {
-          ty_evec(_, _) | ty_unboxed_vec(_) => true,
-          ty_estr(_) => true,
+          ty_vec(_, _) | ty_unboxed_vec(_) => true,
+          ty_str(_) => true,
           _ => false
         };
 }
@@ -1637,8 +1609,8 @@ pub fn type_is_vec(ty: t) -> bool {
 pub fn type_is_unique(ty: t) -> bool {
     match get(ty).sty {
         ty_uniq(_) |
-        ty_evec(_, vstore_uniq) |
-        ty_estr(vstore_uniq) |
+        ty_vec(_, vstore_uniq) |
+        ty_str(vstore_uniq) |
         ty_opaque_closure_ptr(ast::OwnedSigil) => true,
         _ => return false
     }
@@ -1699,7 +1671,7 @@ fn type_needs_unwind_cleanup_(cx: ctxt, ty: t,
     maybe_walk_ty(ty, |ty| {
         let old_encountered_box = encountered_box;
         let result = match get(ty).sty {
-          ty_box(_) | ty_opaque_box => {
+          ty_box(_) => {
             encountered_box = true;
             true
           }
@@ -1719,10 +1691,10 @@ fn type_needs_unwind_cleanup_(cx: ctxt, ty: t,
             !needs_unwind_cleanup
           }
           ty_uniq(_) |
-          ty_estr(vstore_uniq) |
-          ty_estr(vstore_box) |
-          ty_evec(_, vstore_uniq) |
-          ty_evec(_, vstore_box)
+          ty_str(vstore_uniq) |
+          ty_str(vstore_box) |
+          ty_vec(_, vstore_uniq) |
+          ty_vec(_, vstore_box)
           => {
             // Once we're inside a box, the annihilator will find
             // it and destroy it.
@@ -2031,7 +2003,7 @@ pub fn type_contents(cx: ctxt, ty: t) -> TypeContents {
                 TC::None
             }
 
-            ty_estr(vstore_uniq) => {
+            ty_str(vstore_uniq) => {
                 TC::OwnsOwned
             }
 
@@ -2041,6 +2013,10 @@ pub fn type_contents(cx: ctxt, ty: t) -> TypeContents {
 
             ty_box(typ) => {
                 tc_ty(cx, typ, cache).managed_pointer()
+            }
+
+            ty_uniq(typ) => {
+                tc_ty(cx, typ, cache).owned_pointer()
             }
 
             ty_trait(_, _, store, mutbl, bounds) => {
@@ -2056,36 +2032,32 @@ pub fn type_contents(cx: ctxt, ty: t) -> TypeContents {
                     borrowed_contents(r, mt.mutbl))
             }
 
-            ty_uniq(mt) => {
+            ty_vec(mt, vstore_uniq) => {
                 tc_mt(cx, mt, cache).owned_pointer()
             }
 
-            ty_evec(mt, vstore_uniq) => {
-                tc_mt(cx, mt, cache).owned_pointer()
-            }
-
-            ty_evec(mt, vstore_box) => {
+            ty_vec(mt, vstore_box) => {
                 tc_mt(cx, mt, cache).managed_pointer()
             }
 
-            ty_evec(ref mt, vstore_slice(r)) => {
+            ty_vec(ref mt, vstore_slice(r)) => {
                 tc_ty(cx, mt.ty, cache).reference(
                     borrowed_contents(r, mt.mutbl))
             }
 
-            ty_evec(mt, vstore_fixed(_)) => {
+            ty_vec(mt, vstore_fixed(_)) => {
                 tc_mt(cx, mt, cache)
             }
 
-            ty_estr(vstore_box) => {
+            ty_str(vstore_box) => {
                 TC::Managed
             }
 
-            ty_estr(vstore_slice(r)) => {
+            ty_str(vstore_slice(r)) => {
                 borrowed_contents(r, ast::MutImmutable)
             }
 
-            ty_estr(vstore_fixed(_)) => {
+            ty_str(vstore_fixed(_)) => {
                 TC::None
             }
 
@@ -2145,8 +2117,6 @@ pub fn type_contents(cx: ctxt, ty: t) -> TypeContents {
                 // times.
                 TC::All
             }
-
-            ty_opaque_box => TC::Managed,
             ty_unboxed_vec(mt) => TC::InteriorUnsized | tc_mt(cx, mt, cache),
             ty_opaque_closure_ptr(sigil) => {
                 match sigil {
@@ -2317,6 +2287,12 @@ pub fn is_instantiable(cx: ctxt, r_ty: t) -> bool {
                ::util::ppaux::ty_to_str(cx, ty));
 
         let r = match get(ty).sty {
+            // fixed length vectors need special treatment compared to
+            // normal vectors, since they don't necessarily have the
+            // possibilty to have length zero.
+            ty_vec(_, vstore_fixed(0)) => false, // don't need no contents
+            ty_vec(mt, vstore_fixed(_)) => type_requires(cx, seen, r_ty, mt.ty),
+
             ty_nil |
             ty_bot |
             ty_bool |
@@ -2324,7 +2300,7 @@ pub fn is_instantiable(cx: ctxt, r_ty: t) -> bool {
             ty_int(_) |
             ty_uint(_) |
             ty_float(_) |
-            ty_estr(_) |
+            ty_str(_) |
             ty_bare_fn(_) |
             ty_closure(_) |
             ty_infer(_) |
@@ -2332,16 +2308,14 @@ pub fn is_instantiable(cx: ctxt, r_ty: t) -> bool {
             ty_param(_) |
             ty_self(_) |
             ty_type |
-            ty_opaque_box |
             ty_opaque_closure_ptr(_) |
-            ty_evec(_, _) |
+            ty_vec(_, _) |
             ty_unboxed_vec(_) => {
                 false
             }
-            ty_box(typ) => {
+            ty_box(typ) | ty_uniq(typ) => {
                 type_requires(cx, seen, r_ty, typ)
             }
-            ty_uniq(ref mt) |
             ty_rptr(_, ref mt) => {
                 type_requires(cx, seen, r_ty, mt.ty)
             }
@@ -2362,7 +2336,7 @@ pub fn is_instantiable(cx: ctxt, r_ty: t) -> bool {
                 seen.push(did);
                 let fields = struct_fields(cx, did, substs);
                 let r = fields.iter().any(|f| type_requires(cx, seen, r_ty, f.mt.ty));
-                seen.pop();
+                seen.pop().unwrap();
                 r
             }
 
@@ -2383,7 +2357,7 @@ pub fn is_instantiable(cx: ctxt, r_ty: t) -> bool {
                         type_requires(cx, seen, r_ty, sty)
                     })
                 });
-                seen.pop();
+                seen.pop().unwrap();
                 r
             }
         };
@@ -2431,7 +2405,7 @@ pub fn type_structurally_contains(cx: ctxt, ty: t, test: |x: &sty| -> bool)
         }
         return false;
       }
-      ty_evec(ref mt, vstore_fixed(_)) => {
+      ty_vec(ref mt, vstore_fixed(_)) => {
         return type_structurally_contains(cx, mt.ty, test);
       }
       _ => return false
@@ -2442,8 +2416,8 @@ pub fn type_structurally_contains_uniques(cx: ctxt, ty: t) -> bool {
     return type_structurally_contains(cx, ty, |sty| {
         match *sty {
           ty_uniq(_) |
-          ty_evec(_, vstore_uniq) |
-          ty_estr(vstore_uniq) => true,
+          ty_vec(_, vstore_uniq) |
+          ty_str(vstore_uniq) => true,
           _ => false,
         }
     });
@@ -2513,9 +2487,9 @@ pub fn type_is_pod(cx: ctxt, ty: t) -> bool {
       ty_type | ty_ptr(_) | ty_bare_fn(_) => result = true,
       // Boxed types
       ty_box(_) | ty_uniq(_) | ty_closure(_) |
-      ty_estr(vstore_uniq) | ty_estr(vstore_box) |
-      ty_evec(_, vstore_uniq) | ty_evec(_, vstore_box) |
-      ty_trait(_, _, _, _, _) | ty_rptr(_,_) | ty_opaque_box => result = false,
+      ty_str(vstore_uniq) | ty_str(vstore_box) |
+      ty_vec(_, vstore_uniq) | ty_vec(_, vstore_box) |
+      ty_trait(_, _, _, _, _) | ty_rptr(_,_) => result = false,
       // Structural types
       ty_enum(did, ref substs) => {
         let variants = enum_variants(cx, did);
@@ -2532,8 +2506,8 @@ pub fn type_is_pod(cx: ctxt, ty: t) -> bool {
       ty_tup(ref elts) => {
         for elt in elts.iter() { if !type_is_pod(cx, *elt) { result = false; } }
       }
-      ty_estr(vstore_fixed(_)) => result = true,
-      ty_evec(ref mt, vstore_fixed(_)) | ty_unboxed_vec(ref mt) => {
+      ty_str(vstore_fixed(_)) => result = true,
+      ty_vec(ref mt, vstore_fixed(_)) | ty_unboxed_vec(ref mt) => {
         result = type_is_pod(cx, mt.ty);
       }
       ty_param(_) => result = false,
@@ -2547,7 +2521,7 @@ pub fn type_is_pod(cx: ctxt, ty: t) -> bool {
         });
       }
 
-      ty_estr(vstore_slice(..)) | ty_evec(_, vstore_slice(..)) => {
+      ty_str(vstore_slice(..)) | ty_vec(_, vstore_slice(..)) => {
         result = false;
       }
 
@@ -2616,22 +2590,22 @@ pub fn deref(t: t, explicit: bool) -> Option<mt> {
 
 pub fn deref_sty(sty: &sty, explicit: bool) -> Option<mt> {
     match *sty {
-      ty_box(typ) => {
-        Some(mt {
-          ty: typ,
-          mutbl: ast::MutImmutable,
-        })
-      }
+        ty_box(typ) | ty_uniq(typ) => {
+            Some(mt {
+                ty: typ,
+                mutbl: ast::MutImmutable,
+            })
+        }
 
-      ty_rptr(_, mt) | ty_uniq(mt) => {
-        Some(mt)
-      }
+        ty_rptr(_, mt) => {
+            Some(mt)
+        }
 
-      ty_ptr(mt) if explicit => {
-        Some(mt)
-      }
+        ty_ptr(mt) if explicit => {
+            Some(mt)
+        }
 
-      _ => None
+        _ => None
     }
 }
 
@@ -2652,8 +2626,8 @@ pub fn index(t: t) -> Option<mt> {
 
 pub fn index_sty(sty: &sty) -> Option<mt> {
     match *sty {
-      ty_evec(mt, _) => Some(mt),
-      ty_estr(_) => Some(mt {ty: mk_u8(), mutbl: ast::MutImmutable}),
+      ty_vec(mt, _) => Some(mt),
+      ty_str(_) => Some(mt {ty: mk_u8(), mutbl: ast::MutImmutable}),
       _ => None
     }
 }
@@ -2765,8 +2739,8 @@ pub fn is_fn_ty(fty: t) -> bool {
 
 pub fn ty_vstore(ty: t) -> vstore {
     match get(ty).sty {
-        ty_evec(_, vstore) => vstore,
-        ty_estr(vstore) => vstore,
+        ty_vec(_, vstore) => vstore,
+        ty_str(vstore) => vstore,
         ref s => fail!("ty_vstore() called on invalid sty: {:?}", s)
     }
 }
@@ -2776,8 +2750,8 @@ pub fn ty_region(tcx: ctxt,
                  ty: t) -> Region {
     match get(ty).sty {
         ty_rptr(r, _) => r,
-        ty_evec(_, vstore_slice(r)) => r,
-        ty_estr(vstore_slice(r)) => r,
+        ty_vec(_, vstore_slice(r)) => r,
+        ty_str(vstore_slice(r)) => r,
         ref s => {
             tcx.sess.span_bug(
                 span,
@@ -2883,78 +2857,101 @@ pub fn adjust_ty(cx: ctxt,
     return match adjustment {
         None => unadjusted_ty,
 
-        Some(@AutoAddEnv(r, s)) => {
-            match ty::get(unadjusted_ty).sty {
-                ty::ty_bare_fn(ref b) => {
-                    ty::mk_closure(
-                        cx,
-                        ty::ClosureTy {purity: b.purity,
-                                       sigil: s,
-                                       onceness: ast::Many,
-                                       region: r,
-                                       bounds: ty::AllBuiltinBounds(),
-                                       sig: b.sig.clone()})
-                }
-                ref b => {
-                    cx.sess.bug(
-                        format!("add_env adjustment on non-bare-fn: {:?}", b));
-                }
-            }
-        }
-
-        Some(@AutoDerefRef(ref adj)) => {
-            let mut adjusted_ty = unadjusted_ty;
-
-            if (!ty::type_is_error(adjusted_ty)) {
-                for i in range(0, adj.autoderefs) {
-                    match ty::deref(adjusted_ty, true) {
-                        Some(mt) => { adjusted_ty = mt.ty; }
-                        None => {
-                            cx.sess.span_bug(
-                                span,
-                                format!("The {}th autoderef failed: {}",
-                                     i, ty_to_str(cx,
-                                                  adjusted_ty)));
+        Some(adjustment) => {
+            match *adjustment {
+                AutoAddEnv(r, s) => {
+                    match ty::get(unadjusted_ty).sty {
+                        ty::ty_bare_fn(ref b) => {
+                            ty::mk_closure(
+                                cx,
+                                ty::ClosureTy {purity: b.purity,
+                                               sigil: s,
+                                               onceness: ast::Many,
+                                               region: r,
+                                               bounds: ty::AllBuiltinBounds(),
+                                               sig: b.sig.clone()})
+                        }
+                        ref b => {
+                            cx.sess.bug(
+                                format!("add_env adjustment on non-bare-fn: \
+                                         {:?}",
+                                        b));
                         }
                     }
                 }
-            }
 
-            match adj.autoref {
-                None => adjusted_ty,
-                Some(ref autoref) => {
-                    match *autoref {
-                        AutoPtr(r, m) => {
-                            mk_rptr(cx, r, mt {ty: adjusted_ty, mutbl: m})
+                AutoDerefRef(ref adj) => {
+                    let mut adjusted_ty = unadjusted_ty;
+
+                    if !ty::type_is_error(adjusted_ty) {
+                        for i in range(0, adj.autoderefs) {
+                            match ty::deref(adjusted_ty, true) {
+                                Some(mt) => { adjusted_ty = mt.ty; }
+                                None => {
+                                    cx.sess.span_bug(
+                                        span,
+                                        format!("The {}th autoderef failed: \
+                                                {}",
+                                                i,
+                                                ty_to_str(cx, adjusted_ty)));
+                                }
+                            }
                         }
+                    }
 
-                        AutoBorrowVec(r, m) => {
-                            borrow_vec(cx, span, r, m, adjusted_ty)
-                        }
+                    match adj.autoref {
+                        None => adjusted_ty,
+                        Some(ref autoref) => {
+                            match *autoref {
+                                AutoPtr(r, m) => {
+                                    mk_rptr(cx, r, mt {
+                                        ty: adjusted_ty,
+                                        mutbl: m
+                                    })
+                                }
 
-                        AutoBorrowVecRef(r, m) => {
-                            adjusted_ty = borrow_vec(cx, span, r, m, adjusted_ty);
-                            mk_rptr(cx, r, mt {ty: adjusted_ty, mutbl: ast::MutImmutable})
-                        }
+                                AutoBorrowVec(r, m) => {
+                                    borrow_vec(cx, span, r, m, adjusted_ty)
+                                }
 
-                        AutoBorrowFn(r) => {
-                            borrow_fn(cx, span, r, adjusted_ty)
-                        }
+                                AutoBorrowVecRef(r, m) => {
+                                    adjusted_ty = borrow_vec(cx,
+                                                             span,
+                                                             r,
+                                                             m,
+                                                             adjusted_ty);
+                                    mk_rptr(cx, r, mt {
+                                        ty: adjusted_ty,
+                                        mutbl: ast::MutImmutable
+                                    })
+                                }
 
-                        AutoUnsafe(m) => {
-                            mk_ptr(cx, mt {ty: adjusted_ty, mutbl: m})
-                        }
+                                AutoBorrowFn(r) => {
+                                    borrow_fn(cx, span, r, adjusted_ty)
+                                }
 
-                        AutoBorrowObj(r, m) => {
-                            borrow_obj(cx, span, r, m, adjusted_ty)
+                                AutoUnsafe(m) => {
+                                    mk_ptr(cx, mt {ty: adjusted_ty, mutbl: m})
+                                }
+
+                                AutoBorrowObj(r, m) => {
+                                    borrow_obj(cx, span, r, m, adjusted_ty)
+                                }
+                            }
                         }
                     }
                 }
-            }
-        }
 
-        Some(@AutoObject(ref sigil, ref region, m, b, def_id, ref substs)) => {
-            trait_adjustment_to_ty(cx, sigil, region, def_id, substs, m, b)
+                AutoObject(ref sigil, ref region, m, b, def_id, ref substs) => {
+                    trait_adjustment_to_ty(cx,
+                                           sigil,
+                                           region,
+                                           def_id,
+                                           substs,
+                                           m,
+                                           b)
+                }
+            }
         }
     };
 
@@ -2962,12 +2959,12 @@ pub fn adjust_ty(cx: ctxt,
                   r: Region, m: ast::Mutability,
                   ty: ty::t) -> ty::t {
         match get(ty).sty {
-            ty_evec(mt, _) => {
-                ty::mk_evec(cx, mt {ty: mt.ty, mutbl: m}, vstore_slice(r))
+            ty_vec(mt, _) => {
+                ty::mk_vec(cx, mt {ty: mt.ty, mutbl: m}, vstore_slice(r))
             }
 
-            ty_estr(_) => {
-                ty::mk_estr(cx, vstore_slice(r))
+            ty_str(_) => {
+                ty::mk_str(cx, vstore_slice(r))
             }
 
             ref s => {
@@ -3184,10 +3181,13 @@ pub fn expr_kind(tcx: ctxt,
         ast::ExprDoBody(..) |
         ast::ExprBlock(..) |
         ast::ExprRepeat(..) |
-        ast::ExprLit(@codemap::Spanned {node: LitStr(..), ..}) |
         ast::ExprVstore(_, ast::ExprVstoreSlice) |
         ast::ExprVstore(_, ast::ExprVstoreMutSlice) |
         ast::ExprVec(..) => {
+            RvalueDpsExpr
+        }
+
+        ast::ExprLit(lit) if lit_is_str(lit) => {
             RvalueDpsExpr
         }
 
@@ -3344,15 +3344,15 @@ pub fn occurs_check(tcx: ctxt, sp: Span, vid: TyVid, rt: t) {
 pub fn ty_sort_str(cx: ctxt, t: t) -> ~str {
     match get(t).sty {
       ty_nil | ty_bot | ty_bool | ty_char | ty_int(_) |
-      ty_uint(_) | ty_float(_) | ty_estr(_) |
-      ty_type | ty_opaque_box | ty_opaque_closure_ptr(_) => {
+      ty_uint(_) | ty_float(_) | ty_str(_) |
+      ty_type | ty_opaque_closure_ptr(_) => {
         ::util::ppaux::ty_to_str(cx, t)
       }
 
       ty_enum(id, _) => format!("enum {}", item_path_str(cx, id)),
       ty_box(_) => ~"@-ptr",
       ty_uniq(_) => ~"~-ptr",
-      ty_evec(_, _) => ~"vector",
+      ty_vec(_, _) => ~"vector",
       ty_unboxed_vec(_) => ~"unboxed vector",
       ty_ptr(_) => ~"*-ptr",
       ty_rptr(_, _) => ~"&-ptr",
@@ -3458,13 +3458,13 @@ pub fn type_err_to_str(cx: ctxt, err: &type_err) -> ~str {
                  bound_region_ptr_to_str(cx, br))
         }
         terr_vstores_differ(k, ref values) => {
-            format!("{} storage differs: expected {} but found {}",
+            format!("{} storage differs: expected `{}` but found `{}`",
                  terr_vstore_kind_to_str(k),
                  vstore_to_str(cx, (*values).expected),
                  vstore_to_str(cx, (*values).found))
         }
         terr_trait_stores_differ(_, ref values) => {
-            format!("trait storage differs: expected {} but found {}",
+            format!("trait storage differs: expected `{}` but found `{}`",
                  trait_store_to_str(cx, (*values).expected),
                  trait_store_to_str(cx, (*values).found))
         }
@@ -3478,7 +3478,7 @@ pub fn type_err_to_str(cx: ctxt, err: &type_err) -> ~str {
                  ty_sort_str(cx, values.found))
         }
         terr_traits(values) => {
-            format!("expected trait {} but found trait {}",
+            format!("expected trait `{}` but found trait `{}`",
                  item_path_str(cx, values.expected),
                  item_path_str(cx, values.found))
         }
@@ -3563,17 +3563,25 @@ pub fn provided_source(cx: ctxt, id: ast::DefId) -> Option<ast::DefId> {
 pub fn provided_trait_methods(cx: ctxt, id: ast::DefId) -> ~[@Method] {
     if is_local(id) {
         {
-            let items = cx.items.borrow();
-            match items.get().find(&id.node) {
-                Some(&ast_map::NodeItem(@ast::Item {
-                            node: ItemTrait(_, _, ref ms),
-                            ..
-                        }, _)) =>
-                    match ast_util::split_trait_methods(*ms) {
-                       (_, p) => p.map(|m| method(cx, ast_util::local_def(m.id)))
-                    },
-                _ => cx.sess.bug(format!("provided_trait_methods: {:?} is not a trait",
-                                      id))
+            match cx.items.find(id.node) {
+                Some(ast_map::NodeItem(item, _)) => {
+                    match item.node {
+                        ItemTrait(_, _, ref ms) => {
+                            let (_, p) = ast_util::split_trait_methods(*ms);
+                            p.map(|m| method(cx, ast_util::local_def(m.id)))
+                        }
+                        _ => {
+                            cx.sess.bug(format!("provided_trait_methods: \
+                                                 {:?} is not a trait",
+                                                id))
+                        }
+                    }
+                }
+                _ => {
+                    cx.sess.bug(format!("provided_trait_methods: {:?} is not \
+                                         a trait",
+                                        id))
+                }
             }
         }
     } else {
@@ -3685,15 +3693,19 @@ pub fn impl_trait_ref(cx: ctxt, id: ast::DefId) -> Option<@TraitRef> {
     let ret = if id.crate == ast::LOCAL_CRATE {
         debug!("(impl_trait_ref) searching for trait impl {:?}", id);
         {
-            let items = cx.items.borrow();
-            match items.get().find(&id.node) {
-                Some(&ast_map::NodeItem(@ast::Item {
-                     node: ast::ItemImpl(_, ref opt_trait, _, _),
-                     ..},
-                     _)) => {
-                    match opt_trait {
-                        &Some(ref t) => Some(ty::node_id_to_trait_ref(cx, t.ref_id)),
-                        &None => None
+            match cx.items.find(id.node) {
+                Some(ast_map::NodeItem(item, _)) => {
+                    match item.node {
+                        ast::ItemImpl(_, ref opt_trait, _, _) => {
+                            match opt_trait {
+                                &Some(ref t) => {
+                                    Some(ty::node_id_to_trait_ref(cx,
+                                                                  t.ref_id))
+                                }
+                                &None => None
+                            }
+                        }
+                        _ => None
                     }
                 }
                 _ => None
@@ -3877,8 +3889,7 @@ pub fn item_path(cx: ctxt, id: ast::DefId) -> ast_map::Path {
     //                each variant.
     // let node = cx.items.get(&id.node);
     // match *node {
-    let items = cx.items.borrow();
-    match *items.get().get(&id.node) {
+    match cx.items.get(id.node) {
         ast_map::NodeItem(item, path) => {
             let item_elt = match item.node {
                 ItemMod(_) | ItemForeignMod(_) => {
@@ -3948,39 +3959,56 @@ pub fn enum_variants(cx: ctxt, id: ast::DefId) -> @~[@VariantInfo] {
           expr, since check_enum_variants also updates the enum_var_cache
          */
         {
-            let items = cx.items.borrow();
-            match items.get().get_copy(&id.node) {
-              ast_map::NodeItem(@ast::Item {
-                        node: ast::ItemEnum(ref enum_definition, _),
-                        ..
-                    }, _) => {
-                let mut last_discriminant: Option<Disr> = None;
-                @enum_definition.variants.iter().map(|&variant| {
+            match cx.items.get(id.node) {
+              ast_map::NodeItem(item, _) => {
+                  match item.node {
+                    ast::ItemEnum(ref enum_definition, _) => {
+                        let mut last_discriminant: Option<Disr> = None;
+                        @enum_definition.variants.iter().map(|&variant| {
 
-                    let mut discriminant = match last_discriminant {
-                        Some(val) => val + 1,
-                        None => INITIAL_DISCRIMINANT_VALUE
-                    };
+                            let mut discriminant = match last_discriminant {
+                                Some(val) => val + 1,
+                                None => INITIAL_DISCRIMINANT_VALUE
+                            };
 
-                    match variant.node.disr_expr {
-                        Some(e) => match const_eval::eval_const_expr_partial(&cx, e) {
-                            Ok(const_eval::const_int(val)) => discriminant = val as Disr,
-                            Ok(const_eval::const_uint(val)) => discriminant = val as Disr,
-                            Ok(_) => {
-                                cx.sess.span_err(e.span, "expected signed integer constant");
-                            }
-                            Err(ref err) => {
-                                cx.sess.span_err(e.span, format!("expected constant: {}", (*err)));
-                            }
-                        },
-                        None => {}
-                    };
+                            match variant.node.disr_expr {
+                                Some(e) => match const_eval::eval_const_expr_partial(&cx, e) {
+                                    Ok(const_eval::const_int(val)) => {
+                                        discriminant = val as Disr
+                                    }
+                                    Ok(const_eval::const_uint(val)) => {
+                                        discriminant = val as Disr
+                                    }
+                                    Ok(_) => {
+                                        cx.sess
+                                          .span_err(e.span,
+                                                    "expected signed integer \
+                                                     constant");
+                                    }
+                                    Err(ref err) => {
+                                        cx.sess
+                                          .span_err(e.span,
+                                                    format!("expected \
+                                                             constant: {}",
+                                                            (*err)));
+                                    }
+                                },
+                                None => {}
+                            };
 
-                    let variant_info = @VariantInfo::from_ast_variant(cx, variant, discriminant);
-                    last_discriminant = Some(discriminant);
-                    variant_info
+                            let variant_info =
+                                @VariantInfo::from_ast_variant(cx,
+                                                               variant,
+                                                               discriminant);
+                            last_discriminant = Some(discriminant);
+                            variant_info
 
-                }).collect()
+                        }).collect()
+                    }
+                    _ => {
+                        cx.sess.bug("enum_variants: id not bound to an enum")
+                    }
+                  }
               }
               _ => cx.sess.bug("enum_variants: id not bound to an enum")
             }
@@ -4055,13 +4083,10 @@ pub fn lookup_trait_def(cx: ctxt, did: ast::DefId) -> @ty::TraitDef {
 pub fn each_attr(tcx: ctxt, did: DefId, f: |@MetaItem| -> bool) -> bool {
     if is_local(did) {
         {
-            let items = tcx.items.borrow();
-            match items.get().find(&did.node) {
-                Some(&ast_map::NodeItem(@ast::Item {
-                    attrs: ref attrs,
-                    ..
-                }, _)) =>
-                    attrs.iter().advance(|attr| f(attr.node.value)),
+            match tcx.items.find(did.node) {
+                Some(ast_map::NodeItem(item, _)) => {
+                    item.attrs.iter().advance(|attr| f(attr.node.value))
+                }
                 _ => tcx.sess.bug(format!("has_attr: {:?} is not an item",
                                           did))
             }
@@ -4141,9 +4166,8 @@ pub fn lookup_field_type(tcx: ctxt,
 pub fn lookup_struct_fields(cx: ctxt, did: ast::DefId) -> ~[field_ty] {
   if did.crate == ast::LOCAL_CRATE {
       {
-          let items = cx.items.borrow();
-          match items.get().find(&did.node) {
-           Some(&ast_map::NodeItem(i,_)) => {
+          match cx.items.find(did.node) {
+           Some(ast_map::NodeItem(i,_)) => {
              match i.node {
                 ast::ItemStruct(struct_def, _) => {
                    struct_field_tys(struct_def.fields)
@@ -4151,7 +4175,7 @@ pub fn lookup_struct_fields(cx: ctxt, did: ast::DefId) -> ~[field_ty] {
                 _ => cx.sess.bug("struct ID bound to non-struct")
              }
            }
-           Some(&ast_map::NodeVariant(ref variant, _, _)) => {
+           Some(ast_map::NodeVariant(ref variant, _, _)) => {
               match (*variant).node.kind {
                 ast::StructVariantKind(struct_def) => {
                   struct_field_tys(struct_def.fields)
@@ -4680,13 +4704,12 @@ pub fn populate_implementations_for_trait_if_necessary(
 /// If it implements no trait, return `None`.
 pub fn trait_id_of_impl(tcx: ctxt,
                         def_id: ast::DefId) -> Option<ast::DefId> {
-    let items = tcx.items.borrow();
-    let node = match items.get().find(&def_id.node) {
+    let node = match tcx.items.find(def_id.node) {
         Some(node) => node,
         None => return None
     };
     match node {
-        &ast_map::NodeItem(item, _) => {
+        ast_map::NodeItem(item, _) => {
             match item.node {
                 ast::ItemImpl(_, Some(ref trait_ref), _, _) => {
                     Some(node_id_to_trait_ref(tcx, trait_ref.ref_id).def_id)
@@ -4814,7 +4837,7 @@ pub fn hash_crate_independent(tcx: ctxt, t: t, local_hash: @str) -> u64 {
                 hash.input([6]);
                 iter(&mut hash, &f);
             }
-            ty_estr(v) => {
+            ty_str(v) => {
                 hash.input([7]);
                 vstore(&mut hash, v);
             }
@@ -4825,11 +4848,10 @@ pub fn hash_crate_independent(tcx: ctxt, t: t, local_hash: @str) -> u64 {
             ty_box(_) => {
                 hash.input([9]);
             }
-            ty_uniq(m) => {
+            ty_uniq(_) => {
                 hash.input([10]);
-                mt(&mut hash, m);
             }
-            ty_evec(m, v) => {
+            ty_vec(m, v) => {
                 hash.input([11]);
                 mt(&mut hash, m);
                 vstore(&mut hash, v);
@@ -4890,13 +4912,12 @@ pub fn hash_crate_independent(tcx: ctxt, t: t, local_hash: @str) -> u64 {
             ty_infer(_) => unreachable!(),
             ty_err => hash.input([23]),
             ty_type => hash.input([24]),
-            ty_opaque_box => hash.input([25]),
             ty_opaque_closure_ptr(s) => {
-                hash.input([26]);
+                hash.input([25]);
                 iter(&mut hash, &s);
             }
             ty_unboxed_vec(m) => {
-                hash.input([27]);
+                hash.input([26]);
                 mt(&mut hash, m);
             }
         }

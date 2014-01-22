@@ -20,6 +20,7 @@ use lib::llvm::{ContextRef, ModuleRef};
 use metadata::common::LinkMeta;
 use metadata::{creader, filesearch};
 use metadata::cstore::CStore;
+use metadata::creader::Loader;
 use metadata;
 use middle::{trans, freevars, kind, ty, typeck, lint, astencode, reachable};
 use middle;
@@ -30,7 +31,7 @@ use std::cell::{Cell, RefCell};
 use std::hashmap::{HashMap,HashSet};
 use std::io;
 use std::io::fs;
-use std::io::mem::MemReader;
+use std::io::MemReader;
 use std::os;
 use std::vec;
 use extra::getopts::groups::{optopt, optmulti, optflag, optflagopt};
@@ -41,6 +42,7 @@ use syntax::attr;
 use syntax::attr::{AttrMetaMethods};
 use syntax::codemap;
 use syntax::diagnostic;
+use syntax::ext::base::CrateLoader;
 use syntax::parse;
 use syntax::parse::token;
 use syntax::print::{pp, pprust};
@@ -60,11 +62,11 @@ pub enum PpMode {
  */
 pub fn anon_src() -> @str { @"<anon>" }
 
-pub fn source_name(input: &input) -> @str {
+pub fn source_name(input: &Input) -> @str {
     match *input {
       // FIXME (#9639): This needs to handle non-utf8 paths
-      file_input(ref ifile) => ifile.as_str().unwrap().to_managed(),
-      str_input(_) => anon_src()
+      FileInput(ref ifile) => ifile.as_str().unwrap().to_managed(),
+      StrInput(_) => anon_src()
     }
 }
 
@@ -131,22 +133,22 @@ fn parse_cfgspecs(cfgspecs: ~[~str], demitter: @diagnostic::Emitter)
     }).collect::<ast::CrateConfig>()
 }
 
-pub enum input {
+pub enum Input {
     /// Load source from file
-    file_input(Path),
+    FileInput(Path),
     /// The string is the source
     // FIXME (#2319): Don't really want to box the source string
-    str_input(@str)
+    StrInput(@str)
 }
 
-pub fn phase_1_parse_input(sess: Session, cfg: ast::CrateConfig, input: &input)
+pub fn phase_1_parse_input(sess: Session, cfg: ast::CrateConfig, input: &Input)
     -> ast::Crate {
     time(sess.time_passes(), "parsing", (), |_| {
         match *input {
-            file_input(ref file) => {
+            FileInput(ref file) => {
                 parse::parse_crate_from_file(&(*file), cfg.clone(), sess.parse_sess)
             }
-            str_input(src) => {
+            StrInput(src) => {
                 parse::parse_crate_from_source_str(
                     anon_src(), src, cfg.clone(), sess.parse_sess)
             }
@@ -163,6 +165,7 @@ pub fn phase_1_parse_input(sess: Session, cfg: ast::CrateConfig, input: &input)
 /// standard library and prelude.
 pub fn phase_2_configure_and_expand(sess: Session,
                                     cfg: ast::CrateConfig,
+                                    loader: &mut CrateLoader,
                                     mut crate: ast::Crate)
                                     -> (ast::Crate, syntax::ast_map::Map) {
     let time_passes = sess.time_passes();
@@ -188,9 +191,14 @@ pub fn phase_2_configure_and_expand(sess: Session,
     crate = time(time_passes, "configuration 1", crate, |crate|
                  front::config::strip_unconfigured_items(crate));
 
-    crate = time(time_passes, "expansion", crate, |crate|
-                 syntax::ext::expand::expand_crate(sess.parse_sess, cfg.clone(),
-                                                   crate));
+    crate = time(time_passes, "expansion", crate, |crate| {
+        syntax::ext::expand::expand_crate(sess.parse_sess,
+                                          loader,
+                                          cfg.clone(),
+                                          crate)
+    });
+    // dump the syntax-time crates
+    sess.cstore.reset();
 
     // strip again, in case expansion added anything with a #[cfg].
     crate = time(time_passes, "configuration 2", crate, |crate|
@@ -247,6 +255,11 @@ pub fn phase_3_run_analysis_passes(sess: Session,
 
     time(time_passes, "looking for entry point", (),
          |_| middle::entry::find_entry_point(sess, crate, ast_map));
+
+    sess.macro_registrar_fn.with_mut(|r| *r =
+        time(time_passes, "looking for macro registrar", (), |_|
+            syntax::ext::registrar::find_macro_registrar(
+                sess.span_diagnostic, crate)));
 
     let freevars = time(time_passes, "freevar finding", (), |_|
                         freevars::annotate_freevars(def_map, crate));
@@ -431,7 +444,7 @@ pub fn stop_after_phase_5(sess: Session) -> bool {
     return false;
 }
 
-fn write_out_deps(sess: Session, input: &input, outputs: &OutputFilenames, crate: &ast::Crate)
+fn write_out_deps(sess: Session, input: &Input, outputs: &OutputFilenames, crate: &ast::Crate)
 {
     let lm = link::build_link_meta(sess, crate.attrs, &outputs.obj_filename,
                                        &mut ::util::sha2::Sha256::new());
@@ -447,12 +460,12 @@ fn write_out_deps(sess: Session, input: &input, outputs: &OutputFilenames, crate
         (true, Some(ref filename)) => filename.clone(),
         // Use default filename: crate source filename with extension replaced by ".d"
         (true, None) => match *input {
-            file_input(ref input_path) => {
+            FileInput(ref input_path) => {
                 let filestem = input_path.filestem().expect("input file must have stem");
                 let filename = out_filenames[0].dir_path().join(filestem).with_extension("d");
                 filename
             },
-            str_input(..) => {
+            StrInput(..) => {
                 sess.warn("can not write --dep-info without a filename when compiling stdin.");
                 return;
             },
@@ -482,7 +495,7 @@ fn write_out_deps(sess: Session, input: &input, outputs: &OutputFilenames, crate
     }
 }
 
-pub fn compile_input(sess: Session, cfg: ast::CrateConfig, input: &input,
+pub fn compile_input(sess: Session, cfg: ast::CrateConfig, input: &Input,
                      outdir: &Option<Path>, output: &Option<Path>) {
     // We need nested scopes here, because the intermediate results can keep
     // large chunks of memory alive and we want to free them as soon as
@@ -491,7 +504,8 @@ pub fn compile_input(sess: Session, cfg: ast::CrateConfig, input: &input,
         let (expanded_crate, ast_map) = {
             let crate = phase_1_parse_input(sess, cfg.clone(), input);
             if stop_after_phase_1(sess) { return; }
-            phase_2_configure_and_expand(sess, cfg, crate)
+            let loader = &mut Loader::new(sess);
+            phase_2_configure_and_expand(sess, cfg, loader, crate)
         };
         let outputs = build_output_filenames(input, outdir, output,
                                              expanded_crate.attrs, sess);
@@ -573,13 +587,14 @@ impl pprust::PpAnn for TypedAnnotation {
 
 pub fn pretty_print_input(sess: Session,
                           cfg: ast::CrateConfig,
-                          input: &input,
+                          input: &Input,
                           ppm: PpMode) {
     let crate = phase_1_parse_input(sess, cfg.clone(), input);
 
     let (crate, ast_map, is_expanded) = match ppm {
         PpmExpanded | PpmExpandedIdentified | PpmTyped => {
-            let (crate, ast_map) = phase_2_configure_and_expand(sess, cfg, crate);
+            let loader = &mut Loader::new(sess);
+            let (crate, ast_map) = phase_2_configure_and_expand(sess, cfg, loader, crate);
             (crate, Some(ast_map), true)
         }
         _ => (crate, None, false)
@@ -646,12 +661,13 @@ static architecture_abis : &'static [(&'static str, abi::Architecture)] = &'stat
 
     ("arm",    abi::Arm),
     ("xscale", abi::Arm),
+    ("thumb",  abi::Arm),
 
     ("mips",   abi::Mips)];
 
-pub fn build_target_config(sopts: @session::options,
+pub fn build_target_config(sopts: @session::Options,
                            demitter: @diagnostic::Emitter)
-                           -> @session::config {
+                           -> @session::Config {
     let os = match get_os(sopts.target_triple) {
       Some(os) => os,
       None => early_error(demitter, "unknown operating system")
@@ -674,7 +690,7 @@ pub fn build_target_config(sopts: @session::options,
       abi::Arm => arm::get_target_strs(target_triple, os),
       abi::Mips => mips::get_target_strs(target_triple, os)
     };
-    let target_cfg = @session::config {
+    let target_cfg = @session::Config {
         os: os,
         arch: arch,
         target_strs: target_strs,
@@ -699,7 +715,7 @@ pub fn host_triple() -> ~str {
 pub fn build_session_options(binary: ~str,
                              matches: &getopts::Matches,
                              demitter: @diagnostic::Emitter)
-                             -> @session::options {
+                             -> @session::Options {
     let mut outputs = ~[];
     if matches.opt_present("rlib") {
         outputs.push(session::OutputRlib)
@@ -744,22 +760,22 @@ pub fn build_session_options(binary: ~str,
         }
     }
 
-    let mut debugging_opts = 0u;
+    let mut debugging_opts = 0;
     let debug_flags = matches.opt_strs("Z");
     let debug_map = session::debugging_opts_map();
     for debug_flag in debug_flags.iter() {
-        let mut this_bit = 0u;
+        let mut this_bit = 0;
         for tuple in debug_map.iter() {
             let (name, bit) = match *tuple { (ref a, _, b) => (a, b) };
             if *name == *debug_flag { this_bit = bit; break; }
         }
-        if this_bit == 0u {
+        if this_bit == 0 {
             early_error(demitter, format!("unknown debug flag: {}", *debug_flag))
         }
         debugging_opts |= this_bit;
     }
 
-    if debugging_opts & session::debug_llvm != 0 {
+    if debugging_opts & session::DEBUG_LLVM != 0 {
         unsafe { llvm::LLVMSetDebug(1); }
     }
 
@@ -782,7 +798,7 @@ pub fn build_session_options(binary: ~str,
     let target_feature = matches.opt_str("target-feature").unwrap_or(~"");
     let save_temps = matches.opt_present("save-temps");
     let opt_level = {
-        if (debugging_opts & session::no_opt) != 0 {
+        if (debugging_opts & session::NO_OPT) != 0 {
             No
         } else if matches.opt_present("O") {
             if matches.opt_present("opt-level") {
@@ -801,9 +817,9 @@ pub fn build_session_options(binary: ~str,
             }
         } else { No }
     };
-    let gc = debugging_opts & session::gc != 0;
-    let extra_debuginfo = debugging_opts & session::extra_debug_info != 0;
-    let debuginfo = debugging_opts & session::debug_info != 0 ||
+    let gc = debugging_opts & session::GC != 0;
+    let extra_debuginfo = debugging_opts & session::EXTRA_DEBUG_INFO != 0;
+    let debuginfo = debugging_opts & session::DEBUG_INFO != 0 ||
         extra_debuginfo;
 
     let addl_lib_search_paths = matches.opt_strs("L").map(|s| {
@@ -847,7 +863,7 @@ pub fn build_session_options(binary: ~str,
                        matches.opt_present("crate-name"),
                        matches.opt_present("crate-file-name"));
 
-    let sopts = @session::options {
+    let sopts = @session::Options {
         outputs: outputs,
         gc: gc,
         optimize: opt_level,
@@ -880,7 +896,7 @@ pub fn build_session_options(binary: ~str,
     return sopts;
 }
 
-pub fn build_session(sopts: @session::options, demitter: @diagnostic::Emitter)
+pub fn build_session(sopts: @session::Options, demitter: @diagnostic::Emitter)
                      -> Session {
     let codemap = @codemap::CodeMap::new();
     let diagnostic_handler =
@@ -890,7 +906,7 @@ pub fn build_session(sopts: @session::options, demitter: @diagnostic::Emitter)
     build_session_(sopts, codemap, demitter, span_diagnostic_handler)
 }
 
-pub fn build_session_(sopts: @session::options,
+pub fn build_session_(sopts: @session::Options,
                       cm: @codemap::CodeMap,
                       demitter: @diagnostic::Emitter,
                       span_diagnostic_handler: @diagnostic::SpanHandler)
@@ -899,7 +915,7 @@ pub fn build_session_(sopts: @session::options,
     let p_s = parse::new_parse_sess_special_handler(span_diagnostic_handler,
                                                     cm);
     let cstore = @CStore::new(token::get_ident_interner());
-    let filesearch = filesearch::mk_filesearch(
+    let filesearch = @filesearch::FileSearch::new(
         &sopts.maybe_sysroot,
         sopts.target_triple,
         sopts.addl_lib_search_paths);
@@ -912,6 +928,7 @@ pub fn build_session_(sopts: @session::options,
         // For a library crate, this is always none
         entry_fn: RefCell::new(None),
         entry_type: Cell::new(None),
+        macro_registrar_fn: RefCell::new(None),
         span_diagnostic: span_diagnostic_handler,
         filesearch: filesearch,
         building_library: Cell::new(false),
@@ -1011,7 +1028,7 @@ pub fn optgroups() -> ~[getopts::groups::OptGroup] {
                           for details)", "FEATURE"),
   optopt("", "android-cross-path",
          "The path to the Android NDK", "PATH"),
-  optflagopt("W", "warn",
+  optmulti("W", "warn",
                         "Set lint warnings", "OPT"),
   optmulti("A", "allow",
                         "Set lint allowed", "OPT"),
@@ -1030,7 +1047,7 @@ pub struct OutputFilenames {
     obj_filename: Path
 }
 
-pub fn build_output_filenames(input: &input,
+pub fn build_output_filenames(input: &Input,
                               odir: &Option<Path>,
                               ofile: &Option<Path>,
                               attrs: &[ast::Attribute],
@@ -1058,15 +1075,15 @@ pub fn build_output_filenames(input: &input,
           let dirpath = match *odir {
               Some(ref d) => (*d).clone(),
               None => match *input {
-                  str_input(_) => os::getcwd(),
-                  file_input(ref ifile) => (*ifile).dir_path()
+                  StrInput(_) => os::getcwd(),
+                  FileInput(ref ifile) => (*ifile).dir_path()
               }
           };
 
           let mut stem = match *input {
               // FIXME (#9639): This needs to handle non-utf8 paths
-              file_input(ref ifile) => (*ifile).filestem_str().unwrap().to_managed(),
-              str_input(_) => @"rust_out"
+              FileInput(ref ifile) => (*ifile).filestem_str().unwrap().to_managed(),
+              StrInput(_) => @"rust_out"
           };
 
           // If a crateid is present, we use it as the link name

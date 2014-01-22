@@ -16,7 +16,7 @@ use middle::moves;
 use middle::trans::base::*;
 use middle::trans::build::*;
 use middle::trans::common::*;
-use middle::trans::datum::{Datum, INIT};
+use middle::trans::datum::{Datum, Lvalue};
 use middle::trans::debuginfo;
 use middle::trans::expr;
 use middle::trans::glue;
@@ -112,7 +112,7 @@ pub enum EnvAction {
 
 pub struct EnvValue {
     action: EnvAction,
-    datum: Datum
+    datum: Datum<Lvalue>
 }
 
 impl EnvAction {
@@ -129,11 +129,6 @@ impl EnvValue {
     pub fn to_str(&self, ccx: &CrateContext) -> ~str {
         format!("{}({})", self.action.to_str(), self.datum.to_str(ccx))
     }
-}
-
-pub fn mk_tuplified_uniq_cbox_ty(tcx: ty::ctxt, cdata_ty: ty::t) -> ty::t {
-    let cbox_ty = tuplify_box_ty(tcx, cdata_ty);
-    return ty::mk_imm_uniq(tcx, cbox_ty);
 }
 
 // Given a closure ty, emits a corresponding tuple ty
@@ -155,14 +150,6 @@ pub fn mk_closure_tys(tcx: ty::ctxt,
     return cdata_ty;
 }
 
-fn heap_for_unique_closure(bcx: &Block, t: ty::t) -> heap {
-    if ty::type_contents(bcx.tcx(), t).owns_managed() {
-        heap_managed_unique
-    } else {
-        heap_exchange_closure
-    }
-}
-
 pub fn allocate_cbox<'a>(
                      bcx: &'a Block<'a>,
                      sigil: ast::Sigil,
@@ -178,7 +165,7 @@ pub fn allocate_cbox<'a>(
             tcx.sess.bug("trying to trans allocation of @fn")
         }
         ast::OwnedSigil => {
-            malloc_raw(bcx, cdata_ty, heap_for_unique_closure(bcx, cdata_ty))
+            malloc_raw(bcx, cdata_ty, heap_exchange_closure)
         }
         ast::BorrowedSigil => {
             let cbox_ty = tuplify_box_ty(tcx, cdata_ty);
@@ -232,7 +219,7 @@ pub fn store_environment<'a>(
 
     // Copy expr values into boxed bindings.
     let mut bcx = bcx;
-    for (i, bv) in bound_values.iter().enumerate() {
+    for (i, bv) in bound_values.move_iter().enumerate() {
         debug!("Copy {} into closure", bv.to_str(ccx));
 
         if ccx.sess.asm_comments() {
@@ -243,17 +230,13 @@ pub fn store_environment<'a>(
         let bound_data = GEPi(bcx, llbox, [0u, abi::box_field_body, i]);
 
         match bv.action {
-            EnvCopy => {
-                bcx = bv.datum.copy_to(bcx, INIT, bound_data);
-            }
-            EnvMove => {
-                bcx = bv.datum.move_to(bcx, INIT, bound_data);
+            EnvCopy | EnvMove => {
+                bcx = bv.datum.store_to(bcx, bound_data);
             }
             EnvRef => {
-                Store(bcx, bv.datum.to_ref_llval(bcx), bound_data);
+                Store(bcx, bv.datum.to_llref(), bound_data);
             }
         }
-
     }
 
     ClosureResult { llbox: llbox, cdata_ty: cdata_ty, bcx: bcx }
@@ -405,7 +388,7 @@ pub fn trans_expr_fn<'a>(
     let s = mangle_internal_name_by_path_and_seq(ccx,
                                                  sub_path.clone(),
                                                  "expr_fn");
-    let llfn = decl_internal_rust_fn(ccx, f.sig.inputs, f.sig.output, s);
+    let llfn = decl_internal_rust_fn(ccx, None, f.sig.inputs, f.sig.output, s);
 
     // set an inline hint for all closures
     set_inline_hint(llfn);
@@ -423,7 +406,7 @@ pub fn trans_expr_fn<'a>(
                           decl,
                           body,
                           llfn,
-                          no_self,
+                          None,
                           bcx.fcx.param_substs,
                           user_id,
                           [],
@@ -474,7 +457,7 @@ pub fn make_opaque_cbox_drop_glue<'a>(
             bcx.tcx().sess.bug("trying to trans drop glue of @fn")
         }
         ast::OwnedSigil => {
-            glue::free_ty(
+            glue::make_free_glue(
                 bcx, cboxptr,
                 ty::mk_opaque_closure_ptr(bcx.tcx(), sigil))
         }

@@ -78,7 +78,7 @@ impl<T> Drop for Rc<T> {
                 if (*self.ptr).strong == 0 {
                     read_ptr(self.borrow()); // destroy the contained object
                     if (*self.ptr).weak == 0 {
-                        exchange_free(self.ptr as *mut u8 as *i8)
+                        exchange_free(self.ptr as *u8)
                     }
                 }
             }
@@ -153,7 +153,7 @@ impl<T> Drop for Weak<T> {
             if self.ptr != 0 as *mut RcBox<T> {
                 (*self.ptr).weak -= 1;
                 if (*self.ptr).weak == 0 && (*self.ptr).strong == 0 {
-                    exchange_free(self.ptr as *mut u8 as *i8)
+                    exchange_free(self.ptr as *u8)
                 }
             }
         }
@@ -229,5 +229,13 @@ mod tests {
         let y = x.downgrade();
         drop(x);
         assert!(y.upgrade().is_none());
+    }
+
+    #[test]
+    fn gc_inside() {
+        // see issue #11532
+        use gc::Gc;
+        let a = Rc::new(RefCell::new(Gc::new(1)));
+        assert!(a.borrow().try_borrow_mut().is_some());
     }
 }

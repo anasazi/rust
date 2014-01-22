@@ -63,20 +63,7 @@ pub trait Folder {
     }
 
     fn fold_view_item(&mut self, vi: &ViewItem) -> ViewItem {
-        let inner_view_item = match vi.node {
-            ViewItemExternMod(ref ident, string, node_id) => {
-                ViewItemExternMod(ident.clone(), string, self.new_id(node_id))
-            }
-            ViewItemUse(ref view_paths) => {
-                ViewItemUse(self.fold_view_paths(*view_paths))
-            }
-        };
-        ViewItem {
-            node: inner_view_item,
-            attrs: vi.attrs.map(|a| fold_attribute_(*a, self)),
-            vis: vi.vis,
-            span: self.new_span(vi.span),
-        }
+        noop_fold_view_item(vi, self)
     }
 
     fn fold_foreign_item(&mut self, ni: @ForeignItem) -> @ForeignItem {
@@ -319,7 +306,7 @@ pub trait Folder {
 
     fn fold_explicit_self_(&mut self, es: &ExplicitSelf_) -> ExplicitSelf_ {
         match *es {
-            SelfStatic | SelfValue(_) | SelfUniq(_) | SelfBox(_) => {
+            SelfStatic | SelfValue(_) | SelfUniq(_) | SelfBox => {
                 *es
             }
             SelfRegion(ref lifetime, m) => {
@@ -509,6 +496,28 @@ fn fold_variant_arg_<T: Folder>(va: &VariantArg, folder: &mut T) -> VariantArg {
     }
 }
 
+pub fn noop_fold_view_item<T: Folder>(vi: &ViewItem, folder: &mut T)
+                                       -> ViewItem{
+    let inner_view_item = match vi.node {
+        ViewItemExternMod(ref ident,
+                             string,
+                             node_id) => {
+            ViewItemExternMod(ident.clone(),
+                                 string,
+                                 folder.new_id(node_id))
+        }
+        ViewItemUse(ref view_paths) => {
+            ViewItemUse(folder.fold_view_paths(*view_paths))
+        }
+    };
+    ViewItem {
+        node: inner_view_item,
+        attrs: vi.attrs.map(|a| fold_attribute_(*a, folder)),
+        vis: vi.vis,
+        span: folder.new_span(vi.span),
+    }
+}
+
 pub fn noop_fold_block<T: Folder>(b: P<Block>, folder: &mut T) -> P<Block> {
     let view_items = b.view_items.map(|x| folder.fold_view_item(x));
     let stmts = b.stmts.iter().flat_map(|s| folder.fold_stmt(*s).move_iter()).collect();
@@ -687,7 +696,6 @@ pub fn noop_fold_pat<T: Folder>(p: @Pat, folder: &mut T) -> @Pat {
             PatStruct(pth_, fs, etc)
         }
         PatTup(ref elts) => PatTup(elts.map(|x| folder.fold_pat(*x))),
-        PatBox(inner) => PatBox(folder.fold_pat(inner)),
         PatUniq(inner) => PatUniq(folder.fold_pat(inner)),
         PatRegion(inner) => PatRegion(folder.fold_pat(inner)),
         PatRange(e1, e2) => {

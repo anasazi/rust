@@ -13,7 +13,7 @@
 use std::cell::RefCell;
 use std::hashmap::HashMap;
 use std::io;
-use std::io::mem::MemWriter;
+use std::io::MemWriter;
 use std::str;
 use std::fmt;
 
@@ -72,7 +72,7 @@ pub fn enc_ty(w: &mut MemWriter, cx: @ctxt, t: ty::t) {
             None => {
                 let wr = &mut MemWriter::new();
                 enc_sty(wr, cx, &ty::get(t).sty);
-                let s = str::from_utf8(wr.get_ref()).to_managed();
+                let s = str::from_utf8(wr.get_ref()).unwrap().to_managed();
                 let mut short_names_cache = cx.tcx
                                               .short_names_cache
                                               .borrow_mut();
@@ -292,19 +292,19 @@ fn enc_sty(w: &mut MemWriter, cx: @ctxt, st: &ty::sty) {
             mywrite!(w, "]");
         }
         ty::ty_box(typ) => { mywrite!(w, "@"); enc_ty(w, cx, typ); }
-        ty::ty_uniq(mt) => { mywrite!(w, "~"); enc_mt(w, cx, mt); }
+        ty::ty_uniq(typ) => { mywrite!(w, "~"); enc_ty(w, cx, typ); }
         ty::ty_ptr(mt) => { mywrite!(w, "*"); enc_mt(w, cx, mt); }
         ty::ty_rptr(r, mt) => {
             mywrite!(w, "&");
             enc_region(w, cx, r);
             enc_mt(w, cx, mt);
         }
-        ty::ty_evec(mt, v) => {
+        ty::ty_vec(mt, v) => {
             mywrite!(w, "V");
             enc_mt(w, cx, mt);
             enc_vstore(w, cx, v);
         }
-        ty::ty_estr(v) => {
+        ty::ty_str(v) => {
             mywrite!(w, "v");
             enc_vstore(w, cx, v);
         }
@@ -331,7 +331,6 @@ fn enc_sty(w: &mut MemWriter, cx: @ctxt, st: &ty::sty) {
             mywrite!(w, "C&");
             enc_sigil(w, p);
         }
-        ty::ty_opaque_box => mywrite!(w, "B"),
         ty::ty_struct(def, ref substs) => {
             mywrite!(w, "a[{}|", (cx.ds)(def));
             enc_substs(w, cx, substs);

@@ -101,7 +101,6 @@ impl CFGBuilder {
                 self.add_node(pat.id, [pred])
             }
 
-            ast::PatBox(subpat) |
             ast::PatUniq(subpat) |
             ast::PatRegion(subpat) |
             ast::PatIdent(_, _, Some(subpat)) => {
@@ -496,7 +495,7 @@ impl CFGBuilder {
                   label: Option<ast::Name>) -> LoopScope {
         match label {
             None => {
-                return *self.loop_scopes.last();
+                return *self.loop_scopes.last().unwrap();
             }
 
             Some(_) => {

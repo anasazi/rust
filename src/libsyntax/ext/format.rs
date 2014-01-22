@@ -34,7 +34,7 @@ enum Position {
 }
 
 struct Context<'a> {
-    ecx: &'a mut ExtCtxt,
+    ecx: &'a mut ExtCtxt<'a>,
     fmtsp: Span,
 
     // Parsed argument expressions and the types that we've found so far for
@@ -634,17 +634,24 @@ impl<'a> Context<'a> {
                                      self.ecx.expr_ident(e.span, lname)));
         }
 
+        // Now create a vector containing all the arguments
+        let slicename = self.ecx.ident_of("__args_vec");
+        {
+            let args = names.move_iter().map(|a| a.unwrap());
+            let mut args = locals.move_iter().chain(args);
+            let args = self.ecx.expr_vec_slice(self.fmtsp, args.collect());
+            lets.push(self.ecx.stmt_let(self.fmtsp, false, slicename, args));
+        }
+
         // Now create the fmt::Arguments struct with all our locals we created.
-        let args = names.move_iter().map(|a| a.unwrap());
-        let mut args = locals.move_iter().chain(args);
         let fmt = self.ecx.expr_ident(self.fmtsp, static_name);
-        let args = self.ecx.expr_vec_slice(self.fmtsp, args.collect());
+        let args_slice = self.ecx.expr_ident(self.fmtsp, slicename);
         let result = self.ecx.expr_call_global(self.fmtsp, ~[
                 self.ecx.ident_of("std"),
                 self.ecx.ident_of("fmt"),
                 self.ecx.ident_of("Arguments"),
                 self.ecx.ident_of("new"),
-            ], ~[fmt, args]);
+            ], ~[fmt, args_slice]);
 
         // We did all the work of making sure that the arguments
         // structure is safe, so we can safely have an unsafe block.
@@ -748,8 +755,11 @@ pub fn expand_args(ecx: &mut ExtCtxt, sp: Span,
     // Be sure to recursively expand macros just in case the format string uses
     // a macro to build the format expression.
     let expr = cx.ecx.expand_expr(efmt);
-    let (fmt, _) = expr_to_str(cx.ecx, expr,
-                               "format argument must be a string literal.");
+    let fmt = match expr_to_str(cx.ecx, expr,
+                                     "format argument must be a string literal.") {
+        Some((fmt, _)) => fmt,
+        None => return MacResult::dummy_expr()
+    };
 
     let mut err = false;
     parse::parse_error::cond.trap(|m| {

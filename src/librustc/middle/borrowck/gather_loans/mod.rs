@@ -339,7 +339,7 @@ impl<'a> GatherLoanCtxt<'a> {
     }
 
     pub fn pop_repeating_id(&mut self, id: ast::NodeId) {
-        let popped = self.repeating_ids.pop();
+        let popped = self.repeating_ids.pop().unwrap();
         assert_eq!(id, popped);
     }
 
@@ -445,7 +445,7 @@ impl<'a> GatherLoanCtxt<'a> {
             return;
         }
 
-        let root_ub = { *self.repeating_ids.last() }; // FIXME(#5074)
+        let root_ub = { *self.repeating_ids.last().unwrap() }; // FIXME(#5074)
 
         // Check that the lifetime of the borrow does not exceed
         // the lifetime of the data being borrowed.
@@ -662,8 +662,9 @@ impl<'a> GatherLoanCtxt<'a> {
         //! with immutable `&` pointers, because borrows of such pointers
         //! do not require restrictions and hence do not cause a loan.
 
-        let lexical_scope = self.bccx.tcx.region_maps.encl_scope(lp.node_id());
-        if self.bccx.tcx.region_maps.is_subscope_of(lexical_scope, loan_scope) {
+        let rm = &self.bccx.tcx.region_maps;
+        let lexical_scope = rm.var_scope(lp.node_id());
+        if rm.is_subscope_of(lexical_scope, loan_scope) {
             lexical_scope
         } else {
             assert!(self.bccx.tcx.region_maps.is_subscope_of(loan_scope, lexical_scope));
@@ -688,7 +689,7 @@ impl<'a> GatherLoanCtxt<'a> {
             let arg_cmt = mc_ctxt.cat_rvalue(
                 arg.id,
                 arg.pat.span,
-                body.id, // Arguments live only as long as the fn body.
+                ty::ReScope(body.id), // Args live only as long as the fn body.
                 arg_ty);
 
             self.gather_pat(arg_cmt, arg.pat, None);
@@ -808,7 +809,7 @@ impl<'a> GatherLoanCtxt<'a> {
          */
 
         match ty::get(slice_ty).sty {
-            ty::ty_evec(slice_mt, ty::vstore_slice(slice_r)) => {
+            ty::ty_vec(slice_mt, ty::vstore_slice(slice_r)) => {
                 (slice_mt.mutbl, slice_r)
             }
 
