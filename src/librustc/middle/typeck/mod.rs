@@ -70,6 +70,7 @@ use util::ppaux;
 
 use std::cell::RefCell;
 use std::hashmap::HashMap;
+use std::rc::Rc;
 use std::result;
 use extra::list::List;
 use extra::list;
@@ -144,13 +145,6 @@ pub struct method_object {
 
 #[deriving(Clone)]
 pub struct method_map_entry {
-    // the type of the self parameter, which is not reflected in the fn type
-    // (FIXME #3446)
-    self_ty: ty::t,
-
-    // the type of explicit self on the method
-    explicit_self: ast::ExplicitSelf_,
-
     // method details being invoked
     origin: method_origin,
 }
@@ -264,10 +258,10 @@ pub fn write_tpt_to_tcx(tcx: ty::ctxt,
 pub fn lookup_def_tcx(tcx: ty::ctxt, sp: Span, id: ast::NodeId) -> ast::Def {
     let def_map = tcx.def_map.borrow();
     match def_map.get().find(&id) {
-      Some(&x) => x,
-      _ => {
-        tcx.sess.span_fatal(sp, "internal error looking up a definition")
-      }
+        Some(&x) => x,
+        _ => {
+            tcx.sess.span_fatal(sp, "internal error looking up a definition")
+        }
     }
 }
 
@@ -278,8 +272,8 @@ pub fn lookup_def_ccx(ccx: &CrateCtxt, sp: Span, id: ast::NodeId)
 
 pub fn no_params(t: ty::t) -> ty::ty_param_bounds_and_ty {
     ty::ty_param_bounds_and_ty {
-        generics: ty::Generics {type_param_defs: @~[],
-                                region_param_defs: @[]},
+        generics: ty::Generics {type_param_defs: Rc::new(~[]),
+                                region_param_defs: Rc::new(~[])},
         ty: t
     }
 }

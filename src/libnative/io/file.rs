@@ -111,14 +111,14 @@ impl FileDesc {
 }
 
 impl io::Reader for FileDesc {
-    fn read(&mut self, buf: &mut [u8]) -> Option<uint> {
-        match self.inner_read(buf) { Ok(n) => Some(n), Err(..) => None }
+    fn read(&mut self, buf: &mut [u8]) -> io::IoResult<uint> {
+        self.inner_read(buf)
     }
 }
 
 impl io::Writer for FileDesc {
-    fn write(&mut self, buf: &[u8]) {
-        self.inner_write(buf);
+    fn write(&mut self, buf: &[u8]) -> io::IoResult<()> {
+        self.inner_write(buf)
     }
 }
 
@@ -276,7 +276,7 @@ impl rtio::RtioFileStream for FileDesc {
                 _ => Ok(())
             }
         };
-        self.seek(orig_pos as i64, io::SeekSet);
+        let _ = self.seek(orig_pos as i64, io::SeekSet);
         return ret;
     }
     #[cfg(unix)]
@@ -383,12 +383,10 @@ impl rtio::RtioFileStream for CFile {
     }
 
     fn pread(&mut self, buf: &mut [u8], offset: u64) -> Result<int, IoError> {
-        self.flush();
-        self.fd.pread(buf, offset)
+        self.flush().and_then(|()| self.fd.pread(buf, offset))
     }
     fn pwrite(&mut self, buf: &[u8], offset: u64) -> Result<(), IoError> {
-        self.flush();
-        self.fd.pwrite(buf, offset)
+        self.flush().and_then(|()| self.fd.pwrite(buf, offset))
     }
     fn seek(&mut self, pos: i64, style: io::SeekStyle) -> Result<u64, IoError> {
         let whence = match style {
@@ -412,22 +410,19 @@ impl rtio::RtioFileStream for CFile {
         }
     }
     fn fsync(&mut self) -> Result<(), IoError> {
-        self.flush();
-        self.fd.fsync()
+        self.flush().and_then(|()| self.fd.fsync())
     }
     fn datasync(&mut self) -> Result<(), IoError> {
-        self.flush();
-        self.fd.fsync()
+        self.flush().and_then(|()| self.fd.fsync())
     }
     fn truncate(&mut self, offset: i64) -> Result<(), IoError> {
-        self.flush();
-        self.fd.truncate(offset)
+        self.flush().and_then(|()| self.fd.truncate(offset))
     }
 }
 
 impl Drop for CFile {
     fn drop(&mut self) {
-        unsafe { libc::fclose(self.file); }
+        unsafe { let _ = libc::fclose(self.file); }
     }
 }
 
@@ -517,7 +512,7 @@ pub fn readdir(p: &CString) -> IoResult<~[Path]> {
                     paths.push(Path::new(cstr));
                     entry_ptr = readdir(dir_ptr);
                 }
-                closedir(dir_ptr);
+                assert_eq!(closedir(dir_ptr), 0);
                 Ok(paths)
             } else {
                 Err(super::last_error())
@@ -548,13 +543,13 @@ pub fn readdir(p: &CString) -> IoResult<~[Path]> {
             let p = Path::new(p);
             let star = p.join("*");
             as_utf16_p(star.as_str().unwrap(), |path_ptr| {
-                let wfd_ptr = malloc_raw(rust_list_dir_wfd_size() as uint) as *c_void;
+                let wfd_ptr = malloc_raw(rust_list_dir_wfd_size() as uint);
                 let find_handle = FindFirstFileW(path_ptr, wfd_ptr as HANDLE);
                 if find_handle as libc::c_int != INVALID_HANDLE_VALUE {
                     let mut paths = ~[];
                     let mut more_files = 1 as libc::c_int;
                     while more_files != 0 {
-                        let fp_buf = rust_list_dir_wfd_fp_buf(wfd_ptr);
+                        let fp_buf = rust_list_dir_wfd_fp_buf(wfd_ptr as *c_void);
                         if fp_buf as uint == 0 {
                             fail!("os::list_dir() failure: got null ptr from wfd");
                         }
@@ -566,8 +561,8 @@ pub fn readdir(p: &CString) -> IoResult<~[Path]> {
                         }
                         more_files = FindNextFileW(find_handle, wfd_ptr as HANDLE);
                     }
-                    FindClose(find_handle);
-                    free(wfd_ptr);
+                    assert!(FindClose(find_handle) != 0);
+                    free(wfd_ptr as *mut c_void);
                     Ok(paths)
                 } else {
                     Err(super::last_error())
@@ -674,7 +669,7 @@ pub fn chown(p: &CString, uid: int, gid: int) -> IoResult<()> {
 pub fn readlink(p: &CString) -> IoResult<Path> {
     return os_readlink(p);
 
-    // XXX: I have a feeling that this reads intermediate symlinks as well.
+    // FIXME: I have a feeling that this reads intermediate symlinks as well.
     #[cfg(windows)]
     fn os_readlink(p: &CString) -> IoResult<Path> {
         let handle = unsafe {
@@ -688,7 +683,9 @@ pub fn readlink(p: &CString) -> IoResult<Path> {
                                   ptr::mut_null())
             })
         };
-        if handle == ptr::mut_null() { return Err(super::last_error()) }
+        if handle as int == libc::INVALID_HANDLE_VALUE as int {
+            return Err(super::last_error())
+        }
         let ret = fill_utf16_buf_and_decode(|buf, sz| {
             unsafe {
                 libc::GetFinalPathNameByHandleW(handle, buf as *u16, sz,
@@ -699,7 +696,7 @@ pub fn readlink(p: &CString) -> IoResult<Path> {
             Some(s) => Ok(Path::new(s)),
             None => Err(super::last_error()),
         };
-        unsafe { libc::CloseHandle(handle) };
+        assert!(unsafe { libc::CloseHandle(handle) } != 0);
         return ret;
 
     }
@@ -709,7 +706,7 @@ pub fn readlink(p: &CString) -> IoResult<Path> {
         let p = p.with_ref(|p| p);
         let mut len = unsafe { libc::pathconf(p, libc::_PC_NAME_MAX) };
         if len == -1 {
-            len = 1024; // XXX: read PATH_MAX from C ffi?
+            len = 1024; // FIXME: read PATH_MAX from C ffi?
         }
         let mut buf = vec::with_capacity::<u8>(len as uint);
         match retry(|| unsafe {
@@ -877,7 +874,7 @@ pub fn stat(p: &CString) -> IoResult<io::FileStat> {
 pub fn lstat(p: &CString) -> IoResult<io::FileStat> {
     return os_lstat(p);
 
-    // XXX: windows implementation is missing
+    // FIXME: windows implementation is missing
     #[cfg(windows)]
     fn os_lstat(_p: &CString) -> IoResult<io::FileStat> {
         Err(super::unimpl())
@@ -937,7 +934,7 @@ mod tests {
             let mut reader = FileDesc::new(input, true);
             let mut writer = FileDesc::new(out, true);
 
-            writer.inner_write(bytes!("test"));
+            writer.inner_write(bytes!("test")).unwrap();
             let mut buf = [0u8, ..4];
             match reader.inner_read(buf) {
                 Ok(4) => {
@@ -962,9 +959,9 @@ mod tests {
             assert!(!f.is_null());
             let mut file = CFile::new(f);
 
-            file.write(bytes!("test"));
+            file.write(bytes!("test")).unwrap();
             let mut buf = [0u8, ..4];
-            file.seek(0, io::SeekSet);
+            let _ = file.seek(0, io::SeekSet).unwrap();
             match file.read(buf) {
                 Ok(4) => {
                     assert_eq!(buf[0], 't' as u8);

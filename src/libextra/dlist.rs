@@ -25,7 +25,7 @@
 use std::cast;
 use std::ptr;
 use std::util;
-use std::iter::Invert;
+use std::iter::Rev;
 use std::iter;
 
 use container::Deque;
@@ -38,20 +38,24 @@ pub struct DList<T> {
 }
 
 type Link<T> = Option<~Node<T>>;
-struct Rawlink<T> { priv p: *mut T }
+struct Rawlink<T> { p: *mut T }
 
 struct Node<T> {
-    priv next: Link<T>,
-    priv prev: Rawlink<Node<T>>,
-    priv value: T,
+    next: Link<T>,
+    prev: Rawlink<Node<T>>,
+    value: T,
 }
 
 /// Double-ended DList iterator
-#[deriving(Clone)]
 pub struct Items<'a, T> {
     priv head: &'a Link<T>,
     priv tail: Rawlink<Node<T>>,
     priv nelem: uint,
+}
+
+// FIXME #11820: the &'a Option<> of the Link stops clone working.
+impl<'a, T> Clone for Items<'a, T> {
+    fn clone(&self) -> Items<'a, T> { *self }
 }
 
 /// Double-ended mutable DList iterator
@@ -368,8 +372,8 @@ impl<T> DList<T> {
 
     /// Provide a reverse iterator
     #[inline]
-    pub fn rev_iter<'a>(&'a self) -> Invert<Items<'a, T>> {
-        self.iter().invert()
+    pub fn rev_iter<'a>(&'a self) -> Rev<Items<'a, T>> {
+        self.iter().rev()
     }
 
     /// Provide a forward iterator with mutable references
@@ -388,8 +392,8 @@ impl<T> DList<T> {
     }
     /// Provide a reverse iterator with mutable references
     #[inline]
-    pub fn mut_rev_iter<'a>(&'a mut self) -> Invert<MutItems<'a, T>> {
-        self.mut_iter().invert()
+    pub fn mut_rev_iter<'a>(&'a mut self) -> Rev<MutItems<'a, T>> {
+        self.mut_iter().rev()
     }
 
 
@@ -401,8 +405,8 @@ impl<T> DList<T> {
 
     /// Consume the list into an iterator yielding elements by value, in reverse
     #[inline]
-    pub fn move_rev_iter(self) -> Invert<MoveItems<T>> {
-        self.move_iter().invert()
+    pub fn move_rev_iter(self) -> Rev<MoveItems<T>> {
+        self.move_iter().rev()
     }
 }
 
@@ -967,10 +971,10 @@ mod tests {
     #[test]
     fn test_send() {
         let n = list_from([1,2,3]);
-        do spawn {
+        spawn(proc() {
             check_links(&n);
             assert_eq!(~[&1,&2,&3], n.iter().collect::<~[&int]>());
-        }
+        });
     }
 
     #[test]
@@ -1032,11 +1036,11 @@ mod tests {
 
     #[test]
     fn test_fuzz() {
-        25.times(|| {
+        for _ in range(0, 25) {
             fuzz_test(3);
             fuzz_test(16);
             fuzz_test(189);
-        })
+        }
     }
 
     #[cfg(test)]

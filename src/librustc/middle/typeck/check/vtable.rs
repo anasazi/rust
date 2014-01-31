@@ -330,7 +330,7 @@ fn search_for_vtable(vcx: &VtableContext,
     ty::populate_implementations_for_trait_if_necessary(tcx,
                                                         trait_ref.def_id);
 
-    // XXX: this is a bad way to do this, since we do
+    // FIXME: this is a bad way to do this, since we do
     // pointless allocations.
     let impls = {
         let trait_impls = tcx.trait_impls.borrow();
@@ -371,7 +371,7 @@ fn search_for_vtable(vcx: &VtableContext,
         // we're trying to cast to some_trait.  If not, then we try
         // the next impl.
         //
-        // XXX: document a bit more what this means
+        // FIXME: document a bit more what this means
         //
         // FIXME(#5781) this should be mk_eqty not mk_subty
         let ty::ty_param_substs_and_ty {
@@ -423,7 +423,7 @@ fn search_for_vtable(vcx: &VtableContext,
         let im_generics =
             ty::lookup_item_type(tcx, im.did).generics;
         let subres = lookup_vtables(vcx, location_info,
-                                    *im_generics.type_param_defs, &substs,
+                                    im_generics.type_param_defs(), &substs,
                                     is_early);
 
 
@@ -688,12 +688,12 @@ pub fn early_resolve_expr(ex: &ast::Expr, fcx: @FnCtxt, is_early: bool) {
             let item_ty = ty::lookup_item_type(cx.tcx, did);
             debug!("early resolve expr: def {:?} {:?}, {:?}, {}", ex.id, did, def,
                    fcx.infcx().ty_to_str(item_ty.ty));
-            if has_trait_bounds(*item_ty.generics.type_param_defs) {
+            if has_trait_bounds(item_ty.generics.type_param_defs()) {
                 debug!("early_resolve_expr: looking up vtables for type params {}",
-                       item_ty.generics.type_param_defs.repr(fcx.tcx()));
+                       item_ty.generics.type_param_defs().repr(fcx.tcx()));
                 let vcx = fcx.vtable_context();
                 let vtbls = lookup_vtables(&vcx, &location_info_for_expr(ex),
-                                           *item_ty.generics.type_param_defs,
+                                           item_ty.generics.type_param_defs(),
                                            substs, is_early);
                 if !is_early {
                     insert_vtables(fcx, ex.id, vtbls);
@@ -712,16 +712,16 @@ pub fn early_resolve_expr(ex: &ast::Expr, fcx: @FnCtxt, is_early: bool) {
       ast::ExprUnary(callee_id, _, _) |
       ast::ExprAssignOp(callee_id, _, _, _) |
       ast::ExprIndex(callee_id, _, _) |
-      ast::ExprMethodCall(callee_id, _, _, _, _, _) => {
+      ast::ExprMethodCall(callee_id, _, _, _, _) => {
         match ty::method_call_type_param_defs(cx.tcx, fcx.inh.method_map, ex.id) {
           Some(type_param_defs) => {
             debug!("vtable resolution on parameter bounds for method call {}",
                    ex.repr(fcx.tcx()));
-            if has_trait_bounds(*type_param_defs) {
+            if has_trait_bounds(*type_param_defs.borrow()) {
                 let substs = fcx.node_ty_substs(callee_id);
                 let vcx = fcx.vtable_context();
                 let vtbls = lookup_vtables(&vcx, &location_info_for_expr(ex),
-                                           *type_param_defs, &substs, is_early);
+                                           *type_param_defs.borrow(), &substs, is_early);
                 if !is_early {
                     insert_vtables(fcx, callee_id, vtbls);
                 }
@@ -784,9 +784,9 @@ pub fn resolve_impl(ccx: @CrateCtxt,
     let param_env = ty::construct_parameter_environment(
         ccx.tcx,
         None,
-        *impl_generics.type_param_defs,
+        impl_generics.type_param_defs(),
         [],
-        impl_generics.region_param_defs,
+        impl_generics.region_param_defs(),
         impl_item.id);
 
     let impl_trait_ref = @impl_trait_ref.subst(ccx.tcx, &param_env.free_substs);
@@ -800,7 +800,7 @@ pub fn resolve_impl(ccx: @CrateCtxt,
     let trait_def = ty::lookup_trait_def(ccx.tcx, impl_trait_ref.def_id);
     let vtbls = lookup_vtables(&vcx,
                                &loc_info,
-                               *trait_def.generics.type_param_defs,
+                               trait_def.generics.type_param_defs(),
                                &impl_trait_ref.substs,
                                false);
 

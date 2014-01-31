@@ -14,7 +14,7 @@ use codemap::{Span, DUMMY_SP};
 use diagnostic::SpanHandler;
 use ext::tt::macro_parser::{NamedMatch, MatchedSeq, MatchedNonterminal};
 use parse::token::{EOF, INTERPOLATED, IDENT, Token, NtIdent};
-use parse::token::{ident_to_str};
+use parse::token;
 use parse::lexer::TokenAndSpan;
 
 use std::cell::{Cell, RefCell};
@@ -122,9 +122,10 @@ fn lookup_cur_matched(r: &TtReader, name: Ident) -> @NamedMatch {
     match matched_opt {
         Some(s) => lookup_cur_matched_by_matched(r, s),
         None => {
+            let name_string = token::get_ident(name.name);
             r.sp_diag.span_fatal(r.cur_span.get(),
                                  format!("unknown macro variable `{}`",
-                                         ident_to_str(&name)));
+                                         name_string.get()));
         }
     }
 }
@@ -145,11 +146,11 @@ fn lis_merge(lhs: LockstepIterSize, rhs: LockstepIterSize) -> LockstepIterSize {
             LisContradiction(_) => rhs.clone(),
             LisConstraint(r_len, _) if l_len == r_len => lhs.clone(),
             LisConstraint(r_len, ref r_id) => {
-                let l_n = ident_to_str(l_id);
-                let r_n = ident_to_str(r_id);
+                let l_n = token::get_ident(l_id.name);
+                let r_n = token::get_ident(r_id.name);
                 LisContradiction(format!("Inconsistent lockstep iteration: \
                                           '{}' has {} items, but '{}' has {}",
-                                          l_n, l_len, r_n, r_len))
+                                          l_n.get(), l_len, r_n.get(), r_len))
             }
         }
     }
@@ -173,7 +174,7 @@ fn lockstep_iter_size(t: &TokenTree, r: &TtReader) -> LockstepIterSize {
 // return the next token from the TtReader.
 // EFFECT: advances the reader's token field
 pub fn tt_next_token(r: &TtReader) -> TokenAndSpan {
-    // XXX(pcwalton): Bad copy?
+    // FIXME(pcwalton): Bad copy?
     let ret_val = TokenAndSpan {
         tok: r.cur_tok.get(),
         sp: r.cur_span.get(),
@@ -231,7 +232,7 @@ pub fn tt_next_token(r: &TtReader) -> TokenAndSpan {
     }
     loop { /* because it's easiest, this handles `TTDelim` not starting
     with a `TTTok`, even though it won't happen */
-        // XXX(pcwalton): Bad copy.
+        // FIXME(pcwalton): Bad copy.
         match r.stack.get().forest[r.stack.get().idx.get()].clone() {
           TTDelim(tts) => {
             r.stack.set(@TtFrame {
@@ -250,7 +251,7 @@ pub fn tt_next_token(r: &TtReader) -> TokenAndSpan {
             return ret_val;
           }
           TTSeq(sp, tts, sep, zerok) => {
-            // XXX(pcwalton): Bad copy.
+            // FIXME(pcwalton): Bad copy.
             let t = TTSeq(sp, tts, sep.clone(), zerok);
             match lockstep_iter_size(&t, r) {
               LisUnconstrained => {
@@ -306,17 +307,18 @@ pub fn tt_next_token(r: &TtReader) -> TokenAndSpan {
                 return ret_val;
               }
               MatchedNonterminal(ref other_whole_nt) => {
-                // XXX(pcwalton): Bad copy.
+                // FIXME(pcwalton): Bad copy.
                 r.cur_span.set(sp);
                 r.cur_tok.set(INTERPOLATED((*other_whole_nt).clone()));
                 r.stack.get().idx.set(r.stack.get().idx.get() + 1u);
                 return ret_val;
               }
               MatchedSeq(..) => {
+                let string = token::get_ident(ident.name);
                 r.sp_diag.span_fatal(
                     r.cur_span.get(), /* blame the macro writer */
                     format!("variable '{}' is still repeating at this depth",
-                         ident_to_str(&ident)));
+                            string.get()));
               }
             }
           }

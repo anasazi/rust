@@ -1,4 +1,4 @@
-// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -38,11 +38,11 @@ fn read_u32v_be(dst: &mut[u32], input: &[u8]) {
     unsafe {
         let mut x: *mut i32 = transmute(dst.unsafe_mut_ref(0));
         let mut y: *i32 = transmute(input.unsafe_ref(0));
-        dst.len().times(|| {
+        for _ in range(0, dst.len()) {
             *x = to_be32(*y);
             x = x.offset(1);
             y = y.offset(1);
-        });
+        }
     }
 }
 
@@ -109,8 +109,8 @@ trait FixedBuffer {
 
 /// A FixedBuffer of 64 bytes useful for implementing Sha256 which has a 64 byte blocksize.
 struct FixedBuffer64 {
-    priv buffer: [u8, ..64],
-    priv buffer_idx: uint,
+    buffer: [u8, ..64],
+    buffer_idx: uint,
 }
 
 impl FixedBuffer64 {
@@ -476,7 +476,7 @@ pub struct Sha256 {
 }
 
 impl Sha256 {
-    /// Construct an new instance of a SHA-256 digest.
+    /// Construct a new instance of a SHA-256 digest.
     pub fn new() -> Sha256 {
         Sha256 {
             engine: Engine256::new(&H256)

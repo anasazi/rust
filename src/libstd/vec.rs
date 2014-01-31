@@ -1,4 +1,4 @@
-// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -109,7 +109,7 @@ use cmp::{Eq, TotalOrd, Ordering, Less, Equal, Greater};
 use cmp;
 use default::Default;
 use iter::*;
-use num::{Integer, CheckedAdd, Saturating};
+use num::{Integer, CheckedAdd, Saturating, checked_next_power_of_two};
 use option::{None, Option, Some};
 use ptr::to_unsafe_ptr;
 use ptr;
@@ -117,6 +117,7 @@ use ptr::RawPtr;
 use rt::global_heap::{malloc_raw, realloc_raw, exchange_free};
 use mem;
 use mem::size_of;
+use kinds::marker;
 use uint;
 use unstable::finally::Finally;
 use unstable::intrinsics;
@@ -645,13 +646,6 @@ pub mod traits {
         fn ne(&self, other: &~[T]) -> bool { !self.eq(other) }
     }
 
-    impl<T:Eq> Eq for @[T] {
-        #[inline]
-        fn eq(&self, other: &@[T]) -> bool { self.as_slice() == *other }
-        #[inline]
-        fn ne(&self, other: &@[T]) -> bool { !self.eq(other) }
-    }
-
     impl<'a,T:TotalEq> TotalEq for &'a [T] {
         fn equals(&self, other: & &'a [T]) -> bool {
             self.len() == other.len() &&
@@ -664,22 +658,12 @@ pub mod traits {
         fn equals(&self, other: &~[T]) -> bool { self.as_slice().equals(&other.as_slice()) }
     }
 
-    impl<T:TotalEq> TotalEq for @[T] {
-        #[inline]
-        fn equals(&self, other: &@[T]) -> bool { self.as_slice().equals(&other.as_slice()) }
-    }
-
     impl<'a,T:Eq, V: Vector<T>> Equiv<V> for &'a [T] {
         #[inline]
         fn equiv(&self, other: &V) -> bool { self.as_slice() == other.as_slice() }
     }
 
     impl<'a,T:Eq, V: Vector<T>> Equiv<V> for ~[T] {
-        #[inline]
-        fn equiv(&self, other: &V) -> bool { self.as_slice() == other.as_slice() }
-    }
-
-    impl<'a,T:Eq, V: Vector<T>> Equiv<V> for @[T] {
         #[inline]
         fn equiv(&self, other: &V) -> bool { self.as_slice() == other.as_slice() }
     }
@@ -693,11 +677,6 @@ pub mod traits {
     impl<T: TotalOrd> TotalOrd for ~[T] {
         #[inline]
         fn cmp(&self, other: &~[T]) -> Ordering { self.as_slice().cmp(&other.as_slice()) }
-    }
-
-    impl<T: TotalOrd> TotalOrd for @[T] {
-        #[inline]
-        fn cmp(&self, other: &@[T]) -> Ordering { self.as_slice().cmp(&other.as_slice()) }
     }
 
     impl<'a, T: Eq + Ord> Ord for &'a [T] {
@@ -727,17 +706,6 @@ pub mod traits {
         fn ge(&self, other: &~[T]) -> bool { self.as_slice() >= other.as_slice() }
         #[inline]
         fn gt(&self, other: &~[T]) -> bool { self.as_slice() > other.as_slice() }
-    }
-
-    impl<T: Eq + Ord> Ord for @[T] {
-        #[inline]
-        fn lt(&self, other: &@[T]) -> bool { self.as_slice() < other.as_slice() }
-        #[inline]
-        fn le(&self, other: &@[T]) -> bool { self.as_slice() <= other.as_slice() }
-        #[inline]
-        fn ge(&self, other: &@[T]) -> bool { self.as_slice() >= other.as_slice() }
-        #[inline]
-        fn gt(&self, other: &@[T]) -> bool { self.as_slice() > other.as_slice() }
     }
 
     impl<'a,T:Clone, V: Vector<T>> Add<V, ~[T]> for &'a [T] {
@@ -777,11 +745,6 @@ impl<T> Vector<T> for ~[T] {
     fn as_slice<'a>(&'a self) -> &'a [T] { let v: &'a [T] = *self; v }
 }
 
-impl<T> Vector<T> for @[T] {
-    #[inline(always)]
-    fn as_slice<'a>(&'a self) -> &'a [T] { let v: &'a [T] = *self; v }
-}
-
 impl<'a, T> Container for &'a [T] {
     /// Returns the length of a vector
     #[inline]
@@ -798,17 +761,17 @@ impl<T> Container for ~[T] {
     }
 }
 
-/// Extension methods for vector slices with copyable elements
-pub trait CopyableVector<T> {
+/// Extension methods for vector slices with cloneable elements
+pub trait CloneableVector<T> {
     /// Copy `self` into a new owned vector
     fn to_owned(&self) -> ~[T];
 
-    /// Convert `self` into a owned vector, not making a copy if possible.
+    /// Convert `self` into an owned vector, not making a copy if possible.
     fn into_owned(self) -> ~[T];
 }
 
 /// Extension methods for vector slices
-impl<'a, T: Clone> CopyableVector<T> for &'a [T] {
+impl<'a, T: Clone> CloneableVector<T> for &'a [T] {
     /// Returns a copy of `v`.
     #[inline]
     fn to_owned(&self) -> ~[T] {
@@ -824,21 +787,12 @@ impl<'a, T: Clone> CopyableVector<T> for &'a [T] {
 }
 
 /// Extension methods for owned vectors
-impl<T: Clone> CopyableVector<T> for ~[T] {
+impl<T: Clone> CloneableVector<T> for ~[T] {
     #[inline]
     fn to_owned(&self) -> ~[T] { self.clone() }
 
     #[inline(always)]
     fn into_owned(self) -> ~[T] { self }
-}
-
-/// Extension methods for managed vectors
-impl<T: Clone> CopyableVector<T> for @[T] {
-    #[inline]
-    fn to_owned(&self) -> ~[T] { self.as_slice().to_owned() }
-
-    #[inline(always)]
-    fn into_owned(self) -> ~[T] { self.to_owned() }
 }
 
 /// Extension methods for vectors
@@ -960,7 +914,7 @@ pub trait ImmutableVector<'a, T> {
     fn flat_map<U>(&self, f: |t: &T| -> ~[U]) -> ~[U];
     /// Returns a pointer to the element at the given index, without doing
     /// bounds checking.
-    unsafe fn unsafe_ref(&self, index: uint) -> *T;
+    unsafe fn unsafe_ref(self, index: uint) -> &'a T;
 
     /**
      * Returns an unsafe pointer to the vector's buffer
@@ -999,14 +953,15 @@ pub trait ImmutableVector<'a, T> {
      * Equivalent to:
      *
      * ```
+     *     if self.len() == 0 { return None }
      *     let head = &self[0];
      *     *self = self.slice_from(1);
-     *     head
+     *     Some(head)
      * ```
      *
-     * Fails if slice is empty.
+     * Returns `None` if vector is empty
      */
-    fn shift_ref(&mut self) -> &'a T;
+    fn shift_ref(&mut self) -> Option<&'a T>;
 
     /**
      * Returns a mutable reference to the last element in this slice
@@ -1016,14 +971,15 @@ pub trait ImmutableVector<'a, T> {
      * Equivalent to:
      *
      * ```
+     *     if self.len() == 0 { return None; }
      *     let tail = &self[self.len() - 1];
      *     *self = self.slice_to(self.len() - 1);
-     *     tail
+     *     Some(tail)
      * ```
      *
-     * Fails if slice is empty.
+     * Returns `None` if slice is empty.
      */
-    fn pop_ref(&mut self) -> &'a T;
+    fn pop_ref(&mut self) -> Option<&'a T>;
 }
 
 impl<'a,T> ImmutableVector<'a, T> for &'a [T] {
@@ -1055,24 +1011,24 @@ impl<'a,T> ImmutableVector<'a, T> for &'a [T] {
             let p = self.as_ptr();
             if mem::size_of::<T>() == 0 {
                 Items{ptr: p,
-                            end: (p as uint + self.len()) as *T,
-                            lifetime: None}
+                      end: (p as uint + self.len()) as *T,
+                      marker: marker::ContravariantLifetime::<'a>}
             } else {
                 Items{ptr: p,
-                            end: p.offset(self.len() as int),
-                            lifetime: None}
+                      end: p.offset(self.len() as int),
+                      marker: marker::ContravariantLifetime::<'a>}
             }
         }
     }
 
     #[inline]
     fn rev_iter(self) -> RevItems<'a, T> {
-        self.iter().invert()
+        self.iter().rev()
     }
 
     #[inline]
     fn split(self, pred: 'a |&T| -> bool) -> Splits<'a, T> {
-        self.splitn(uint::max_value, pred)
+        self.splitn(uint::MAX, pred)
     }
 
     #[inline]
@@ -1087,7 +1043,7 @@ impl<'a,T> ImmutableVector<'a, T> for &'a [T] {
 
     #[inline]
     fn rsplit(self, pred: 'a |&T| -> bool) -> RevSplits<'a, T> {
-        self.rsplitn(uint::max_value, pred)
+        self.rsplitn(uint::MAX, pred)
     }
 
     #[inline]
@@ -1149,8 +1105,8 @@ impl<'a,T> ImmutableVector<'a, T> for &'a [T] {
     }
 
     #[inline]
-    unsafe fn unsafe_ref(&self, index: uint) -> *T {
-        self.repr().data.offset(index as int)
+    unsafe fn unsafe_ref(self, index: uint) -> &'a T {
+        cast::transmute(self.repr().data.offset(index as int))
     }
 
     #[inline]
@@ -1182,17 +1138,19 @@ impl<'a,T> ImmutableVector<'a, T> for &'a [T] {
         self.iter().map(f).collect()
     }
 
-    fn shift_ref(&mut self) -> &'a T {
+    fn shift_ref(&mut self) -> Option<&'a T> {
+        if self.len() == 0 { return None; }
         unsafe {
             let s: &mut Slice<T> = cast::transmute(self);
-            &*raw::shift_ptr(s)
+            Some(&*raw::shift_ptr(s))
         }
     }
 
-    fn pop_ref(&mut self) -> &'a T {
+    fn pop_ref(&mut self) -> Option<&'a T> {
+        if self.len() == 0 { return None; }
         unsafe {
             let s: &mut Slice<T> = cast::transmute(self);
-            &*raw::pop_ptr(s)
+            Some(&*raw::pop_ptr(s))
         }
     }
 }
@@ -1261,7 +1219,7 @@ impl<'a, T: TotalOrd> ImmutableTotalOrdVector<T> for &'a [T] {
 }
 
 /// Extension methods for vectors containing `Clone` elements.
-pub trait ImmutableCopyableVector<T> {
+pub trait ImmutableCloneableVector<T> {
     /**
      * Partitions the vector into those that satisfies the predicate, and
      * those that do not.
@@ -1273,7 +1231,7 @@ pub trait ImmutableCopyableVector<T> {
     fn permutations(self) -> Permutations<T>;
 }
 
-impl<'a,T:Clone> ImmutableCopyableVector<T> for &'a [T] {
+impl<'a,T:Clone> ImmutableCloneableVector<T> for &'a [T] {
     #[inline]
     fn partitioned(&self, f: |&T| -> bool) -> (~[T], ~[T]) {
         let mut lefts  = ~[];
@@ -1464,7 +1422,7 @@ impl<T> OwnedVector<T> for ~[T] {
 
     #[inline]
     fn move_rev_iter(self) -> RevMoveItems<T> {
-        self.move_iter().invert()
+        self.move_iter().rev()
     }
 
     fn reserve(&mut self, n: uint) {
@@ -1486,7 +1444,7 @@ impl<T> OwnedVector<T> for ~[T] {
 
     #[inline]
     fn reserve_at_least(&mut self, n: uint) {
-        self.reserve(uint::next_power_of_two_opt(n).unwrap_or(n));
+        self.reserve(checked_next_power_of_two(n).unwrap_or(n));
     }
 
     #[inline]
@@ -1698,7 +1656,7 @@ impl<T> Mutable for ~[T] {
 }
 
 /// Extension methods for owned vectors containing `Clone` elements.
-pub trait OwnedCopyableVector<T:Clone> {
+pub trait OwnedCloneableVector<T:Clone> {
     /// Iterates over the slice `rhs`, copies each element, and then appends it to
     /// the vector provided `v`. The `rhs` vector is traversed in-order.
     ///
@@ -1732,7 +1690,7 @@ pub trait OwnedCopyableVector<T:Clone> {
     fn grow_set(&mut self, index: uint, initval: &T, val: T);
 }
 
-impl<T:Clone> OwnedCopyableVector<T> for ~[T] {
+impl<T:Clone> OwnedCloneableVector<T> for ~[T] {
     #[inline]
     fn push_all(&mut self, rhs: &[T]) {
         let new_len = self.len() + rhs.len();
@@ -2027,7 +1985,7 @@ pub trait MutableVector<'a, T> {
     fn mut_iter(self) -> MutItems<'a, T>;
 
     /// Returns a mutable pointer to the last item in the vector.
-    fn mut_last(self) -> &'a mut T;
+    fn mut_last(self) -> Option<&'a mut T>;
 
     /// Returns a reversed iterator that allows modifying each value
     fn mut_rev_iter(self) -> RevMutItems<'a, T>;
@@ -2057,14 +2015,15 @@ pub trait MutableVector<'a, T> {
      * Equivalent to:
      *
      * ```
+     *     if self.len() == 0 { return None; }
      *     let head = &mut self[0];
      *     *self = self.mut_slice_from(1);
-     *     head
+     *     Some(head)
      * ```
      *
-     * Fails if slice is empty.
+     * Returns `None` if slice is empty
      */
-    fn mut_shift_ref(&mut self) -> &'a mut T;
+    fn mut_shift_ref(&mut self) -> Option<&'a mut T>;
 
     /**
      * Returns a mutable reference to the last element in this slice
@@ -2074,14 +2033,15 @@ pub trait MutableVector<'a, T> {
      * Equivalent to:
      *
      * ```
+     *     if self.len() == 0 { return None; }
      *     let tail = &mut self[self.len() - 1];
      *     *self = self.mut_slice_to(self.len() - 1);
-     *     tail
+     *     Some(tail)
      * ```
      *
-     * Fails if slice is empty.
+     * Returns `None` if slice is empty.
      */
-    fn mut_pop_ref(&mut self) -> &'a mut T;
+    fn mut_pop_ref(&mut self) -> Option<&'a mut T>;
 
     /// Swaps two elements in a vector.
     ///
@@ -2183,7 +2143,7 @@ pub trait MutableVector<'a, T> {
     fn move_from(self, src: ~[T], start: uint, end: uint) -> uint;
 
     /// Returns an unsafe mutable pointer to the element in index
-    unsafe fn unsafe_mut_ref(self, index: uint) -> *mut T;
+    unsafe fn unsafe_mut_ref(self, index: uint) -> &'a mut T;
 
     /// Return an unsafe mutable pointer to the vector's buffer.
     ///
@@ -2281,26 +2241,26 @@ impl<'a,T> MutableVector<'a, T> for &'a mut [T] {
             let p = self.as_mut_ptr();
             if mem::size_of::<T>() == 0 {
                 MutItems{ptr: p,
-                               end: (p as uint + self.len()) as *mut T,
-                               lifetime: None}
+                         end: (p as uint + self.len()) as *mut T,
+                         marker: marker::ContravariantLifetime::<'a>}
             } else {
                 MutItems{ptr: p,
-                               end: p.offset(self.len() as int),
-                               lifetime: None}
+                         end: p.offset(self.len() as int),
+                         marker: marker::ContravariantLifetime::<'a>}
             }
         }
     }
 
     #[inline]
-    fn mut_last(self) -> &'a mut T {
+    fn mut_last(self) -> Option<&'a mut T> {
         let len = self.len();
-        if len == 0 { fail!("mut_last: empty vector") }
-        &mut self[len - 1]
+        if len == 0 { return None; }
+        Some(&mut self[len - 1])
     }
 
     #[inline]
     fn mut_rev_iter(self) -> RevMutItems<'a, T> {
-        self.mut_iter().invert()
+        self.mut_iter().rev()
     }
 
     #[inline]
@@ -2314,17 +2274,19 @@ impl<'a,T> MutableVector<'a, T> for &'a mut [T] {
         MutChunks { v: self, chunk_size: chunk_size }
     }
 
-    fn mut_shift_ref(&mut self) -> &'a mut T {
+    fn mut_shift_ref(&mut self) -> Option<&'a mut T> {
+        if self.len() == 0 { return None; }
         unsafe {
             let s: &mut Slice<T> = cast::transmute(self);
-            cast::transmute_mut(&*raw::shift_ptr(s))
+            Some(cast::transmute_mut(&*raw::shift_ptr(s)))
         }
     }
 
-    fn mut_pop_ref(&mut self) -> &'a mut T {
+    fn mut_pop_ref(&mut self) -> Option<&'a mut T> {
+        if self.len() == 0 { return None; }
         unsafe {
             let s: &mut Slice<T> = cast::transmute(self);
-            cast::transmute_mut(&*raw::pop_ptr(s))
+            Some(cast::transmute_mut(&*raw::pop_ptr(s)))
         }
     }
 
@@ -2361,8 +2323,8 @@ impl<'a,T> MutableVector<'a, T> for &'a mut [T] {
     }
 
     #[inline]
-    unsafe fn unsafe_mut_ref(self, index: uint) -> *mut T {
-        ptr::mut_offset(self.repr().data as *mut T, index as int)
+    unsafe fn unsafe_mut_ref(self, index: uint) -> &'a mut T {
+        cast::transmute(ptr::mut_offset(self.repr().data as *mut T, index as int))
     }
 
     #[inline]
@@ -2628,17 +2590,13 @@ impl<A> Default for ~[A] {
     fn default() -> ~[A] { ~[] }
 }
 
-impl<A> Default for @[A] {
-    fn default() -> @[A] { @[] }
-}
-
 macro_rules! iterator {
     (struct $name:ident -> $ptr:ty, $elem:ty) => {
         /// An iterator for iterating over a vector.
         pub struct $name<'a, T> {
             priv ptr: $ptr,
             priv end: $ptr,
-            priv lifetime: Option<$elem> // FIXME: #5922
+            priv marker: marker::ContravariantLifetime<'a>,
         }
 
         impl<'a, T> Iterator<$elem> for $name<'a, T> {
@@ -2714,7 +2672,7 @@ impl<'a, T> RandomAccessIterator<&'a T> for Items<'a, T> {
 }
 
 iterator!{struct Items -> *T, &'a T}
-pub type RevItems<'a, T> = Invert<Items<'a, T>>;
+pub type RevItems<'a, T> = Rev<Items<'a, T>>;
 
 impl<'a, T> ExactSize<&'a T> for Items<'a, T> {}
 impl<'a, T> ExactSize<&'a mut T> for MutItems<'a, T> {}
@@ -2724,7 +2682,7 @@ impl<'a, T> Clone for Items<'a, T> {
 }
 
 iterator!{struct MutItems -> *mut T, &'a mut T}
-pub type RevMutItems<'a, T> = Invert<MutItems<'a, T>>;
+pub type RevMutItems<'a, T> = Rev<MutItems<'a, T>>;
 
 /// An iterator over the subslices of the vector which are separated
 /// by elements that match `pred`.
@@ -2882,7 +2840,7 @@ impl<T> Drop for MoveItems<T> {
 }
 
 /// An iterator that moves out of a vector in reverse order.
-pub type RevMoveItems<T> = Invert<MoveItems<T>>;
+pub type RevMoveItems<T> = Rev<MoveItems<T>>;
 
 impl<A> FromIterator<A> for ~[A] {
     fn from_iterator<T: Iterator<A>>(iterator: &mut T) -> ~[A] {
@@ -3107,14 +3065,6 @@ mod tests {
         assert_eq!(v_b.len(), 2u);
         assert_eq!(v_b[0], 2);
         assert_eq!(v_b[1], 3);
-
-        // Test on managed heap.
-        let vec_managed = @[1, 2, 3, 4, 5];
-        let v_c = vec_managed.slice(0u, 3u).to_owned();
-        assert_eq!(v_c.len(), 3u);
-        assert_eq!(v_c[0], 1);
-        assert_eq!(v_c[1], 2);
-        assert_eq!(v_c[2], 3);
 
         // Test on exchange heap.
         let vec_unique = ~[1, 2, 3, 4, 5, 6];
@@ -3985,7 +3935,7 @@ mod tests {
         assert_eq!(v.chunks(3).collect::<~[&[int]]>(), ~[&[1i,2,3], &[4,5]]);
         assert_eq!(v.chunks(6).collect::<~[&[int]]>(), ~[&[1i,2,3,4,5]]);
 
-        assert_eq!(v.chunks(2).invert().collect::<~[&[int]]>(), ~[&[5i], &[3,4], &[1,2]]);
+        assert_eq!(v.chunks(2).rev().collect::<~[&[int]]>(), ~[&[5i], &[3,4], &[1,2]]);
         let it = v.chunks(2);
         assert_eq!(it.indexable(), 3);
         assert_eq!(it.idx(0).unwrap(), &[1,2]);
@@ -4051,7 +4001,6 @@ mod tests {
         );
 
         t!(&[int]);
-        t!(@[int]);
         t!(~[int]);
     }
 
@@ -4194,34 +4143,26 @@ mod tests {
     fn test_shift_ref() {
         let mut x: &[int] = [1, 2, 3, 4, 5];
         let h = x.shift_ref();
-        assert_eq!(*h, 1);
+        assert_eq!(*h.unwrap(), 1);
         assert_eq!(x.len(), 4);
         assert_eq!(x[0], 2);
         assert_eq!(x[3], 5);
-    }
 
-    #[test]
-    #[should_fail]
-    fn test_shift_ref_empty() {
-        let mut x: &[int] = [];
-        x.shift_ref();
+        let mut y: &[int] = [];
+        assert_eq!(y.shift_ref(), None);
     }
 
     #[test]
     fn test_pop_ref() {
         let mut x: &[int] = [1, 2, 3, 4, 5];
         let h = x.pop_ref();
-        assert_eq!(*h, 5);
+        assert_eq!(*h.unwrap(), 5);
         assert_eq!(x.len(), 4);
         assert_eq!(x[0], 1);
         assert_eq!(x[3], 4);
-    }
 
-    #[test]
-    #[should_fail]
-    fn test_pop_ref_empty() {
-        let mut x: &[int] = [];
-        x.pop_ref();
+        let mut y: &[int] = [];
+        assert!(y.pop_ref().is_none());
     }
 
     #[test]
@@ -4241,9 +4182,9 @@ mod tests {
     }
 
     #[test]
-    fn test_mut_splitator_invert() {
+    fn test_mut_splitator_rev() {
         let mut xs = [1,2,0,3,4,0,0,5,6,0];
-        for slice in xs.mut_split(|x| *x == 0).invert().take(4) {
+        for slice in xs.mut_split(|x| *x == 0).rev().take(4) {
             slice.reverse();
         }
         assert_eq!(xs, [1,2,0,4,3,0,0,6,5,0]);
@@ -4262,9 +4203,9 @@ mod tests {
     }
 
     #[test]
-    fn test_mut_chunks_invert() {
+    fn test_mut_chunks_rev() {
         let mut v = [0u8, 1, 2, 3, 4, 5, 6];
-        for (i, chunk) in v.mut_chunks(3).invert().enumerate() {
+        for (i, chunk) in v.mut_chunks(3).rev().enumerate() {
             for x in chunk.mut_iter() {
                 *x = i as u8;
             }
@@ -4284,34 +4225,36 @@ mod tests {
     fn test_mut_shift_ref() {
         let mut x: &mut [int] = [1, 2, 3, 4, 5];
         let h = x.mut_shift_ref();
-        assert_eq!(*h, 1);
+        assert_eq!(*h.unwrap(), 1);
         assert_eq!(x.len(), 4);
         assert_eq!(x[0], 2);
         assert_eq!(x[3], 5);
-    }
 
-    #[test]
-    #[should_fail]
-    fn test_mut_shift_ref_empty() {
-        let mut x: &mut [int] = [];
-        x.mut_shift_ref();
+        let mut y: &mut [int] = [];
+        assert!(y.mut_shift_ref().is_none());
     }
 
     #[test]
     fn test_mut_pop_ref() {
         let mut x: &mut [int] = [1, 2, 3, 4, 5];
         let h = x.mut_pop_ref();
-        assert_eq!(*h, 5);
+        assert_eq!(*h.unwrap(), 5);
         assert_eq!(x.len(), 4);
         assert_eq!(x[0], 1);
         assert_eq!(x[3], 4);
+
+        let mut y: &mut [int] = [];
+        assert!(y.mut_pop_ref().is_none());
     }
 
     #[test]
-    #[should_fail]
-    fn test_mut_pop_ref_empty() {
-        let mut x: &mut [int] = [];
-        x.mut_pop_ref();
+    fn test_mut_last() {
+        let mut x = [1, 2, 3, 4, 5];
+        let h = x.mut_last();
+        assert_eq!(*h.unwrap(), 5);
+
+        let mut y: &mut [int] = [];
+        assert!(y.mut_last().is_none());
     }
 }
 

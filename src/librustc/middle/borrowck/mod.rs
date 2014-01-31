@@ -25,6 +25,7 @@ use std::ops::{BitOr, BitAnd};
 use std::result::{Result};
 use syntax::ast;
 use syntax::ast_map;
+use syntax::ast_util;
 use syntax::codemap::Span;
 use syntax::parse::token;
 use syntax::visit;
@@ -50,7 +51,7 @@ pub mod move_data;
 
 pub struct LoanDataFlowOperator;
 
-/// XXX(pcwalton): Should just be #[deriving(Clone)], but that doesn't work
+/// FIXME(pcwalton): Should just be #[deriving(Clone)], but that doesn't work
 /// yet on unit structs.
 impl Clone for LoanDataFlowOperator {
     fn clone(&self) -> LoanDataFlowOperator {
@@ -193,16 +194,6 @@ pub struct BorrowStats {
 //
 // Note that there is no entry with derefs:3---the type of that expression
 // is T, which is not a box.
-//
-// Note that implicit dereferences also occur with indexing of `@[]`,
-// `@str`, etc.  The same rules apply. So, for example, given a
-// variable `x` of type `@[@[...]]`, if I have an instance of the
-// expression `x[0]` which is then auto-slice'd, there would be two
-// potential entries in the root map, both with the id of the `x[0]`
-// expression. The entry with `derefs==0` refers to the deref of `x`
-// used as part of evaluating `x[0]`. The entry with `derefs==1`
-// refers to the deref of the `x[0]` that occurs as part of the
-// auto-slice.
 #[deriving(Eq, IterBytes)]
 pub struct root_map_key {
     id: ast::NodeId,
@@ -294,9 +285,7 @@ pub fn opt_loan_path(cmt: mc::cmt) -> Option<@LoanPath> {
             None
         }
 
-        mc::cat_local(id) |
-        mc::cat_arg(id) |
-        mc::cat_self(id) => {
+        mc::cat_local(id) | mc::cat_arg(id) => {
             Some(@LpVar(id))
         }
 
@@ -631,6 +620,10 @@ impl BorrowckCtxt {
         self.tcx.sess.span_note(s, m);
     }
 
+    pub fn span_end_note(&self, s: Span, m: &str) {
+        self.tcx.sess.span_end_note(s, m);
+    }
+
     pub fn bckerr_to_str(&self, err: BckError) -> ~str {
         match err.code {
             err_mutbl(lk) => {
@@ -767,8 +760,19 @@ impl BorrowckCtxt {
         match *loan_path {
             LpVar(id) => {
                 match self.tcx.items.find(id) {
-                    Some(ast_map::NodeLocal(ref ident, _)) => {
-                        out.push_str(token::ident_to_str(ident));
+                    Some(ast_map::NodeLocal(pat)) => {
+                        match pat.node {
+                            ast::PatIdent(_, ref path, _) => {
+                                let ident = ast_util::path_to_ident(path);
+                                let string = token::get_ident(ident.name);
+                                out.push_str(string.get());
+                            }
+                            _ => {
+                                self.tcx.sess.bug(
+                                    format!("Loan path LpVar({:?}) maps to {:?}, not local",
+                                        id, pat));
+                            }
+                        }
                     }
                     r => {
                         self.tcx.sess.bug(
@@ -782,8 +786,9 @@ impl BorrowckCtxt {
                 self.append_loan_path_to_str_from_interior(lp_base, out);
                 match fname {
                     mc::NamedField(ref fname) => {
+                        let string = token::get_ident(*fname);
                         out.push_char('.');
-                        out.push_str(token::interner_get(*fname));
+                        out.push_str(string.get());
                     }
                     mc::PositionalField(idx) => {
                         out.push_char('#'); // invent a notation here

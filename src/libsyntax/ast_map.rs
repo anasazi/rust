@@ -17,7 +17,6 @@ use diagnostic::SpanHandler;
 use fold::Folder;
 use fold;
 use parse::token::{get_ident_interner, IdentInterner};
-use parse::token::special_idents;
 use print::pprust;
 use util::small_vector::SmallVector;
 
@@ -63,9 +62,10 @@ pub fn path_to_str_with_sep(p: &[PathElem], sep: &str, itr: @IdentInterner)
 
 pub fn path_ident_to_str(p: &Path, i: Ident, itr: @IdentInterner) -> ~str {
     if p.is_empty() {
-        itr.get(i.name).to_owned()
+        itr.get(i.name).into_owned()
     } else {
-        format!("{}::{}", path_to_str(*p, itr), itr.get(i.name))
+        let string = itr.get(i.name);
+        format!("{}::{}", path_to_str(*p, itr), string.as_slice())
     }
 }
 
@@ -76,7 +76,7 @@ pub fn path_to_str(p: &[PathElem], itr: @IdentInterner) -> ~str {
 pub fn path_elem_to_str(pe: PathElem, itr: @IdentInterner) -> ~str {
     match pe {
         PathMod(s) | PathName(s) | PathPrettyName(s, _) => {
-            itr.get(s.name).to_owned()
+            itr.get(s.name).into_owned()
         }
     }
 }
@@ -86,7 +86,7 @@ pub fn path_elem_to_str(pe: PathElem, itr: @IdentInterner) -> ~str {
 /// from, even if it's hard to read (previously they would all just be
 /// listed as `__extensions__::method_name::hash`, with no indication
 /// of the type).
-// XXX: these dollar signs and the names in general are actually a
+// FIXME: these dollar signs and the names in general are actually a
 //      relic of $ being one of the very few valid symbol names on
 //      unix. These kinds of details shouldn't be exposed way up here
 //      in the ast.
@@ -106,7 +106,11 @@ fn pretty_ty(ty: &Ty, itr: @IdentInterner, out: &mut ~str) {
         // need custom handling.
         TyNil => { out.push_str("$NIL$"); return }
         TyPath(ref path, _, _) => {
-            out.push_str(itr.get(path.segments.last().unwrap().identifier.name));
+            out.push_str(itr.get(path.segments
+                                     .last()
+                                     .unwrap()
+                                     .identifier
+                                     .name).as_slice());
             return
         }
         TyTup(ref tys) => {
@@ -139,7 +143,8 @@ pub fn impl_pretty_name(trait_ref: &Option<TraitRef>, ty: &Ty) -> PathElem {
     match *trait_ref {
         None => pretty = ~"",
         Some(ref trait_ref) => {
-            pretty = itr.get(trait_ref.path.segments.last().unwrap().identifier.name).to_owned();
+            pretty = itr.get(trait_ref.path.segments.last().unwrap().identifier.name)
+                        .into_owned();
             pretty.push_char('$');
         }
     };
@@ -163,10 +168,7 @@ pub enum Node {
     NodeExpr(@Expr),
     NodeStmt(@Stmt),
     NodeArg(@Pat),
-    // HACK(eddyb) should always be a pattern, but `self` is not, and thus it
-    // is identified only by an ident and no span is available. In all other
-    // cases, node_span will return the proper span (required by borrowck).
-    NodeLocal(Ident, Option<@Pat>),
+    NodeLocal(@Pat),
     NodeBlock(P<Block>),
 
     /// NodeStructCtor represents a tuple struct.
@@ -246,10 +248,6 @@ impl<F> Ctx<F> {
         let mut map = self.map.map.borrow_mut();
         map.get().insert(id as uint, node);
     }
-
-    fn map_self(&self, m: @Method) {
-        self.insert(m.self_id, NodeLocal(special_idents::self_, None));
-    }
 }
 
 impl<F: FoldOps> Folder for Ctx<F> {
@@ -285,7 +283,6 @@ impl<F: FoldOps> Folder for Ctx<F> {
                 let impl_did = ast_util::local_def(i.id);
                 for &m in ms.iter() {
                     self.insert(m.id, NodeMethod(m, impl_did, p));
-                    self.map_self(m);
                 }
 
             }
@@ -332,7 +329,6 @@ impl<F: FoldOps> Folder for Ctx<F> {
                         }
                         Provided(m) => {
                             self.insert(m.id, NodeTraitMethod(@Provided(m), d_id, p));
-                            self.map_self(m);
                         }
                     }
                 }
@@ -348,9 +344,9 @@ impl<F: FoldOps> Folder for Ctx<F> {
     fn fold_pat(&mut self, pat: @Pat) -> @Pat {
         let pat = fold::noop_fold_pat(pat, self);
         match pat.node {
-            PatIdent(_, ref path, _) => {
+            PatIdent(..) => {
                 // Note: this is at least *potentially* a pattern...
-                self.insert(pat.id, NodeLocal(ast_util::path_to_ident(path), Some(pat)));
+                self.insert(pat.id, NodeLocal(pat));
             }
             _ => {}
         }
@@ -467,7 +463,6 @@ pub fn map_decoded_item<F: 'static + FoldOps>(diag: @SpanHandler,
                 NodeMethod(m, impl_did, @path)
             };
             cx.insert(m.id, entry);
-            cx.map_self(m);
         }
     }
 
@@ -500,17 +495,21 @@ pub fn node_id_to_str(map: Map, id: NodeId, itr: @IdentInterner) -> ~str {
              path_ident_to_str(path, item.ident, itr), abi, id)
       }
       Some(NodeMethod(m, _, path)) => {
+        let name = itr.get(m.ident.name);
         format!("method {} in {} (id={})",
-             itr.get(m.ident.name), path_to_str(*path, itr), id)
+             name.as_slice(), path_to_str(*path, itr), id)
       }
       Some(NodeTraitMethod(ref tm, _, path)) => {
         let m = ast_util::trait_method_to_ty_method(&**tm);
+        let name = itr.get(m.ident.name);
         format!("method {} in {} (id={})",
-             itr.get(m.ident.name), path_to_str(*path, itr), id)
+             name.as_slice(), path_to_str(*path, itr), id)
       }
       Some(NodeVariant(ref variant, _, path)) => {
+        let name = itr.get(variant.node.name.name);
         format!("variant {} in {} (id={})",
-             itr.get(variant.node.name.name), path_to_str(*path, itr), id)
+             name.as_slice(),
+             path_to_str(*path, itr), id)
       }
       Some(NodeExpr(expr)) => {
         format!("expr {} (id={})", pprust::expr_to_str(expr, itr), id)
@@ -525,8 +524,8 @@ pub fn node_id_to_str(map: Map, id: NodeId, itr: @IdentInterner) -> ~str {
       Some(NodeArg(pat)) => {
         format!("arg {} (id={})", pprust::pat_to_str(pat, itr), id)
       }
-      Some(NodeLocal(ident, _)) => {
-        format!("local (id={}, name={})", id, itr.get(ident.name))
+      Some(NodeLocal(pat)) => {
+        format!("local {} (id={})", pprust::pat_to_str(pat, itr), id)
       }
       Some(NodeBlock(block)) => {
         format!("block {} (id={})", pprust::block_to_str(block, itr), id)
@@ -559,11 +558,7 @@ pub fn node_span(items: Map, id: ast::NodeId) -> Span {
         Some(NodeVariant(variant, _, _)) => variant.span,
         Some(NodeExpr(expr)) => expr.span,
         Some(NodeStmt(stmt)) => stmt.span,
-        Some(NodeArg(pat)) => pat.span,
-        Some(NodeLocal(_, pat)) => match pat {
-            Some(pat) => pat.span,
-            None => fail!("node_span: cannot get span from NodeLocal (likely `self`)")
-        },
+        Some(NodeArg(pat)) | Some(NodeLocal(pat)) => pat.span,
         Some(NodeBlock(block)) => block.span,
         Some(NodeStructCtor(_, item, _)) => item.span,
         Some(NodeCalleeScope(expr)) => expr.span,

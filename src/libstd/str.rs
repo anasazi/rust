@@ -1,4 +1,4 @@
-// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -17,46 +17,35 @@ Unicode string manipulation (`str` type)
 Rust's string type is one of the core primitive types of the language. While
 represented by the name `str`, the name `str` is not actually a valid type in
 Rust. Each string must also be decorated with its ownership. This means that
-there are three common kinds of strings in rust:
+there are two common kinds of strings in rust:
 
 * `~str` - This is an owned string. This type obeys all of the normal semantics
            of the `~T` types, meaning that it has one, and only one, owner. This
            type cannot be implicitly copied, and is moved out of when passed to
            other functions.
 
-* `@str` - This is a managed string. Similarly to `@T`, this type can be
-           implicitly copied, and each implicit copy will increment the
-           reference count to the string. This means that there is no "true
-           owner" of the string, and the string will be deallocated when the
-           reference count reaches 0.
-
-* `&str` - Finally, this is the borrowed string type. This type of string can
-           only be created from one of the other two kinds of strings. As the
-           name "borrowed" implies, this type of string is owned elsewhere, and
-           this string cannot be moved out of.
+* `&str` - This is the borrowed string type. This type of string can only be
+           created from the other kind of string. As the name "borrowed"
+           implies, this type of string is owned elsewhere, and this string
+           cannot be moved out of.
 
 As an example, here's a few different kinds of strings.
 
 ```rust
-#[feature(managed_boxes)];
-
 fn main() {
     let owned_string = ~"I am an owned string";
-    let managed_string = @"This string is garbage-collected";
     let borrowed_string1 = "This string is borrowed with the 'static lifetime";
     let borrowed_string2: &str = owned_string;   // owned strings can be borrowed
-    let borrowed_string3: &str = managed_string; // managed strings can also be borrowed
 }
  ```
 
-From the example above, you can see that rust has 3 different kinds of string
-literals. The owned/managed literals correspond to the owned/managed string
-types, but the "borrowed literal" is actually more akin to C's concept of a
-static string.
+From the example above, you can see that rust has 2 different kinds of string
+literals. The owned literals correspond to the owned string types, but the
+"borrowed literal" is actually more akin to C's concept of a static string.
 
-When a string is declared without a `~` or `@` sigil, then the string is
-allocated statically in the rodata of the executable/library. The string then
-has the type `&'static str` meaning that the string is valid for the `'static`
+When a string is declared without a `~` sigil, then the string is allocated
+statically in the rodata of the executable/library. The string then has the
+type `&'static str` meaning that the string is valid for the `'static`
 lifetime, otherwise known as the lifetime of the entire program. As can be
 inferred from the type, these static strings are not mutable.
 
@@ -89,11 +78,9 @@ The actual representation of strings have direct mappings to vectors:
 
 * `~str` is the same as `~[u8]`
 * `&str` is the same as `&[u8]`
-* `@str` is the same as `@[u8]`
 
 */
 
-use at_vec;
 use cast;
 use cast::transmute;
 use char;
@@ -102,17 +89,16 @@ use clone::{Clone, DeepClone};
 use container::{Container, Mutable};
 use iter::{Iterator, FromIterator, Extendable, range};
 use iter::{Filter, AdditiveIterator, Map};
-use iter::{Invert, DoubleEndedIterator, ExactSize};
+use iter::{Rev, DoubleEndedIterator, ExactSize};
 use libc;
-use num::{Saturating};
+use num::{Saturating, checked_next_power_of_two};
 use option::{None, Option, Some};
 use ptr;
 use ptr::RawPtr;
 use to_str::ToStr;
 use from_str::FromStr;
-use uint;
 use vec;
-use vec::{OwnedVector, OwnedCopyableVector, ImmutableVector, MutableVector};
+use vec::{OwnedVector, OwnedCloneableVector, ImmutableVector, MutableVector};
 use default::Default;
 use send_str::{SendStr, SendStrOwned};
 use unstable::raw::Repr;
@@ -156,16 +142,6 @@ impl FromStr for ~str {
 impl<'a> ToStr for &'a str {
     #[inline]
     fn to_str(&self) -> ~str { self.to_owned() }
-}
-
-impl ToStr for @str {
-    #[inline]
-    fn to_str(&self) -> ~str { self.to_owned() }
-}
-
-impl<'a> FromStr for @str {
-    #[inline]
-    fn from_str(s: &str) -> Option<@str> { Some(s.to_managed()) }
 }
 
 /// Convert a byte to a UTF-8 string
@@ -376,11 +352,11 @@ impl<'a> DoubleEndedIterator<(uint, char)> for CharOffsets<'a> {
 
 /// External iterator for a string's characters in reverse order.
 /// Use with the `std::iter` module.
-pub type RevChars<'a> = Invert<Chars<'a>>;
+pub type RevChars<'a> = Rev<Chars<'a>>;
 
 /// External iterator for a string's characters and their byte offsets in reverse order.
 /// Use with the `std::iter` module.
-pub type RevCharOffsets<'a> = Invert<CharOffsets<'a>>;
+pub type RevCharOffsets<'a> = Rev<CharOffsets<'a>>;
 
 /// External iterator for a string's bytes.
 /// Use with the `std::iter` module.
@@ -389,7 +365,7 @@ pub type Bytes<'a> =
 
 /// External iterator for a string's bytes in reverse order.
 /// Use with the `std::iter` module.
-pub type RevBytes<'a> = Invert<Bytes<'a>>;
+pub type RevBytes<'a> = Rev<Bytes<'a>>;
 
 /// An iterator over the substrings of a string, separated by `sep`.
 #[deriving(Clone)]
@@ -405,7 +381,7 @@ pub struct CharSplits<'a, Sep> {
 
 /// An iterator over the substrings of a string, separated by `sep`,
 /// starting from the back of the string.
-pub type RevCharSplits<'a, Sep> = Invert<CharSplits<'a, Sep>>;
+pub type RevCharSplits<'a, Sep> = Rev<CharSplits<'a, Sep>>;
 
 /// An iterator over the substrings of a string, separated by `sep`,
 /// splitting at most `count` times.
@@ -417,7 +393,7 @@ pub struct CharSplitsN<'a, Sep> {
     priv invert: bool,
 }
 
-/// An iterator over the words of a string, separated by an sequence of whitespace
+/// An iterator over the words of a string, separated by a sequence of whitespace
 pub type Words<'a> =
     Filter<'a, &'a str, CharSplits<'a, extern "Rust" fn(char) -> bool>>;
 
@@ -486,7 +462,7 @@ for CharSplits<'a, Sep> {
         let mut next_split = None;
 
         if self.only_ascii {
-            for (idx, byte) in self.string.bytes().enumerate().invert() {
+            for (idx, byte) in self.string.bytes().enumerate().rev() {
                 if self.sep.matches(byte as char) && byte < 128u8 {
                     next_split = Some((idx, idx + 1));
                     break;
@@ -594,7 +570,7 @@ impl<'a> Iterator<&'a str> for StrSplits<'a> {
 // Helper functions used for Unicode normalization
 fn canonical_sort(comb: &mut [(char, u8)]) {
     use iter::range;
-    use tuple::CopyableTuple;
+    use tuple::CloneableTuple;
 
     let len = comb.len();
     for i in range(0, len) {
@@ -620,7 +596,7 @@ enum NormalizationForm {
 /// External iterator for a string's normalization's characters.
 /// Use with the `std::iter` module.
 #[deriving(Clone)]
-struct Normalizations<'a> {
+pub struct Normalizations<'a> {
     priv kind: NormalizationForm,
     priv iter: Chars<'a>,
     priv buffer: ~[(char, u8)],
@@ -1141,11 +1117,6 @@ pub mod traits {
         fn cmp(&self, other: &~str) -> Ordering { self.as_slice().cmp(&other.as_slice()) }
     }
 
-    impl TotalOrd for @str {
-        #[inline]
-        fn cmp(&self, other: &@str) -> Ordering { self.as_slice().cmp(&other.as_slice()) }
-    }
-
     impl<'a> Eq for &'a str {
         #[inline]
         fn eq(&self, other: & &'a str) -> bool {
@@ -1158,13 +1129,6 @@ pub mod traits {
     impl Eq for ~str {
         #[inline]
         fn eq(&self, other: &~str) -> bool {
-            eq_slice((*self), (*other))
-        }
-    }
-
-    impl Eq for @str {
-        #[inline]
-        fn eq(&self, other: &@str) -> bool {
             eq_slice((*self), (*other))
         }
     }
@@ -1183,13 +1147,6 @@ pub mod traits {
         }
     }
 
-    impl TotalEq for @str {
-        #[inline]
-        fn equals(&self, other: &@str) -> bool {
-            eq_slice((*self), (*other))
-        }
-    }
-
     impl<'a> Ord for &'a str {
         #[inline]
         fn lt(&self, other: & &'a str) -> bool { self.cmp(other) == Less }
@@ -1200,17 +1157,7 @@ pub mod traits {
         fn lt(&self, other: &~str) -> bool { self.cmp(other) == Less }
     }
 
-    impl Ord for @str {
-        #[inline]
-        fn lt(&self, other: &@str) -> bool { self.cmp(other) == Less }
-    }
-
     impl<'a, S: Str> Equiv<S> for &'a str {
-        #[inline]
-        fn equiv(&self, other: &S) -> bool { eq_slice(*self, other.as_slice()) }
-    }
-
-    impl<'a, S: Str> Equiv<S> for @str {
         #[inline]
         fn equiv(&self, other: &S) -> bool { eq_slice(*self, other.as_slice()) }
     }
@@ -1251,16 +1198,6 @@ impl<'a> Str for ~str {
     fn into_owned(self) -> ~str { self }
 }
 
-impl<'a> Str for @str {
-    #[inline]
-    fn as_slice<'a>(&'a self) -> &'a str {
-        let s: &'a str = *self; s
-    }
-
-    #[inline]
-    fn into_owned(self) -> ~str { self.to_owned() }
-}
-
 impl<'a> Container for &'a str {
     #[inline]
     fn len(&self) -> uint {
@@ -1269,11 +1206,6 @@ impl<'a> Container for &'a str {
 }
 
 impl Container for ~str {
-    #[inline]
-    fn len(&self) -> uint { self.as_slice().len() }
-}
-
-impl Container for @str {
     #[inline]
     fn len(&self) -> uint { self.as_slice().len() }
 }
@@ -1735,9 +1667,6 @@ pub trait StrSlice<'a> {
     /// Copy a slice into a new owned str.
     fn to_owned(&self) -> ~str;
 
-    /// Copy a slice into a new managed str.
-    fn to_managed(&self) -> @str;
-
     /// Converts to a vector of `u16` encoded as UTF-16.
     fn to_utf16(&self) -> ~[u16];
 
@@ -1980,7 +1909,7 @@ impl<'a> StrSlice<'a> for &'a str {
 
     #[inline]
     fn chars_rev(&self) -> RevChars<'a> {
-        self.chars().invert()
+        self.chars().rev()
     }
 
     #[inline]
@@ -1990,7 +1919,7 @@ impl<'a> StrSlice<'a> for &'a str {
 
     #[inline]
     fn bytes_rev(&self) -> RevBytes<'a> {
-        self.bytes().invert()
+        self.bytes().rev()
     }
 
     #[inline]
@@ -2000,7 +1929,7 @@ impl<'a> StrSlice<'a> for &'a str {
 
     #[inline]
     fn char_indices_rev(&self) -> RevCharOffsets<'a> {
-        self.char_indices().invert()
+        self.char_indices().rev()
     }
 
     #[inline]
@@ -2035,7 +1964,7 @@ impl<'a> StrSlice<'a> for &'a str {
 
     #[inline]
     fn rsplit<Sep: CharEq>(&self, sep: Sep) -> RevCharSplits<'a, Sep> {
-        self.split(sep).invert()
+        self.split(sep).rev()
     }
 
     #[inline]
@@ -2244,14 +2173,6 @@ impl<'a> StrSlice<'a> for &'a str {
             ptr::copy_memory(v.as_mut_ptr(), self.as_ptr(), len);
             v.set_len(len);
             ::cast::transmute(v)
-        }
-    }
-
-    #[inline]
-    fn to_managed(&self) -> @str {
-        unsafe {
-            let v: *&[u8] = cast::transmute(self);
-            cast::transmute(at_vec::to_managed(*v))
         }
     }
 
@@ -2640,7 +2561,7 @@ impl OwnedStr for ~str {
 
     #[inline]
     fn reserve_at_least(&mut self, n: uint) {
-        self.reserve(uint::next_power_of_two_opt(n).unwrap_or(n))
+        self.reserve(checked_next_power_of_two(n).unwrap_or(n))
     }
 
     #[inline]
@@ -2683,20 +2604,6 @@ impl DeepClone for ~str {
     }
 }
 
-impl Clone for @str {
-    #[inline]
-    fn clone(&self) -> @str {
-        *self
-    }
-}
-
-impl DeepClone for @str {
-    #[inline]
-    fn deep_clone(&self) -> @str {
-        *self
-    }
-}
-
 impl FromIterator<char> for ~str {
     #[inline]
     fn from_iterator<T: Iterator<char>>(iterator: &mut T) -> ~str {
@@ -2726,10 +2633,6 @@ impl<'a> Default for &'a str {
 
 impl Default for ~str {
     fn default() -> ~str { ~"" }
-}
-
-impl Default for @str {
-    fn default() -> @str { @"" }
 }
 
 #[cfg(test)]
@@ -3538,12 +3441,6 @@ mod tests {
     }
 
     #[test]
-    fn test_to_managed() {
-        assert_eq!("abc".to_managed(), @"abc");
-        assert_eq!("abcdef".slice(1, 5).to_managed(), @"bcde");
-    }
-
-    #[test]
     fn test_total_ord() {
         "1234".cmp(& &"123") == Greater;
         "123".cmp(& &"1234") == Less;
@@ -3580,15 +3477,12 @@ mod tests {
                 let e = $e;
                 assert_eq!(s1 + s2, e.to_owned());
                 assert_eq!(s1.to_owned() + s2, e.to_owned());
-                assert_eq!(s1.to_managed() + s2, e.to_owned());
             } }
         );
 
         t!("foo",  "bar", "foobar");
-        t!("foo", @"bar", "foobar");
         t!("foo", ~"bar", "foobar");
         t!("ศไทย中",  "华Việt Nam", "ศไทย中华Việt Nam");
-        t!("ศไทย中", @"华Việt Nam", "ศไทย中华Việt Nam");
         t!("ศไทย中", ~"华Việt Nam", "ศไทย中华Việt Nam");
     }
 
@@ -3789,11 +3683,11 @@ mod tests {
     fn test_rev_split_char_iterator_no_trailing() {
         let data = "\nMäry häd ä little lämb\nLittle lämb\n";
 
-        let mut split: ~[&str] = data.split('\n').invert().collect();
+        let mut split: ~[&str] = data.split('\n').rev().collect();
         split.reverse();
         assert_eq!(split, ~["", "Märy häd ä little lämb", "Little lämb", ""]);
 
-        let mut split: ~[&str] = data.split_terminator('\n').invert().collect();
+        let mut split: ~[&str] = data.split_terminator('\n').rev().collect();
         split.reverse();
         assert_eq!(split, ~["", "Märy häd ä little lämb", "Little lämb"]);
     }
@@ -3875,7 +3769,6 @@ mod tests {
         }
 
         t::<&str>();
-        t::<@str>();
         t::<~str>();
     }
 
@@ -3887,7 +3780,6 @@ mod tests {
 
         let s = ~"01234";
         assert_eq!(5, sum_len(["012", "", "34"]));
-        assert_eq!(5, sum_len([@"01", @"2", @"34", @""]));
         assert_eq!(5, sum_len([~"01", ~"2", ~"34", ~""]));
         assert_eq!(5, sum_len([s.as_slice()]));
     }
@@ -3958,8 +3850,6 @@ mod tests {
     fn test_from_str() {
       let owned: Option<~str> = from_str(&"string");
       assert_eq!(owned, Some(~"string"));
-      let managed: Option<@str> = from_str(&"string");
-      assert_eq!(managed, Some(@"string"));
     }
 }
 

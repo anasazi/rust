@@ -13,7 +13,7 @@ use ast::{TTDelim};
 use ast;
 use codemap::{Span, Spanned, DUMMY_SP};
 use ext::base::{AnyMacro, ExtCtxt, MacResult, MRAny, MRDef, MacroDef};
-use ext::base::{NormalTT, SyntaxExpanderTTTrait};
+use ext::base::{NormalTT, MacroExpander};
 use ext::base;
 use ext::tt::macro_parser::{Success, Error, Failure};
 use ext::tt::macro_parser::{NamedMatch, MatchedSeq, MatchedNonterminal};
@@ -21,8 +21,9 @@ use ext::tt::macro_parser::{parse, parse_or_else};
 use parse::lexer::{new_tt_reader, Reader};
 use parse::parser::Parser;
 use parse::attr::ParserAttr;
-use parse::token::{get_ident_interner, special_idents, gensym_ident, ident_to_str};
+use parse::token::{get_ident_interner, special_idents, gensym_ident};
 use parse::token::{FAT_ARROW, SEMI, NtMatchers, NtTT, EOF};
+use parse::token;
 use print;
 use std::cell::RefCell;
 use util::small_vector::SmallVector;
@@ -87,18 +88,17 @@ impl AnyMacro for ParserAnyMacro {
     }
 }
 
-struct MacroRulesSyntaxExpanderTTFun {
+struct MacroRulesMacroExpander {
     name: Ident,
     lhses: @~[@NamedMatch],
     rhses: @~[@NamedMatch],
 }
 
-impl SyntaxExpanderTTTrait for MacroRulesSyntaxExpanderTTFun {
+impl MacroExpander for MacroRulesMacroExpander {
     fn expand(&self,
               cx: &mut ExtCtxt,
               sp: Span,
-              arg: &[ast::TokenTree],
-              _: ast::SyntaxContext)
+              arg: &[ast::TokenTree])
               -> MacResult {
         generic_extension(cx, sp, self.name, arg, *self.lhses, *self.rhses)
     }
@@ -113,10 +113,11 @@ fn generic_extension(cx: &ExtCtxt,
                      rhses: &[@NamedMatch])
                      -> MacResult {
     if cx.trace_macros() {
+        let interned_name = token::get_ident(name.name);
         println!("{}! \\{ {} \\}",
-                  cx.str_of(name),
-                  print::pprust::tt_to_str(&TTDelim(@arg.to_owned()),
-                                           get_ident_interner()));
+                 interned_name.get(),
+                 print::pprust::tt_to_str(&TTDelim(@arg.to_owned()),
+                                          get_ident_interner()));
     }
 
     // Which arm's failure should we report? (the one furthest along)
@@ -175,8 +176,7 @@ fn generic_extension(cx: &ExtCtxt,
 pub fn add_new_extension(cx: &mut ExtCtxt,
                          sp: Span,
                          name: Ident,
-                         arg: ~[ast::TokenTree],
-                         _: ast::SyntaxContext)
+                         arg: ~[ast::TokenTree])
                          -> base::MacResult {
     // these spans won't matter, anyways
     fn ms(m: Matcher_) -> Matcher {
@@ -224,14 +224,14 @@ pub fn add_new_extension(cx: &mut ExtCtxt,
         _ => cx.span_bug(sp, "wrong-structured rhs")
     };
 
-    let exp = ~MacroRulesSyntaxExpanderTTFun {
+    let exp = ~MacroRulesMacroExpander {
         name: name,
         lhses: lhses,
         rhses: rhses,
     };
 
     return MRDef(MacroDef {
-        name: ident_to_str(&name),
+        name: token::get_ident(name.name).get().to_str(),
         ext: NormalTT(exp, Some(sp))
     });
 }

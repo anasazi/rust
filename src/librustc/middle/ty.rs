@@ -1,4 +1,4 @@
-// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -34,6 +34,7 @@ use std::cmp;
 use std::hashmap::{HashMap, HashSet};
 use std::ops;
 use std::ptr::to_unsafe_ptr;
+use std::rc::Rc;
 use std::to_bytes;
 use std::to_str::ToStr;
 use std::vec;
@@ -73,7 +74,6 @@ pub enum MethodContainer {
 pub struct Method {
     ident: ast::Ident,
     generics: ty::Generics,
-    transformed_self_ty: Option<ty::t>,
     fty: BareFnTy,
     explicit_self: ast::ExplicitSelf_,
     vis: ast::Visibility,
@@ -87,7 +87,6 @@ pub struct Method {
 impl Method {
     pub fn new(ident: ast::Ident,
                generics: ty::Generics,
-               transformed_self_ty: Option<ty::t>,
                fty: BareFnTy,
                explicit_self: ast::ExplicitSelf_,
                vis: ast::Visibility,
@@ -95,17 +94,9 @@ impl Method {
                container: MethodContainer,
                provided_source: Option<ast::DefId>)
                -> Method {
-        // Check the invariants.
-        if explicit_self == ast::SelfStatic {
-            assert!(transformed_self_ty.is_none());
-        } else {
-            assert!(transformed_self_ty.is_some());
-        }
-
        Method {
             ident: ident,
             generics: generics,
-            transformed_self_ty: transformed_self_ty,
             fty: fty,
             explicit_self: explicit_self,
             vis: vis,
@@ -139,7 +130,6 @@ pub struct mt {
 pub enum vstore {
     vstore_fixed(uint),
     vstore_uniq,
-    vstore_box,
     vstore_slice(Region)
 }
 
@@ -236,10 +226,10 @@ pub enum AutoRef {
     /// Convert from T to &T
     AutoPtr(Region, ast::Mutability),
 
-    /// Convert from @[]/~[]/&[] to &[] (or str)
+    /// Convert from ~[]/&[] to &[] (or str)
     AutoBorrowVec(Region, ast::Mutability),
 
-    /// Convert from @[]/~[]/&[] to &&[] (or str)
+    /// Convert from ~[]/&[] to &&[] (or str)
     AutoBorrowVecRef(Region, ast::Mutability),
 
     /// Convert from @fn()/~fn()/|| to ||
@@ -257,7 +247,7 @@ pub type ctxt = @ctxt_;
 /// The data structure to keep track of all the information that typechecker
 /// generates so that so that it can be reused and doesn't have to be redone
 /// later on.
-struct ctxt_ {
+pub struct ctxt_ {
     diag: @syntax::diagnostic::SpanHandler,
     interner: RefCell<HashMap<intern_key, ~t_box_>>,
     next_id: Cell<uint>,
@@ -301,7 +291,7 @@ struct ctxt_ {
     freevars: RefCell<freevars::freevar_map>,
     tcache: type_cache,
     rcache: creader_cache,
-    short_names_cache: RefCell<HashMap<t, @str>>,
+    short_names_cache: RefCell<HashMap<t, ~str>>,
     needs_unwind_cleanup_cache: RefCell<HashMap<t, bool>>,
     tc_cache: RefCell<HashMap<uint, TypeContents>>,
     ast_ty_to_ty_cache: RefCell<HashMap<NodeId, ast_ty_to_ty_cache_entry>>,
@@ -309,7 +299,7 @@ struct ctxt_ {
     ty_param_defs: RefCell<HashMap<ast::NodeId, TypeParameterDef>>,
     adjustments: RefCell<HashMap<ast::NodeId, @AutoAdjustment>>,
     normalized_cache: RefCell<HashMap<t, t>>,
-    lang_items: middle::lang_items::LanguageItems,
+    lang_items: @middle::lang_items::LanguageItems,
     // A mapping of fake provided method def_ids to the default implementation
     provided_method_sources: RefCell<HashMap<ast::DefId, ast::DefId>>,
     supertraits: RefCell<HashMap<ast::DefId, @~[@TraitRef]>>,
@@ -650,7 +640,6 @@ pub enum sty {
 
     // "Fake" types, used for trans purposes
     ty_type, // type_desc*
-    ty_opaque_closure_ptr(Sigil), // ptr to env for || and proc
     ty_unboxed_vec(mt),
 }
 
@@ -866,7 +855,8 @@ impl ToStr for IntVarValue {
 pub struct TypeParameterDef {
     ident: ast::Ident,
     def_id: ast::DefId,
-    bounds: @ParamBounds
+    bounds: @ParamBounds,
+    default: Option<ty::t>
 }
 
 #[deriving(Encodable, Decodable, Clone)]
@@ -880,15 +870,21 @@ pub struct RegionParameterDef {
 #[deriving(Clone)]
 pub struct Generics {
     /// List of type parameters declared on the item.
-    type_param_defs: @~[TypeParameterDef],
+    type_param_defs: Rc<~[TypeParameterDef]>,
 
     /// List of region parameters declared on the item.
-    region_param_defs: @[RegionParameterDef],
+    region_param_defs: Rc<~[RegionParameterDef]>,
 }
 
 impl Generics {
     pub fn has_type_params(&self) -> bool {
-        !self.type_param_defs.is_empty()
+        !self.type_param_defs.borrow().is_empty()
+    }
+    pub fn type_param_defs<'a>(&'a self) -> &'a [TypeParameterDef] {
+        self.type_param_defs.borrow().as_slice()
+    }
+    pub fn region_param_defs<'a>(&'a self) -> &'a [RegionParameterDef] {
+        self.region_param_defs.borrow().as_slice()
     }
 }
 
@@ -957,7 +953,7 @@ pub fn mk_ctxt(s: session::Session,
                amap: ast_map::Map,
                freevars: freevars::freevar_map,
                region_maps: middle::region::RegionMaps,
-               lang_items: middle::lang_items::LanguageItems)
+               lang_items: @middle::lang_items::LanguageItems)
             -> ctxt {
     @ctxt_ {
         named_region_map: named_region_map,
@@ -1068,7 +1064,7 @@ pub fn mk_t(cx: ctxt, st: sty) -> t {
         flags |= get(mt.ty).flags;
       }
       &ty_nil | &ty_bool | &ty_char | &ty_int(_) | &ty_float(_) | &ty_uint(_) |
-      &ty_str(_) | &ty_type | &ty_opaque_closure_ptr(_) => {}
+      &ty_str(_) | &ty_type => {}
       // You might think that we could just return ty_err for
       // any type containing ty_err as a component, and get
       // rid of the has_ty_err flag -- likewise for ty_bot (with
@@ -1333,10 +1329,6 @@ pub fn mk_param(cx: ctxt, n: uint, k: DefId) -> t {
 
 pub fn mk_type(cx: ctxt) -> t { mk_t(cx, ty_type) }
 
-pub fn mk_opaque_closure_ptr(cx: ctxt, sigil: ast::Sigil) -> t {
-    mk_t(cx, ty_opaque_closure_ptr(sigil))
-}
-
 pub fn walk_ty(ty: t, f: |t|) {
     maybe_walk_ty(ty, |t| { f(t); true });
 }
@@ -1346,27 +1338,27 @@ pub fn maybe_walk_ty(ty: t, f: |t| -> bool) {
         return;
     }
     match get(ty).sty {
-      ty_nil | ty_bot | ty_bool | ty_char | ty_int(_) | ty_uint(_) | ty_float(_) |
-      ty_str(_) | ty_type | ty_self(_) |
-      ty_opaque_closure_ptr(_) | ty_infer(_) | ty_param(_) | ty_err => {}
-      ty_box(ty) | ty_uniq(ty) => maybe_walk_ty(ty, f),
-      ty_vec(ref tm, _) | ty_unboxed_vec(ref tm) | ty_ptr(ref tm) |
-      ty_rptr(_, ref tm) => {
-        maybe_walk_ty(tm.ty, f);
-      }
-      ty_enum(_, ref substs) | ty_struct(_, ref substs) |
-      ty_trait(_, ref substs, _, _, _) => {
-        for subty in (*substs).tps.iter() { maybe_walk_ty(*subty, |x| f(x)); }
-      }
-      ty_tup(ref ts) => { for tt in ts.iter() { maybe_walk_ty(*tt, |x| f(x)); } }
-      ty_bare_fn(ref ft) => {
-        for a in ft.sig.inputs.iter() { maybe_walk_ty(*a, |x| f(x)); }
-        maybe_walk_ty(ft.sig.output, f);
-      }
-      ty_closure(ref ft) => {
-        for a in ft.sig.inputs.iter() { maybe_walk_ty(*a, |x| f(x)); }
-        maybe_walk_ty(ft.sig.output, f);
-      }
+        ty_nil | ty_bot | ty_bool | ty_char | ty_int(_) | ty_uint(_) | ty_float(_) |
+        ty_str(_) | ty_type | ty_self(_) |
+        ty_infer(_) | ty_param(_) | ty_err => {}
+        ty_box(ty) | ty_uniq(ty) => maybe_walk_ty(ty, f),
+        ty_vec(ref tm, _) | ty_unboxed_vec(ref tm) | ty_ptr(ref tm) |
+        ty_rptr(_, ref tm) => {
+            maybe_walk_ty(tm.ty, f);
+        }
+        ty_enum(_, ref substs) | ty_struct(_, ref substs) |
+        ty_trait(_, ref substs, _, _, _) => {
+            for subty in (*substs).tps.iter() { maybe_walk_ty(*subty, |x| f(x)); }
+        }
+        ty_tup(ref ts) => { for tt in ts.iter() { maybe_walk_ty(*tt, |x| f(x)); } }
+        ty_bare_fn(ref ft) => {
+            for a in ft.sig.inputs.iter() { maybe_walk_ty(*a, |x| f(x)); }
+            maybe_walk_ty(ft.sig.output, f);
+        }
+        ty_closure(ref ft) => {
+            for a in ft.sig.inputs.iter() { maybe_walk_ty(*a, |x| f(x)); }
+            maybe_walk_ty(ft.sig.output, f);
+        }
     }
 }
 
@@ -1565,7 +1557,7 @@ pub fn type_is_box(ty: t) -> bool {
 
 pub fn type_is_boxed(ty: t) -> bool {
     match get(ty).sty {
-      ty_box(_) | ty_vec(_, vstore_box) | ty_str(vstore_box) => true,
+      ty_box(_) => true,
       _ => false
     }
 }
@@ -1608,11 +1600,8 @@ pub fn type_is_vec(ty: t) -> bool {
 
 pub fn type_is_unique(ty: t) -> bool {
     match get(ty).sty {
-        ty_uniq(_) |
-        ty_vec(_, vstore_uniq) |
-        ty_str(vstore_uniq) |
-        ty_opaque_closure_ptr(ast::OwnedSigil) => true,
-        _ => return false
+        ty_uniq(_) | ty_vec(_, vstore_uniq) | ty_str(vstore_uniq) => true,
+        _ => false
     }
 }
 
@@ -1692,10 +1681,7 @@ fn type_needs_unwind_cleanup_(cx: ctxt, ty: t,
           }
           ty_uniq(_) |
           ty_str(vstore_uniq) |
-          ty_str(vstore_box) |
-          ty_vec(_, vstore_uniq) |
-          ty_vec(_, vstore_box)
-          => {
+          ty_vec(_, vstore_uniq) => {
             // Once we're inside a box, the annihilator will find
             // it and destroy it.
             if !encountered_box {
@@ -1789,7 +1775,9 @@ def_type_content_sets!(
         // Things that prevent values from being considered sized
         Nonsized                            = 0b0000__00000000__0001,
 
-        // Things that make values considered not POD (same as `Moves`)
+        // Things that make values considered not POD (would be same
+        // as `Moves`, but for the fact that managed data `@` is
+        // not considered POD)
         Nonpod                              = 0b0000__00001111__0000,
 
         // Bits to set when a managed value is encountered
@@ -2036,10 +2024,6 @@ pub fn type_contents(cx: ctxt, ty: t) -> TypeContents {
                 tc_mt(cx, mt, cache).owned_pointer()
             }
 
-            ty_vec(mt, vstore_box) => {
-                tc_mt(cx, mt, cache).managed_pointer()
-            }
-
             ty_vec(ref mt, vstore_slice(r)) => {
                 tc_ty(cx, mt.ty, cache).reference(
                     borrowed_contents(r, mt.mutbl))
@@ -2047,10 +2031,6 @@ pub fn type_contents(cx: ctxt, ty: t) -> TypeContents {
 
             ty_vec(mt, vstore_fixed(_)) => {
                 tc_mt(cx, mt, cache)
-            }
-
-            ty_str(vstore_box) => {
-                TC::Managed
             }
 
             ty_str(vstore_slice(r)) => {
@@ -2068,7 +2048,7 @@ pub fn type_contents(cx: ctxt, ty: t) -> TypeContents {
                 if ty::has_dtor(cx, did) {
                     res = res | TC::OwnsDtor;
                 }
-                apply_attributes(cx, did, res)
+                apply_lang_items(cx, did, res)
             }
 
             ty_tup(ref tys) => {
@@ -2083,7 +2063,7 @@ pub fn type_contents(cx: ctxt, ty: t) -> TypeContents {
                             tc_ty(cx, *arg_ty, cache)
                         })
                     });
-                apply_attributes(cx, did, res)
+                apply_lang_items(cx, did, res)
             }
 
             ty_param(p) => {
@@ -2118,13 +2098,6 @@ pub fn type_contents(cx: ctxt, ty: t) -> TypeContents {
                 TC::All
             }
             ty_unboxed_vec(mt) => TC::InteriorUnsized | tc_mt(cx, mt, cache),
-            ty_opaque_closure_ptr(sigil) => {
-                match sigil {
-                    ast::BorrowedSigil => TC::ReachesBorrowed,
-                    ast::ManagedSigil => TC::Managed,
-                    ast::OwnedSigil => TC::OwnsOwned,
-                }
-            }
 
             ty_type => TC::None,
 
@@ -2145,13 +2118,21 @@ pub fn type_contents(cx: ctxt, ty: t) -> TypeContents {
         mc | tc_ty(cx, mt.ty, cache)
     }
 
-    fn apply_attributes(cx: ctxt,
+    fn apply_lang_items(cx: ctxt,
                         did: ast::DefId,
                         tc: TypeContents)
                         -> TypeContents {
-        tc |
-            TC::ReachesMutable.when(has_attr(cx, did, "no_freeze")) |
-            TC::ReachesNonsendAnnot.when(has_attr(cx, did, "no_send"))
+        if Some(did) == cx.lang_items.no_freeze_bound() {
+            tc | TC::ReachesMutable
+        } else if Some(did) == cx.lang_items.no_send_bound() {
+            tc | TC::ReachesNonsendAnnot
+        } else if Some(did) == cx.lang_items.managed_bound() {
+            tc | TC::Managed
+        } else if Some(did) == cx.lang_items.no_pod_bound() {
+            tc | TC::OwnsAffine
+        } else {
+            tc
+        }
     }
 
     fn borrowed_contents(region: ty::Region,
@@ -2308,7 +2289,6 @@ pub fn is_instantiable(cx: ctxt, r_ty: t) -> bool {
             ty_param(_) |
             ty_self(_) |
             ty_type |
-            ty_opaque_closure_ptr(_) |
             ty_vec(_, _) |
             ty_unboxed_vec(_) => {
                 false
@@ -2374,53 +2354,104 @@ pub fn is_instantiable(cx: ctxt, r_ty: t) -> bool {
     !subtypes_require(cx, &mut seen, r_ty, r_ty)
 }
 
-pub fn type_structurally_contains(cx: ctxt, ty: t, test: |x: &sty| -> bool)
-                                  -> bool {
-    let sty = &get(ty).sty;
-    debug!("type_structurally_contains: {}",
-           ::util::ppaux::ty_to_str(cx, ty));
-    if test(sty) { return true; }
-    match *sty {
-      ty_enum(did, ref substs) => {
-        for variant in (*enum_variants(cx, did)).iter() {
-            for aty in variant.args.iter() {
-                let sty = subst(cx, substs, *aty);
-                if type_structurally_contains(cx, sty, |x| test(x)) { return true; }
-            }
-        }
-        return false;
-      }
-      ty_struct(did, ref substs) => {
-        let r = lookup_struct_fields(cx, did);
-        for field in r.iter() {
-            let ft = lookup_field_type(cx, did, field.id, substs);
-            if type_structurally_contains(cx, ft, |x| test(x)) { return true; }
-        }
-        return false;
-      }
-
-      ty_tup(ref ts) => {
-        for tt in ts.iter() {
-            if type_structurally_contains(cx, *tt, |x| test(x)) { return true; }
-        }
-        return false;
-      }
-      ty_vec(ref mt, vstore_fixed(_)) => {
-        return type_structurally_contains(cx, mt.ty, test);
-      }
-      _ => return false
-    }
+/// Describes whether a type is representable. For types that are not
+/// representable, 'SelfRecursive' and 'ContainsRecursive' are used to
+/// distinguish between types that are recursive with themselves and types that
+/// contain a different recursive type. These cases can therefore be treated
+/// differently when reporting errors.
+#[deriving(Eq)]
+pub enum Representability {
+    Representable,
+    SelfRecursive,
+    ContainsRecursive,
 }
 
-pub fn type_structurally_contains_uniques(cx: ctxt, ty: t) -> bool {
-    return type_structurally_contains(cx, ty, |sty| {
-        match *sty {
-          ty_uniq(_) |
-          ty_vec(_, vstore_uniq) |
-          ty_str(vstore_uniq) => true,
-          _ => false,
+/// Check whether a type is representable. This means it cannot contain unboxed
+/// structural recursion. This check is needed for structs and enums.
+pub fn is_type_representable(cx: ctxt, ty: t) -> Representability {
+
+    // Iterate until something non-representable is found
+    fn find_nonrepresentable<It: Iterator<t>>(cx: ctxt, seen: &mut ~[DefId],
+                                              mut iter: It) -> Representability {
+        for ty in iter {
+            let r = type_structurally_recursive(cx, seen, ty);
+            if r != Representable {
+                 return r
+            }
         }
-    });
+        Representable
+    }
+
+    // Does the type `ty` directly (without indirection through a pointer)
+    // contain any types on stack `seen`?
+    fn type_structurally_recursive(cx: ctxt, seen: &mut ~[DefId],
+                                   ty: t) -> Representability {
+        debug!("type_structurally_recursive: {}",
+               ::util::ppaux::ty_to_str(cx, ty));
+
+        // Compare current type to previously seen types
+        match get(ty).sty {
+            ty_struct(did, _) |
+            ty_enum(did, _) => {
+                for (i, &seen_did) in seen.iter().enumerate() {
+                    if did == seen_did {
+                        return if i == 0 { SelfRecursive }
+                               else { ContainsRecursive }
+                    }
+                }
+            }
+            _ => (),
+        }
+
+        // Check inner types
+        match get(ty).sty {
+            // Tuples
+            ty_tup(ref ts) => {
+                find_nonrepresentable(cx, seen, ts.iter().map(|t| *t))
+            }
+            // Fixed-length vectors.
+            // FIXME(#11924) Behavior undecided for zero-length vectors.
+            ty_vec(mt, vstore_fixed(_)) => {
+                type_structurally_recursive(cx, seen, mt.ty)
+            }
+
+            // Push struct and enum def-ids onto `seen` before recursing.
+            ty_struct(did, ref substs) => {
+                seen.push(did);
+                let fields = struct_fields(cx, did, substs);
+                let r = find_nonrepresentable(cx, seen,
+                                              fields.iter().map(|f| f.mt.ty));
+                seen.pop();
+                r
+            }
+            ty_enum(did, ref substs) => {
+                seen.push(did);
+                let vs = enum_variants(cx, did);
+
+                let mut r = Representable;
+                for variant in vs.iter() {
+                    let iter = variant.args.iter().map(|aty| subst(cx, substs, *aty));
+                    r = find_nonrepresentable(cx, seen, iter);
+
+                    if r != Representable { break }
+                }
+
+                seen.pop();
+                r
+            }
+
+            _ => Representable,
+        }
+    }
+
+    debug!("is_type_representable: {}",
+           ::util::ppaux::ty_to_str(cx, ty));
+
+    // To avoid a stack overflow when checking an enum variant or struct that
+    // contains a different, structurally recursive type, maintain a stack
+    // of seen types and check recursion for each of them (issues #3008, #3779).
+    let mut seen: ~[DefId] = ~[];
+    type_structurally_recursive(cx, &mut seen, ty)
 }
 
 pub fn type_is_trait(ty: t) -> bool {
@@ -2487,14 +2518,14 @@ pub fn type_is_pod(cx: ctxt, ty: t) -> bool {
       ty_type | ty_ptr(_) | ty_bare_fn(_) => result = true,
       // Boxed types
       ty_box(_) | ty_uniq(_) | ty_closure(_) |
-      ty_str(vstore_uniq) | ty_str(vstore_box) |
-      ty_vec(_, vstore_uniq) | ty_vec(_, vstore_box) |
+      ty_str(vstore_uniq) |
+      ty_vec(_, vstore_uniq) |
       ty_trait(_, _, _, _, _) | ty_rptr(_,_) => result = false,
       // Structural types
       ty_enum(did, ref substs) => {
         let variants = enum_variants(cx, did);
         for variant in (*variants).iter() {
-            // XXX(pcwalton): This is an inefficient way to do this. Don't
+            // FIXME(pcwalton): This is an inefficient way to do this. Don't
             // synthesize a tuple!
             //
             // Perform any type parameter substitutions.
@@ -2511,7 +2542,6 @@ pub fn type_is_pod(cx: ctxt, ty: t) -> bool {
         result = type_is_pod(cx, mt.ty);
       }
       ty_param(_) => result = false,
-      ty_opaque_closure_ptr(_) => result = true,
       ty_struct(did, ref substs) => {
         let fields = lookup_struct_fields(cx, did);
         result = fields.iter().all(|f| {
@@ -2556,7 +2586,7 @@ pub fn type_is_sized(cx: ctxt, ty: ty::t) -> bool {
     }
 }
 
-// Whether a type is enum like, that is a enum type with only nullary
+// Whether a type is enum like, that is an enum type with only nullary
 // constructors
 pub fn type_is_c_like_enum(cx: ctxt, ty: t) -> bool {
     match get(ty).sty {
@@ -2644,10 +2674,8 @@ pub fn node_id_to_trait_ref(cx: ctxt, id: ast::NodeId) -> @ty::TraitRef {
 }
 
 pub fn node_id_to_type(cx: ctxt, id: ast::NodeId) -> t {
-    //printfln!("{:?}/{:?}", id, cx.node_types.len());
-    let node_types = cx.node_types.borrow();
-    match node_types.get().find(&(id as uint)) {
-       Some(&t) => t,
+    match node_id_to_type_opt(cx, id) {
+       Some(t) => t,
        None => cx.sess.bug(
            format!("node_id_to_type: no type for node `{}`",
                 ast_map::node_id_to_str(cx.items, id,
@@ -2655,7 +2683,16 @@ pub fn node_id_to_type(cx: ctxt, id: ast::NodeId) -> t {
     }
 }
 
-// XXX(pcwalton): Makes a copy, bleh. Probably better to not do that.
+pub fn node_id_to_type_opt(cx: ctxt, id: ast::NodeId) -> Option<t> {
+    let node_types = cx.node_types.borrow();
+    debug!("id: {:?}, node_types: {:?}", id, node_types);
+    match node_types.get().find(&(id as uint)) {
+       Some(&t) => Some(t),
+       None => None
+    }
+}
+
+// FIXME(pcwalton): Makes a copy, bleh. Probably better to not do that.
 pub fn node_id_to_type_params(cx: ctxt, id: ast::NodeId) -> ~[t] {
     let node_type_substs = cx.node_type_substs.borrow();
     match node_type_substs.get().find(&id) {
@@ -2823,6 +2860,10 @@ pub fn pat_ty(cx: ctxt, pat: &ast::Pat) -> t {
 // expr_ty_params_and_ty() below.
 pub fn expr_ty(cx: ctxt, expr: &ast::Expr) -> t {
     return node_id_to_type(cx, expr.id);
+}
+
+pub fn expr_ty_opt(cx: ctxt, expr: &ast::Expr) -> Option<t> {
+    return node_id_to_type_opt(cx, expr.id);
 }
 
 pub fn expr_ty_adjusted(cx: ctxt, expr: &ast::Expr) -> t {
@@ -3059,7 +3100,7 @@ pub fn expr_has_ty_params(cx: ctxt, expr: &ast::Expr) -> bool {
 pub fn method_call_type_param_defs(tcx: ctxt,
                                    method_map: typeck::method_map,
                                    id: ast::NodeId)
-                                   -> Option<@~[TypeParameterDef]> {
+                                   -> Option<Rc<~[TypeParameterDef]>> {
     let method_map = method_map.borrow();
     method_map.get().find(&id).map(|method| {
         match method.origin {
@@ -3079,12 +3120,12 @@ pub fn method_call_type_param_defs(tcx: ctxt,
             // method bounds, so we must preprend the tps from the
             // trait itself.  This ought to be harmonized.
             let trait_type_param_defs =
-                lookup_trait_def(tcx, trt_id).generics.type_param_defs;
-            @vec::append(
-                (*trait_type_param_defs).clone(),
-                *ty::trait_method(tcx,
-                                  trt_id,
-                                  n_mth).generics.type_param_defs)
+                lookup_trait_def(tcx, trt_id).generics.type_param_defs();
+            Rc::new(vec::append(
+                trait_type_param_defs.to_owned(),
+                ty::trait_method(tcx,
+                                 trt_id,
+                                 n_mth).generics.type_param_defs()))
           }
         }
     })
@@ -3139,22 +3180,37 @@ pub fn expr_kind(tcx: ctxt,
     }
 
     match expr.node {
-        ast::ExprPath(..) | ast::ExprSelf => {
+        ast::ExprPath(..) => {
             match resolve_expr(tcx, expr) {
-                ast::DefVariant(..) | ast::DefStruct(..) => RvalueDpsExpr,
+                ast::DefVariant(tid, vid, _) => {
+                    let variant_info = enum_variant_with_id(tcx, tid, vid);
+                    if variant_info.args.len() > 0u {
+                        // N-ary variant.
+                        RvalueDatumExpr
+                    } else {
+                        // Nullary variant.
+                        RvalueDpsExpr
+                    }
+                }
+
+                ast::DefStruct(_) => {
+                    match get(expr_ty(tcx, expr)).sty {
+                        ty_bare_fn(..) => RvalueDatumExpr,
+                        _ => RvalueDpsExpr
+                    }
+                }
 
                 // Fn pointers are just scalar values.
                 ast::DefFn(..) | ast::DefStaticMethod(..) => RvalueDatumExpr,
 
                 // Note: there is actually a good case to be made that
-                // def_args, particularly those of immediate type, ought to
+                // DefArg's, particularly those of immediate type, ought to
                 // considered rvalues.
                 ast::DefStatic(..) |
                 ast::DefBinding(..) |
                 ast::DefUpvar(..) |
                 ast::DefArg(..) |
-                ast::DefLocal(..) |
-                ast::DefSelf(..) => LvalueExpr,
+                ast::DefLocal(..) => LvalueExpr,
 
                 def => {
                     tcx.sess.span_bug(expr.span, format!(
@@ -3178,7 +3234,6 @@ pub fn expr_kind(tcx: ctxt,
         ast::ExprMatch(..) |
         ast::ExprFnBlock(..) |
         ast::ExprProc(..) |
-        ast::ExprDoBody(..) |
         ast::ExprBlock(..) |
         ast::ExprRepeat(..) |
         ast::ExprVstore(_, ast::ExprVstoreSlice) |
@@ -3236,7 +3291,6 @@ pub fn expr_kind(tcx: ctxt,
         ast::ExprUnary(..) |
         ast::ExprAddrOf(..) |
         ast::ExprBinary(..) |
-        ast::ExprVstore(_, ast::ExprVstoreBox) |
         ast::ExprVstore(_, ast::ExprVstoreUniq) => {
             RvalueDatumExpr
         }
@@ -3284,9 +3338,10 @@ pub fn field_idx_strict(tcx: ty::ctxt, name: ast::Name, fields: &[field])
                      -> uint {
     let mut i = 0u;
     for f in fields.iter() { if f.ident.name == name { return i; } i += 1u; }
+    let string = token::get_ident(name);
     tcx.sess.bug(format!(
         "No field named `{}` found in the list of fields `{:?}`",
-        token::interner_get(name),
+        string.get(),
         fields.map(|f| tcx.sess.str_of(f.ident))));
 }
 
@@ -3343,30 +3398,29 @@ pub fn occurs_check(tcx: ctxt, sp: Span, vid: TyVid, rt: t) {
 
 pub fn ty_sort_str(cx: ctxt, t: t) -> ~str {
     match get(t).sty {
-      ty_nil | ty_bot | ty_bool | ty_char | ty_int(_) |
-      ty_uint(_) | ty_float(_) | ty_str(_) |
-      ty_type | ty_opaque_closure_ptr(_) => {
-        ::util::ppaux::ty_to_str(cx, t)
-      }
+        ty_nil | ty_bot | ty_bool | ty_char | ty_int(_) |
+        ty_uint(_) | ty_float(_) | ty_str(_) | ty_type => {
+            ::util::ppaux::ty_to_str(cx, t)
+        }
 
-      ty_enum(id, _) => format!("enum {}", item_path_str(cx, id)),
-      ty_box(_) => ~"@-ptr",
-      ty_uniq(_) => ~"~-ptr",
-      ty_vec(_, _) => ~"vector",
-      ty_unboxed_vec(_) => ~"unboxed vector",
-      ty_ptr(_) => ~"*-ptr",
-      ty_rptr(_, _) => ~"&-ptr",
-      ty_bare_fn(_) => ~"extern fn",
-      ty_closure(_) => ~"fn",
-      ty_trait(id, _, _, _, _) => format!("trait {}", item_path_str(cx, id)),
-      ty_struct(id, _) => format!("struct {}", item_path_str(cx, id)),
-      ty_tup(_) => ~"tuple",
-      ty_infer(TyVar(_)) => ~"inferred type",
-      ty_infer(IntVar(_)) => ~"integral variable",
-      ty_infer(FloatVar(_)) => ~"floating-point variable",
-      ty_param(_) => ~"type parameter",
-      ty_self(_) => ~"self",
-      ty_err => ~"type error"
+        ty_enum(id, _) => format!("enum {}", item_path_str(cx, id)),
+        ty_box(_) => ~"@-ptr",
+        ty_uniq(_) => ~"~-ptr",
+        ty_vec(_, _) => ~"vector",
+        ty_unboxed_vec(_) => ~"unboxed vector",
+        ty_ptr(_) => ~"*-ptr",
+        ty_rptr(_, _) => ~"&-ptr",
+        ty_bare_fn(_) => ~"extern fn",
+        ty_closure(_) => ~"fn",
+        ty_trait(id, _, _, _, _) => format!("trait {}", item_path_str(cx, id)),
+        ty_struct(id, _) => format!("struct {}", item_path_str(cx, id)),
+        ty_tup(_) => ~"tuple",
+        ty_infer(TyVar(_)) => ~"inferred type",
+        ty_infer(IntVar(_)) => ~"integral variable",
+        ty_infer(FloatVar(_)) => ~"floating-point variable",
+        ty_param(_) => ~"type parameter",
+        ty_self(_) => ~"self",
+        ty_err => ~"type error"
     }
 }
 
@@ -4106,7 +4160,7 @@ pub fn each_attr(tcx: ctxt, did: DefId, f: |@MetaItem| -> bool) -> bool {
 pub fn has_attr(tcx: ctxt, did: DefId, attr: &str) -> bool {
     let mut found = false;
     each_attr(tcx, did, |item| {
-        if attr == item.name() {
+        if item.name().equiv(&attr) {
             found = true;
             false
         } else {
@@ -4152,7 +4206,7 @@ pub fn lookup_field_type(tcx: ctxt,
                Some(&ty_param_bounds_and_ty {ty, ..}) => ty,
                None => {
                    let tpt = csearch::get_field_type(tcx, struct_id, id);
-                   tcache.get().insert(id, tpt);
+                   tcache.get().insert(id, tpt.clone());
                    tpt.ty
                }
             }
@@ -4360,7 +4414,7 @@ pub fn normalize_ty(cx: ctxt, t: t) -> t {
 
         fn fold_vstore(&mut self, vstore: vstore) -> vstore {
             match vstore {
-                vstore_fixed(..) | vstore_uniq | vstore_box => vstore,
+                vstore_fixed(..) | vstore_uniq => vstore,
                 vstore_slice(_) => vstore_slice(ReStatic)
             }
         }
@@ -4775,7 +4829,7 @@ pub fn trait_method_of_method(tcx: ctxt,
 
 /// Creates a hash of the type `t` which will be the same no matter what crate
 /// context it's calculated within. This is used by the `type_id` intrinsic.
-pub fn hash_crate_independent(tcx: ctxt, t: t, local_hash: @str) -> u64 {
+pub fn hash_crate_independent(tcx: ctxt, t: t, local_hash: ~str) -> u64 {
     use std::hash::{SipState, Streaming};
 
     let mut hash = SipState::new(0, 0);
@@ -4797,7 +4851,6 @@ pub fn hash_crate_independent(tcx: ctxt, t: t, local_hash: @str) -> u64 {
         match v {
             vstore_fixed(_) => hash.input([0]),
             vstore_uniq => hash.input([1]),
-            vstore_box => hash.input([2]),
             vstore_slice(r) => {
                 hash.input([3]);
                 region(hash, r);
@@ -4806,7 +4859,7 @@ pub fn hash_crate_independent(tcx: ctxt, t: t, local_hash: @str) -> u64 {
     };
     let did = |hash: &mut SipState, did: DefId| {
         let h = if ast_util::is_local(did) {
-            local_hash
+            local_hash.clone()
         } else {
             tcx.sess.cstore.get_crate_hash(did.crate)
         };
@@ -4912,12 +4965,8 @@ pub fn hash_crate_independent(tcx: ctxt, t: t, local_hash: @str) -> u64 {
             ty_infer(_) => unreachable!(),
             ty_err => hash.input([23]),
             ty_type => hash.input([24]),
-            ty_opaque_closure_ptr(s) => {
-                hash.input([25]);
-                iter(&mut hash, &s);
-            }
             ty_unboxed_vec(m) => {
-                hash.input([26]);
+                hash.input([25]);
                 mt(&mut hash, m);
             }
         }

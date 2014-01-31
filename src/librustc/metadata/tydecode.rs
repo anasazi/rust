@@ -156,7 +156,6 @@ fn parse_vstore(st: &mut PState, conv: conv_did) -> ty::vstore {
 
     match next(st) {
       '~' => ty::vstore_uniq,
-      '@' => ty::vstore_box,
       '&' => ty::vstore_slice(parse_region(st, conv)),
       c => st.tcx.sess.bug(format!("parse_vstore(): bad input '{}'", c))
     }
@@ -374,10 +373,6 @@ fn parse_ty(st: &mut PState, conv: conv_did) -> ty::t {
         return ty::mk_bare_fn(st.tcx, parse_bare_fn_ty(st, |x,y| conv(x,y)));
       }
       'Y' => return ty::mk_type(st.tcx),
-      'C' => {
-        let sigil = parse_sigil(st);
-        return ty::mk_opaque_closure_ptr(st.tcx, sigil);
-      }
       '#' => {
         let pos = parse_hex(st);
         assert_eq!(next(st), ':');
@@ -577,9 +572,12 @@ pub fn parse_type_param_def_data(data: &[u8], start: uint,
 }
 
 fn parse_type_param_def(st: &mut PState, conv: conv_did) -> ty::TypeParameterDef {
-    ty::TypeParameterDef {ident: parse_ident(st, ':'),
-                          def_id: parse_def(st, NominalType, |x,y| conv(x,y)),
-                          bounds: @parse_bounds(st, |x,y| conv(x,y))}
+    ty::TypeParameterDef {
+        ident: parse_ident(st, ':'),
+        def_id: parse_def(st, NominalType, |x,y| conv(x,y)),
+        bounds: @parse_bounds(st, |x,y| conv(x,y)),
+        default: parse_opt(st, |st| parse_ty(st, |x,y| conv(x,y)))
+    }
 }
 
 fn parse_bounds(st: &mut PState, conv: conv_did) -> ty::ParamBounds {

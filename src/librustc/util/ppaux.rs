@@ -18,10 +18,8 @@ use middle::ty::{ReFree, ReScope, ReInfer, ReStatic, Region,
                  ReEmpty};
 use middle::ty::{ty_bool, ty_char, ty_bot, ty_box, ty_struct, ty_enum};
 use middle::ty::{ty_err, ty_str, ty_vec, ty_float, ty_bare_fn, ty_closure};
-use middle::ty::{ty_nil, ty_opaque_closure_ptr, ty_param};
-use middle::ty::{ty_ptr, ty_rptr, ty_self, ty_tup, ty_type, ty_uniq};
-use middle::ty::{ty_trait, ty_int};
-use middle::ty::{ty_uint, ty_unboxed_vec, ty_infer};
+use middle::ty::{ty_nil, ty_param, ty_ptr, ty_rptr, ty_self, ty_tup, ty_type};
+use middle::ty::{ty_uniq, ty_trait, ty_int, ty_uint, ty_unboxed_vec, ty_infer};
 use middle::ty;
 use middle::typeck;
 use syntax::abi::AbiSet;
@@ -262,7 +260,6 @@ pub fn vstore_to_str(cx: ctxt, vs: ty::vstore) -> ~str {
     match vs {
       ty::vstore_fixed(n) => format!("{}", n),
       ty::vstore_uniq => ~"~",
-      ty::vstore_box => ~"@",
       ty::vstore_slice(r) => region_ptr_to_str(cx, r)
     }
 }
@@ -487,12 +484,13 @@ pub fn ty_to_str(cx: ctxt, typ: t) -> ~str {
       ty_enum(did, ref substs) | ty_struct(did, ref substs) => {
         let path = ty::item_path(cx, did);
         let base = ast_map::path_to_str(path, cx.sess.intr());
-        parameterized(cx, base, &substs.regions, substs.tps)
+        parameterized(cx, base, &substs.regions, substs.tps, did, false)
       }
       ty_trait(did, ref substs, s, mutbl, ref bounds) => {
         let path = ty::item_path(cx, did);
         let base = ast_map::path_to_str(path, cx.sess.intr());
-        let ty = parameterized(cx, base, &substs.regions, substs.tps);
+        let ty = parameterized(cx, base, &substs.regions,
+                               substs.tps, did, true);
         let bound_sep = if bounds.is_empty() { "" } else { ":" };
         let bound_str = bounds.repr(cx);
         format!("{}{}{}{}{}", trait_store_to_str(cx, s), mutability_to_str(mutbl), ty,
@@ -501,17 +499,16 @@ pub fn ty_to_str(cx: ctxt, typ: t) -> ~str {
       ty_vec(ref mt, vs) => {
         vstore_ty_to_str(cx, mt, vs)
       }
-      ty_str(vs) => format!("{}{}", vstore_to_str(cx, vs), "str"),
-      ty_opaque_closure_ptr(ast::BorrowedSigil) => ~"&closure",
-      ty_opaque_closure_ptr(ast::ManagedSigil) => ~"@closure",
-      ty_opaque_closure_ptr(ast::OwnedSigil) => ~"~closure",
+      ty_str(vs) => format!("{}{}", vstore_to_str(cx, vs), "str")
     }
 }
 
 pub fn parameterized(cx: ctxt,
                      base: &str,
                      regions: &ty::RegionSubsts,
-                     tps: &[ty::t]) -> ~str {
+                     tps: &[ty::t],
+                     did: ast::DefId,
+                     is_trait: bool) -> ~str {
 
     let mut strs = ~[];
     match *regions {
@@ -523,7 +520,32 @@ pub fn parameterized(cx: ctxt,
         }
     }
 
-    for t in tps.iter() {
+    let generics = if is_trait {
+        ty::lookup_trait_def(cx, did).generics.clone()
+    } else {
+        ty::lookup_item_type(cx, did).generics
+    };
+    let ty_params = generics.type_param_defs();
+    let has_defaults = ty_params.last().map_or(false, |def| def.default.is_some());
+    let num_defaults = if has_defaults {
+        // We should have a borrowed version of substs instead of cloning.
+        let mut substs = ty::substs {
+            tps: tps.to_owned(),
+            regions: regions.clone(),
+            self_ty: None
+        };
+        ty_params.iter().zip(tps.iter()).rev().take_while(|&(def, &actual)| {
+            substs.tps.pop();
+            match def.default {
+                Some(default) => ty::subst(cx, &substs, default) == actual,
+                None => false
+            }
+        }).len()
+    } else {
+        0
+    };
+
+    for t in tps.slice_to(tps.len() - num_defaults).iter() {
         strs.push(ty_to_str(cx, *t))
     }
 
@@ -778,8 +800,8 @@ impl Repr for ty::ty_param_bounds_and_ty {
 impl Repr for ty::Generics {
     fn repr(&self, tcx: ctxt) -> ~str {
         format!("Generics(type_param_defs: {}, region_param_defs: {})",
-                self.type_param_defs.repr(tcx),
-                self.region_param_defs.repr(tcx))
+                self.type_param_defs().repr(tcx),
+                self.region_param_defs().repr(tcx))
     }
 }
 
@@ -800,11 +822,10 @@ impl Repr for ty::Variance {
 
 impl Repr for ty::Method {
     fn repr(&self, tcx: ctxt) -> ~str {
-        format!("method(ident: {}, generics: {}, transformed_self_ty: {}, \
-                fty: {}, explicit_self: {}, vis: {}, def_id: {})",
+        format!("method(ident: {}, generics: {}, fty: {}, \
+                explicit_self: {}, vis: {}, def_id: {})",
                 self.ident.repr(tcx),
                 self.generics.repr(tcx),
-                self.transformed_self_ty.repr(tcx),
                 self.fty.repr(tcx),
                 self.explicit_self.repr(tcx),
                 self.vis.repr(tcx),
@@ -814,7 +835,8 @@ impl Repr for ty::Method {
 
 impl Repr for ast::Ident {
     fn repr(&self, _tcx: ctxt) -> ~str {
-        token::ident_to_str(self).to_owned()
+        let string = token::get_ident(self.name);
+        string.get().to_str()
     }
 }
 
@@ -847,12 +869,7 @@ impl Repr for ty::FnSig {
 
 impl Repr for typeck::method_map_entry {
     fn repr(&self, tcx: ctxt) -> ~str {
-        format!("method_map_entry \\{self_arg: {}, \
-              explicit_self: {}, \
-              origin: {}\\}",
-             self.self_ty.repr(tcx),
-             self.explicit_self.repr(tcx),
-             self.origin.repr(tcx))
+        format!("method_map_entry \\{origin: {}\\}", self.origin.repr(tcx))
     }
 }
 
@@ -980,9 +997,11 @@ impl UserString for ty::TraitRef {
         if tcx.sess.verbose() && self.substs.self_ty.is_some() {
             let mut all_tps = self.substs.tps.clone();
             for &t in self.substs.self_ty.iter() { all_tps.push(t); }
-            parameterized(tcx, base, &self.substs.regions, all_tps)
+            parameterized(tcx, base, &self.substs.regions,
+                          all_tps, self.def_id, true)
         } else {
-            parameterized(tcx, base, &self.substs.regions, self.substs.tps)
+            parameterized(tcx, base, &self.substs.regions,
+                          self.substs.tps, self.def_id, true)
         }
     }
 }

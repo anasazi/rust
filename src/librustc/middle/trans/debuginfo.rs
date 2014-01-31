@@ -130,8 +130,6 @@ use lib::llvm::llvm;
 use lib::llvm::{ModuleRef, ContextRef, ValueRef};
 use lib::llvm::debuginfo::*;
 use middle::trans::adt;
-use middle::trans::base;
-use middle::trans::build;
 use middle::trans::common::*;
 use middle::trans::datum::{Datum, Lvalue};
 use middle::trans::machine;
@@ -142,7 +140,7 @@ use middle::ty;
 use middle::pat_util;
 use util::ppaux;
 
-use std::c_str::ToCStr;
+use std::c_str::{CString, ToCStr};
 use std::cell::{Cell, RefCell};
 use std::hashmap::HashMap;
 use std::hashmap::HashSet;
@@ -151,7 +149,7 @@ use std::ptr;
 use std::sync::atomics;
 use std::vec;
 use syntax::codemap::{Span, Pos};
-use syntax::{ast, codemap, ast_util, ast_map, opt_vec};
+use syntax::{abi, ast, codemap, ast_util, ast_map, opt_vec};
 use syntax::parse::token;
 use syntax::parse::token::special_idents;
 
@@ -173,7 +171,6 @@ static DW_ATE_unsigned_char: c_uint = 0x08;
 
 /// A context object for maintaining all state needed by the debuginfo module.
 pub struct CrateDebugContext {
-    priv crate_file: ~str,
     priv llcontext: ContextRef,
     priv builder: DIBuilderRef,
     priv current_debug_location: Cell<DebugLocation>,
@@ -186,13 +183,12 @@ pub struct CrateDebugContext {
 }
 
 impl CrateDebugContext {
-    pub fn new(llmod: ModuleRef, crate: ~str) -> CrateDebugContext {
+    pub fn new(llmod: ModuleRef) -> CrateDebugContext {
         debug!("CrateDebugContext::new");
         let builder = unsafe { llvm::LLVMDIBuilderCreate(llmod) };
         // DIBuilder inherits context from the module, so we'd better use the same one
         let llcontext = unsafe { llvm::LLVMGetModuleContext(llmod) };
         return CrateDebugContext {
-            crate_file: crate,
             llcontext: llcontext,
             builder: builder,
             current_debug_location: Cell::new(UnknownLocation),
@@ -265,6 +261,20 @@ pub fn finalize(cx: @CrateContext) {
     unsafe {
         llvm::LLVMDIBuilderFinalize(DIB(cx));
         llvm::LLVMDIBuilderDispose(DIB(cx));
+        // Debuginfo generation in LLVM by default uses a higher
+        // version of dwarf than OS X currently understands. We can
+        // instruct LLVM to emit an older version of dwarf, however,
+        // for OS X to understand. For more info see #11352
+        // This can be overridden using --llvm-opts -dwarf-version,N.
+        if cx.sess.targ_cfg.os == abi::OsMacos {
+            "Dwarf Version".with_c_str(
+                |s| llvm::LLVMRustAddModuleFlag(cx.llmod, s, 2));
+        }
+
+        // Prevent bitcode readers from deleting the debug info.
+        "Debug Info Version".with_c_str(
+            |s| llvm::LLVMRustAddModuleFlag(cx.llmod, s,
+                                            llvm::LLVMRustDebugMetadataVersion));
     };
 }
 
@@ -328,8 +338,7 @@ pub fn create_captured_var_metadata(bcx: &Block,
         None => {
             cx.sess.span_bug(span, "debuginfo::create_captured_var_metadata() - NodeId not found");
         }
-        Some(ast_map::NodeLocal(ident, _)) => ident,
-        Some(ast_map::NodeArg(pat)) => {
+        Some(ast_map::NodeLocal(pat)) | Some(ast_map::NodeArg(pat)) => {
             match pat.node {
                 ast::PatIdent(_, ref path, _) => {
                     ast_util::path_to_ident(path)
@@ -407,83 +416,6 @@ pub fn create_match_binding_metadata(bcx: &Block,
                   scope_metadata,
                   DirectVariable { alloca: datum.val },
                   LocalVariable,
-                  span);
-}
-
-/// Creates debug information for the self argument of a method.
-///
-/// Adds the created metadata nodes directly to the crate's IR.
-pub fn create_self_argument_metadata(bcx: &Block,
-                                     type_of_self: ty::t,
-                                     llptr: ValueRef) {
-    if fn_should_be_ignored(bcx.fcx) {
-        return;
-    }
-
-    // Extract the span of the self argument from the method's AST
-    let fnitem = bcx.ccx().tcx.items.get(bcx.fcx.id);
-    let span = match fnitem {
-        ast_map::NodeMethod(method, _, _) => {
-            method.explicit_self.span
-        }
-        ast_map::NodeTraitMethod(trait_method, _, _) => {
-            match *trait_method {
-                ast::Provided(method) => method.explicit_self.span,
-                _ => {
-                    bcx.ccx()
-                       .sess
-                       .bug(format!("create_self_argument_metadata: \
-                                     unexpected sort of node: {:?}",
-                                     fnitem))
-                }
-            }
-        }
-        _ => bcx.ccx().sess.bug(
-                format!("create_self_argument_metadata: unexpected sort of node: {:?}", fnitem))
-    };
-
-    let scope_metadata = bcx.fcx.debug_context.get_ref(bcx.ccx(), span).fn_metadata;
-
-    let argument_index = {
-        let counter = &bcx.fcx.debug_context.get_ref(bcx.ccx(), span).argument_counter;
-        let argument_index = counter.get();
-        counter.set(argument_index + 1);
-        argument_index
-    };
-
-    let address_operations = &[unsafe { llvm::LLVMDIBuilderCreateOpDeref(Type::i64().to_ref()) }];
-
-    // The self argument comes in one of two forms:
-    // (1) For `&self`, `~self`, and `@self` it is an alloca containing a pointer to the data. That
-    //     is the `{&~@}self` pointer is contained by value in the alloca, and `type_of_self` will
-    //     be `{&~@}Self`
-    // (2) For by-value `self`, `llptr` will not be an alloca, but a pointer to the self-value. That
-    //     is by-value `self` is always implicitly passed by reference (sic!). So we have a couple
-    //     of problems here:
-    //     (a) There is no alloca to give to `llvm.dbg.declare` and
-    //     (b) `type_of_self` is `Self`, but `llptr` is of type `*Self`
-    //     In order to solve this problem, the else branch below creates a helper alloca which
-    //     contains a copy of `llptr`. We then describe the `self` parameter by pointing
-    //     `llvm.dbg.declare` to this helper alloca and tell it that the pointer there needs to be
-    //     dereferenced once to get to the actual data (similar to non-immediate by-value args).
-    let variable_access = if unsafe { llvm::LLVMIsAAllocaInst(llptr) } != ptr::null() {
-        DirectVariable { alloca: llptr }
-    } else {
-        // Create a helper alloca that allows us to track the self-argument properly. The alloca
-        // contains a pointer to the self-value.
-        let ptr_type = ty::mk_mut_ptr(bcx.tcx(), type_of_self);
-        let helper_alloca = base::alloc_ty(bcx, ptr_type, "__self");
-        build::Store(bcx, llptr, helper_alloca);
-
-        IndirectVariable { alloca: helper_alloca, address_operations: address_operations }
-    };
-
-    declare_local(bcx,
-                  special_idents::self_,
-                  type_of_self,
-                  scope_metadata,
-                  variable_access,
-                  ArgumentVariable(argument_index),
                   span);
 }
 
@@ -690,7 +622,8 @@ pub fn create_function_debug_context(cx: &CrateContext,
     };
 
     // get_template_parameters() will append a `<...>` clause to the function name if necessary.
-    let mut function_name = token::ident_to_str(&ident).to_owned();
+    let function_name_string = token::get_ident(ident.name);
+    let mut function_name = function_name_string.get().to_owned();
     let template_parameters = get_template_parameters(cx,
                                                       generics,
                                                       param_substs,
@@ -859,7 +792,9 @@ pub fn create_function_debug_context(cx: &CrateContext,
 
                 let ident = special_idents::type_self;
 
-                let param_metadata = token::ident_to_str(&ident).with_c_str(|name| {
+                let param_metadata_string = token::get_ident(ident.name);
+                let param_metadata = param_metadata_string.get()
+                                                          .with_c_str(|name| {
                     unsafe {
                         llvm::LLVMDIBuilderCreateTemplateTypeParameter(
                             DIB(cx),
@@ -897,7 +832,9 @@ pub fn create_function_debug_context(cx: &CrateContext,
             // Again, only create type information if extra_debuginfo is enabled
             if cx.sess.opts.extra_debuginfo {
                 let actual_type_metadata = type_metadata(cx, actual_type, codemap::DUMMY_SP);
-                let param_metadata = token::ident_to_str(&ident).with_c_str(|name| {
+                let param_metadata_string = token::get_ident(ident.name);
+                let param_metadata = param_metadata_string.get()
+                                                          .with_c_str(|name| {
                     unsafe {
                         llvm::LLVMDIBuilderCreateTemplateTypeParameter(
                             DIB(cx),
@@ -929,26 +866,49 @@ fn create_DIArray(builder: DIBuilderRef, arr: &[DIDescriptor]) -> DIArray {
     };
 }
 
-fn compile_unit_metadata(cx: @CrateContext) {
-    let dcx = debug_context(cx);
-    let crate_name: &str = dcx.crate_file;
+fn compile_unit_metadata(cx: &CrateContext) {
+    let work_dir = &cx.sess.working_dir;
+    let compile_unit_name = match cx.sess.local_crate_source_file {
+        None => fallback_path(cx),
+        Some(ref abs_path) => {
+            if abs_path.is_relative() {
+                cx.sess.warn("debuginfo: Invalid path to crate's local root source file!");
+                fallback_path(cx)
+            } else {
+                match abs_path.path_relative_from(work_dir) {
+                    Some(ref p) if p.is_relative() => {
+                            // prepend "./" if necessary
+                            let dotdot = bytes!("..");
+                            let prefix = &[dotdot[0], ::std::path::SEP_BYTE];
+                            let mut path_bytes = p.as_vec().to_owned();
 
-    debug!("compile_unit_metadata: {:?}", crate_name);
+                            if path_bytes.slice_to(2) != prefix &&
+                               path_bytes.slice_to(2) != dotdot {
+                                path_bytes.insert(0, prefix[0]);
+                                path_bytes.insert(1, prefix[1]);
+                            }
 
-    // FIXME (#9639): This needs to handle non-utf8 paths
-    let work_dir = cx.sess.working_dir.as_str().unwrap();
+                            path_bytes.to_c_str()
+                        }
+                    _ => fallback_path(cx)
+                }
+            }
+        }
+    };
+
+    debug!("compile_unit_metadata: {:?}", compile_unit_name);
     let producer = format!("rustc version {}", env!("CFG_VERSION"));
 
-    crate_name.with_c_str(|crate_name| {
-        work_dir.with_c_str(|work_dir| {
+    compile_unit_name.with_ref(|compile_unit_name| {
+        work_dir.as_vec().with_c_str(|work_dir| {
             producer.with_c_str(|producer| {
                 "".with_c_str(|flags| {
                     "".with_c_str(|split_name| {
                         unsafe {
                             llvm::LLVMDIBuilderCreateCompileUnit(
-                                dcx.builder,
+                                debug_context(cx).builder,
                                 DW_LANG_RUST,
-                                crate_name,
+                                compile_unit_name,
                                 work_dir,
                                 producer,
                                 cx.sess.opts.optimize != session::No,
@@ -961,6 +921,10 @@ fn compile_unit_metadata(cx: @CrateContext) {
             })
         })
     });
+
+    fn fallback_path(cx: &CrateContext) -> CString {
+        cx.link_meta.crateid.name.to_c_str()
+    }
 }
 
 fn declare_local(bcx: &Block,
@@ -972,10 +936,11 @@ fn declare_local(bcx: &Block,
                  span: Span) {
     let cx: &CrateContext = bcx.ccx();
 
-    let filename = span_start(cx, span).file.name;
+    let filename = span_start(cx, span).file.name.clone();
     let file_metadata = file_metadata(cx, filename);
 
-    let name: &str = token::ident_to_str(&variable_ident);
+    let variable_ident_string = token::get_ident(variable_ident.name);
+    let name: &str = variable_ident_string.get();
     let loc = span_start(cx, span);
     let type_metadata = type_metadata(cx, variable_type, span);
 
@@ -1180,9 +1145,10 @@ impl MemberDescriptionFactory for StructMemberDescriptionFactory {
                                   -> ~[MemberDescription] {
         self.fields.map(|field| {
             let name = if field.ident.name == special_idents::unnamed_field.name {
-                @""
+                ~""
             } else {
-                token::ident_to_str(&field.ident)
+                let string = token::get_ident(field.ident.name);
+                string.get().to_str()
             };
 
             MemberDescription {
@@ -1206,7 +1172,7 @@ fn prepare_struct_metadata(cx: &CrateContext,
 
     let (containing_scope, definition_span) = get_namespace_and_span_for_item(cx, def_id, span);
 
-    let file_name = span_start(cx, definition_span).file.name;
+    let file_name = span_start(cx, definition_span).file.name.clone();
     let file_metadata = file_metadata(cx, file_name);
 
     let struct_metadata_stub = create_struct_stub(cx,
@@ -1285,7 +1251,7 @@ impl MemberDescriptionFactory for TupleMemberDescriptionFactory {
                                   -> ~[MemberDescription] {
         self.component_types.map(|&component_type| {
             MemberDescription {
-                name: @"",
+                name: ~"",
                 llvm_type: type_of::type_of(cx, component_type),
                 type_metadata: type_metadata(cx, component_type, self.span),
                 offset: ComputedMemberOffset,
@@ -1363,7 +1329,7 @@ impl MemberDescriptionFactory for GeneralMemberDescriptionFactory {
                                               self.file_metadata,
                                               codemap::DUMMY_SP);
                 MemberDescription {
-                    name: @"",
+                    name: ~"",
                     llvm_type: variant_llvm_type,
                     type_metadata: variant_type_metadata,
                     offset: FixedMemberOffset { bytes: 0 },
@@ -1373,7 +1339,7 @@ impl MemberDescriptionFactory for GeneralMemberDescriptionFactory {
 }
 
 struct EnumVariantMemberDescriptionFactory {
-    args: ~[(@str, ty::t)],
+    args: ~[(~str, ty::t)],
     discriminant_type_metadata: Option<DIType>,
     span: Span,
 }
@@ -1381,9 +1347,9 @@ struct EnumVariantMemberDescriptionFactory {
 impl MemberDescriptionFactory for EnumVariantMemberDescriptionFactory {
     fn create_member_descriptions(&self, cx: &CrateContext)
                                   -> ~[MemberDescription] {
-        self.args.iter().enumerate().map(|(i, &(name, ty))| {
+        self.args.iter().enumerate().map(|(i, &(ref name, ty))| {
             MemberDescription {
-                name: name,
+                name: name.to_str(),
                 llvm_type: type_of::type_of(cx, ty),
                 type_metadata: match self.discriminant_type_metadata {
                     Some(metadata) if i == 0 => metadata,
@@ -1403,7 +1369,8 @@ fn describe_enum_variant(cx: &CrateContext,
                          file_metadata: DIFile,
                          span: Span)
                       -> (DICompositeType, Type, @MemberDescriptionFactory) {
-    let variant_name = token::ident_to_str(&variant_info.name);
+    let variant_info_string = token::get_ident(variant_info.name.name);
+    let variant_name = variant_info_string.get();
     let variant_llvm_type = Type::struct_(struct_def.fields.map(|&t| type_of::type_of(cx, t)),
                                           struct_def.packed);
     // Could some consistency checks here: size, align, field count, discr type
@@ -1436,19 +1403,24 @@ fn describe_enum_variant(cx: &CrateContext,
 
     // Get the argument names from the enum variant info
     let mut arg_names = match variant_info.arg_names {
-        Some(ref names) => names.map(|ident| token::ident_to_str(ident)),
-        None => variant_info.args.map(|_| @"")
+        Some(ref names) => {
+            names.map(|ident| {
+                let string = token::get_ident(ident.name);
+                string.get().to_str()
+            })
+        }
+        None => variant_info.args.map(|_| ~"")
     };
 
     // If this is not a univariant enum, there is also the (unnamed) discriminant field
     if discriminant_type_metadata.is_some() {
-        arg_names.insert(0, @"");
+        arg_names.insert(0, ~"");
     }
 
     // Build an array of (field name, field type) pairs to be captured in the factory closure.
-    let args: ~[(@str, ty::t)] = arg_names.iter()
+    let args: ~[(~str, ty::t)] = arg_names.iter()
         .zip(struct_def.fields.iter())
-        .map(|(&s, &t)| (s, t))
+        .map(|(s, &t)| (s.to_str(), t))
         .collect();
 
     let member_description_factory =
@@ -1493,7 +1465,8 @@ fn prepare_enum_metadata(cx: &CrateContext,
     let enumerators_metadata: ~[DIDescriptor] = variants
         .iter()
         .map(|v| {
-            let name: &str = token::ident_to_str(&v.name);
+            let string = token::get_ident(v.name.name);
+            let name: &str = string.get();
             let discriminant_value = v.disr_val as c_ulonglong;
 
             name.with_c_str(|name| {
@@ -1621,7 +1594,7 @@ enum MemberOffset {
 }
 
 struct MemberDescription {
-    name: @str,
+    name: ~str,
     llvm_type: Type,
     type_metadata: DIType,
     offset: MemberOffset,
@@ -1687,7 +1660,7 @@ fn set_members_of_composite_type(cx: &CrateContext,
         .map(|(i, member_description)| {
             let (member_size, member_align) = size_and_align_of(cx, member_description.llvm_type);
             let member_offset = match member_description.offset {
-                FixedMemberOffset { bytes } => bytes,
+                FixedMemberOffset { bytes } => bytes as u64,
                 ComputedMemberOffset => machine::llelement_offset(cx, composite_llvm_type, i)
             };
 
@@ -1768,7 +1741,7 @@ fn boxed_type_metadata(cx: &CrateContext,
         None                    => ~"BoxedType"
     };
 
-    let box_llvm_type = Type::smart_ptr(cx, &content_llvm_type);
+    let box_llvm_type = Type::at_box(cx, content_llvm_type);
     let member_llvm_types = box_llvm_type.field_types();
     assert!(box_layout_is_correct(cx, member_llvm_types, content_llvm_type));
 
@@ -1778,31 +1751,31 @@ fn boxed_type_metadata(cx: &CrateContext,
 
     let member_descriptions = [
         MemberDescription {
-            name: @"refcnt",
+            name: ~"refcnt",
             llvm_type: member_llvm_types[0],
             type_metadata: type_metadata(cx, int_type, codemap::DUMMY_SP),
             offset: ComputedMemberOffset,
         },
         MemberDescription {
-            name: @"tydesc",
+            name: ~"tydesc",
             llvm_type: member_llvm_types[1],
             type_metadata: nil_pointer_type_metadata,
             offset: ComputedMemberOffset,
         },
         MemberDescription {
-            name: @"prev",
+            name: ~"prev",
             llvm_type: member_llvm_types[2],
             type_metadata: nil_pointer_type_metadata,
             offset: ComputedMemberOffset,
         },
         MemberDescription {
-            name: @"next",
+            name: ~"next",
             llvm_type: member_llvm_types[3],
             type_metadata: nil_pointer_type_metadata,
             offset: ComputedMemberOffset,
         },
         MemberDescription {
-            name: @"val",
+            name: ~"val",
             llvm_type: member_llvm_types[4],
             type_metadata: content_type_metadata,
             offset: ComputedMemberOffset,
@@ -1856,7 +1829,7 @@ fn fixed_vec_metadata(cx: &CrateContext,
     return unsafe {
         llvm::LLVMDIBuilderCreateArrayType(
             DIB(cx),
-            bytes_to_bits(element_type_size * len),
+            bytes_to_bits(element_type_size * (len as u64)),
             bytes_to_bits(element_type_align),
             element_type_metadata,
             subscripts)
@@ -1889,19 +1862,19 @@ fn vec_metadata(cx: &CrateContext,
 
     let member_descriptions = [
         MemberDescription {
-            name: @"fill",
+            name: ~"fill",
             llvm_type: member_llvm_types[0],
             type_metadata: int_type_metadata,
             offset: ComputedMemberOffset,
         },
         MemberDescription {
-            name: @"alloc",
+            name: ~"alloc",
             llvm_type: member_llvm_types[1],
             type_metadata: int_type_metadata,
             offset: ComputedMemberOffset,
         },
         MemberDescription {
-            name: @"elements",
+            name: ~"elements",
             llvm_type: member_llvm_types[2],
             type_metadata: array_type_metadata,
             offset: ComputedMemberOffset,
@@ -1923,23 +1896,6 @@ fn vec_metadata(cx: &CrateContext,
         span);
 }
 
-fn boxed_vec_metadata(cx: &CrateContext,
-                      element_type: ty::t,
-                      span: Span)
-                   -> DICompositeType {
-    let element_llvm_type = type_of::type_of(cx, element_type);
-    let vec_llvm_type = Type::vec(cx.sess.targ_cfg.arch, &element_llvm_type);
-    let vec_type_name: &str = format!("[{}]", ppaux::ty_to_str(cx.tcx, element_type));
-    let vec_metadata = vec_metadata(cx, element_type, span);
-
-    return boxed_type_metadata(
-        cx,
-        Some(vec_type_name),
-        vec_llvm_type,
-        vec_metadata,
-        span);
-}
-
 fn vec_slice_metadata(cx: &CrateContext,
                       vec_type: ty::t,
                       element_type: ty::t,
@@ -1958,13 +1914,13 @@ fn vec_slice_metadata(cx: &CrateContext,
 
     let member_descriptions = [
         MemberDescription {
-            name: @"data_ptr",
+            name: ~"data_ptr",
             llvm_type: member_llvm_types[0],
             type_metadata: type_metadata(cx, data_ptr_type, span),
             offset: ComputedMemberOffset,
         },
         MemberDescription {
-            name: @"length",
+            name: ~"length",
             llvm_type: member_llvm_types[1],
             type_metadata: type_metadata(cx, ty::mk_uint(), span),
             offset: ComputedMemberOffset,
@@ -2037,16 +1993,18 @@ fn trait_metadata(cx: &CrateContext,
     // the trait's methods.
     let path = ty::item_path(cx.tcx, def_id);
     let ident = path.last().unwrap().ident();
+    let ident_string = token::get_ident(ident.name);
     let name = ppaux::trait_store_to_str(cx.tcx, trait_store) +
                ppaux::mutability_to_str(mutability) +
-               token::ident_to_str(&ident);
+               ident_string.get();
     // Add type and region parameters
-    let name = ppaux::parameterized(cx.tcx, name, &substs.regions, substs.tps);
+    let name = ppaux::parameterized(cx.tcx, name, &substs.regions,
+                                    substs.tps, def_id, true);
 
     let (containing_scope, definition_span) =
         get_namespace_and_span_for_item(cx, def_id, usage_site_span);
 
-    let file_name = span_start(cx, definition_span).file.name;
+    let file_name = span_start(cx, definition_span).file.name.clone();
     let file_metadata = file_metadata(cx, file_name);
 
     let trait_llvm_type = type_of::type_of(cx, trait_type);
@@ -2118,10 +2076,6 @@ fn type_metadata(cx: &CrateContext,
                     let vec_metadata = vec_metadata(cx, i8_t, usage_site_span);
                     pointer_type_metadata(cx, t, vec_metadata)
                 }
-                ty::vstore_box => {
-                    let boxed_vec_metadata = boxed_vec_metadata(cx, i8_t, usage_site_span);
-                    pointer_type_metadata(cx, t, boxed_vec_metadata)
-                }
                 ty::vstore_slice(_region) => {
                     vec_slice_metadata(cx, t, i8_t, usage_site_span)
                 }
@@ -2141,10 +2095,6 @@ fn type_metadata(cx: &CrateContext,
                 ty::vstore_uniq => {
                     let vec_metadata = vec_metadata(cx, mt.ty, usage_site_span);
                     pointer_type_metadata(cx, t, vec_metadata)
-                }
-                ty::vstore_box => {
-                    let boxed_vec_metadata = boxed_vec_metadata(cx, mt.ty, usage_site_span);
-                    pointer_type_metadata(cx, t, boxed_vec_metadata)
                 }
                 ty::vstore_slice(_) => {
                     vec_slice_metadata(cx, t, mt.ty, usage_site_span)
@@ -2251,11 +2201,11 @@ fn span_start(cx: &CrateContext, span: Span) -> codemap::Loc {
     cx.sess.codemap.lookup_char_pos(span.lo)
 }
 
-fn size_and_align_of(cx: &CrateContext, llvm_type: Type) -> (uint, uint) {
+fn size_and_align_of(cx: &CrateContext, llvm_type: Type) -> (u64, u64) {
     (machine::llsize_of_alloc(cx, llvm_type), machine::llalign_of_min(cx, llvm_type))
 }
 
-fn bytes_to_bits(bytes: uint) -> c_ulonglong {
+fn bytes_to_bits(bytes: u64) -> c_ulonglong {
     (bytes * 8) as c_ulonglong
 }
 
@@ -2584,11 +2534,10 @@ fn populate_scope_map(cx: &CrateContext,
 
         match exp.node {
             ast::ExprLogLevel |
-            ast::ExprSelf     |
             ast::ExprLit(_)   |
             ast::ExprBreak(_) |
             ast::ExprAgain(_) |
-            ast::ExprPath(_)  => (),
+            ast::ExprPath(_)  => {}
 
             ast::ExprVstore(sub_exp, _)   |
             ast::ExprCast(sub_exp, _)     |
@@ -2697,21 +2646,6 @@ fn populate_scope_map(cx: &CrateContext,
                 })
             }
 
-            // ast::expr_loop_body(inner_exp) |
-            ast::ExprDoBody(inner_exp)   => {
-                let inner_expr_is_expr_fn_block = match *inner_exp {
-                    ast::Expr { node: ast::ExprFnBlock(..), .. } => true,
-                    _ => false
-                };
-
-                if !inner_expr_is_expr_fn_block {
-                    cx.sess.span_bug(inner_exp.span, "debuginfo: Inner expression was expected \
-                                                      to be an ast::expr_fn_block.");
-                }
-
-                walk_expr(cx, inner_exp, scope_stack, scope_map);
-            }
-
             ast::ExprCall(fn_exp, ref args, _) => {
                 walk_expr(cx, fn_exp, scope_stack, scope_map);
 
@@ -2720,9 +2654,8 @@ fn populate_scope_map(cx: &CrateContext,
                 }
             }
 
-            ast::ExprMethodCall(node_id, receiver_exp, _, _, ref args, _) => {
+            ast::ExprMethodCall(node_id, _, _, ref args, _) => {
                 scope_map.insert(node_id, scope_stack.last().unwrap().scope_metadata);
-                walk_expr(cx, receiver_exp, scope_stack, scope_map);
 
                 for arg_exp in args.iter() {
                     walk_expr(cx, *arg_exp, scope_stack, scope_map);
@@ -2771,7 +2704,7 @@ fn populate_scope_map(cx: &CrateContext,
             ast::ExprInlineAsm(ast::InlineAsm { inputs: ref inputs,
                                                 outputs: ref outputs,
                                                 .. }) => {
-                // inputs, outputs: ~[(@str, @expr)]
+                // inputs, outputs: ~[(~str, @expr)]
                 for &(_, exp) in inputs.iter() {
                     walk_expr(cx, exp, scope_stack, scope_map);
                 }
@@ -2812,8 +2745,10 @@ impl NamespaceTreeNode {
                 }
                 None => {}
             }
-            let name = token::ident_to_str(&node.ident);
-            output.push_str(format!("{}{}", name.len(), name));
+            let string = token::get_ident(node.ident.name);
+            output.push_str(format!("{}{}",
+                                    string.get().len(),
+                                    string.get()));
         }
     }
 }
@@ -2864,7 +2799,8 @@ fn namespace_for_item(cx: &CrateContext,
                     Some(node) => node.scope,
                     None => ptr::null()
                 };
-                let namespace_name = token::ident_to_str(&ident);
+                let namespace_name_string = token::get_ident(ident.name);
+                let namespace_name = namespace_name_string.get();
 
                 let namespace_metadata = unsafe {
                     namespace_name.with_c_str(|namespace_name| {

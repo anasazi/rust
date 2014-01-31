@@ -1,4 +1,4 @@
-// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -121,7 +121,7 @@ impl<T> Option<T> {
     // Getting to contained values
     /////////////////////////////////////////////////////////////////////////
 
-    /// Unwraps a option, yielding the content of a `Some`
+    /// Unwraps an option, yielding the content of a `Some`
     /// Fails if the value is a `None` with a custom failure message provided by `msg`.
     #[inline]
     pub fn expect<M: Any + Send>(self, msg: M) -> T {
@@ -380,9 +380,9 @@ impl<T: Default> Option<T> {
 // Trait implementations
 /////////////////////////////////////////////////////////////////////////////
 
-impl<T: fmt::Default> fmt::Default for Option<T> {
+impl<T: fmt::Show> fmt::Show for Option<T> {
     #[inline]
-    fn fmt(s: &Option<T>, f: &mut fmt::Formatter) {
+    fn fmt(s: &Option<T>, f: &mut fmt::Formatter) -> fmt::Result {
         match *s {
             Some(ref t) => write!(f.buf, "Some({})", *t),
             None        => write!(f.buf, "None")
@@ -441,7 +441,7 @@ impl<A> ExactSize<A> for Item<A> {}
 /// checking for overflow:
 ///
 ///     fn inc_conditionally(x: uint) -> Option<uint> {
-///         if x == uint::max_value { return None; }
+///         if x == uint::MAX { return None; }
 ///         else { return Some(x+1u); }
 ///     }
 ///     let v = [1u, 2, 3];

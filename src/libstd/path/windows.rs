@@ -17,7 +17,7 @@ use clone::Clone;
 use container::Container;
 use cmp::Eq;
 use from_str::FromStr;
-use iter::{AdditiveIterator, DoubleEndedIterator, Extendable, Invert, Iterator, Map};
+use iter::{AdditiveIterator, DoubleEndedIterator, Extendable, Rev, Iterator, Map};
 use option::{Option, Some, None};
 use str;
 use str::{CharSplits, OwnedStr, Str, StrVector, StrSlice};
@@ -35,7 +35,7 @@ pub type StrComponents<'a> = Map<'a, &'a str, Option<&'a str>,
 ///
 /// Each component is yielded as Option<&str> for compatibility with PosixPath, but
 /// every component in WindowsPath is guaranteed to be Some.
-pub type RevStrComponents<'a> = Invert<Map<'a, &'a str, Option<&'a str>,
+pub type RevStrComponents<'a> = Rev<Map<'a, &'a str, Option<&'a str>,
                                                  CharSplits<'a, char>>>;
 
 /// Iterator that yields successive components of a Path as &[u8]
@@ -571,8 +571,8 @@ impl GenericPath for Path {
 
     fn ends_with_path(&self, child: &Path) -> bool {
         if !child.is_relative() { return false; }
-        let mut selfit = self.str_components().invert();
-        let mut childit = child.str_components().invert();
+        let mut selfit = self.str_components().rev();
+        let mut childit = child.str_components().rev();
         loop {
             match (selfit.next(), childit.next()) {
                 (Some(a), Some(b)) => if a != b { return false; },
@@ -628,7 +628,7 @@ impl Path {
     /// Returns an iterator that yields each component of the path in reverse as an Option<&str>
     /// See str_components() for details.
     pub fn rev_str_components<'a>(&'a self) -> RevStrComponents<'a> {
-        self.str_components().invert()
+        self.str_components().rev()
     }
 
     /// Returns an iterator that yields each component of the path in turn as a &[u8].
@@ -1290,11 +1290,11 @@ mod tests {
         use task;
 
         macro_rules! t(
-            ($name:expr => $code:block) => (
+            ($name:expr => $code:expr) => (
                 {
                     let mut t = task::task();
                     t.name($name);
-                    let res = do t.try $code;
+                    let res = t.try(proc() $code);
                     assert!(res.is_err());
                 }
             )
@@ -1587,8 +1587,6 @@ mod tests {
 
     #[test]
     fn test_push_many() {
-        use to_man = at_vec::to_managed_move;
-
         macro_rules! t(
             (s: $path:expr, $push:expr, $exp:expr) => (
                 {
@@ -1610,12 +1608,9 @@ mod tests {
         t!(s: "a\\b\\c", ["d", "\\e"], "\\e");
         t!(s: "a\\b\\c", ["d", "\\e", "f"], "\\e\\f");
         t!(s: "a\\b\\c", [~"d", ~"e"], "a\\b\\c\\d\\e");
-        t!(s: "a\\b\\c", [@"d", @"e"], "a\\b\\c\\d\\e");
         t!(v: b!("a\\b\\c"), [b!("d"), b!("e")], b!("a\\b\\c\\d\\e"));
         t!(v: b!("a\\b\\c"), [b!("d"), b!("\\e"), b!("f")], b!("\\e\\f"));
         t!(v: b!("a\\b\\c"), [b!("d").to_owned(), b!("e").to_owned()], b!("a\\b\\c\\d\\e"));
-        t!(v: b!("a\\b\\c"), [to_man(b!("d").to_owned()), to_man(b!("e").to_owned())],
-              b!("a\\b\\c\\d\\e"));
     }
 
     #[test]
@@ -1732,8 +1727,6 @@ mod tests {
 
     #[test]
     fn test_join_many() {
-        use to_man = at_vec::to_managed_move;
-
         macro_rules! t(
             (s: $path:expr, $join:expr, $exp:expr) => (
                 {
@@ -1755,11 +1748,8 @@ mod tests {
         t!(s: "a\\b\\c", ["..", "d"], "a\\b\\d");
         t!(s: "a\\b\\c", ["d", "\\e", "f"], "\\e\\f");
         t!(s: "a\\b\\c", [~"d", ~"e"], "a\\b\\c\\d\\e");
-        t!(s: "a\\b\\c", [@"d", @"e"], "a\\b\\c\\d\\e");
         t!(v: b!("a\\b\\c"), [b!("d"), b!("e")], b!("a\\b\\c\\d\\e"));
         t!(v: b!("a\\b\\c"), [b!("d").to_owned(), b!("e").to_owned()], b!("a\\b\\c\\d\\e"));
-        t!(v: b!("a\\b\\c"), [to_man(b!("d").to_owned()), to_man(b!("e").to_owned())],
-              b!("a\\b\\c\\d\\e"));
     }
 
     #[test]

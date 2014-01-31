@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -229,6 +229,7 @@ use syntax::ast::Ident;
 use syntax::ast_util::path_to_ident;
 use syntax::ast_util;
 use syntax::codemap::{Span, DUMMY_SP};
+use syntax::parse::token::InternedString;
 
 // An option identifying a literal: either a unit-like struct or an
 // expression.
@@ -244,7 +245,7 @@ pub enum VecLenOpt {
     vec_len_ge(/* length of prefix */uint)
 }
 
-// An option identifying a branch (either a literal, a enum variant or a
+// An option identifying a branch (either a literal, an enum variant or a
 // range)
 enum Opt {
     lit(Lit),
@@ -337,8 +338,8 @@ fn trans_opt<'a>(bcx: &'a Block<'a>, o: &Opt) -> opt_result<'a> {
             return adt::trans_case(bcx, repr, disr_val);
         }
         range(l1, l2) => {
-            let (l1, _) = consts::const_expr(ccx, l1);
-            let (l2, _) = consts::const_expr(ccx, l2);
+            let (l1, _) = consts::const_expr(ccx, l1, true);
+            let (l2, _) = consts::const_expr(ccx, l2, true);
             return range_result(rslt(bcx, l1), rslt(bcx, l2));
         }
         vec_len(n, vec_len_eq, _) => {
@@ -399,11 +400,15 @@ struct BindingInfo {
 
 type BindingsMap = HashMap<Ident, BindingInfo>;
 
-#[deriving(Clone)]
 struct ArmData<'a,'b> {
     bodycx: &'b Block<'b>,
     arm: &'a ast::Arm,
     bindings_map: @BindingsMap
+}
+
+// FIXME #11820: method resolution is unreliable with &
+impl<'a,'b> Clone for ArmData<'a, 'b> {
+    fn clone(&self) -> ArmData<'a, 'b> { *self }
 }
 
 /**
@@ -643,7 +648,7 @@ fn enter_opt<'r,'b>(
             }
             ast::PatEnum(_, ref subpats) => {
                 if opt_eq(tcx, &variant_opt(bcx, p.id), opt) {
-                    // XXX: Must we clone?
+                    // FIXME: Must we clone?
                     match *subpats {
                         None => Some(vec::from_elem(variant_size, dummy)),
                         _ => (*subpats).clone(),
@@ -1027,7 +1032,6 @@ fn match_datum(bcx: &Block,
 
 fn extract_vec_elems<'a>(
                      bcx: &'a Block<'a>,
-                     pat_span: Span,
                      pat_id: ast::NodeId,
                      elem_count: uint,
                      slice: Option<uint>,
@@ -1036,7 +1040,7 @@ fn extract_vec_elems<'a>(
                      -> ExtractedBlock<'a> {
     let _icx = push_ctxt("match::extract_vec_elems");
     let vec_datum = match_datum(bcx, val, pat_id);
-    let (bcx, base, len) = vec_datum.get_vec_base_and_len(bcx, pat_span, pat_id, 0);
+    let (base, len) = vec_datum.get_vec_base_and_len(bcx);
     let vt = tvec::vec_types(bcx, node_id_type(bcx, pat_id));
 
     let mut elems = vec::from_fn(elem_count, |i| {
@@ -1170,7 +1174,7 @@ fn any_tuple_struct_pat(bcx: &Block, m: &[Match], col: uint) -> bool {
 struct DynamicFailureHandler<'a> {
     bcx: &'a Block<'a>,
     sp: Span,
-    msg: @str,
+    msg: InternedString,
     finished: @Cell<Option<BasicBlockRef>>,
 }
 
@@ -1183,7 +1187,7 @@ impl<'a> DynamicFailureHandler<'a> {
 
         let fcx = self.bcx.fcx;
         let fail_cx = fcx.new_block(false, "case_fallthrough", None);
-        controlflow::trans_fail(fail_cx, Some(self.sp), self.msg);
+        controlflow::trans_fail(fail_cx, Some(self.sp), self.msg.clone());
         self.finished.set(Some(fail_cx.llbb));
         fail_cx.llbb
     }
@@ -1507,13 +1511,11 @@ fn compile_submatch_continue<'r,
                                 vals.slice(col + 1u, vals.len()));
     let ccx = bcx.fcx.ccx;
     let mut pat_id = 0;
-    let mut pat_span = DUMMY_SP;
     for br in m.iter() {
         // Find a real id (we're adding placeholder wildcard patterns, but
         // each column is guaranteed to have at least one real pattern)
         if pat_id == 0 {
             pat_id = br.pats[col].id;
-            pat_span = br.pats[col].span;
         }
     }
 
@@ -1762,7 +1764,7 @@ fn compile_submatch_continue<'r,
                     vec_len_ge(i) => (n + 1u, Some(i)),
                     vec_len_eq => (n, None)
                 };
-                let args = extract_vec_elems(opt_cx, pat_span, pat_id, n,
+                let args = extract_vec_elems(opt_cx, pat_id, n,
                                              slice, val, test_val);
                 size = args.vals.len();
                 unpacked = args.vals.clone();
@@ -1887,7 +1889,8 @@ fn trans_match_inner<'a>(scope_cx: &'a Block<'a>,
             let fail_handler = ~DynamicFailureHandler {
                 bcx: scope_cx,
                 sp: discr_expr.span,
-                msg: @"scrutinizing value that can't exist",
+                msg: InternedString::new("scrutinizing value that can't \
+                                          exist"),
                 finished: fail_cx,
             };
             DynamicFailureHandlerClass(fail_handler)
@@ -2227,5 +2230,3 @@ fn bind_irrefutable_pat<'a>(
     }
     return bcx;
 }
-
-

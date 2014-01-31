@@ -1,4 +1,4 @@
-// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -52,13 +52,14 @@
       html_favicon_url = "http://www.rust-lang.org/favicon.ico",
       html_root_url = "http://static.rust-lang.org/doc/master")];
 
-#[feature(macro_rules, globs, asm, managed_boxes, thread_local, link_args)];
+#[feature(macro_rules, globs, asm, managed_boxes, thread_local, link_args, simd)];
 
 // Don't link to std. We are std.
 #[no_std];
 
 #[deny(non_camel_case_types)];
 #[deny(missing_doc)];
+#[allow(unknown_features)];
 
 // When testing libstd, bring in libuv as the I/O backend so tests can print
 // things and all of the std::io tests have an I/O interface to run on top
@@ -75,6 +76,8 @@
 #[cfg(test)] pub use kinds = realstd::kinds;
 #[cfg(test)] pub use ops = realstd::ops;
 #[cfg(test)] pub use cmp = realstd::cmp;
+
+mod macros;
 
 mod rtdeps;
 
@@ -110,7 +113,7 @@ pub mod char;
 pub mod tuple;
 
 pub mod vec;
-pub mod at_vec;
+pub mod vec_ng;
 pub mod str;
 
 pub mod ascii;
@@ -119,7 +122,7 @@ pub mod send_str;
 pub mod ptr;
 pub mod owned;
 pub mod managed;
-pub mod borrow;
+mod reference;
 pub mod rc;
 pub mod gc;
 
@@ -218,7 +221,6 @@ mod std {
     pub use io;
     pub use kinds;
     pub use local_data;
-    pub use logging;
     pub use logging;
     pub use option;
     pub use os;

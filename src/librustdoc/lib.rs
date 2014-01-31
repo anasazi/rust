@@ -162,10 +162,16 @@ pub fn main_args(args: &[~str]) -> int {
     let output = matches.opt_str("o").map(|s| Path::new(s));
     match matches.opt_str("w") {
         Some(~"html") | None => {
-            html::render::run(crate, output.unwrap_or(Path::new("doc")))
+            match html::render::run(crate, output.unwrap_or(Path::new("doc"))) {
+                Ok(()) => {}
+                Err(e) => fail!("failed to generate documentation: {}", e),
+            }
         }
         Some(~"json") => {
-            json_output(crate, res, output.unwrap_or(Path::new("doc.json")))
+            match json_output(crate, res, output.unwrap_or(Path::new("doc.json"))) {
+                Ok(()) => {}
+                Err(e) => fail!("failed to write json: {}", e),
+            }
         }
         Some(s) => {
             println!("unknown output format: {}", s);
@@ -211,10 +217,10 @@ fn rust_input(cratefile: &str, matches: &getopts::Matches) -> Output {
     let cfgs = matches.opt_strs("cfg");
     let cr = Path::new(cratefile);
     info!("starting to run rustc");
-    let (crate, analysis) = do std::task::try {
+    let (crate, analysis) = std::task::try(proc() {
         let cr = cr;
         core::run_core(libs.move_iter().collect(), cfgs, &cr)
-    }.unwrap();
+    }).unwrap();
     info!("finished with rustc");
     local_data::set(analysiskey, analysis);
 
@@ -276,8 +282,8 @@ fn rust_input(cratefile: &str, matches: &getopts::Matches) -> Output {
 /// run over the deserialized output.
 fn json_input(input: &str) -> Result<Output, ~str> {
     let mut input = match File::open(&Path::new(input)) {
-        Some(f) => f,
-        None => return Err(format!("couldn't open {} for reading", input)),
+        Ok(f) => f,
+        Err(e) => return Err(format!("couldn't open {}: {}", input, e)),
     };
     match json::from_reader(&mut input) {
         Err(s) => Err(s.to_str()),
@@ -301,7 +307,7 @@ fn json_input(input: &str) -> Result<Output, ~str> {
                 }
                 None => return Err(~"malformed json"),
             };
-            // XXX: this should read from the "plugins" field, but currently
+            // FIXME: this should read from the "plugins" field, but currently
             //      Json doesn't implement decodable...
             let plugin_output = ~[];
             Ok((crate, plugin_output))
@@ -312,7 +318,8 @@ fn json_input(input: &str) -> Result<Output, ~str> {
 
 /// Outputs the crate/plugin json as a giant json blob at the specified
 /// destination.
-fn json_output(crate: clean::Crate, res: ~[plugins::PluginJson], dst: Path) {
+fn json_output(crate: clean::Crate, res: ~[plugins::PluginJson],
+               dst: Path) -> io::IoResult<()> {
     // {
     //   "schema": version,
     //   "crate": { parsed crate ... },
@@ -340,6 +347,7 @@ fn json_output(crate: clean::Crate, res: ~[plugins::PluginJson], dst: Path) {
     json.insert(~"crate", crate_json);
     json.insert(~"plugins", json::Object(plugins_json));
 
-    let mut file = File::create(&dst).unwrap();
-    json::Object(json).to_writer(&mut file);
+    let mut file = if_ok!(File::create(&dst));
+    if_ok!(json::Object(json).to_writer(&mut file));
+    Ok(())
 }

@@ -1,4 +1,4 @@
-// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -11,6 +11,10 @@
 #[allow(missing_doc)];
 
 use std::str;
+
+macro_rules! if_ok( ($e:expr) => (
+    match $e { Ok(e) => e, Err(e) => { self.last_error = Err(e); return } }
+) )
 
 // Simple Extensible Binary Markup Language (ebml) reader and writer on a
 // cursor model. See the specification here:
@@ -364,7 +368,7 @@ pub mod reader {
         fn read_u8 (&mut self) -> u8  { doc_as_u8 (self.next_doc(EsU8 )) }
         fn read_uint(&mut self) -> uint {
             let v = doc_as_u64(self.next_doc(EsUint));
-            if v > (::std::uint::max_value as u64) {
+            if v > (::std::uint::MAX as u64) {
                 fail!("uint {} too large for this architecture", v);
             }
             v as uint
@@ -384,7 +388,7 @@ pub mod reader {
         }
         fn read_int(&mut self) -> int {
             let v = doc_as_u64(self.next_doc(EsInt)) as i64;
-            if v > (int::max_value as i64) || v < (int::min_value as i64) {
+            if v > (int::MAX as i64) || v < (int::MIN as i64) {
                 debug!("FIXME \\#6122: Removing this makes this function miscompile");
                 fail!("int {} out of range for this architecture", v);
             }
@@ -595,9 +599,15 @@ pub mod writer {
 
     // ebml writing
     pub struct Encoder<'a> {
-        // FIXME(#5665): this should take a trait object
+        // FIXME(#5665): this should take a trait object. Note that if you
+        //               delete this comment you should consider removing the
+        //               unwrap()'s below of the results of the calls to
+        //               write(). We're guaranteed that writing into a MemWriter
+        //               won't fail, but this is not true for all I/O streams in
+        //               general.
         writer: &'a mut MemWriter,
         priv size_positions: ~[uint],
+        last_error: io::IoResult<()>,
     }
 
     fn write_sized_vuint(w: &mut MemWriter, n: uint, size: uint) {
@@ -609,7 +619,7 @@ pub mod writer {
             4u => w.write(&[0x10u8 | ((n >> 24_u) as u8), (n >> 16_u) as u8,
                             (n >> 8_u) as u8, n as u8]),
             _ => fail!("vint to write too big: {}", n)
-        };
+        }.unwrap()
     }
 
     fn write_vuint(w: &mut MemWriter, n: uint) {
@@ -624,17 +634,19 @@ pub mod writer {
         let size_positions: ~[uint] = ~[];
         Encoder {
             writer: w,
-            size_positions: size_positions
+            size_positions: size_positions,
+            last_error: Ok(()),
         }
     }
 
     // FIXME (#2741): Provide a function to write the standard ebml header.
     impl<'a> Encoder<'a> {
-        /// XXX(pcwalton): Workaround for badness in trans. DO NOT USE ME.
+        /// FIXME(pcwalton): Workaround for badness in trans. DO NOT USE ME.
         pub unsafe fn unsafe_clone(&self) -> Encoder<'a> {
             Encoder {
                 writer: cast::transmute_copy(&self.writer),
                 size_positions: self.size_positions.clone(),
+                last_error: Ok(()),
             }
         }
 
@@ -645,18 +657,18 @@ pub mod writer {
             write_vuint(self.writer, tag_id);
 
             // Write a placeholder four-byte size.
-            self.size_positions.push(self.writer.tell() as uint);
+            self.size_positions.push(if_ok!(self.writer.tell()) as uint);
             let zeroes: &[u8] = &[0u8, 0u8, 0u8, 0u8];
-            self.writer.write(zeroes);
+            if_ok!(self.writer.write(zeroes));
         }
 
         pub fn end_tag(&mut self) {
             let last_size_pos = self.size_positions.pop().unwrap();
-            let cur_pos = self.writer.tell();
-            self.writer.seek(last_size_pos as i64, io::SeekSet);
+            let cur_pos = if_ok!(self.writer.tell());
+            if_ok!(self.writer.seek(last_size_pos as i64, io::SeekSet));
             let size = (cur_pos as uint - last_size_pos - 4);
             write_sized_vuint(self.writer, size, 4u);
-            self.writer.seek(cur_pos as i64, io::SeekSet);
+            if_ok!(self.writer.seek(cur_pos as i64, io::SeekSet));
 
             debug!("End tag (size = {})", size);
         }
@@ -670,7 +682,7 @@ pub mod writer {
         pub fn wr_tagged_bytes(&mut self, tag_id: uint, b: &[u8]) {
             write_vuint(self.writer, tag_id);
             write_vuint(self.writer, b.len());
-            self.writer.write(b);
+            self.writer.write(b).unwrap();
         }
 
         pub fn wr_tagged_u64(&mut self, tag_id: uint, v: u64) {
@@ -723,12 +735,12 @@ pub mod writer {
 
         pub fn wr_bytes(&mut self, b: &[u8]) {
             debug!("Write {} bytes", b.len());
-            self.writer.write(b);
+            self.writer.write(b).unwrap();
         }
 
         pub fn wr_str(&mut self, s: &str) {
             debug!("Write str: {}", s);
-            self.writer.write(s.as_bytes());
+            self.writer.write(s.as_bytes()).unwrap();
         }
     }
 

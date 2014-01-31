@@ -57,6 +57,8 @@ pub struct TyDesc {
     align: uint,
 
     // Called on a copy of a value of type `T` *after* memcpy
+    // NOTE remove after next snapshot
+    #[cfg(stage0)]
     take_glue: GlueFn,
 
     // Called when a value of type `T` is no longer needed
@@ -164,7 +166,9 @@ pub trait TyVisitor {
     fn visit_param(&mut self, i: uint) -> bool;
     fn visit_self(&mut self) -> bool;
     fn visit_type(&mut self) -> bool;
-    fn visit_opaque_box(&mut self) -> bool;
+
+    // NOTE remove after next snapshot
+    #[cfg(stage0)]
     fn visit_closure_ptr(&mut self, ck: uint) -> bool;
 }
 

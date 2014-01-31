@@ -96,10 +96,10 @@ pub mod write {
     use lib::llvm::llvm;
     use lib::llvm::{ModuleRef, TargetMachineRef, PassManagerRef};
     use lib;
+    use syntax::abi;
     use util::common::time;
 
     use std::c_str::ToCStr;
-    use std::io;
     use std::libc::{c_uint, c_int};
     use std::path::Path;
     use std::run;
@@ -128,6 +128,12 @@ pub mod write {
             };
             let use_softfp = sess.opts.debugging_opts & session::USE_SOFTFP != 0;
 
+            // FIXME: #11906: Omitting frame pointers breaks retrieving the value of a parameter.
+            // FIXME: #11954: mac64 unwinding may not work with fp elim
+            let no_fp_elim = sess.opts.debuginfo ||
+                             (sess.targ_cfg.os == abi::OsMacos &&
+                              sess.targ_cfg.arch == abi::X86_64);
+
             let tm = sess.targ_cfg.target_strs.target_triple.with_c_str(|T| {
                 sess.opts.target_cpu.with_c_str(|CPU| {
                     sess.opts.target_feature.with_c_str(|Features| {
@@ -137,7 +143,8 @@ pub mod write {
                             lib::llvm::RelocPIC,
                             OptLevel,
                             true,
-                            use_softfp
+                            use_softfp,
+                            no_fp_elim
                         )
                     })
                 })
@@ -289,12 +296,8 @@ pub mod write {
             assembly.as_str().unwrap().to_owned()];
 
         debug!("{} '{}'", cc, args.connect("' '"));
-        let opt_prog = {
-            let _guard = io::ignore_io_error();
-            run::process_output(cc, args)
-        };
-        match opt_prog {
-            Some(prog) => {
+        match run::process_output(cc, args) {
+            Ok(prog) => {
                 if !prog.status.success() {
                     sess.err(format!("linking with `{}` failed: {}", cc, prog.status));
                     sess.note(format!("{} arguments: '{}'", cc, args.connect("' '")));
@@ -302,8 +305,8 @@ pub mod write {
                     sess.abort_if_errors();
                 }
             },
-            None => {
-                sess.err(format!("could not exec the linker `{}`", cc));
+            Err(e) => {
+                sess.err(format!("could not exec the linker `{}`: {}", cc, e));
                 sess.abort_if_errors();
             }
         }
@@ -465,10 +468,10 @@ pub fn build_link_meta(sess: Session,
                        symbol_hasher: &mut Sha256)
                        -> LinkMeta {
     // This calculates CMH as defined above
-    fn crate_hash(symbol_hasher: &mut Sha256, crateid: &CrateId) -> @str {
+    fn crate_hash(symbol_hasher: &mut Sha256, crateid: &CrateId) -> ~str {
         symbol_hasher.reset();
         symbol_hasher.input_str(crateid.to_str());
-        truncated_hash_result(symbol_hasher).to_managed()
+        truncated_hash_result(symbol_hasher)
     }
 
     let crateid = match attr::find_crateid(attrs) {
@@ -502,7 +505,8 @@ fn truncated_hash_result(symbol_hasher: &mut Sha256) -> ~str {
 pub fn symbol_hash(tcx: ty::ctxt,
                    symbol_hasher: &mut Sha256,
                    t: ty::t,
-                   link_meta: &LinkMeta) -> @str {
+                   link_meta: &LinkMeta)
+                   -> ~str {
     // NB: do *not* use abbrevs here as we want the symbol names
     // to be independent of one another in the crate.
 
@@ -515,15 +519,14 @@ pub fn symbol_hash(tcx: ty::ctxt,
     let mut hash = truncated_hash_result(symbol_hasher);
     // Prefix with 'h' so that it never blends into adjacent digits
     hash.unshift_char('h');
-    // tjc: allocation is unfortunate; need to change std::hash
-    hash.to_managed()
+    hash
 }
 
-pub fn get_symbol_hash(ccx: &CrateContext, t: ty::t) -> @str {
+pub fn get_symbol_hash(ccx: &CrateContext, t: ty::t) -> ~str {
     {
         let type_hashcodes = ccx.type_hashcodes.borrow();
         match type_hashcodes.get().find(&t) {
-            Some(&h) => return h,
+            Some(h) => return h.to_str(),
             None => {}
         }
     }
@@ -531,7 +534,7 @@ pub fn get_symbol_hash(ccx: &CrateContext, t: ty::t) -> @str {
     let mut type_hashcodes = ccx.type_hashcodes.borrow_mut();
     let mut symbol_hasher = ccx.symbol_hasher.borrow_mut();
     let hash = symbol_hash(ccx.tcx, symbol_hasher.get(), t, &ccx.link_meta);
-    type_hashcodes.get().insert(t, hash);
+    type_hashcodes.get().insert(t, hash.clone());
     hash
 }
 
@@ -760,6 +763,15 @@ fn get_system_tool(sess: Session, tool: &str) -> ~str {
     }
 }
 
+fn remove(sess: Session, path: &Path) {
+    match fs::unlink(path) {
+        Ok(..) => {}
+        Err(e) => {
+            sess.err(format!("failed to remove {}: {}", path.display(), e));
+        }
+    }
+}
+
 /// Perform the linkage portion of the compilation phase. This will generate all
 /// of the requested outputs for this compilation session.
 pub fn link_binary(sess: Session,
@@ -777,17 +789,15 @@ pub fn link_binary(sess: Session,
 
     // Remove the temporary object file and metadata if we aren't saving temps
     if !sess.opts.save_temps {
-        fs::unlink(obj_filename);
-        fs::unlink(&obj_filename.with_extension("metadata.o"));
+        remove(sess, obj_filename);
+        remove(sess, &obj_filename.with_extension("metadata.o"));
     }
 
     out_filenames
 }
 
 fn is_writeable(p: &Path) -> bool {
-    use std::io;
-
-    match io::result(|| p.stat()) {
+    match p.stat() {
         Err(..) => true,
         Ok(m) => m.perm & io::UserWrite == io::UserWrite
     }
@@ -876,7 +886,7 @@ fn link_rlib(sess: Session,
     for &(ref l, kind) in used_libraries.get().iter() {
         match kind {
             cstore::NativeStatic => {
-                a.add_native_library(l.as_slice());
+                a.add_native_library(l.as_slice()).unwrap();
             }
             cstore::NativeFramework | cstore::NativeUnknown => {}
         }
@@ -911,16 +921,23 @@ fn link_rlib(sess: Session,
             // the same filename for metadata (stomping over one another)
             let tmpdir = TempDir::new("rustc").expect("needs a temp dir");
             let metadata = tmpdir.path().join(METADATA_FILENAME);
-            fs::File::create(&metadata).write(trans.metadata);
+            match fs::File::create(&metadata).write(trans.metadata) {
+                Ok(..) => {}
+                Err(e) => {
+                    sess.err(format!("failed to write {}: {}",
+                                     metadata.display(), e));
+                    sess.abort_if_errors();
+                }
+            }
             a.add_file(&metadata, false);
-            fs::unlink(&metadata);
+            remove(sess, &metadata);
 
             // For LTO purposes, the bytecode of this library is also inserted
             // into the archive.
             let bc = obj_filename.with_extension("bc");
             a.add_file(&bc, false);
             if !sess.opts.save_temps {
-                fs::unlink(&bc);
+                remove(sess, &bc);
             }
 
             // After adding all files to the archive, we need to update the
@@ -951,18 +968,18 @@ fn link_rlib(sess: Session,
 // metadata file).
 fn link_staticlib(sess: Session, obj_filename: &Path, out_filename: &Path) {
     let mut a = link_rlib(sess, None, obj_filename, out_filename);
-    a.add_native_library("morestack");
+    a.add_native_library("morestack").unwrap();
 
     let crates = sess.cstore.get_used_crates(cstore::RequireStatic);
     for &(cnum, ref path) in crates.iter() {
-        let name = sess.cstore.get_crate_data(cnum).name;
+        let name = sess.cstore.get_crate_data(cnum).name.clone();
         let p = match *path {
             Some(ref p) => p.clone(), None => {
                 sess.err(format!("could not find rlib for: `{}`", name));
                 continue
             }
         };
-        a.add_rlib(&p, name, sess.lto());
+        a.add_rlib(&p, name, sess.lto()).unwrap();
         let native_libs = csearch::get_native_libraries(sess.cstore, cnum);
         for &(kind, ref lib) in native_libs.iter() {
             let name = match kind {
@@ -996,14 +1013,10 @@ fn link_natively(sess: Session, dylib: bool, obj_filename: &Path,
 
     // Invoke the system linker
     debug!("{} {}", cc_prog, cc_args.connect(" "));
-    let opt_prog = {
-        let _guard = io::ignore_io_error();
-        time(sess.time_passes(), "running linker", (), |()|
-             run::process_output(cc_prog, cc_args))
-    };
-
-    match opt_prog {
-        Some(prog) => {
+    let prog = time(sess.time_passes(), "running linker", (), |()|
+                    run::process_output(cc_prog, cc_args));
+    match prog {
+        Ok(prog) => {
             if !prog.status.success() {
                 sess.err(format!("linking with `{}` failed: {}", cc_prog, prog.status));
                 sess.note(format!("{} arguments: '{}'", cc_prog, cc_args.connect("' '")));
@@ -1011,8 +1024,8 @@ fn link_natively(sess: Session, dylib: bool, obj_filename: &Path,
                 sess.abort_if_errors();
             }
         },
-        None => {
-            sess.err(format!("could not exec the linker `{}`", cc_prog));
+        Err(e) => {
+            sess.err(format!("could not exec the linker `{}`: {}", cc_prog, e));
             sess.abort_if_errors();
         }
     }
@@ -1022,8 +1035,14 @@ fn link_natively(sess: Session, dylib: bool, obj_filename: &Path,
     // the symbols
     if sess.targ_cfg.os == abi::OsMacos && sess.opts.debuginfo {
         // FIXME (#9639): This needs to handle non-utf8 paths
-        run::process_status("dsymutil",
-                            [out_filename.as_str().unwrap().to_owned()]);
+        match run::process_status("dsymutil",
+                                  [out_filename.as_str().unwrap().to_owned()]) {
+            Ok(..) => {}
+            Err(e) => {
+                sess.err(format!("failed to run dsymutil: {}", e));
+                sess.abort_if_errors();
+            }
+        }
     }
 }
 
@@ -1089,8 +1108,10 @@ fn link_args(sess: Session,
             args.push(~"-dynamiclib");
             args.push(~"-Wl,-dylib");
             // FIXME (#9639): This needs to handle non-utf8 paths
-            args.push(~"-Wl,-install_name,@rpath/" +
-                      out_filename.filename_str().unwrap());
+            if !sess.opts.no_rpath {
+                args.push(~"-Wl,-install_name,@rpath/" +
+                          out_filename.filename_str().unwrap());
+            }
         } else {
             args.push(~"-shared")
         }
@@ -1108,7 +1129,9 @@ fn link_args(sess: Session,
     // FIXME (#2397): At some point we want to rpath our guesses as to
     // where extern libraries might live, based on the
     // addl_lib_search_paths
-    args.push_all(rpath::get_rpath_flags(sess, out_filename));
+    if !sess.opts.no_rpath {
+        args.push_all(rpath::get_rpath_flags(sess, out_filename));
+    }
 
     // Finally add all the linker arguments provided on the command line along
     // with any #[link_args] attributes found inside the crate
@@ -1209,11 +1232,20 @@ fn add_upstream_rust_crates(args: &mut ~[~str], sess: Session,
                 // If we're not doing LTO, then our job is simply to just link
                 // against the archive.
                 if sess.lto() {
-                    let name = sess.cstore.get_crate_data(cnum).name;
+                    let name = sess.cstore.get_crate_data(cnum).name.clone();
                     time(sess.time_passes(), format!("altering {}.rlib", name),
                          (), |()| {
                         let dst = tmpdir.join(cratepath.filename().unwrap());
-                        fs::copy(&cratepath, &dst);
+                        match fs::copy(&cratepath, &dst) {
+                            Ok(..) => {}
+                            Err(e) => {
+                                sess.err(format!("failed to copy {} to {}: {}",
+                                                 cratepath.display(),
+                                                 dst.display(),
+                                                 e));
+                                sess.abort_if_errors();
+                            }
+                        }
                         let dst_str = dst.as_str().unwrap().to_owned();
                         let mut archive = Archive::open(sess, dst);
                         archive.remove_file(format!("{}.o", name));

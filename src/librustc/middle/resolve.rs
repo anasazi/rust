@@ -1,4 +1,4 @@
-// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -20,9 +20,8 @@ use syntax::ast::*;
 use syntax::ast;
 use syntax::ast_util::{def_id_of_def, local_def, mtwt_resolve};
 use syntax::ast_util::{path_to_ident, walk_pat, trait_method_to_ty_method};
+use syntax::parse::token::{IdentInterner, special_idents};
 use syntax::parse::token;
-use syntax::parse::token::{IdentInterner, interner_get};
-use syntax::parse::token::special_idents;
 use syntax::print::pprust::path_to_str;
 use syntax::codemap::{Span, DUMMY_SP, Pos};
 use syntax::opt_vec::OptVec;
@@ -53,16 +52,15 @@ pub type TraitMap = HashMap<NodeId,@RefCell<~[DefId]>>;
 pub type ExportMap2 = @RefCell<HashMap<NodeId, ~[Export2]>>;
 
 pub struct Export2 {
-    name: @str,        // The name of the target.
+    name: ~str,        // The name of the target.
     def_id: DefId,     // The definition of the target.
-    reexport: bool,     // Whether this is a reexport.
 }
 
 // This set contains all exported definitions from external crates. The set does
 // not contain any entries from local crates.
 pub type ExternalExports = HashSet<DefId>;
 
-// XXX: dox
+// FIXME: dox
 pub type LastPrivateMap = HashMap<NodeId, LastPrivate>;
 
 pub enum LastPrivate {
@@ -129,11 +127,6 @@ enum NameDefinition {
     NoNameDefinition,           //< The name was unbound.
     ChildNameDefinition(Def, LastPrivate), //< The name identifies an immediate child.
     ImportNameDefinition(Def, LastPrivate) //< The name identifies an import.
-}
-
-enum SelfBinding {
-    NoSelfBinding,
-    HasSelfBinding(NodeId, ExplicitSelf)
 }
 
 impl Visitor<()> for Resolver {
@@ -260,12 +253,6 @@ enum ModulePrefixResult {
 }
 
 #[deriving(Eq)]
-enum AllowCapturingSelfFlag {
-    AllowCapturingSelf,         //< The "self" definition can be captured.
-    DontAllowCapturingSelf,     //< The "self" definition cannot be captured.
-}
-
-#[deriving(Eq)]
 enum NameSearchType {
     /// We're doing a name search in order to resolve a `use` directive.
     ImportSearch,
@@ -295,7 +282,6 @@ enum DuplicateCheckingMode {
 /// One local scope.
 struct Rib {
     bindings: RefCell<HashMap<Name, DefLike>>,
-    self_binding: RefCell<Option<DefLike>>,
     kind: RibKind,
 }
 
@@ -303,7 +289,6 @@ impl Rib {
     fn new(kind: RibKind) -> Rib {
         Rib {
             bindings: RefCell::new(HashMap::new()),
-            self_binding: RefCell::new(None),
             kind: kind
         }
     }
@@ -779,7 +764,7 @@ fn namespace_error_to_str(ns: NamespaceError) -> &'static str {
 }
 
 fn Resolver(session: Session,
-            lang_items: LanguageItems,
+            lang_items: @LanguageItems,
             crate_span: Span) -> Resolver {
     let graph_root = @NameBindings();
 
@@ -837,7 +822,7 @@ fn Resolver(session: Session,
 /// The main resolver class.
 struct Resolver {
     session: @Session,
-    lang_items: LanguageItems,
+    lang_items: @LanguageItems,
 
     intr: @IdentInterner,
 
@@ -1412,7 +1397,7 @@ impl Resolver {
                                        parent: ReducedGraphParent,
                                        parent_public: bool) {
         let ident = variant.node.name;
-        // XXX: this is unfortunate to have to do this privacy calculation
+        // FIXME: this is unfortunate to have to do this privacy calculation
         //      here. This should be living in middle::privacy, but it's
         //      necessary to keep around in some form becaues of glob imports...
         let is_public = parent_public && variant.node.vis != ast::Private;
@@ -1747,8 +1732,8 @@ impl Resolver {
                       ignoring {:?}", def);
               // Ignored; handled elsewhere.
           }
-          DefSelf(..) | DefArg(..) | DefLocal(..) |
-          DefPrimTy(..) | DefTyParam(..) | DefBinding(..) |
+          DefArg(..) | DefLocal(..) | DefPrimTy(..) |
+          DefTyParam(..) | DefBinding(..) |
           DefUse(..) | DefUpvar(..) | DefRegion(..) |
           DefTyParamBinder(..) | DefLabel(..) | DefSelfTy(..) => {
             fail!("didn't expect `{:?}`", def);
@@ -1908,8 +1893,9 @@ impl Resolver {
         csearch::each_child_of_item(self.session.cstore,
                                     def_id,
                                     |def_like, child_ident, visibility| {
+            let child_ident_string = token::get_ident(child_ident.name);
             debug!("(populating external module) ... found ident: {}",
-                   token::ident_to_str(&child_ident));
+                   child_ident_string.get());
             self.build_reduced_graph_for_external_crate_def(module,
                                                             def_like,
                                                             child_ident,
@@ -2128,24 +2114,26 @@ impl Resolver {
     }
 
     fn import_directive_subclass_to_str(&mut self,
-                                            subclass: ImportDirectiveSubclass)
-                                            -> @str {
+                                        subclass: ImportDirectiveSubclass)
+                                        -> ~str {
         match subclass {
-            SingleImport(_target, source) => self.session.str_of(source),
-            GlobImport => @"*"
+            SingleImport(_target, source) => {
+                self.session.str_of(source).to_str()
+            }
+            GlobImport => ~"*"
         }
     }
 
     fn import_path_to_str(&mut self,
-                              idents: &[Ident],
-                              subclass: ImportDirectiveSubclass)
-                              -> @str {
+                          idents: &[Ident],
+                          subclass: ImportDirectiveSubclass)
+                          -> ~str {
         if idents.is_empty() {
             self.import_directive_subclass_to_str(subclass)
         } else {
             (format!("{}::{}",
-                  self.idents_to_str(idents),
-                  self.import_directive_subclass_to_str(subclass))).to_managed()
+                     self.idents_to_str(idents),
+                     self.import_directive_subclass_to_str(subclass)))
         }
     }
 
@@ -2598,7 +2586,7 @@ impl Resolver {
 
             debug!("(resolving glob import) writing resolution `{}` in `{}` \
                     to `{}`",
-                   interner_get(name),
+                   token::get_ident(name).get().to_str(),
                    self.module_to_str(containing_module),
                    self.module_to_str(module_));
 
@@ -3115,11 +3103,12 @@ impl Resolver {
         // top of the crate otherwise.
         let mut containing_module;
         let mut i;
-        if "self" == token::ident_to_str(&module_path[0]) {
+        let first_module_path_string = token::get_ident(module_path[0].name);
+        if "self" == first_module_path_string.get() {
             containing_module =
                 self.get_nearest_normal_module_parent_or_self(module_);
             i = 1;
-        } else if "super" == token::ident_to_str(&module_path[0]) {
+        } else if "super" == first_module_path_string.get() {
             containing_module =
                 self.get_nearest_normal_module_parent_or_self(module_);
             i = 0;  // We'll handle `super` below.
@@ -3128,8 +3117,11 @@ impl Resolver {
         }
 
         // Now loop through all the `super`s we find.
-        while i < module_path.len() &&
-                "super" == token::ident_to_str(&module_path[i]) {
+        while i < module_path.len() {
+            let string = token::get_ident(module_path[i].name);
+            if "super" != string.get() {
+                break
+            }
             debug!("(resolving module prefix) resolving `super` at {}",
                    self.module_to_str(containing_module));
             match self.get_nearest_normal_module_parent(containing_module) {
@@ -3364,22 +3356,19 @@ impl Resolver {
                                    exports2: &mut ~[Export2],
                                    name: Name,
                                    namebindings: @NameBindings,
-                                   ns: Namespace,
-                                   reexport: bool) {
+                                   ns: Namespace) {
         match namebindings.def_for_namespace(ns) {
             Some(d) => {
-                debug!("(computing exports) YES: {} '{}' => {:?}",
-                       if reexport { ~"reexport" } else { ~"export"},
-                       interner_get(name),
+                debug!("(computing exports) YES: export '{}' => {:?}",
+                       token::get_ident(name).get().to_str(),
                        def_id_of_def(d));
                 exports2.push(Export2 {
-                    reexport: reexport,
-                    name: interner_get(name),
+                    name: token::get_ident(name).get().to_str(),
                     def_id: def_id_of_def(d)
                 });
             }
             d_opt => {
-                debug!("(computing reexports) NO: {:?}", d_opt);
+                debug!("(computing exports) NO: {:?}", d_opt);
             }
         }
     }
@@ -3396,13 +3385,12 @@ impl Resolver {
             for &ns in xs.iter() {
                 match importresolution.target_for_namespace(ns) {
                     Some(target) => {
-                        debug!("(computing exports) maybe reexport '{}'",
-                               interner_get(*name));
+                        debug!("(computing exports) maybe export '{}'",
+                               token::get_ident(*name).get().to_str());
                         self.add_exports_of_namebindings(exports2,
                                                          *name,
                                                          target.bindings,
-                                                         ns,
-                                                         true)
+                                                         ns)
                     }
                     _ => ()
                 }
@@ -3474,8 +3462,7 @@ impl Resolver {
                     ribs: &mut ~[@Rib],
                     rib_index: uint,
                     def_like: DefLike,
-                    span: Span,
-                    allow_capturing_self: AllowCapturingSelfFlag)
+                    span: Span)
                     -> Option<DefLike> {
         let mut def;
         let is_ty_param;
@@ -3489,11 +3476,6 @@ impl Resolver {
             DlDef(d @ DefTyParam(..)) => {
                 def = d;
                 is_ty_param = true;
-            }
-            DlDef(d @ DefSelf(..))
-                    if allow_capturing_self == DontAllowCapturingSelf => {
-                def = d;
-                is_ty_param = false;
             }
             _ => {
                 return Some(def_like);
@@ -3594,8 +3576,7 @@ impl Resolver {
     fn search_ribs(&mut self,
                        ribs: &mut ~[@Rib],
                        name: Name,
-                       span: Span,
-                       allow_capturing_self: AllowCapturingSelfFlag)
+                       span: Span)
                        -> Option<DefLike> {
         // FIXME #4950: This should not use a while loop.
         // FIXME #4950: Try caching?
@@ -3609,8 +3590,7 @@ impl Resolver {
             };
             match binding_opt {
                 Some(def_like) => {
-                    return self.upvarify(ribs, i, def_like, span,
-                                         allow_capturing_self);
+                    return self.upvarify(ribs, i, def_like, span);
                 }
                 None => {
                     // Continue.
@@ -3791,8 +3771,7 @@ impl Resolver {
                                          item.id,
                                          0,
                                          OpaqueFunctionRibKind),
-                                      block,
-                                      NoSelfBinding);
+                                      block);
             }
 
             ItemStatic(..) => {
@@ -3888,11 +3867,10 @@ impl Resolver {
     }
 
     fn resolve_function(&mut self,
-                            rib_kind: RibKind,
-                            optional_declaration: Option<P<FnDecl>>,
-                            type_parameters: TypeParameters,
-                            block: P<Block>,
-                            self_binding: SelfBinding) {
+                        rib_kind: RibKind,
+                        optional_declaration: Option<P<FnDecl>>,
+                        type_parameters: TypeParameters,
+                        block: P<Block>) {
         // Create a value rib for the function.
         let function_value_rib = @Rib::new(rib_kind);
         {
@@ -3916,21 +3894,6 @@ impl Resolver {
                 }
                 HasTypeParameters(ref generics, _, _, _) => {
                     this.resolve_type_parameters(&generics.ty_params);
-                }
-            }
-
-            // Add self to the rib, if necessary.
-            match self_binding {
-                NoSelfBinding => {
-                    // Nothing to do.
-                }
-                HasSelfBinding(self_node_id, explicit_self) => {
-                    let mutable = match explicit_self.node {
-                        SelfUniq(m) | SelfValue(m) if m == MutMutable => true,
-                        _ => false
-                    };
-                    let def_like = DlDef(DefSelf(self_node_id, mutable));
-                    function_value_rib.self_binding.set(Some(def_like));
                 }
             }
 
@@ -3973,6 +3936,10 @@ impl Resolver {
         for type_parameter in type_parameters.iter() {
             for bound in type_parameter.bounds.iter() {
                 self.resolve_type_parameter_bound(type_parameter.id, bound);
+            }
+            match type_parameter.default {
+                Some(ty) => self.resolve_type(ty),
+                None => {}
             }
         }
     }
@@ -4055,26 +4022,17 @@ impl Resolver {
     // Does this really need to take a RibKind or is it always going
     // to be NormalRibKind?
     fn resolve_method(&mut self,
-                          rib_kind: RibKind,
-                          method: @Method,
-                          outer_type_parameter_count: uint) {
+                      rib_kind: RibKind,
+                      method: @Method,
+                      outer_type_parameter_count: uint) {
         let method_generics = &method.generics;
         let type_parameters =
             HasTypeParameters(method_generics,
                               method.id,
                               outer_type_parameter_count,
                               rib_kind);
-        // we only have self ty if it is a non static method
-        let self_binding = match method.explicit_self.node {
-            SelfStatic => NoSelfBinding,
-            _ => HasSelfBinding(method.self_id, method.explicit_self)
-        };
 
-        self.resolve_function(rib_kind,
-                              Some(method.decl),
-                              type_parameters,
-                              method.body,
-                              self_binding);
+        self.resolve_function(rib_kind, Some(method.decl), type_parameters, method.body);
     }
 
     fn resolve_implementation(&mut self,
@@ -4140,9 +4098,7 @@ impl Resolver {
                                              method.id,
                                              outer_type_parameter_count,
                                              NormalRibKind),
-                                          method.body,
-                                          HasSelfBinding(method.self_id),
-                                          visitor);
+                                          method.body);
 */
             }
 
@@ -4205,19 +4161,23 @@ impl Resolver {
             for (&key, &binding_0) in map_0.iter() {
                 match map_i.find(&key) {
                   None => {
+                    let string = token::get_ident(key);
                     self.resolve_error(
                         p.span,
                         format!("variable `{}` from pattern \\#1 is \
                                   not bound in pattern \\#{}",
-                             interner_get(key), i + 1));
+                                string.get(),
+                                i + 1));
                   }
                   Some(binding_i) => {
                     if binding_0.binding_mode != binding_i.binding_mode {
+                        let string = token::get_ident(key);
                         self.resolve_error(
                             binding_i.span,
                             format!("variable `{}` is bound with different \
                                       mode in pattern \\#{} than in pattern \\#1",
-                                 interner_get(key), i + 1));
+                                    string.get(),
+                                    i + 1));
                     }
                   }
                 }
@@ -4225,11 +4185,13 @@ impl Resolver {
 
             for (&key, &binding) in map_i.iter() {
                 if !map_0.contains_key(&key) {
+                    let string = token::get_ident(key);
                     self.resolve_error(
                         binding.span,
                         format!("variable `{}` from pattern \\#{} is \
                                   not bound in pattern \\#1",
-                             interner_get(key), i + 1));
+                                string.get(),
+                                i + 1));
                 }
             }
         }
@@ -4421,9 +4383,10 @@ impl Resolver {
                     match self.resolve_bare_identifier_pattern(ident) {
                         FoundStructOrEnumVariant(def, lp)
                                 if mode == RefutableMode => {
+                            let string = token::get_ident(renamed);
                             debug!("(resolving pattern) resolving `{}` to \
                                     struct or enum variant",
-                                   interner_get(renamed));
+                                   string.get());
 
                             self.enforce_default_binding_mode(
                                 pattern,
@@ -4432,17 +4395,19 @@ impl Resolver {
                             self.record_def(pattern.id, (def, lp));
                         }
                         FoundStructOrEnumVariant(..) => {
+                            let string = token::get_ident(renamed);
                             self.resolve_error(pattern.span,
                                                   format!("declaration of `{}` \
                                                         shadows an enum \
                                                         variant or unit-like \
                                                         struct in scope",
-                                                       interner_get(renamed)));
+                                                          string.get()));
                         }
                         FoundConst(def, lp) if mode == RefutableMode => {
+                            let string = token::get_ident(renamed);
                             debug!("(resolving pattern) resolving `{}` to \
                                     constant",
-                                   interner_get(renamed));
+                                   string.get());
 
                             self.enforce_default_binding_mode(
                                 pattern,
@@ -4456,8 +4421,9 @@ impl Resolver {
                                                    allowed here");
                         }
                         BareIdentifierPatternUnresolved => {
+                            let string = token::get_ident(renamed);
                             debug!("(resolving pattern) binding `{}`",
-                                   interner_get(renamed));
+                                   string.get());
 
                             let def = match mode {
                                 RefutableMode => {
@@ -4979,16 +4945,14 @@ impl Resolver {
                 let mut value_ribs = self.value_ribs.borrow_mut();
                 search_result = self.search_ribs(value_ribs.get(),
                                                  renamed,
-                                                 span,
-                                                 DontAllowCapturingSelf);
+                                                 span);
             }
             TypeNS => {
                 let name = ident.name;
                 let mut type_ribs = self.type_ribs.borrow_mut();
                 search_result = self.search_ribs(type_ribs.get(),
                                                  name,
-                                                 span,
-                                                 AllowCapturingSelf);
+                                                 span);
             }
         }
 
@@ -5004,46 +4968,6 @@ impl Resolver {
                 return None;
             }
         }
-    }
-
-    fn resolve_self_value_in_local_ribs(&mut self, span: Span)
-                                            -> Option<Def> {
-        // FIXME #4950: This should not use a while loop.
-        let mut i = {
-            let value_ribs = self.value_ribs.borrow();
-            value_ribs.get().len()
-        };
-        while i != 0 {
-            i -= 1;
-            let self_binding_opt = {
-                let value_ribs = self.value_ribs.borrow();
-                value_ribs.get()[i].self_binding.get()
-            };
-            match self_binding_opt {
-                Some(def_like) => {
-                    let mut value_ribs = self.value_ribs.borrow_mut();
-                    match self.upvarify(value_ribs.get(),
-                                        i,
-                                        def_like,
-                                        span,
-                                        DontAllowCapturingSelf) {
-                        Some(DlDef(def)) => return Some(def),
-                        _ => {
-                            if self.session.has_errors() {
-                                // May happen inside a nested fn item, cf #6642.
-                                return None;
-                            } else {
-                                self.session.span_bug(span,
-                                        "self wasn't mapped to a def?!")
-                            }
-                        }
-                    }
-                }
-                None => {}
-            }
-        }
-
-        None
     }
 
     fn resolve_item_by_identifier_in_lexical_scope(&mut self,
@@ -5101,10 +5025,10 @@ impl Resolver {
     }
 
     fn find_best_match_for_name(&mut self, name: &str, max_distance: uint)
-                                -> Option<@str> {
+                                -> Option<~str> {
         let this = &mut *self;
 
-        let mut maybes: ~[@str] = ~[];
+        let mut maybes: ~[~str] = ~[];
         let mut values: ~[uint] = ~[];
 
         let mut j = {
@@ -5116,14 +5040,15 @@ impl Resolver {
             let value_ribs = this.value_ribs.borrow();
             let bindings = value_ribs.get()[j].bindings.borrow();
             for (&k, _) in bindings.get().iter() {
-                maybes.push(interner_get(k));
-                values.push(uint::max_value);
+                let string = token::get_ident(k);
+                maybes.push(string.get().to_str());
+                values.push(uint::MAX);
             }
         }
 
         let mut smallest = 0;
-        for (i, &other) in maybes.iter().enumerate() {
-            values[i] = name.lev_distance(other);
+        for (i, other) in maybes.iter().enumerate() {
+            values[i] = name.lev_distance(*other);
 
             if values[i] <= values[smallest] {
                 smallest = i;
@@ -5131,7 +5056,7 @@ impl Resolver {
         }
 
         if values.len() > 0 &&
-            values[smallest] != uint::max_value &&
+            values[smallest] != uint::MAX &&
             values[smallest] < name.len() + 2 &&
             values[smallest] <= max_distance &&
             name != maybes[smallest] {
@@ -5229,10 +5154,8 @@ impl Resolver {
             ExprFnBlock(fn_decl, block) |
             ExprProc(fn_decl, block) => {
                 self.resolve_function(FunctionRibKind(expr.id, block.id),
-                                      Some(fn_decl),
-                                      NoTypeParameters,
-                                      block,
-                                      NoSelfBinding);
+                                      Some(fn_decl), NoTypeParameters,
+                                      block);
             }
 
             ExprStruct(ref path, _, _) => {
@@ -5279,15 +5202,16 @@ impl Resolver {
 
             ExprBreak(Some(label)) | ExprAgain(Some(label)) => {
                 let mut label_ribs = self.label_ribs.borrow_mut();
-                match self.search_ribs(label_ribs.get(), label, expr.span,
-                                       DontAllowCapturingSelf) {
+                match self.search_ribs(label_ribs.get(), label, expr.span) {
                     None =>
                         self.resolve_error(expr.span,
                                               format!("use of undeclared label \
                                                    `{}`",
-                                                   interner_get(label))),
+                                                   token::get_ident(label)
+                                                    .get()
+                                                    .to_str())),
                     Some(DlDef(def @ DefLabel(_))) => {
-                        // XXX: is AllPublic correct?
+                        // FIXME: is AllPublic correct?
                         self.record_def(expr.id, (def, AllPublic))
                     }
                     Some(_) => {
@@ -5295,17 +5219,6 @@ impl Resolver {
                                               "label wasn't mapped to a \
                                                label def!")
                     }
-                }
-            }
-
-            ExprSelf => {
-                match self.resolve_self_value_in_local_ribs(expr.span) {
-                    None => {
-                        self.resolve_error(expr.span,
-                                              "`self` is not allowed in \
-                                               this context")
-                    }
-                    Some(def) => self.record_def(expr.id, (def, AllPublic)),
                 }
             }
 
@@ -5325,7 +5238,7 @@ impl Resolver {
                 let traits = self.search_for_traits_containing_method(ident);
                 self.trait_map.insert(expr.id, @RefCell::new(traits));
             }
-            ExprMethodCall(_, _, ident, _, _, _) => {
+            ExprMethodCall(_, ident, _, _, _) => {
                 debug!("(recording candidate traits for expr) recording \
                         traits for {}",
                        expr.id);
@@ -5616,7 +5529,7 @@ impl Resolver {
         self.populate_module_if_necessary(module_);
         let children = module_.children.borrow();
         for (&name, _) in children.get().iter() {
-            debug!("* {}", interner_get(name));
+            debug!("* {}", token::get_ident(name).get().to_str());
         }
 
         debug!("Import resolutions:");
@@ -5640,7 +5553,7 @@ impl Resolver {
                 }
             }
 
-            debug!("* {}:{}{}", interner_get(*name),
+            debug!("* {}:{}{}", token::get_ident(*name).get().to_str(),
                    value_repr, type_repr);
         }
     }
@@ -5656,7 +5569,7 @@ pub struct CrateMap {
 
 /// Entry point to crate resolution.
 pub fn resolve_crate(session: Session,
-                     lang_items: LanguageItems,
+                     lang_items: @LanguageItems,
                      crate: &Crate)
                   -> CrateMap {
     let mut resolver = Resolver(session, lang_items, crate.span);

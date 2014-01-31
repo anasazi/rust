@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -10,14 +10,17 @@
 
 // The Rust abstract syntax tree.
 
-use codemap::{Span, Spanned};
+use codemap::{Span, Spanned, DUMMY_SP};
 use abi::AbiSet;
+use ast_util;
 use opt_vec::OptVec;
-use parse::token::{interner_get, str_to_ident};
+use parse::token::{InternedString, special_idents, str_to_ident};
+use parse::token;
 
 use std::cell::RefCell;
 use std::hashmap::HashMap;
 use std::option::Option;
+use std::rc::Rc;
 use std::to_str::ToStr;
 use extra::serialize::{Encodable, Decodable, Encoder, Decoder};
 
@@ -124,7 +127,8 @@ pub type Mrk = u32;
 
 impl<S:Encoder> Encodable<S> for Ident {
     fn encode(&self, s: &mut S) {
-        s.emit_str(interner_get(self.name));
+        let string = token::get_ident(self.name);
+        s.emit_str(string.get());
     }
 }
 
@@ -205,7 +209,8 @@ pub enum TyParamBound {
 pub struct TyParam {
     ident: Ident,
     id: NodeId,
-    bounds: OptVec<TyParamBound>
+    bounds: OptVec<TyParamBound>,
+    default: Option<P<Ty>>
 }
 
 #[deriving(Clone, Eq, Encodable, Decodable, IterBytes)]
@@ -236,7 +241,6 @@ pub enum MethodProvenance {
 pub enum Def {
     DefFn(DefId, Purity),
     DefStaticMethod(/* method */ DefId, MethodProvenance, Purity),
-    DefSelf(NodeId, bool /* is_mutbl */),
     DefSelfTy(/* trait id */ NodeId),
     DefMod(DefId),
     DefForeignMod(DefId),
@@ -294,9 +298,9 @@ pub type MetaItem = Spanned<MetaItem_>;
 
 #[deriving(Clone, Encodable, Decodable, IterBytes)]
 pub enum MetaItem_ {
-    MetaWord(@str),
-    MetaList(@str, ~[@MetaItem]),
-    MetaNameValue(@str, Lit),
+    MetaWord(InternedString),
+    MetaList(InternedString, ~[@MetaItem]),
+    MetaNameValue(InternedString, Lit),
 }
 
 // can't be derived because the MetaList requires an unordered comparison
@@ -357,7 +361,7 @@ pub enum BindingMode {
 pub enum Pat_ {
     PatWild,
     PatWildMulti,
-    // A pat_ident may either be a new bound variable,
+    // A PatIdent may either be a new bound variable,
     // or a nullary enum (in which case the second field
     // is None).
     // In the nullary enum case, the parser can't determine
@@ -366,7 +370,7 @@ pub enum Pat_ {
     // set (of "pat_idents that refer to nullary enums")
     PatIdent(BindingMode, Path, Option<@Pat>),
     PatEnum(Path, Option<~[@Pat]>), /* "none" means a * pattern where
-                                       * we don't bind the fields to names */
+                                     * we don't bind the fields to names */
     PatStruct(Path, ~[FieldPat], bool),
     PatTup(~[@Pat]),
     PatUniq(@Pat),
@@ -374,7 +378,7 @@ pub enum Pat_ {
     PatLit(@Expr),
     PatRange(@Expr, @Expr),
     // [a, b, ..i, y, z] is represented as
-    // pat_vec(~[a, b], Some(i), ~[y, z])
+    // PatVec(~[a, b], Some(i), ~[y, z])
     PatVec(~[@Pat], Option<@Pat>, ~[@Pat])
 }
 
@@ -401,19 +405,9 @@ impl ToStr for Sigil {
     }
 }
 
-#[deriving(Eq, Encodable, Decodable, IterBytes)]
-pub enum Vstore {
-    // FIXME (#3469): Change uint to @expr (actually only constant exprs)
-    VstoreFixed(Option<uint>),     // [1,2,3,4]
-    VstoreUniq,                    // ~[1,2,3,4]
-    VstoreBox,                     // @[1,2,3,4]
-    VstoreSlice(Option<Lifetime>)  // &'foo? [1,2,3,4]
-}
-
 #[deriving(Clone, Eq, Encodable, Decodable, IterBytes)]
 pub enum ExprVstore {
     ExprVstoreUniq,                 // ~[1,2,3,4]
-    ExprVstoreBox,                  // @[1,2,3,4]
     ExprVstoreSlice,                // &[1,2,3,4]
     ExprVstoreMutSlice,             // &mut [1,2,3,4]
 }
@@ -526,7 +520,7 @@ pub struct Expr {
 impl Expr {
     pub fn get_callee_id(&self) -> Option<NodeId> {
         match self.node {
-            ExprMethodCall(callee_id, _, _, _, _, _) |
+            ExprMethodCall(callee_id, _, _, _, _) |
             ExprIndex(callee_id, _, _) |
             ExprBinary(callee_id, _, _, _) |
             ExprAssignOp(callee_id, _, _, _) |
@@ -539,7 +533,6 @@ impl Expr {
 #[deriving(Clone, Eq, Encodable, Decodable, IterBytes)]
 pub enum CallSugar {
     NoSugar,
-    DoSugar,
     ForSugar
 }
 
@@ -550,7 +543,7 @@ pub enum Expr_ {
     ExprBox(@Expr, @Expr),
     ExprVec(~[@Expr], Mutability),
     ExprCall(@Expr, ~[@Expr], CallSugar),
-    ExprMethodCall(NodeId, @Expr, Ident, ~[P<Ty>], ~[@Expr], CallSugar),
+    ExprMethodCall(NodeId, Ident, ~[P<Ty>], ~[@Expr], CallSugar),
     ExprTup(~[@Expr]),
     ExprBinary(NodeId, BinOp, @Expr, @Expr),
     ExprUnary(NodeId, UnOp, @Expr),
@@ -566,7 +559,6 @@ pub enum Expr_ {
     ExprMatch(@Expr, ~[Arm]),
     ExprFnBlock(P<FnDecl>, P<Block>),
     ExprProc(P<FnDecl>, P<Block>),
-    ExprDoBody(@Expr),
     ExprBlock(P<Block>),
 
     ExprAssign(@Expr, @Expr),
@@ -579,8 +571,6 @@ pub enum Expr_ {
     /// of a function call.
     ExprPath(Path),
 
-    /// The special identifier `self`.
-    ExprSelf,
     ExprAddrOf(Mutability, @Expr),
     ExprBreak(Option<Name>),
     ExprAgain(Option<Name>),
@@ -683,7 +673,7 @@ pub enum TokenTree {
 //
 // As a final, horrifying aside, note that macro-by-example's input is
 // also matched by one of these matchers. Holy self-referential! It is matched
-// by an MatchSeq, specifically this one:
+// by a MatchSeq, specifically this one:
 //
 //                   $( $lhs:matchers => $rhs:tt );+
 //
@@ -724,14 +714,14 @@ pub type Lit = Spanned<Lit_>;
 
 #[deriving(Clone, Eq, Encodable, Decodable, IterBytes)]
 pub enum Lit_ {
-    LitStr(@str, StrStyle),
-    LitBinary(@[u8]),
+    LitStr(InternedString, StrStyle),
+    LitBinary(Rc<~[u8]>),
     LitChar(u32),
     LitInt(i64, IntTy),
     LitUint(u64, UintTy),
     LitIntUnsuffixed(i64),
-    LitFloat(@str, FloatTy),
-    LitFloatUnsuffixed(@str),
+    LitFloat(InternedString, FloatTy),
+    LitFloatUnsuffixed(InternedString),
     LitNil,
     LitBool(bool),
 }
@@ -783,7 +773,7 @@ pub enum IntTy {
 
 impl ToStr for IntTy {
     fn to_str(&self) -> ~str {
-        ::ast_util::int_ty_to_str(*self)
+        ast_util::int_ty_to_str(*self)
     }
 }
 
@@ -798,7 +788,7 @@ pub enum UintTy {
 
 impl ToStr for UintTy {
     fn to_str(&self) -> ~str {
-        ::ast_util::uint_ty_to_str(*self)
+        ast_util::uint_ty_to_str(*self)
     }
 }
 
@@ -810,7 +800,7 @@ pub enum FloatTy {
 
 impl ToStr for FloatTy {
     fn to_str(&self) -> ~str {
-        ::ast_util::float_ty_to_str(*self)
+        ast_util::float_ty_to_str(*self)
     }
 }
 
@@ -886,7 +876,7 @@ pub enum Ty_ {
     TyTup(~[P<Ty>]),
     TyPath(Path, Option<OptVec<TyParamBound>>, NodeId), // for #7264; see above
     TyTypeof(@Expr),
-    // ty_infer means the type should be inferred instead of it having been
+    // TyInfer means the type should be inferred instead of it having been
     // specified. This should only appear at the "top level" of a type and not
     // nested in one.
     TyInfer,
@@ -900,11 +890,11 @@ pub enum AsmDialect {
 
 #[deriving(Clone, Eq, Encodable, Decodable, IterBytes)]
 pub struct InlineAsm {
-    asm: @str,
+    asm: InternedString,
     asm_str_style: StrStyle,
-    clobbers: @str,
-    inputs: ~[(@str, @Expr)],
-    outputs: ~[(@str, @Expr)],
+    clobbers: InternedString,
+    inputs: ~[(InternedString, @Expr)],
+    outputs: ~[(InternedString, @Expr)],
     volatile: bool,
     alignstack: bool,
     dialect: AsmDialect
@@ -915,6 +905,26 @@ pub struct Arg {
     ty: P<Ty>,
     pat: @Pat,
     id: NodeId,
+}
+
+impl Arg {
+    pub fn new_self(span: Span, mutability: Mutability) -> Arg {
+        let path = ast_util::ident_to_path(span, special_idents::self_);
+        Arg {
+            // HACK(eddyb) fake type for the self argument.
+            ty: P(Ty {
+                id: DUMMY_NODE_ID,
+                node: TyInfer,
+                span: DUMMY_SP,
+            }),
+            pat: @Pat {
+                id: DUMMY_NODE_ID,
+                node: PatIdent(BindByValue(mutability), path, None),
+                span: span
+            },
+            id: DUMMY_NODE_ID
+        }
+    }
 }
 
 #[deriving(Clone, Eq, Encodable, Decodable, IterBytes)]
@@ -952,10 +962,10 @@ pub enum RetStyle {
 #[deriving(Clone, Eq, Encodable, Decodable, IterBytes)]
 pub enum ExplicitSelf_ {
     SelfStatic,                                // no self
-    SelfValue(Mutability),                     // `self`, `mut self`
+    SelfValue,                                 // `self`
     SelfRegion(Option<Lifetime>, Mutability),  // `&'lt self`, `&'lt mut self`
     SelfBox,                                   // `@self`
-    SelfUniq(Mutability)                       // `~self`, `mut ~self`
+    SelfUniq                                   // `~self`
 }
 
 pub type ExplicitSelf = Spanned<ExplicitSelf_>;
@@ -971,7 +981,6 @@ pub struct Method {
     body: P<Block>,
     id: NodeId,
     span: Span,
-    self_id: NodeId,
     vis: Visibility,
 }
 
@@ -1058,7 +1067,7 @@ pub enum ViewItem_ {
     // optional @str: if present, this is a location (containing
     // arbitrary characters) from which to fetch the crate sources
     // For example, extern mod whatever = "github.com/mozilla/rust"
-    ViewItemExternMod(Ident, Option<(@str, StrStyle)>, NodeId),
+    ViewItemExternMod(Ident, Option<(InternedString,StrStyle)>, NodeId),
     ViewItemUse(~[@ViewPath]),
 }
 

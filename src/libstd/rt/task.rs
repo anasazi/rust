@@ -14,7 +14,6 @@
 //! to implement this.
 
 use any::AnyOwnExt;
-use borrow;
 use cast;
 use cleanup;
 use clone::Clone;
@@ -120,6 +119,7 @@ impl Task {
 
             // Run the task main function, then do some cleanup.
             f.finally(|| {
+                #[allow(unused_must_use)]
                 fn close_outputs() {
                     let mut task = Local::borrow(None::<Task>);
                     let logger = task.get().logger.take();
@@ -127,8 +127,8 @@ impl Task {
                     let stdout = task.get().stdout.take();
                     drop(task);
                     drop(logger); // loggers are responsible for flushing
-                    match stdout { Some(mut w) => w.flush(), None => {} }
-                    match stderr { Some(mut w) => w.flush(), None => {} }
+                    match stdout { Some(mut w) => { w.flush(); }, None => {} }
+                    match stderr { Some(mut w) => { w.flush(); }, None => {} }
                 }
 
                 // First, flush/destroy the user stdout/logger because these
@@ -212,7 +212,7 @@ impl Task {
         // pretty sketchy and involves shuffling vtables of trait objects
         // around, but it gets the job done.
         //
-        // XXX: This function is a serious code smell and should be avoided at
+        // FIXME: This function is a serious code smell and should be avoided at
         //      all costs. I have yet to think of a method to avoid this
         //      function, and I would be saddened if more usage of the function
         //      crops up.
@@ -287,7 +287,7 @@ impl Task {
 
 impl Drop for Task {
     fn drop(&mut self) {
-        rtdebug!("called drop for a task: {}", borrow::to_uint(self));
+        rtdebug!("called drop for a task: {}", self as *mut Task as uint);
         rtassert!(self.destroyed);
     }
 }

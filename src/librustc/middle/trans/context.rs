@@ -19,12 +19,12 @@ use middle::resolve;
 use middle::trans::adt;
 use middle::trans::base;
 use middle::trans::builder::Builder;
-use middle::trans::debuginfo;
 use middle::trans::common::{C_i32, C_null};
-use middle::ty;
-
+use middle::trans::common::{mono_id,ExternMap,tydesc_info,BuilderRef_res,Stats};
+use middle::trans::base::{decl_crate_map};
+use middle::trans::debuginfo;
 use middle::trans::type_::Type;
-
+use middle::ty;
 use util::sha2::Sha256;
 
 use std::cell::{Cell, RefCell};
@@ -33,10 +33,7 @@ use std::hashmap::{HashMap, HashSet};
 use std::local_data;
 use std::libc::c_uint;
 use syntax::ast;
-
-use middle::trans::common::{mono_id,ExternMap,tydesc_info,BuilderRef_res,Stats};
-
-use middle::trans::base::{decl_crate_map};
+use syntax::parse::token::InternedString;
 
 pub struct CrateContext {
      sess: session::Session,
@@ -71,7 +68,7 @@ pub struct CrateContext {
      // Cache generated vtables
      vtables: RefCell<HashMap<(ty::t, mono_id), ValueRef>>,
      // Cache of constant strings,
-     const_cstr_cache: RefCell<HashMap<@str, ValueRef>>,
+     const_cstr_cache: RefCell<HashMap<InternedString, ValueRef>>,
 
      // Reverse-direction for const ptrs cast from globals.
      // Key is an int, cast from a ValueRef holding a *T,
@@ -91,13 +88,16 @@ pub struct CrateContext {
 
      impl_method_cache: RefCell<HashMap<(ast::DefId, ast::Name), ast::DefId>>,
 
+     // Cache of closure wrappers for bare fn's.
+     closure_bare_wrapper_cache: RefCell<HashMap<ValueRef, ValueRef>>,
+
      module_data: RefCell<HashMap<~str, ValueRef>>,
      lltypes: RefCell<HashMap<ty::t, Type>>,
      llsizingtypes: RefCell<HashMap<ty::t, Type>>,
      adt_reprs: RefCell<HashMap<ty::t, @adt::Repr>>,
      symbol_hasher: RefCell<Sha256>,
-     type_hashcodes: RefCell<HashMap<ty::t, @str>>,
-     all_llvm_symbols: RefCell<HashSet<@str>>,
+     type_hashcodes: RefCell<HashMap<ty::t, ~str>>,
+     all_llvm_symbols: RefCell<HashSet<~str>>,
      tcx: ty::ctxt,
      maps: astencode::Maps,
      stats: @Stats,
@@ -165,7 +165,7 @@ impl CrateContext {
 
             let (crate_map_name, crate_map) = decl_crate_map(sess, link_meta.clone(), llmod);
             let dbg_cx = if sess.opts.debuginfo {
-                Some(debuginfo::CrateDebugContext::new(llmod, name.to_owned()))
+                Some(debuginfo::CrateDebugContext::new(llmod))
             } else {
                 None
             };
@@ -201,6 +201,7 @@ impl CrateContext {
                   const_values: RefCell::new(HashMap::new()),
                   extern_const_values: RefCell::new(HashMap::new()),
                   impl_method_cache: RefCell::new(HashMap::new()),
+                  closure_bare_wrapper_cache: RefCell::new(HashMap::new()),
                   module_data: RefCell::new(HashMap::new()),
                   lltypes: RefCell::new(HashMap::new()),
                   llsizingtypes: RefCell::new(HashMap::new()),

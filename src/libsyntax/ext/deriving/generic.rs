@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -42,7 +42,7 @@ arguments:
   the same variant (e.g. `None`, `Some(1)` and `None`). If
   `const_nonmatching` is true, this will contain an empty list.
 - `StaticEnum` and `StaticStruct` for static methods, where the type
-  being derived upon is either a enum or struct respectively. (Any
+  being derived upon is either an enum or struct respectively. (Any
   argument with type Self is just grouped among the non-self
   arguments.)
 
@@ -68,6 +68,7 @@ enum C {
     C0(int),
     C1 { x: int }
 }
+~~~
 
 The `int`s in `B` and `C0` don't have an identifier, so the
 `Option<ident>`s would be `None` for them.
@@ -168,8 +169,9 @@ StaticStruct(<ast::StructDef of A>, Named(~[(<ident of x>, <span of x>)]))
 
 StaticStruct(<ast::StructDef of B>, Unnamed(~[<span of x>]))
 
-StaticEnum(<ast::EnumDef of C>, ~[(<ident of C0>, Unnamed(~[<span of int>])),
-                                  (<ident of C1>, Named(~[(<ident of x>, <span of x>)]))])
+StaticEnum(<ast::EnumDef of C>, ~[(<ident of C0>, <span of C0>, Unnamed(~[<span of int>])),
+                                  (<ident of C1>, <span of C1>,
+                                   Named(~[(<ident of x>, <span of x>)]))])
 ~~~
 
 */
@@ -182,6 +184,8 @@ use ext::build::AstBuilder;
 use codemap;
 use codemap::Span;
 use opt_vec;
+use parse::token::InternedString;
+use parse::token;
 
 use std::vec;
 
@@ -290,7 +294,7 @@ pub enum SubstructureFields<'a> {
     /// A static method where Self is a struct.
     StaticStruct(&'a ast::StructDef, StaticFields),
     /// A static method where Self is an enum.
-    StaticEnum(&'a ast::EnumDef, ~[(Ident, StaticFields)])
+    StaticEnum(&'a ast::EnumDef, ~[(Ident, Span, StaticFields)])
 }
 
 
@@ -373,7 +377,7 @@ impl<'a> TraitDef<'a> {
             // require the current trait
             bounds.push(cx.typarambound(trait_path.clone()));
 
-            trait_generics.ty_params.push(cx.typaram(ty_param.ident, bounds));
+            trait_generics.ty_params.push(cx.typaram(ty_param.ident, bounds, None));
         }
 
         // Create the reference to the trait.
@@ -394,8 +398,10 @@ impl<'a> TraitDef<'a> {
         let doc_attr = cx.attribute(
             self.span,
             cx.meta_name_value(self.span,
-                               @"doc",
-                               ast::LitStr(@"Automatically derived.", ast::CookedStr)));
+                               InternedString::new("doc"),
+                               ast::LitStr(token::intern_and_get_ident(
+                                       "Automatically derived."),
+                                       ast::CookedStr)));
         cx.item(
             self.span,
             ::parse::token::special_idents::clownshoes_extensions,
@@ -549,9 +555,14 @@ impl<'a> MethodDef<'a> {
         // create the generics that aren't for Self
         let fn_generics = self.generics.to_generics(trait_.cx, trait_.span, type_ident, generics);
 
+        let self_arg = match explicit_self.node {
+            ast::SelfStatic => None,
+            _ => Some(ast::Arg::new_self(trait_.span, ast::MutImmutable))
+        };
         let args = arg_types.move_iter().map(|(name, ty)| {
             trait_.cx.arg(trait_.span, name, ty)
-        }).collect();
+        });
+        let args = self_arg.move_iter().chain(args).collect();
 
         let ret_type = self.get_ret_ty(trait_, generics, type_ident);
 
@@ -560,7 +571,14 @@ impl<'a> MethodDef<'a> {
         let body_block = trait_.cx.block_expr(body);
 
         let attrs = if self.inline {
-            ~[trait_.cx.attribute(trait_.span, trait_.cx.meta_word(trait_.span, @"inline"))]
+            ~[
+                trait_.cx
+                      .attribute(trait_.span,
+                                 trait_.cx
+                                       .meta_word(trait_.span,
+                                                  InternedString::new(
+                                                      "inline")))
+            ]
         } else {
             ~[]
         };
@@ -576,7 +594,6 @@ impl<'a> MethodDef<'a> {
             body: body_block,
             id: ast::DUMMY_NODE_ID,
             span: trait_.span,
-            self_id: ast::DUMMY_NODE_ID,
             vis: ast::Inherited,
         }
     }
@@ -904,7 +921,7 @@ impl<'a> MethodDef<'a> {
                     trait_.summarise_struct(struct_def)
                 }
             };
-            (ident, summary)
+            (ident, v.span, summary)
         });
         self.call_substructure_method(trait_, type_ident,
                                       self_args, nonself_args,
@@ -927,7 +944,7 @@ impl<'a> TraitDef<'a> {
         to_set.expn_info = Some(@codemap::ExpnInfo {
             call_site: to_set,
             callee: codemap::NameAndSpan {
-                name: format!("deriving({})", trait_name).to_managed(),
+                name: format!("deriving({})", trait_name),
                 format: codemap::MacroAttribute,
                 span: Some(self.span)
             }
@@ -1007,7 +1024,8 @@ impl<'a> TraitDef<'a> {
             };
             let path = cx.path_ident(sp, cx.ident_of(format!("{}_{}", prefix, i)));
             paths.push(path.clone());
-            ident_expr.push((sp, opt_id, cx.expr_path(path)));
+            let val = cx.expr(sp, ast::ExprParen(cx.expr_deref(sp, cx.expr_path(path))));
+            ident_expr.push((sp, opt_id, val));
         }
 
         let subpats = self.create_subpatterns(paths, mutbl);
@@ -1051,7 +1069,8 @@ impl<'a> TraitDef<'a> {
                     let path = cx.path_ident(sp, cx.ident_of(format!("{}_{}", prefix, i)));
 
                     paths.push(path.clone());
-                    ident_expr.push((sp, None, cx.expr_path(path)));
+                    let val = cx.expr(sp, ast::ExprParen(cx.expr_deref(sp, cx.expr_path(path))));
+                    ident_expr.push((sp, None, val));
                 }
 
                 let subpats = self.create_subpatterns(paths, mutbl);
@@ -1126,7 +1145,7 @@ pub fn cs_same_method(f: |&ExtCtxt, Span, ~[@Expr]| -> @Expr,
                 cx.expr_method_call(field.span,
                                     field.self_,
                                     substructure.method_ident,
-                                    field.other.clone())
+                                    field.other.map(|e| cx.expr_addr_of(field.span, *e)))
             });
 
             f(cx, trait_span, called)

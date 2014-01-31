@@ -1,4 +1,4 @@
-// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -81,6 +81,7 @@ use middle::const_eval;
 use middle::lang_items::{ExchangeHeapLangItem, GcLangItem};
 use middle::lang_items::{ManagedHeapLangItem};
 use middle::lint::UnreachableCode;
+use middle::lint;
 use middle::pat_util::pat_id_map;
 use middle::pat_util;
 use middle::subst::Subst;
@@ -142,17 +143,11 @@ pub mod regionck;
 pub mod demand;
 pub mod method;
 
-pub struct SelfInfo {
-    self_ty: ty::t,
-    self_id: ast::NodeId,
-    span: Span
-}
-
 /// Fields that are part of a `FnCtxt` which are inherited by
 /// closures defined within the function.  For example:
 ///
 ///     fn foo() {
-///         do bar() { ... }
+///         bar(proc() { ... })
 ///     }
 ///
 /// Here, the function `foo()` and the closure passed to
@@ -320,23 +315,21 @@ pub fn check_item_types(ccx: @CrateCtxt, crate: &ast::Crate) {
     visit::walk_crate(&mut visit, crate, ());
 }
 
-pub fn check_bare_fn(ccx: @CrateCtxt,
-                     decl: &ast::FnDecl,
-                     body: &ast::Block,
-                     id: ast::NodeId,
-                     self_info: Option<SelfInfo>,
-                     fty: ty::t,
-                     param_env: ty::ParameterEnvironment) {
+fn check_bare_fn(ccx: @CrateCtxt,
+                 decl: &ast::FnDecl,
+                 body: &ast::Block,
+                 id: ast::NodeId,
+                 fty: ty::t,
+                 param_env: ty::ParameterEnvironment) {
     match ty::get(fty).sty {
         ty::ty_bare_fn(ref fn_ty) => {
             let fcx =
-                check_fn(ccx, self_info, fn_ty.purity,
-                         &fn_ty.sig, decl, id, body, Vanilla,
-                         @Inherited::new(ccx.tcx, param_env));
+                check_fn(ccx, fn_ty.purity, &fn_ty.sig, decl, id, body,
+                         Vanilla, @Inherited::new(ccx.tcx, param_env));
 
             vtable::resolve_in_block(fcx, body);
             regionck::regionck_fn(fcx, body);
-            writeback::resolve_type_vars_in_fn(fcx, decl, body, self_info);
+            writeback::resolve_type_vars_in_fn(fcx, decl, body);
         }
         _ => ccx.tcx.sess.impossible_case(body.span,
                                  "check_bare_fn: function type expected")
@@ -419,15 +412,14 @@ impl Visitor<()> for GatherLocalsVisitor {
 
 }
 
-pub fn check_fn(ccx: @CrateCtxt,
-                opt_self_info: Option<SelfInfo>,
-                purity: ast::Purity,
-                fn_sig: &ty::FnSig,
-                decl: &ast::FnDecl,
-                id: ast::NodeId,
-                body: &ast::Block,
-                fn_kind: FnKind,
-                inherited: @Inherited) -> @FnCtxt
+fn check_fn(ccx: @CrateCtxt,
+            purity: ast::Purity,
+            fn_sig: &ty::FnSig,
+            decl: &ast::FnDecl,
+            id: ast::NodeId,
+            body: &ast::Block,
+            fn_kind: FnKind,
+            inherited: @Inherited) -> @FnCtxt
 {
     /*!
      * Helper used by check_bare_fn and check_expr_fn.  Does the
@@ -442,99 +434,44 @@ pub fn check_fn(ccx: @CrateCtxt,
     let tcx = ccx.tcx;
     let err_count_on_creation = tcx.sess.err_count();
 
-    // First, we have to replace any bound regions in the fn and self
-    // types with free ones.  The free region references will be bound
-    // the node_id of the body block.
-    let (opt_self_info, fn_sig) = {
-        let opt_self_ty = opt_self_info.map(|i| i.self_ty);
-        let (_, opt_self_ty, fn_sig) =
-            replace_bound_regions_in_fn_sig(
-                tcx, opt_self_ty, fn_sig,
-                |br| ty::ReFree(ty::FreeRegion {scope_id: body.id,
-                                                 bound_region: br}));
-        let opt_self_info =
-            opt_self_info.map(
-                |si| SelfInfo {self_ty: opt_self_ty.unwrap(), .. si});
-        (opt_self_info, fn_sig)
-    };
+    // First, we have to replace any bound regions in the fn type with free ones.
+    // The free region references will be bound the node_id of the body block.
+    let (_, fn_sig) = replace_bound_regions_in_fn_sig(tcx, fn_sig, |br| {
+        ty::ReFree(ty::FreeRegion {scope_id: body.id, bound_region: br})
+    });
 
-    relate_free_regions(tcx, opt_self_info.map(|s| s.self_ty), &fn_sig);
+    relate_free_regions(tcx, &fn_sig);
 
-    let arg_tys = fn_sig.inputs.map(|a| *a);
+    let arg_tys = fn_sig.inputs.as_slice();
     let ret_ty = fn_sig.output;
 
-    debug!("check_fn(arg_tys={:?}, ret_ty={:?}, opt_self_ty={:?})",
+    debug!("check_fn(arg_tys={:?}, ret_ty={:?})",
            arg_tys.map(|&a| ppaux::ty_to_str(tcx, a)),
-           ppaux::ty_to_str(tcx, ret_ty),
-           opt_self_info.map(|si| ppaux::ty_to_str(tcx, si.self_ty)));
+           ppaux::ty_to_str(tcx, ret_ty));
 
     // Create the function context.  This is either derived from scratch or,
     // in the case of function expressions, based on the outer context.
-    let fcx: @FnCtxt = {
-        @FnCtxt {
-            err_count_on_creation: err_count_on_creation,
-            ret_ty: ret_ty,
-            ps: RefCell::new(PurityState::function(purity, id)),
-            region_lb: Cell::new(body.id),
-            fn_kind: fn_kind,
-            inh: inherited,
-            ccx: ccx
-        }
+    let fcx = @FnCtxt {
+        err_count_on_creation: err_count_on_creation,
+        ret_ty: ret_ty,
+        ps: RefCell::new(PurityState::function(purity, id)),
+        region_lb: Cell::new(body.id),
+        fn_kind: fn_kind,
+        inh: inherited,
+        ccx: ccx
     };
 
-    gather_locals(fcx, decl, body, arg_tys, opt_self_info);
-    check_block_with_expected(fcx, body, Some(ret_ty));
-
-    // We unify the tail expr's type with the
-    // function result type, if there is a tail expr.
-    match body.expr {
-      Some(tail_expr) => {
-        let tail_expr_ty = fcx.expr_ty(tail_expr);
-        // Special case: we print a special error if there appears
-        // to be do-block/for-loop confusion
-        demand::suptype_with_fn(fcx, tail_expr.span, false,
-            fcx.ret_ty, tail_expr_ty,
-            |sp, e, a, s| {
-                fcx.report_mismatched_return_types(sp, e, a, s) });
-      }
-      None => ()
-    }
-
-    for self_info in opt_self_info.iter() {
-        fcx.write_ty(self_info.self_id, self_info.self_ty);
-    }
-    for (input, arg) in decl.inputs.iter().zip(arg_tys.iter()) {
-        fcx.write_ty(input.id, *arg);
-    }
-
-    return fcx;
-
-    fn gather_locals(fcx: @FnCtxt,
-                     decl: &ast::FnDecl,
-                     body: &ast::Block,
-                     arg_tys: &[ty::t],
-                     opt_self_info: Option<SelfInfo>) {
-        let tcx = fcx.ccx.tcx;
+    {
 
         let mut visit = GatherLocalsVisitor { fcx: fcx, tcx: tcx, };
-
-        // Add the self parameter
-        for self_info in opt_self_info.iter() {
-            visit.assign(self_info.self_id, Some(self_info.self_ty));
-            let locals = fcx.inh.locals.borrow();
-            debug!("self is assigned to {}",
-                   fcx.infcx().ty_to_str(
-                       locals.get().get_copy(&self_info.self_id)));
-        }
-
         // Add formal parameters.
         for (arg_ty, input) in arg_tys.iter().zip(decl.inputs.iter()) {
             // Create type variables for each argument.
             pat_util::pat_bindings(tcx.def_map,
                                    input.pat,
                                    |_bm, pat_id, _sp, _path| {
-                visit.assign(pat_id, None);
-            });
+                                       visit.assign(pat_id, None);
+                                   });
 
             // Check the pattern.
             let pcx = pat_ctxt {
@@ -546,6 +483,29 @@ pub fn check_fn(ccx: @CrateCtxt,
 
         visit.visit_block(body, ());
     }
+
+    check_block_with_expected(fcx, body, Some(ret_ty));
+
+    // We unify the tail expr's type with the
+    // function result type, if there is a tail expr.
+    match body.expr {
+        Some(tail_expr) => {
+            // Special case: we print a special error if there appears
+            // to be do-block/for-loop confusion
+            demand::suptype_with_fn(fcx, tail_expr.span, false,
+                fcx.ret_ty, fcx.expr_ty(tail_expr),
+                |sp, e, a, s| {
+                    fcx.report_mismatched_return_types(sp, e, a, s);
+                });
+        }
+        None => {}
+    }
+
+    for (input, arg) in decl.inputs.iter().zip(arg_tys.iter()) {
+        fcx.write_ty(input.id, *arg);
+    }
+
+    fcx
 }
 
 pub fn check_no_duplicate_fields(tcx: ty::ctxt,
@@ -572,7 +532,10 @@ pub fn check_no_duplicate_fields(tcx: ty::ctxt,
 pub fn check_struct(ccx: @CrateCtxt, id: ast::NodeId, span: Span) {
     let tcx = ccx.tcx;
 
-    // Check that the class is instantiable
+    // Check that the struct is representable
+    check_representable(tcx, span, id, "struct");
+
+    // Check that the struct is instantiable
     check_instantiable(tcx, span, id);
 
     if ty::lookup_simd(tcx, local_def(id)) {
@@ -601,12 +564,12 @@ pub fn check_item(ccx: @CrateCtxt, it: &ast::Item) {
         let param_env = ty::construct_parameter_environment(
                 ccx.tcx,
                 None,
-                *fn_tpt.generics.type_param_defs,
+                fn_tpt.generics.type_param_defs(),
                 [],
                 [],
                 body.id);
 
-        check_bare_fn(ccx, decl, body, it.id, None, fn_tpt.ty, param_env);
+        check_bare_fn(ccx, decl, body, it.id, fn_tpt.ty, param_env);
       }
       ast::ItemImpl(_, ref opt_trait_ref, _, ref ms) => {
         debug!("ItemImpl {} with id {}", ccx.tcx.sess.str_of(it.ident), it.id);
@@ -711,28 +674,16 @@ fn check_method_body(ccx: @CrateCtxt,
         ty::construct_parameter_environment(
             ccx.tcx,
             self_bound,
-            *item_generics.type_param_defs,
-            *method_generics.type_param_defs,
-            item_generics.region_param_defs,
+            item_generics.type_param_defs(),
+            method_generics.type_param_defs(),
+            item_generics.region_param_defs(),
             method.body.id);
 
-    // Compute the self type and fty from point of view of inside fn
-    let opt_self_info = method_ty.transformed_self_ty.map(|ty| {
-        SelfInfo {self_ty: ty.subst(ccx.tcx, &param_env.free_substs),
-                  self_id: method.self_id,
-                  span: method.explicit_self.span}
-    });
+    // Compute the fty from point of view of inside fn
     let fty = ty::node_id_to_type(ccx.tcx, method.id);
     let fty = fty.subst(ccx.tcx, &param_env.free_substs);
 
-    check_bare_fn(
-        ccx,
-        method.decl,
-        method.body,
-        method.id,
-        opt_self_info,
-        fty,
-        param_env);
+    check_bare_fn(ccx, method.decl, method.body, method.id, fty, param_env);
 }
 
 fn check_impl_methods_against_trait(ccx: @CrateCtxt,
@@ -815,17 +766,17 @@ fn check_impl_methods_against_trait(ccx: @CrateCtxt,
  * - trait_m: the method in the trait
  * - trait_substs: the substitutions used on the type of the trait
  */
-pub fn compare_impl_method(tcx: ty::ctxt,
-                           impl_generics: &ty::Generics,
-                           impl_m: @ty::Method,
-                           impl_m_span: Span,
-                           impl_m_body_id: ast::NodeId,
-                           trait_m: &ty::Method,
-                           trait_substs: &ty::substs) {
+fn compare_impl_method(tcx: ty::ctxt,
+                       impl_generics: &ty::Generics,
+                       impl_m: @ty::Method,
+                       impl_m_span: Span,
+                       impl_m_body_id: ast::NodeId,
+                       trait_m: &ty::Method,
+                       trait_substs: &ty::substs) {
     debug!("compare_impl_method()");
     let infcx = infer::new_infer_ctxt(tcx);
 
-    let impl_tps = impl_generics.type_param_defs.len();
+    let impl_tps = impl_generics.type_param_defs().len();
 
     // Try to give more informative error messages about self typing
     // mismatches.  Note that any mismatch will also be detected
@@ -861,8 +812,8 @@ pub fn compare_impl_method(tcx: ty::ctxt,
         }
     }
 
-    let num_impl_m_type_params = impl_m.generics.type_param_defs.len();
-    let num_trait_m_type_params = trait_m.generics.type_param_defs.len();
+    let num_impl_m_type_params = impl_m.generics.type_param_defs().len();
+    let num_trait_m_type_params = trait_m.generics.type_param_defs().len();
     if num_impl_m_type_params != num_trait_m_type_params {
         tcx.sess.span_err(
             impl_m_span,
@@ -887,10 +838,10 @@ pub fn compare_impl_method(tcx: ty::ctxt,
         return;
     }
 
-    for (i, trait_param_def) in trait_m.generics.type_param_defs.iter().enumerate() {
-        // For each of the corresponding impl ty param's bounds...
-        let impl_param_def = &impl_m.generics.type_param_defs[i];
+    let it = trait_m.generics.type_param_defs().iter()
+        .zip(impl_m.generics.type_param_defs().iter());
 
+    for (i, (trait_param_def, impl_param_def)) in it.enumerate() {
         // Check that the impl does not require any builtin-bounds
         // that the trait does not guarantee:
         let extra_bounds =
@@ -935,15 +886,15 @@ pub fn compare_impl_method(tcx: ty::ctxt,
     // impl type is "&'a str", then this would replace the self
     // type with a free region `self`.
     let dummy_impl_tps: ~[ty::t] =
-        impl_generics.type_param_defs.iter().enumerate().
+        impl_generics.type_param_defs().iter().enumerate().
         map(|(i,t)| ty::mk_param(tcx, i, t.def_id)).
         collect();
     let dummy_method_tps: ~[ty::t] =
-        impl_m.generics.type_param_defs.iter().enumerate().
+        impl_m.generics.type_param_defs().iter().enumerate().
         map(|(i,t)| ty::mk_param(tcx, i + impl_tps, t.def_id)).
         collect();
     let dummy_impl_regions: OptVec<ty::Region> =
-        impl_generics.region_param_defs.iter().
+        impl_generics.region_param_defs().iter().
         map(|l| ty::ReFree(ty::FreeRegion {
                 scope_id: impl_m_body_id,
                 bound_region: ty::BrNamed(l.def_id, l.ident)})).
@@ -953,52 +904,10 @@ pub fn compare_impl_method(tcx: ty::ctxt,
         regions: ty::NonerasedRegions(dummy_impl_regions),
         self_ty: None };
 
-    // We are going to create a synthetic fn type that includes
-    // both the method's self argument and its normal arguments.
-    // So a method like `fn(&self, a: uint)` would be converted
-    // into a function `fn(self: &T, a: uint)`.
-    let mut trait_fn_args = ~[];
-    let mut impl_fn_args = ~[];
-
-    // For both the trait and the impl, create an argument to
-    // represent the self argument (unless this is a static method).
-    // This argument will have the *transformed* self type.
-    for &t in trait_m.transformed_self_ty.iter() {
-        trait_fn_args.push(t);
-    }
-    for &t in impl_m.transformed_self_ty.iter() {
-        impl_fn_args.push(t);
-    }
-
-    // Add in the normal arguments.
-    trait_fn_args.push_all(trait_m.fty.sig.inputs);
-    impl_fn_args.push_all(impl_m.fty.sig.inputs);
-
-    // Create a bare fn type for trait/impl that includes self argument
-    let trait_fty =
-        ty::mk_bare_fn(tcx,
-                       ty::BareFnTy {
-                            purity: trait_m.fty.purity,
-                            abis: trait_m.fty.abis,
-                            sig: ty::FnSig {
-                                binder_id: trait_m.fty.sig.binder_id,
-                                inputs: trait_fn_args,
-                                output: trait_m.fty.sig.output,
-                                variadic: false
-                            }
-                        });
-    let impl_fty =
-        ty::mk_bare_fn(tcx,
-                       ty::BareFnTy {
-                            purity: impl_m.fty.purity,
-                            abis: impl_m.fty.abis,
-                            sig: ty::FnSig {
-                                binder_id: impl_m.fty.sig.binder_id,
-                                inputs: impl_fn_args,
-                                output: impl_m.fty.sig.output,
-                                variadic: false
-                            }
-                        });
+    // Create a bare fn type for trait/impl
+    // It'd be nice to refactor so as to provide the bare fn types instead.
+    let trait_fty = ty::mk_bare_fn(tcx, trait_m.fty.clone());
+    let impl_fty = ty::mk_bare_fn(tcx, impl_m.fty.clone());
 
     // Perform substitutions so that the trait/impl methods are expressed
     // in terms of the same set of type/region parameters:
@@ -1465,8 +1374,8 @@ pub fn impl_self_ty(vcx: &VtableContext,
 
     let (n_tps, n_rps, raw_ty) = {
         let ity = ty::lookup_item_type(tcx, did);
-        (ity.generics.type_param_defs.len(),
-         ity.generics.region_param_defs.len(),
+        (ity.generics.type_param_defs().len(),
+         ity.generics.region_param_defs().len(),
          ity.ty)
     };
 
@@ -1510,10 +1419,10 @@ fn generics_of_static_method_container(type_context: ty::ctxt,
                                        -> ty::Generics {
     match provenance {
         ast::FromTrait(trait_def_id) => {
-            ty::lookup_trait_def(type_context, trait_def_id).generics
+            ty::lookup_trait_def(type_context, trait_def_id).generics.clone()
         }
         ast::FromImpl(impl_def_id) => {
-            ty::lookup_item_type(type_context, impl_def_id).generics
+            ty::lookup_item_type(type_context, impl_def_id).generics.clone()
         }
     }
 }
@@ -1576,7 +1485,7 @@ fn check_type_parameter_positions_in_path(function_context: @FnCtxt,
 
             // Make sure lifetime parameterization agrees with the trait or
             // implementation type.
-            let trait_region_parameter_count = generics.region_param_defs.len();
+            let trait_region_parameter_count = generics.region_param_defs().len();
             let supplied_region_parameter_count = trait_segment.lifetimes.len();
             if trait_region_parameter_count != supplied_region_parameter_count
                 && supplied_region_parameter_count != 0 {
@@ -1592,32 +1501,55 @@ fn check_type_parameter_positions_in_path(function_context: @FnCtxt,
             // Make sure the number of type parameters supplied on the trait
             // or implementation segment equals the number of type parameters
             // on the trait or implementation definition.
-            let trait_type_parameter_count = generics.type_param_defs.len();
-            let supplied_type_parameter_count = trait_segment.types.len();
-            if trait_type_parameter_count != supplied_type_parameter_count {
-                let trait_count_suffix = if trait_type_parameter_count == 1 {
+            let formal_ty_param_count = generics.type_param_defs().len();
+            let required_ty_param_count = generics.type_param_defs().iter()
+                                                  .take_while(|x| x.default.is_none())
+                                                  .len();
+            let supplied_ty_param_count = trait_segment.types.len();
+            if supplied_ty_param_count < required_ty_param_count {
+                let trait_count_suffix = if required_ty_param_count == 1 {
                     ""
                 } else {
                     "s"
                 };
-                let supplied_count_suffix =
-                    if supplied_type_parameter_count == 1 {
-                        ""
-                    } else {
-                        "s"
-                    };
-                function_context.tcx()
-                                .sess
-                                .span_err(path.span,
-                                          format!("the {} referenced by this \
-                                                path has {} type \
-                                                parameter{}, but {} type \
-                                                parameter{} were supplied",
-                                               name,
-                                               trait_type_parameter_count,
-                                               trait_count_suffix,
-                                               supplied_type_parameter_count,
-                                               supplied_count_suffix))
+                let supplied_count_suffix = if supplied_ty_param_count == 1 {
+                    ""
+                } else {
+                    "s"
+                };
+                let needs = if required_ty_param_count < generics.type_param_defs().len() {
+                    "needs at least"
+                } else {
+                    "needs"
+                };
+                function_context.tcx().sess.span_err(path.span,
+                    format!("the {} referenced by this path {} {} type \
+                            parameter{}, but {} type parameter{} were supplied",
+                            name, needs,
+                            required_ty_param_count, trait_count_suffix,
+                            supplied_ty_param_count, supplied_count_suffix))
+            } else if supplied_ty_param_count > formal_ty_param_count {
+                let trait_count_suffix = if formal_ty_param_count == 1 {
+                    ""
+                } else {
+                    "s"
+                };
+                let supplied_count_suffix = if supplied_ty_param_count == 1 {
+                    ""
+                } else {
+                    "s"
+                };
+                let needs = if required_ty_param_count < generics.type_param_defs().len() {
+                    "needs at most"
+                } else {
+                    "needs"
+                };
+                function_context.tcx().sess.span_err(path.span,
+                    format!("the {} referenced by this path {} {} type \
+                            parameter{}, but {} type parameter{} were supplied",
+                            name, needs,
+                            formal_ty_param_count, trait_count_suffix,
+                            supplied_ty_param_count, supplied_count_suffix))
             }
         }
         _ => {
@@ -1669,6 +1601,8 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
         sugar: ast::CallSugar,
         deref_args: DerefArgs) -> ty::t
     {
+        // HACK(eddyb) ignore provided self (it has special typeck rules).
+        let args = args.slice_from(1);
         if ty::type_is_error(method_fn_ty) {
             let err_inputs = err_args(args.len());
             check_argument_types(fcx, sp, err_inputs, callee_expr,
@@ -1677,8 +1611,10 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
         } else {
             match ty::get(method_fn_ty).sty {
                 ty::ty_bare_fn(ref fty) => {
-                    check_argument_types(fcx, sp, fty.sig.inputs, callee_expr,
-                                         args, sugar, deref_args, fty.sig.variadic);
+                    // HACK(eddyb) ignore self in the definition (see above).
+                    check_argument_types(fcx, sp, fty.sig.inputs.slice_from(1),
+                                         callee_expr, args, sugar, deref_args,
+                                         fty.sig.variadic);
                     fty.sig.output
                 }
                 _ => {
@@ -1731,8 +1667,6 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
         } else {
             let suffix = match sugar {
                 ast::NoSugar => "",
-                ast::DoSugar => " (including the closure passed by \
-                                 the `do` keyword)",
                 ast::ForSugar => " (including the closure passed by \
                                   the `for` keyword)"
             };
@@ -1781,8 +1715,7 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
             for (i, arg) in args.iter().take(t).enumerate() {
                 let is_block = match arg.node {
                     ast::ExprFnBlock(..) |
-                    ast::ExprProc(..) |
-                    ast::ExprDoBody(..) => true,
+                    ast::ExprProc(..) => true,
                     _ => false
                 };
 
@@ -1923,13 +1856,10 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
 
         // Replace any bound regions that appear in the function
         // signature with region variables
-        let (_, _, fn_sig) =
-            replace_bound_regions_in_fn_sig(fcx.tcx(),
-                                            None,
-                                            fn_sig,
-                                            |br| fcx.infcx()
-                                                    .next_region_var(
-                    infer::BoundRegionInFnCall(call_expr.span, br)));
+        let (_, fn_sig) = replace_bound_regions_in_fn_sig(fcx.tcx(), fn_sig, |br| {
+            fcx.infcx()
+               .next_region_var(infer::BoundRegionInFnCall(call_expr.span, br))
+        });
 
         // Call the generic checker.
         check_argument_types(fcx, call_expr.span, fn_sig.inputs, f,
@@ -1942,11 +1872,11 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
     fn check_method_call(fcx: @FnCtxt,
                          callee_id: ast::NodeId,
                          expr: &ast::Expr,
-                         rcvr: &ast::Expr,
                          method_name: ast::Ident,
                          args: &[@ast::Expr],
                          tps: &[ast::P<ast::Ty>],
                          sugar: ast::CallSugar) {
+        let rcvr = args[0];
         check_expr(fcx, rcvr);
 
         // no need to check for bot/err -- callee does that
@@ -2042,7 +1972,6 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
     fn lookup_op_method(fcx: @FnCtxt,
                         callee_id: ast::NodeId,
                         op_ex: &ast::Expr,
-                        self_ex: &ast::Expr,
                         self_t: ty::t,
                         opname: ast::Name,
                         args: &[@ast::Expr],
@@ -2052,7 +1981,7 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
                         _expected_result: Option<ty::t>
                        )
                      -> ty::t {
-        match method::lookup(fcx, op_ex, self_ex,
+        match method::lookup(fcx, op_ex, args[0],
                              callee_id, opname, self_t, [],
                              deref_args, CheckTraitsOnly, autoderef_receiver) {
             Some(ref origin) => {
@@ -2079,12 +2008,12 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
         }
     }
 
-    // could be either a expr_binop or an expr_assign_binop
+    // could be either an expr_binop or an expr_assign_binop
     fn check_binop(fcx: @FnCtxt,
                    callee_id: ast::NodeId,
                    expr: &ast::Expr,
                    op: ast::BinOp,
-                   lhs: &ast::Expr,
+                   lhs: @ast::Expr,
                    rhs: @ast::Expr,
                    // Used only in the error case
                    expected_result: Option<ty::t>,
@@ -2172,7 +2101,7 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
     fn check_user_binop(fcx: @FnCtxt,
                         callee_id: ast::NodeId,
                         ex: &ast::Expr,
-                        lhs_expr: &ast::Expr,
+                        lhs_expr: @ast::Expr,
                         lhs_resolved_t: ty::t,
                         op: ast::BinOp,
                         rhs: @ast::Expr,
@@ -2187,10 +2116,10 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
                              ast_util::binop_to_str(op), actual)},
                             lhs_resolved_t, None)
                 };
-                return lookup_op_method(fcx, callee_id, ex, lhs_expr, lhs_resolved_t,
-                                       token::intern(*name),
-                                       &[rhs], DoDerefArgs, DontAutoderefReceiver, if_op_unbound,
-                                       expected_result);
+                return lookup_op_method(fcx, callee_id, ex, lhs_resolved_t,
+                                        token::intern(*name), [lhs_expr, rhs],
+                                        DoDerefArgs,DontAutoderefReceiver,
+                                        if_op_unbound, expected_result);
             }
             None => ()
         };
@@ -2216,14 +2145,13 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
                        op_str: &str,
                        mname: &str,
                        ex: &ast::Expr,
-                       rhs_expr: &ast::Expr,
+                       rhs_expr: @ast::Expr,
                        rhs_t: ty::t,
                        expected_t: Option<ty::t>)
                     -> ty::t {
        lookup_op_method(
-            fcx, callee_id, ex, rhs_expr, rhs_t,
-            token::intern(mname), &[],
-            DoDerefArgs, DontAutoderefReceiver,
+            fcx, callee_id, ex, rhs_t, token::intern(mname),
+            [rhs_expr], DoDerefArgs, DontAutoderefReceiver,
             || {
                 fcx.type_error_message(ex.span, |actual| {
                     format!("cannot apply unary operator `{}` to type `{}`",
@@ -2280,9 +2208,9 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
              expected_bounds) = {
             match expected_sty {
                 Some(ty::ty_closure(ref cenv)) => {
-                    let (_, _, sig) =
+                    let (_, sig) =
                         replace_bound_regions_in_fn_sig(
-                            tcx, None, &cenv.sig,
+                            tcx, &cenv.sig,
                             |_| fcx.inh.infcx.fresh_bound_region(expr.id));
                     (Some(sig), cenv.purity, cenv.sigil,
                      cenv.onceness, cenv.bounds)
@@ -2352,7 +2280,7 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
                                            (purity, expr.id),
                                            sigil);
 
-        check_fn(fcx.ccx, None, inherited_purity, &fty_sig,
+        check_fn(fcx.ccx, inherited_purity, &fty_sig,
                  decl, id, body, fn_kind, fcx.inh);
     }
 
@@ -2407,9 +2335,11 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
                 fcx.type_error_message(
                     expr.span,
                     |actual| {
+                        let string = token::get_ident(field);
                         format!("attempted to take value of method `{}` on type `{}` \
-                              (try writing an anonymous function)",
-                             token::interner_get(field), actual)
+                                 (try writing an anonymous function)",
+                                string.get(),
+                                actual)
                     },
                     expr_t, None);
             }
@@ -2418,9 +2348,11 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
                 fcx.type_error_message(
                     expr.span,
                     |actual| {
+                        let string = token::get_ident(field);
                         format!("attempted access of field `{}` on type `{}`, \
-                              but no field with that name was found",
-                             token::interner_get(field), actual)
+                                 but no field with that name was found",
+                                string.get(),
+                                actual)
                     },
                     expr_t, None);
             }
@@ -2500,8 +2432,8 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
                     let name = class_field.name;
                     let (_, seen) = *class_field_map.get(&name);
                     if !seen {
-                        missing_fields.push(
-                            ~"`" + token::interner_get(name) + "`");
+                        let string = token::get_ident(name);
+                        missing_fields.push(~"`" + string.get() + "`");
                     }
                 }
 
@@ -2533,8 +2465,8 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
         // Look up the number of type parameters and the raw type, and
         // determine whether the class is region-parameterized.
         let item_type = ty::lookup_item_type(tcx, class_id);
-        let type_parameter_count = item_type.generics.type_param_defs.len();
-        let region_parameter_count = item_type.generics.region_param_defs.len();
+        let type_parameter_count = item_type.generics.type_param_defs().len();
+        let region_parameter_count = item_type.generics.region_param_defs().len();
         let raw_type = item_type.ty;
 
         // Generate the struct type.
@@ -2591,8 +2523,8 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
         // Look up the number of type parameters and the raw type, and
         // determine whether the enum is region-parameterized.
         let item_type = ty::lookup_item_type(tcx, enum_id);
-        let type_parameter_count = item_type.generics.type_param_defs.len();
-        let region_parameter_count = item_type.generics.region_param_defs.len();
+        let type_parameter_count = item_type.generics.type_param_defs().len();
+        let region_parameter_count = item_type.generics.region_param_defs().len();
         let raw_type = item_type.ty;
 
         // Generate the enum type.
@@ -2691,7 +2623,7 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
           let mut checked = false;
           match place.node {
               ast::ExprPath(ref path) => {
-                  // XXX(pcwalton): For now we hardcode the two permissible
+                  // FIXME(pcwalton): For now we hardcode the two permissible
                   // places: the exchange heap and the managed heap.
                   let definition = lookup_def(fcx, path.span, place.id);
                   let def_id = ast_util::def_id_of_def(definition);
@@ -2916,12 +2848,6 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
         let tpt = ty_param_bounds_and_ty_for_def(fcx, expr.span, defn);
         instantiate_path(fcx, pth, tpt, defn, expr.span, expr.id);
       }
-      ast::ExprSelf => {
-        let definition = lookup_def(fcx, expr.span, id);
-        let ty_param_bounds_and_ty =
-            ty_param_bounds_and_ty_for_def(fcx, expr.span, definition);
-        fcx.write_ty(id, ty_param_bounds_and_ty.ty);
-      }
       ast::ExprInlineAsm(ref ia) => {
           for &(_, input) in ia.inputs.iter() {
               check_expr(fcx, input);
@@ -3030,44 +2956,6 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
                       Vanilla,
                       expected);
       }
-      ast::ExprDoBody(b) => {
-        let expected_sty = unpack_expected(fcx,
-                                           expected,
-                                           |x| Some((*x).clone()));
-        let inner_ty = match expected_sty {
-            Some(ty::ty_closure(ref closure_ty))
-                    if closure_ty.sigil == ast::OwnedSigil => {
-                expected.unwrap()
-            }
-            _ => match expected {
-                Some(expected_t) => {
-                    fcx.type_error_message(expr.span, |actual| {
-                        format!("last argument in `do` call \
-                              has non-procedure type: {}",
-                             actual)
-                    }, expected_t, None);
-                    let err_ty = ty::mk_err();
-                    fcx.write_ty(id, err_ty);
-                    err_ty
-                }
-                None => {
-                    fcx.tcx().sess.impossible_case(
-                        expr.span,
-                        "do body must have expected type")
-                }
-            }
-        };
-        match b.node {
-          ast::ExprFnBlock(decl, body) => {
-            check_expr_fn(fcx, b, None,
-                          decl, body, DoBlock, Some(inner_ty));
-            demand::suptype(fcx, b.span, inner_ty, fcx.expr_ty(b));
-          }
-          // argh
-          _ => fail!("expected fn ty")
-        }
-        fcx.write_ty(expr.id, fcx.node_ty(b.id));
-      }
       ast::ExprBlock(b) => {
         check_block_with_expected(fcx, b, expected);
         fcx.write_ty(id, fcx.node_ty(b.id));
@@ -3088,18 +2976,16 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
               fcx.write_bot(id);
           }
       }
-      ast::ExprMethodCall(callee_id, rcvr, ident, ref tps, ref args, sugar) => {
-        check_method_call(fcx, callee_id, expr, rcvr, ident, *args, *tps, sugar);
-        let f_ty = fcx.expr_ty(rcvr);
+      ast::ExprMethodCall(callee_id, ident, ref tps, ref args, sugar) => {
+        check_method_call(fcx, callee_id, expr, ident, *args, *tps, sugar);
         let arg_tys = args.map(|a| fcx.expr_ty(*a));
         let (args_bot, args_err) = arg_tys.iter().fold((false, false),
              |(rest_bot, rest_err), a| {
               (rest_bot || ty::type_is_bot(*a),
                rest_err || ty::type_is_error(*a))});
-        if ty::type_is_error(f_ty) || args_err {
+        if args_err {
             fcx.write_error(id);
-        }
-        else if ty::type_is_bot(f_ty) || args_bot {
+        } else if args_bot {
             fcx.write_bot(id);
         }
       }
@@ -3327,10 +3213,9 @@ pub fn check_expr_with_unifier(fcx: @FnCtxt,
                       let ret_ty = lookup_op_method(fcx,
                                                     callee_id,
                                                     expr,
-                                                    base,
                                                     resolved,
                                                     index_ident.name,
-                                                    &[idx],
+                                                    [base, idx],
                                                     DoDerefArgs,
                                                     AutoderefReceiver,
                                                     error_message,
@@ -3556,6 +3441,33 @@ pub fn check_const_with_ty(fcx: @FnCtxt,
     writeback::resolve_type_vars_in_expr(fcx, e);
 }
 
+/// Checks whether a type can be represented in memory. In particular, it
+/// identifies types that contain themselves without indirection through a
+/// pointer, which would mean their size is unbounded. This is different from
+/// the question of whether a type can be instantiated. See the definition of
+/// `check_instantiable`.
+pub fn check_representable(tcx: ty::ctxt,
+                           sp: Span,
+                           item_id: ast::NodeId,
+                           designation: &str) {
+    let rty = ty::node_id_to_type(tcx, item_id);
+
+    // Check that it is possible to represent this type. This call identifies
+    // (1) types that contain themselves and (2) types that contain a different
+    // recursive type. It is only necessary to throw an error on those that
+    // contain themselves. For case 2, there must be an inner type that will be
+    // caught by case 1.
+    match ty::is_type_representable(tcx, rty) {
+      ty::SelfRecursive => {
+        tcx.sess.span_err(
+          sp, format!("illegal recursive {} type; \
+                       wrap the inner value in a box to make it representable",
+                      designation));
+      }
+      ty::Representable | ty::ContainsRecursive => (),
+    }
+}
+
 /// Checks whether a type can be created without an instance of itself.
 /// This is similar but different from the question of whether a type
 /// can be represented.  For example, the following type:
@@ -3711,7 +3623,6 @@ pub fn check_enum_variants(ccx: @CrateCtxt,
         return variants;
     }
 
-    let rty = ty::node_id_to_type(ccx.tcx, id);
     let hint = ty::lookup_repr_hint(ccx.tcx, ast::DefId { crate: ast::LOCAL_CRATE, node: id });
     if hint != attr::ReprAny && vs.len() <= 1 {
         ccx.tcx.sess.span_err(sp, format!("unsupported representation for {}variant enum",
@@ -3726,22 +3637,8 @@ pub fn check_enum_variants(ccx: @CrateCtxt,
         enum_var_cache.get().insert(local_def(id), @variants);
     }
 
-    // Check that it is possible to represent this enum:
-    let mut outer = true;
-    let did = local_def(id);
-    if ty::type_structurally_contains(ccx.tcx, rty, |sty| {
-        match *sty {
-          ty::ty_enum(id, _) if id == did => {
-            if outer { outer = false; false }
-            else { true }
-          }
-          _ => false
-        }
-    }) {
-        ccx.tcx.sess.span_err(sp,
-                              "illegal recursive enum type; \
-                               wrap the inner value in a box to make it representable");
-    }
+    // Check that it is possible to represent this enum.
+    check_representable(ccx.tcx, sp, id, "enum");
 
     // Check that it is possible to instantiate this enum:
     //
@@ -3760,7 +3657,7 @@ pub fn ty_param_bounds_and_ty_for_def(fcx: @FnCtxt,
                                       defn: ast::Def)
                                    -> ty_param_bounds_and_ty {
     match defn {
-      ast::DefArg(nid, _) | ast::DefLocal(nid, _) | ast::DefSelf(nid, _) |
+      ast::DefArg(nid, _) | ast::DefLocal(nid, _) |
       ast::DefBinding(nid, _) => {
           let typ = fcx.local_ty(sp, nid);
           return no_params(typ);
@@ -3813,7 +3710,10 @@ pub fn instantiate_path(fcx: @FnCtxt,
                         node_id: ast::NodeId) {
     debug!(">>> instantiate_path");
 
-    let ty_param_count = tpt.generics.type_param_defs.len();
+    let ty_param_count = tpt.generics.type_param_defs().len();
+    let ty_param_req = tpt.generics.type_param_defs().iter()
+                                                   .take_while(|x| x.default.is_none())
+                                                   .len();
     let mut ty_substs_len = 0;
     for segment in pth.segments.iter() {
         ty_substs_len += segment.types.len()
@@ -3826,7 +3726,7 @@ pub fn instantiate_path(fcx: @FnCtxt,
 
     // determine the region parameters, using the value given by the user
     // (if any) and otherwise using a fresh region variable
-    let num_expected_regions = tpt.generics.region_param_defs.len();
+    let num_expected_regions = tpt.generics.region_param_defs().len();
     let num_supplied_regions = pth.segments.last().unwrap().lifetimes.len();
     let regions = if num_expected_regions == num_supplied_regions {
         pth.segments.last().unwrap().lifetimes.map(
@@ -3844,6 +3744,7 @@ pub fn instantiate_path(fcx: @FnCtxt,
                 infer::BoundRegionInTypeOrImpl(span),
                 num_expected_regions))
     };
+    let regions = ty::NonerasedRegions(regions);
 
     // Special case: If there is a self parameter, omit it from the list of
     // type parameters.
@@ -3851,69 +3752,118 @@ pub fn instantiate_path(fcx: @FnCtxt,
     // Here we calculate the "user type parameter count", which is the number
     // of type parameters actually manifest in the AST. This will differ from
     // the internal type parameter count when there are self types involved.
-    let (user_type_parameter_count, self_parameter_index) = match def {
+    let (user_ty_param_count, user_ty_param_req, self_parameter_index) = match def {
         ast::DefStaticMethod(_, provenance @ ast::FromTrait(_), _) => {
             let generics = generics_of_static_method_container(fcx.ccx.tcx,
                                                                provenance);
-            (ty_param_count - 1, Some(generics.type_param_defs.len()))
+            (ty_param_count - 1, ty_param_req - 1, Some(generics.type_param_defs().len()))
         }
-        _ => (ty_param_count, None),
+        _ => (ty_param_count, ty_param_req, None),
     };
 
     // determine values for type parameters, using the values given by
     // the user (if any) and otherwise using fresh type variables
-    let tps = if ty_substs_len == 0 {
-        fcx.infcx().next_ty_vars(ty_param_count)
+    let (tps, regions) = if ty_substs_len == 0 {
+        (fcx.infcx().next_ty_vars(ty_param_count), regions)
     } else if ty_param_count == 0 {
         fcx.ccx.tcx.sess.span_err
             (span, "this item does not take type parameters");
-        fcx.infcx().next_ty_vars(ty_param_count)
-    } else if ty_substs_len > user_type_parameter_count {
+        (fcx.infcx().next_ty_vars(ty_param_count), regions)
+    } else if ty_substs_len > user_ty_param_count {
+        let expected = if user_ty_param_req < user_ty_param_count {
+            "expected at most"
+        } else {
+            "expected"
+        };
         fcx.ccx.tcx.sess.span_err
             (span,
-             format!("too many type parameters provided: expected {}, found {}",
-                  user_type_parameter_count, ty_substs_len));
-        fcx.infcx().next_ty_vars(ty_param_count)
-    } else if ty_substs_len < user_type_parameter_count {
+             format!("too many type parameters provided: {} {}, found {}",
+                  expected, user_ty_param_count, ty_substs_len));
+        (fcx.infcx().next_ty_vars(ty_param_count), regions)
+    } else if ty_substs_len < user_ty_param_req {
+        let expected = if user_ty_param_req < user_ty_param_count {
+            "expected at least"
+        } else {
+            "expected"
+        };
         fcx.ccx.tcx.sess.span_err
             (span,
-             format!("not enough type parameters provided: expected {}, found {}",
-                  user_type_parameter_count, ty_substs_len));
-        fcx.infcx().next_ty_vars(ty_param_count)
+             format!("not enough type parameters provided: {} {}, found {}",
+                  expected, user_ty_param_req, ty_substs_len));
+        (fcx.infcx().next_ty_vars(ty_param_count), regions)
     } else {
+        if ty_substs_len > user_ty_param_req {
+            fcx.tcx().sess.add_lint(lint::DefaultTypeParamUsage, node_id, pth.span,
+                                    ~"provided type arguments with defaults");
+        }
+
         // Build up the list of type parameters, inserting the self parameter
         // at the appropriate position.
-        let mut result = ~[];
+        let mut tps = ~[];
         let mut pushed = false;
-        for (i, &ast_type) in pth.segments
-                                .iter()
-                                .flat_map(|segment| segment.types.iter())
-                                .enumerate() {
+        for (i, ty) in pth.segments.iter()
+                                   .flat_map(|segment| segment.types.iter())
+                                   .map(|&ast_type| fcx.to_ty(ast_type))
+                                   .enumerate() {
             match self_parameter_index {
                 Some(index) if index == i => {
-                    result.push(fcx.infcx().next_ty_vars(1)[0]);
+                    tps.push(fcx.infcx().next_ty_vars(1)[0]);
                     pushed = true;
                 }
                 _ => {}
             }
-            result.push(fcx.to_ty(ast_type))
+            tps.push(ty)
+        }
+
+        let mut substs = substs {
+            regions: regions,
+            self_ty: None,
+            tps: tps
+        };
+
+        let defaults = tpt.generics.type_param_defs().iter()
+                          .enumerate().filter_map(|(i, x)| {
+            match self_parameter_index {
+                Some(index) if index == i => None,
+                _ => Some(x.default)
+            }
+        });
+        for (i, default) in defaults.skip(ty_substs_len).enumerate() {
+            match self_parameter_index {
+                Some(index) if index == i + ty_substs_len => {
+                    substs.tps.push(fcx.infcx().next_ty_vars(1)[0]);
+                    pushed = true;
+                }
+                _ => {}
+            }
+            match default {
+                Some(default) => {
+                    let ty = default.subst_spanned(fcx.tcx(), &substs, Some(span));
+                    substs.tps.push(ty);
+                }
+                None => {
+                    fcx.tcx().sess.span_bug(span,
+                        "missing default for a not explicitely provided type param")
+                }
+            }
         }
 
         // If the self parameter goes at the end, insert it there.
         if !pushed && self_parameter_index.is_some() {
-            result.push(fcx.infcx().next_ty_vars(1)[0])
+            substs.tps.push(fcx.infcx().next_ty_vars(1)[0])
         }
 
-        assert_eq!(result.len(), ty_param_count)
-        result
+        assert_eq!(substs.tps.len(), ty_param_count)
+
+        let substs {tps, regions, ..} = substs;
+        (tps, regions)
     };
 
-    let substs = substs {
-        regions: ty::NonerasedRegions(regions),
+    fcx.write_ty_substs(node_id, tpt.ty, substs {
+        regions: regions,
         self_ty: None,
         tps: tps
-    };
-    fcx.write_ty_substs(node_id, tpt.ty, substs);
+    });
 
     debug!("<<<");
 }
@@ -3981,7 +3931,6 @@ pub fn ast_expr_vstore_to_vstore(fcx: @FnCtxt,
                               -> ty::vstore {
     match v {
         ast::ExprVstoreUniq => ty::vstore_uniq,
-        ast::ExprVstoreBox => ty::vstore_box,
         ast::ExprVstoreSlice | ast::ExprVstoreMutSlice => {
             match e.node {
                 ast::ExprLit(..) |
@@ -4377,7 +4326,7 @@ pub fn check_intrinsic_type(ccx: @CrateCtxt, it: &ast::ForeignItem) {
                     variadic: false}
     });
     let i_ty = ty::lookup_item_type(ccx.tcx, local_def(it.id));
-    let i_n_tps = i_ty.generics.type_param_defs.len();
+    let i_n_tps = i_ty.generics.type_param_defs().len();
     if i_n_tps != n_tps {
         tcx.sess.span_err(it.span, format!("intrinsic has wrong number \
                                          of type parameters: found {}, \
@@ -4390,4 +4339,3 @@ pub fn check_intrinsic_type(ccx: @CrateCtxt, it: &ast::ForeignItem) {
                      ppaux::ty_to_str(ccx.tcx, fty)));
     }
 }
-

@@ -35,6 +35,8 @@ pub static tag_items_data_item_variant: uint = 0x0eu;
 
 pub static tag_items_data_parent_item: uint = 0x0fu;
 
+pub static tag_items_data_item_is_tuple_struct_ctor: uint = 0x10u;
+
 pub static tag_index: uint = 0x11u;
 
 pub static tag_index_buckets: uint = 0x12u;
@@ -176,24 +178,23 @@ pub static tag_link_args_arg: uint = 0x7a;
 
 pub static tag_item_method_tps: uint = 0x7b;
 pub static tag_item_method_fty: uint = 0x7c;
-pub static tag_item_method_transformed_self_ty: uint = 0x7d;
 
-pub static tag_mod_child: uint = 0x7e;
-pub static tag_misc_info: uint = 0x7f;
-pub static tag_misc_info_crate_items: uint = 0x80;
+pub static tag_mod_child: uint = 0x7d;
+pub static tag_misc_info: uint = 0x7e;
+pub static tag_misc_info_crate_items: uint = 0x7f;
 
-pub static tag_item_method_provided_source: uint = 0x81;
-pub static tag_item_impl_vtables: uint = 0x82;
+pub static tag_item_method_provided_source: uint = 0x80;
+pub static tag_item_impl_vtables: uint = 0x81;
 
-pub static tag_impls: uint = 0x83;
-pub static tag_impls_impl: uint = 0x84;
+pub static tag_impls: uint = 0x82;
+pub static tag_impls_impl: uint = 0x83;
 
-pub static tag_items_data_item_inherent_impl: uint = 0x85;
-pub static tag_items_data_item_extension_impl: uint = 0x86;
+pub static tag_items_data_item_inherent_impl: uint = 0x84;
+pub static tag_items_data_item_extension_impl: uint = 0x85;
 
-pub static tag_path_elem_pretty_name: uint = 0x87;
-pub static tag_path_elem_pretty_name_ident: uint = 0x88;
-pub static tag_path_elem_pretty_name_extra: uint = 0x89;
+pub static tag_path_elem_pretty_name: uint = 0x86;
+pub static tag_path_elem_pretty_name_ident: uint = 0x87;
+pub static tag_path_elem_pretty_name_extra: uint = 0x88;
 
 pub static tag_region_param_def: uint = 0x100;
 pub static tag_region_param_def_ident: uint = 0x101;
@@ -211,5 +212,5 @@ pub static tag_macro_def: uint = 0x112;
 #[deriving(Clone)]
 pub struct LinkMeta {
     crateid: CrateId,
-    crate_hash: @str,
+    crate_hash: ~str,
 }

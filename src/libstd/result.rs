@@ -1,4 +1,4 @@
-// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -20,6 +20,7 @@ use to_str::ToStr;
 
 /// `Result` is a type that represents either success (`Ok`) or failure (`Err`).
 #[deriving(Clone, DeepClone, Eq, Ord, TotalEq, TotalOrd, ToStr)]
+#[must_use]
 pub enum Result<T, E> {
     /// Contains the success value
     Ok(T),
@@ -101,7 +102,7 @@ impl<T, E> Result<T, E> {
     // Transforming contained values
     /////////////////////////////////////////////////////////////////////////
 
-    /// Maps an `Result<T, E>` to `Result<U, E>` by applying a function to an
+    /// Maps a `Result<T, E>` to `Result<U, E>` by applying a function to an
     /// contained `Ok` value, leaving an `Err` value untouched.
     ///
     /// This function can be used to compose the results of two functions.
@@ -119,7 +120,7 @@ impl<T, E> Result<T, E> {
         }
     }
 
-    /// Maps an `Result<T, E>` to `Result<T, F>` by applying a function to an
+    /// Maps a `Result<T, E>` to `Result<T, F>` by applying a function to an
     /// contained `Err` value, leaving an `Ok` value untouched.
     ///
     /// This function can be used to pass through a successful result while handling
@@ -205,9 +206,9 @@ impl<T, E> Result<T, E> {
 // Trait implementations
 /////////////////////////////////////////////////////////////////////////////
 
-impl<T: fmt::Default, E: fmt::Default> fmt::Default for Result<T, E> {
+impl<T: fmt::Show, E: fmt::Show> fmt::Show for Result<T, E> {
     #[inline]
-    fn fmt(s: &Result<T, E>, f: &mut fmt::Formatter) {
+    fn fmt(s: &Result<T, E>, f: &mut fmt::Formatter) -> fmt::Result {
         match *s {
             Ok(ref t) => write!(f.buf, "Ok({})", *t),
             Err(ref e) => write!(f.buf, "Err({})", *e)
@@ -227,7 +228,7 @@ impl<T: fmt::Default, E: fmt::Default> fmt::Default for Result<T, E> {
 /// checking for overflow:
 ///
 ///     fn inc_conditionally(x: uint) -> Result<uint, &'static str> {
-///         if x == uint::max_value { return Err("overflow"); }
+///         if x == uint::MAX { return Err("overflow"); }
 ///         else { return Ok(x+1u); }
 ///     }
 ///     let v = [1u, 2, 3];

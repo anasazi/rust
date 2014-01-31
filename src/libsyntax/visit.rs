@@ -186,7 +186,7 @@ fn walk_explicit_self<E: Clone, V: Visitor<E>>(visitor: &mut V,
                                                explicit_self: &ExplicitSelf,
                                                env: E) {
     match explicit_self.node {
-        SelfStatic | SelfValue(_) | SelfBox | SelfUniq(_) => {}
+        SelfStatic | SelfValue | SelfBox | SelfUniq => {}
         SelfRegion(ref lifetime, _) => {
             visitor.visit_opt_lifetime_ref(explicit_self.span, lifetime, env)
         }
@@ -470,7 +470,11 @@ pub fn walk_generics<E: Clone, V: Visitor<E>>(visitor: &mut V,
                                               generics: &Generics,
                                               env: E) {
     for type_parameter in generics.ty_params.iter() {
-        walk_ty_param_bounds(visitor, &type_parameter.bounds, env.clone())
+        walk_ty_param_bounds(visitor, &type_parameter.bounds, env.clone());
+        match type_parameter.default {
+            Some(ty) => visitor.visit_ty(ty, env.clone()),
+            None => {}
+        }
     }
     walk_lifetime_decls(visitor, &generics.lifetimes, env);
 }
@@ -654,20 +658,18 @@ pub fn walk_expr<E: Clone, V: Visitor<E>>(visitor: &mut V, expression: &Expr, en
             }
             visitor.visit_expr(callee_expression, env.clone())
         }
-        ExprMethodCall(_, callee, _, ref types, ref arguments, _) => {
+        ExprMethodCall(_, _, ref types, ref arguments, _) => {
             walk_exprs(visitor, *arguments, env.clone());
             for &typ in types.iter() {
                 visitor.visit_ty(typ, env.clone())
             }
-            visitor.visit_expr(callee, env.clone())
         }
         ExprBinary(_, _, left_expression, right_expression) => {
             visitor.visit_expr(left_expression, env.clone());
             visitor.visit_expr(right_expression, env.clone())
         }
         ExprAddrOf(_, subexpression) |
-        ExprUnary(_, _, subexpression) |
-        ExprDoBody(subexpression) => {
+        ExprUnary(_, _, subexpression) => {
             visitor.visit_expr(subexpression, env.clone())
         }
         ExprLit(_) => {}
@@ -734,7 +736,7 @@ pub fn walk_expr<E: Clone, V: Visitor<E>>(visitor: &mut V, expression: &Expr, en
         ExprPath(ref path) => {
             visitor.visit_path(path, expression.id, env.clone())
         }
-        ExprSelf | ExprBreak(_) | ExprAgain(_) => {}
+        ExprBreak(_) | ExprAgain(_) => {}
         ExprRet(optional_expression) => {
             walk_expr_opt(visitor, optional_expression, env.clone())
         }

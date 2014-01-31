@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -119,11 +119,4 @@ impl CheckedMul for int {
             if y { None } else { Some(x as int) }
         }
     }
-}
-
-#[test]
-fn test_overflows() {
-    assert!((::int::max_value > 0));
-    assert!((::int::min_value <= 0));
-    assert!((::int::min_value + ::int::max_value + 1 == 0));
 }

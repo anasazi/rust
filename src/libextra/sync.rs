@@ -1,4 +1,4 @@
-// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -18,7 +18,6 @@
  */
 
 
-use std::borrow;
 use std::comm;
 use std::unstable::sync::Exclusive;
 use std::sync::arc::UnsafeArc;
@@ -26,6 +25,8 @@ use std::sync::atomics;
 use std::unstable::finally::Finally;
 use std::util;
 use std::util::NonCopyable;
+
+use arc::MutexArc;
 
 /****************************************************************************
  * Internals
@@ -118,7 +119,7 @@ impl<Q:Send> Sem<Q> {
                 }
             });
             // Uncomment if you wish to test for sem races. Not valgrind-friendly.
-            /* 1000.times(|| task::deschedule()); */
+            /* for _ in range(0, 1000) { task::deschedule(); } */
             // Need to wait outside the exclusive.
             if waiter_nobe.is_some() {
                 let _ = waiter_nobe.unwrap().recv();
@@ -153,7 +154,7 @@ impl Sem<~[WaitQueue]> {
     fn new_and_signal(count: int, num_condvars: uint)
         -> Sem<~[WaitQueue]> {
         let mut queues = ~[];
-        num_condvars.times(|| queues.push(WaitQueue::new()));
+        for _ in range(0, num_condvars) { queues.push(WaitQueue::new()); }
         Sem::new(count, queues)
     }
 }
@@ -632,7 +633,7 @@ impl RWLock {
     /// To be called inside of the write_downgrade block.
     pub fn downgrade<'a>(&self, token: RWLockWriteMode<'a>)
                          -> RWLockReadMode<'a> {
-        if !borrow::ref_eq(self, token.lock) {
+        if !((self as *RWLock) == (token.lock as *RWLock)) {
             fail!("Can't downgrade() with a different rwlock's write_mode!");
         }
         unsafe {
@@ -682,6 +683,68 @@ impl<'a> RWLockReadMode<'a> {
     pub fn read<U>(&self, blk: || -> U) -> U { blk() }
 }
 
+/// A barrier enables multiple tasks to synchronize the beginning
+/// of some computation.
+///
+/// ```rust
+/// use extra::sync::Barrier;
+///
+/// let barrier = Barrier::new(10);
+/// for _ in range(0, 10) {
+///     let c = barrier.clone();
+///     // The same messages will be printed together.
+///     // You will NOT see any interleaving.
+///     spawn(proc() {
+///         println!("before wait");
+///         c.wait();
+///         println!("after wait");
+///     });
+/// }
+/// ```
+#[deriving(Clone)]
+pub struct Barrier {
+    priv arc: MutexArc<BarrierState>,
+    priv num_tasks: uint,
+}
+
+// The inner state of a double barrier
+struct BarrierState {
+    count: uint,
+    generation_id: uint,
+}
+
+impl Barrier {
+    /// Create a new barrier that can block a given number of tasks.
+    pub fn new(num_tasks: uint) -> Barrier {
+        Barrier {
+            arc: MutexArc::new(BarrierState {
+                count: 0,
+                generation_id: 0,
+            }),
+            num_tasks: num_tasks,
+        }
+    }
+
+    /// Block the current task until a certain number of tasks is waiting.
+    pub fn wait(&self) {
+        self.arc.access_cond(|state, cond| {
+            let local_gen = state.generation_id;
+            state.count += 1;
+            if state.count < self.num_tasks {
+                // We need a while loop to guard against spurious wakeups.
+                // http://en.wikipedia.org/wiki/Spurious_wakeup
+                while local_gen == state.generation_id && state.count < self.num_tasks {
+                    cond.wait();
+                }
+            } else {
+                state.count = 0;
+                state.generation_id += 1;
+                cond.broadcast();
+            }
+        });
+    }
+}
+
 /****************************************************************************
  * Tests
  ****************************************************************************/
@@ -693,6 +756,7 @@ mod tests {
     use std::cast;
     use std::result;
     use std::task;
+    use std::comm::{SharedChan, Empty};
 
     /************************************************************************
      * Semaphore tests
@@ -713,13 +777,13 @@ mod tests {
     fn test_sem_as_mutex() {
         let s = Semaphore::new(1);
         let s2 = s.clone();
-        do task::spawn {
+        task::spawn(proc() {
             s2.access(|| {
-                5.times(|| { task::deschedule(); })
+                for _ in range(0, 5) { task::deschedule(); }
             })
-        }
+        });
         s.access(|| {
-            5.times(|| { task::deschedule(); })
+            for _ in range(0, 5) { task::deschedule(); }
         })
     }
     #[test]
@@ -728,11 +792,11 @@ mod tests {
         let (p, c) = Chan::new();
         let s = Semaphore::new(0);
         let s2 = s.clone();
-        do task::spawn {
+        task::spawn(proc() {
             s2.acquire();
             c.send(());
-        }
-        5.times(|| { task::deschedule(); });
+        });
+        for _ in range(0, 5) { task::deschedule(); }
         s.release();
         let _ = p.recv();
 
@@ -740,11 +804,11 @@ mod tests {
         let (p, c) = Chan::new();
         let s = Semaphore::new(0);
         let s2 = s.clone();
-        do task::spawn {
-            5.times(|| { task::deschedule(); });
+        task::spawn(proc() {
+            for _ in range(0, 5) { task::deschedule(); }
             s2.release();
             let _ = p.recv();
-        }
+        });
         s.acquire();
         c.send(());
     }
@@ -756,12 +820,12 @@ mod tests {
         let s2 = s.clone();
         let (p1,c1) = Chan::new();
         let (p2,c2) = Chan::new();
-        do task::spawn {
+        task::spawn(proc() {
             s2.access(|| {
                 let _ = p2.recv();
                 c1.send(());
             })
-        }
+        });
         s.access(|| {
             c2.send(());
             let _ = p1.recv();
@@ -777,13 +841,13 @@ mod tests {
         let mut child_data = Some((s2, c));
         s.access(|| {
             let (s2, c) = child_data.take_unwrap();
-            do task::spawn {
+            task::spawn(proc() {
                 c.send(());
                 s2.access(|| { });
                 c.send(());
-            }
+            });
             let _ = p.recv(); // wait for child to come alive
-            5.times(|| { task::deschedule(); }); // let the child contend
+            for _ in range(0, 5) { task::deschedule(); } // let the child contend
         });
         let _ = p.recv(); // wait for child to be done
     }
@@ -800,13 +864,12 @@ mod tests {
         let mut sharedstate = ~0;
         {
             let ptr: *int = &*sharedstate;
-            do task::spawn {
+            task::spawn(proc() {
                 let sharedstate: &mut int =
                     unsafe { cast::transmute(ptr) };
                 access_shared(sharedstate, &m2, 10);
                 c.send(());
-
-            }
+            });
         }
         {
             access_shared(sharedstate, &m, 10);
@@ -816,13 +879,13 @@ mod tests {
         }
 
         fn access_shared(sharedstate: &mut int, m: &Mutex, n: uint) {
-            n.times(|| {
+            for _ in range(0, n) {
                 m.lock(|| {
                     let oldval = *sharedstate;
                     task::deschedule();
                     *sharedstate = oldval + 1;
                 })
-            })
+            }
         }
     }
     #[test]
@@ -832,24 +895,24 @@ mod tests {
         // Child wakes up parent
         m.lock_cond(|cond| {
             let m2 = m.clone();
-            do task::spawn {
+            task::spawn(proc() {
                 m2.lock_cond(|cond| {
                     let woken = cond.signal();
                     assert!(woken);
                 })
-            }
+            });
             cond.wait();
         });
         // Parent wakes up child
         let (port,chan) = Chan::new();
         let m3 = m.clone();
-        do task::spawn {
+        task::spawn(proc() {
             m3.lock_cond(|cond| {
                 chan.send(());
                 cond.wait();
                 chan.send(());
             })
-        }
+        });
         let _ = port.recv(); // Wait until child gets in the mutex
         m.lock_cond(|cond| {
             let woken = cond.signal();
@@ -862,18 +925,18 @@ mod tests {
         let m = Mutex::new();
         let mut ports = ~[];
 
-        num_waiters.times(|| {
+        for _ in range(0, num_waiters) {
             let mi = m.clone();
             let (port, chan) = Chan::new();
             ports.push(port);
-            do task::spawn {
+            task::spawn(proc() {
                 mi.lock_cond(|cond| {
                     chan.send(());
                     cond.wait();
                     chan.send(());
                 })
-            }
-        });
+            });
+        }
 
         // wait until all children get in the mutex
         for port in ports.mut_iter() { let _ = port.recv(); }
@@ -896,9 +959,9 @@ mod tests {
     fn test_mutex_cond_no_waiter() {
         let m = Mutex::new();
         let m2 = m.clone();
-        do task::try {
+        let _ = task::try(proc() {
             m.lock_cond(|_x| { })
-        };
+        });
         m2.lock_cond(|cond| {
             assert!(!cond.signal());
         })
@@ -909,11 +972,11 @@ mod tests {
         let m = Mutex::new();
         let m2 = m.clone();
 
-        let result: result::Result<(), ~Any> = do task::try {
+        let result: result::Result<(), ~Any> = task::try(proc() {
             m2.lock(|| {
                 fail!();
             })
-        };
+        });
         assert!(result.is_err());
         // child task must have finished by the time try returns
         m.lock(|| { })
@@ -926,18 +989,18 @@ mod tests {
         let m = Mutex::new();
         let m2 = m.clone();
 
-        let result: result::Result<(), ~Any> = do task::try {
+        let result: result::Result<(), ~Any> = task::try(proc() {
             let (p, c) = Chan::new();
-            do task::spawn { // linked
+            task::spawn(proc() { // linked
                 let _ = p.recv(); // wait for sibling to get in the mutex
                 task::deschedule();
                 fail!();
-            }
+            });
             m2.lock_cond(|cond| {
                 c.send(()); // tell sibling go ahead
                 cond.wait(); // block forever
             })
-        };
+        });
         assert!(result.is_err());
         // child task must have finished by the time try returns
         m.lock_cond(|cond| {
@@ -954,14 +1017,14 @@ mod tests {
         let m2 = m.clone();
         let (p, c) = Chan::new();
 
-        let result: result::Result<(), ~Any> = do task::try {
+        let result: result::Result<(), ~Any> = task::try(proc() {
             let mut sibling_convos = ~[];
-            2.times(|| {
+            for _ in range(0, 2) {
                 let (p, c) = Chan::new();
                 sibling_convos.push(p);
                 let mi = m2.clone();
                 // spawn sibling task
-                do task::spawn { // linked
+                task::spawn(proc() { // linked
                     mi.lock_cond(|cond| {
                         c.send(()); // tell sibling to go ahead
                         (|| {
@@ -972,15 +1035,15 @@ mod tests {
                             error!("task unwinding and done sending");
                         })
                     })
-                }
-            });
+                });
+            }
             for p in sibling_convos.mut_iter() {
                 let _ = p.recv(); // wait for sibling to get in the mutex
             }
             m2.lock(|| { });
             c.send(sibling_convos); // let parent wait on all children
             fail!();
-        };
+        });
         assert!(result.is_err());
         // child task must have finished by the time try returns
         let mut r = p.recv();
@@ -996,52 +1059,52 @@ mod tests {
         let m = Mutex::new();
         m.lock_cond(|cond| {
             let m2 = m.clone();
-            do task::spawn {
+            task::spawn(proc() {
                 m2.lock_cond(|cond| {
                     cond.signal_on(0);
                 })
-            }
+            });
             cond.wait();
         })
     }
     #[test]
     #[ignore(reason = "linked failure?")]
     fn test_mutex_different_conds() {
-        let result = do task::try {
+        let result = task::try(proc() {
             let m = Mutex::new_with_condvars(2);
             let m2 = m.clone();
             let (p, c) = Chan::new();
-            do task::spawn {
+            task::spawn(proc() {
                 m2.lock_cond(|cond| {
                     c.send(());
                     cond.wait_on(1);
                 })
-            }
+            });
             let _ = p.recv();
             m.lock_cond(|cond| {
                 if !cond.signal_on(0) {
                     fail!(); // success; punt sibling awake.
                 }
             })
-        };
+        });
         assert!(result.is_err());
     }
     #[test]
     fn test_mutex_no_condvars() {
-        let result = do task::try {
+        let result = task::try(proc() {
             let m = Mutex::new_with_condvars(0);
             m.lock_cond(|cond| { cond.wait(); })
-        };
+        });
         assert!(result.is_err());
-        let result = do task::try {
+        let result = task::try(proc() {
             let m = Mutex::new_with_condvars(0);
             m.lock_cond(|cond| { cond.signal(); })
-        };
+        });
         assert!(result.is_err());
-        let result = do task::try {
+        let result = task::try(proc() {
             let m = Mutex::new_with_condvars(0);
             m.lock_cond(|cond| { cond.broadcast(); })
-        };
+        });
         assert!(result.is_err());
     }
     /************************************************************************
@@ -1076,12 +1139,12 @@ mod tests {
         let mut sharedstate = ~0;
         {
             let ptr: *int = &*sharedstate;
-            do task::spawn {
+            task::spawn(proc() {
                 let sharedstate: &mut int =
                     unsafe { cast::transmute(ptr) };
                 access_shared(sharedstate, &x2, mode1, 10);
                 c.send(());
-            }
+            });
         }
         {
             access_shared(sharedstate, x, mode2, 10);
@@ -1092,13 +1155,13 @@ mod tests {
 
         fn access_shared(sharedstate: &mut int, x: &RWLock, mode: RWLockMode,
                          n: uint) {
-            n.times(|| {
+            for _ in range(0, n) {
                 lock_rwlock_in_mode(x, mode, || {
                     let oldval = *sharedstate;
                     task::deschedule();
                     *sharedstate = oldval + 1;
                 })
-            })
+            }
         }
     }
     #[test]
@@ -1124,7 +1187,7 @@ mod tests {
         let x2 = x.clone();
         let (p1, c1) = Chan::new();
         let (p2, c2) = Chan::new();
-        do task::spawn {
+        task::spawn(proc() {
             if !make_mode2_go_first {
                 let _ = p2.recv(); // parent sends to us once it locks, or ...
             }
@@ -1135,7 +1198,7 @@ mod tests {
                 let _ = p2.recv();
                 c1.send(());
             })
-        }
+        });
         if make_mode2_go_first {
             let _ = p1.recv(); // child sends to us once it locks, or ...
         }
@@ -1179,24 +1242,24 @@ mod tests {
         // Child wakes up parent
         x.write_cond(|cond| {
             let x2 = x.clone();
-            do task::spawn {
+            task::spawn(proc() {
                 x2.write_cond(|cond| {
                     let woken = cond.signal();
                     assert!(woken);
                 })
-            }
+            });
             cond.wait();
         });
         // Parent wakes up child
         let (port, chan) = Chan::new();
         let x3 = x.clone();
-        do task::spawn {
+        task::spawn(proc() {
             x3.write_cond(|cond| {
                 chan.send(());
                 cond.wait();
                 chan.send(());
             })
-        }
+        });
         let _ = port.recv(); // Wait until child gets in the rwlock
         x.read(|| { }); // Must be able to get in as a reader in the meantime
         x.write_cond(|cond| { // Or as another writer
@@ -1223,18 +1286,18 @@ mod tests {
         let x = RWLock::new();
         let mut ports = ~[];
 
-        num_waiters.times(|| {
+        for _ in range(0, num_waiters) {
             let xi = x.clone();
             let (port, chan) = Chan::new();
             ports.push(port);
-            do task::spawn {
+            task::spawn(proc() {
                 lock_cond(&xi, dg1, |cond| {
                     chan.send(());
                     cond.wait();
                     chan.send(());
                 })
-            }
-        });
+            });
+        }
 
         // wait until all children get in the mutex
         for port in ports.mut_iter() { let _ = port.recv(); }
@@ -1262,11 +1325,11 @@ mod tests {
         let x = RWLock::new();
         let x2 = x.clone();
 
-        let result: result::Result<(), ~Any> = do task::try || {
+        let result: result::Result<(), ~Any> = task::try(proc() {
             lock_rwlock_in_mode(&x2, mode1, || {
                 fail!();
             })
-        };
+        });
         assert!(result.is_err());
         // child task must have finished by the time try returns
         lock_rwlock_in_mode(&x, mode2, || { })
@@ -1314,5 +1377,36 @@ mod tests {
                 error!("oops, y.downgrade(x) should have failed!");
             })
         })
+    }
+
+    /************************************************************************
+     * Barrier tests
+     ************************************************************************/
+    #[test]
+    fn test_barrier() {
+        let barrier = Barrier::new(10);
+        let (port, chan) = SharedChan::new();
+
+        for _ in range(0, 9) {
+            let c = barrier.clone();
+            let chan = chan.clone();
+            spawn(proc() {
+                c.wait();
+                chan.send(true);
+            });
+        }
+
+        // At this point, all spawned tasks should be blocked,
+        // so we shouldn't get anything from the port
+        assert!(match port.try_recv() {
+            Empty => true,
+            _ => false,
+        });
+
+        barrier.wait();
+        // Now, the barrier is cleared and we should get data.
+        for _ in range(0, 9) {
+            port.recv();
+        }
     }
 }

@@ -1,4 +1,4 @@
-// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -34,18 +34,17 @@
 //! Context itself, span_lint should be used instead of add_lint.
 
 use driver::session;
+use metadata::csearch;
 use middle::dead::DEAD_CODE_LINT_STR;
+use middle::pat_util;
 use middle::privacy;
 use middle::trans::adt; // for `adt::is_ffi_safe`
 use middle::ty;
-use middle::typeck;
-use middle::pat_util;
-use metadata::csearch;
-use util::ppaux::{ty_to_str};
-use std::to_str::ToStr;
-
-use middle::typeck::infer;
 use middle::typeck::astconv::{ast_ty_to_ty, AstConv};
+use middle::typeck::infer;
+use middle::typeck;
+use std::to_str::ToStr;
+use util::ppaux::{ty_to_str};
 
 use std::cmp;
 use std::hashmap::HashMap;
@@ -59,13 +58,14 @@ use std::u64;
 use std::u8;
 use extra::smallintmap::SmallIntMap;
 use syntax::ast_map;
-use syntax::attr;
-use syntax::attr::{AttrMetaMethods, AttributeMethods};
-use syntax::codemap::Span;
-use syntax::parse::token;
-use syntax::{ast, ast_util, visit};
 use syntax::ast_util::IdVisitingOperation;
+use syntax::attr::{AttrMetaMethods, AttributeMethods};
+use syntax::attr;
+use syntax::codemap::Span;
+use syntax::parse::token::InternedString;
+use syntax::parse::token;
 use syntax::visit::Visitor;
+use syntax::{ast, ast_util, visit};
 
 #[deriving(Clone, Eq, Ord, TotalEq, TotalOrd)]
 pub enum Lint {
@@ -86,6 +86,7 @@ pub enum Lint {
     AttributeUsage,
     UnknownFeatures,
     UnknownCrateType,
+    DefaultTypeParamUsage,
 
     ManagedHeapMemory,
     OwnedHeapMemory,
@@ -104,6 +105,9 @@ pub enum Lint {
     Deprecated,
     Experimental,
     Unstable,
+
+    UnusedMustUse,
+    UnusedResult,
 
     Warnings,
 }
@@ -356,10 +360,32 @@ static lint_table: &'static [(&'static str, LintSpec)] = &[
         desc: "unknown features found in crate-level #[feature] directives",
         default: deny,
     }),
-     ("unknown_crate_type",
+
+    ("unknown_crate_type",
+    LintSpec {
+        lint: UnknownCrateType,
+        desc: "unknown crate type found in #[crate_type] directive",
+        default: deny,
+    }),
+
+    ("unused_must_use",
+    LintSpec {
+        lint: UnusedMustUse,
+        desc: "unused result of a type flagged as #[must_use]",
+        default: warn,
+    }),
+
+    ("unused_result",
+    LintSpec {
+        lint: UnusedResult,
+        desc: "unused result of an expression in a statement",
+        default: allow,
+    }),
+
+     ("default_type_param_usage",
      LintSpec {
-         lint: UnknownCrateType,
-         desc: "unknown crate type found in #[crate_type] directive",
+         lint: DefaultTypeParamUsage,
+         desc: "prevents explicitly setting a type parameter with a default",
          default: deny,
      }),
 ];
@@ -514,19 +540,25 @@ impl<'a> Context<'a> {
         });
 
         let old_is_doc_hidden = self.is_doc_hidden;
-        self.is_doc_hidden = self.is_doc_hidden ||
-            attrs.iter().any(|attr| ("doc" == attr.name() && match attr.meta_item_list()
-                                     { None => false,
-                                       Some(l) => attr::contains_name(l, "hidden") }));
+        self.is_doc_hidden =
+            self.is_doc_hidden ||
+            attrs.iter()
+                 .any(|attr| {
+                     attr.name().equiv(&("doc")) &&
+                     match attr.meta_item_list() {
+                         None => false,
+                         Some(l) => attr::contains_name(l, "hidden")
+                     }
+                 });
 
         f(self);
 
         // rollback
         self.is_doc_hidden = old_is_doc_hidden;
-        pushed.times(|| {
+        for _ in range(0, pushed) {
             let (lint, lvl, src) = self.lint_stack.pop().unwrap();
             self.set_level(lint, lvl, src);
-        })
+        }
     }
 
     fn visit_ids(&self, f: |&mut ast_util::IdVisitor<Context>|) {
@@ -543,12 +575,12 @@ impl<'a> Context<'a> {
 // Return true if that's the case. Otherwise return false.
 pub fn each_lint(sess: session::Session,
                  attrs: &[ast::Attribute],
-                 f: |@ast::MetaItem, level, @str| -> bool)
+                 f: |@ast::MetaItem, level, InternedString| -> bool)
                  -> bool {
     let xs = [allow, warn, deny, forbid];
     for &level in xs.iter() {
         let level_name = level_to_str(level);
-        for attr in attrs.iter().filter(|m| level_name == m.name()) {
+        for attr in attrs.iter().filter(|m| m.name().equiv(&level_name)) {
             let meta = attr.node.value;
             let metas = match meta.node {
                 ast::MetaList(_, ref metas) => metas,
@@ -559,8 +591,8 @@ pub fn each_lint(sess: session::Session,
             };
             for meta in metas.iter() {
                 match meta.node {
-                    ast::MetaWord(lintname) => {
-                        if !f(*meta, level, lintname) {
+                    ast::MetaWord(ref lintname) => {
+                        if !f(*meta, level, (*lintname).clone()) {
                             return false;
                         }
                     }
@@ -577,15 +609,17 @@ pub fn each_lint(sess: session::Session,
 // Check from a list of attributes if it contains the appropriate
 // `#[level(lintname)]` attribute (e.g. `#[allow(dead_code)]).
 pub fn contains_lint(attrs: &[ast::Attribute],
-                    level: level, lintname: &'static str) -> bool {
+                     level: level,
+                     lintname: &'static str)
+                     -> bool {
     let level_name = level_to_str(level);
-    for attr in attrs.iter().filter(|m| level_name == m.name()) {
+    for attr in attrs.iter().filter(|m| m.name().equiv(&level_name)) {
         if attr.meta_item_list().is_none() {
             continue
         }
         let list = attr.meta_item_list().unwrap();
         for meta_item in list.iter() {
-            if lintname == meta_item.name() {
+            if meta_item.name().equiv(&lintname) {
                 return true;
             }
         }
@@ -724,21 +758,21 @@ fn check_type_limits(cx: &Context, e: &ast::Expr) {
     // warnings are consistent between 32- and 64-bit platforms
     fn int_ty_range(int_ty: ast::IntTy) -> (i64, i64) {
         match int_ty {
-            ast::TyI =>    (i64::min_value,        i64::max_value),
-            ast::TyI8 =>   (i8::min_value  as i64, i8::max_value  as i64),
-            ast::TyI16 =>  (i16::min_value as i64, i16::max_value as i64),
-            ast::TyI32 =>  (i32::min_value as i64, i32::max_value as i64),
-            ast::TyI64 =>  (i64::min_value,        i64::max_value)
+            ast::TyI =>    (i64::MIN,        i64::MAX),
+            ast::TyI8 =>   (i8::MIN  as i64, i8::MAX  as i64),
+            ast::TyI16 =>  (i16::MIN as i64, i16::MAX as i64),
+            ast::TyI32 =>  (i32::MIN as i64, i32::MAX as i64),
+            ast::TyI64 =>  (i64::MIN,        i64::MAX)
         }
     }
 
     fn uint_ty_range(uint_ty: ast::UintTy) -> (u64, u64) {
         match uint_ty {
-            ast::TyU =>   (u64::min_value,         u64::max_value),
-            ast::TyU8 =>  (u8::min_value   as u64, u8::max_value   as u64),
-            ast::TyU16 => (u16::min_value  as u64, u16::max_value  as u64),
-            ast::TyU32 => (u32::min_value  as u64, u32::max_value  as u64),
-            ast::TyU64 => (u64::min_value,         u64::max_value)
+            ast::TyU =>   (u64::MIN,         u64::MAX),
+            ast::TyU8 =>  (u8::MIN   as u64, u8::MAX   as u64),
+            ast::TyU16 => (u16::MIN  as u64, u16::MAX  as u64),
+            ast::TyU32 => (u32::MIN  as u64, u32::MAX  as u64),
+            ast::TyU64 => (u64::MIN,         u64::MAX)
         }
     }
 
@@ -853,8 +887,7 @@ fn check_heap_type(cx: &Context, span: Span, ty: ty::t) {
         let mut n_uniq = 0;
         ty::fold_ty(cx.tcx, ty, |t| {
             match ty::get(t).sty {
-                ty::ty_box(_) | ty::ty_str(ty::vstore_box) |
-                ty::ty_vec(_, ty::vstore_box) |
+                ty::ty_box(_) |
                 ty::ty_trait(_, _, ty::BoxTraitStore, _, _) => {
                     n_box += 1;
                 }
@@ -931,10 +964,10 @@ static other_attrs: &'static [&'static str] = &[
     "thread_local", // for statics
     "allow", "deny", "forbid", "warn", // lint options
     "deprecated", "experimental", "unstable", "stable", "locked", "frozen", //item stability
-    "crate_map", "cfg", "doc", "export_name", "link_section", "no_freeze",
-    "no_mangle", "no_send", "static_assert", "unsafe_no_drop_flag", "packed",
+    "crate_map", "cfg", "doc", "export_name", "link_section",
+    "no_mangle", "static_assert", "unsafe_no_drop_flag", "packed",
     "simd", "repr", "deriving", "unsafe_destructor", "link", "phase",
-    "macro_export",
+    "macro_export", "must_use",
 
     //mod-level
     "path", "link_name", "link_args", "nolink", "macro_escape", "no_implicit_prelude",
@@ -1013,6 +1046,54 @@ fn check_path_statement(cx: &Context, s: &ast::Stmt) {
             }
         }
         _ => ()
+    }
+}
+
+fn check_unused_result(cx: &Context, s: &ast::Stmt) {
+    let expr = match s.node {
+        ast::StmtSemi(expr, _) => expr,
+        _ => return
+    };
+    let t = ty::expr_ty(cx.tcx, expr);
+    match ty::get(t).sty {
+        ty::ty_nil | ty::ty_bot | ty::ty_bool => return,
+        _ => {}
+    }
+    match expr.node {
+        ast::ExprRet(..) => return,
+        _ => {}
+    }
+
+    let t = ty::expr_ty(cx.tcx, expr);
+    let mut warned = false;
+    match ty::get(t).sty {
+        ty::ty_struct(did, _) |
+        ty::ty_enum(did, _) => {
+            if ast_util::is_local(did) {
+                match cx.tcx.items.get(did.node) {
+                    ast_map::NodeItem(it, _) => {
+                        if attr::contains_name(it.attrs, "must_use") {
+                            cx.span_lint(UnusedMustUse, s.span,
+                                         "unused result which must be used");
+                            warned = true;
+                        }
+                    }
+                    _ => {}
+                }
+            } else {
+                csearch::get_item_attrs(cx.tcx.sess.cstore, did, |attrs| {
+                    if attr::contains_name(attrs, "must_use") {
+                        cx.span_lint(UnusedMustUse, s.span,
+                                     "unused result which must be used");
+                        warned = true;
+                    }
+                });
+            }
+        }
+        _ => {}
+    }
+    if !warned {
+        cx.span_lint(UnusedResult, s.span, "unused result");
     }
 }
 
@@ -1166,8 +1247,7 @@ fn check_unnecessary_allocation(cx: &Context, e: &ast::Expr) {
     // Warn if string and vector literals with sigils, or boxing expressions,
     // are immediately borrowed.
     let allocation = match e.node {
-        ast::ExprVstore(e2, ast::ExprVstoreUniq) |
-        ast::ExprVstore(e2, ast::ExprVstoreBox) => {
+        ast::ExprVstore(e2, ast::ExprVstoreUniq) => {
             match e2.node {
                 ast::ExprLit(lit) if ast_util::lit_is_str(lit) => {
                     VectorAllocation
@@ -1240,7 +1320,7 @@ fn check_missing_doc_attrs(cx: &Context,
 
     let has_doc = attrs.iter().any(|a| {
         match a.node.value.node {
-            ast::MetaNameValue(ref name, _) if "doc" == *name => true,
+            ast::MetaNameValue(ref name, _) if name.equiv(&("doc")) => true,
             _ => false
         }
     });
@@ -1478,6 +1558,7 @@ impl<'a> Visitor<()> for Context<'a> {
 
     fn visit_stmt(&mut self, s: &ast::Stmt, _: ()) {
         check_path_statement(self, s);
+        check_unused_result(self, s);
 
         visit::walk_stmt(self, s, ());
     }

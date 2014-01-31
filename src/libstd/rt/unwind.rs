@@ -58,6 +58,7 @@
 use any::{Any, AnyRefExt};
 use c_str::CString;
 use cast;
+use fmt;
 use kinds::Send;
 use option::{Some, None, Option};
 use prelude::drop;
@@ -76,7 +77,7 @@ mod libunwind {
     //! Unwind library interface
 
     #[allow(non_camel_case_types)];
-    #[allow(dead_code)] // these are just bindings
+    #[allow(dead_code)]; // these are just bindings
 
     use libc::{uintptr_t};
 
@@ -121,7 +122,10 @@ mod libunwind {
 
     pub type _Unwind_Word = uintptr_t;
 
-    #[cfg(not(target_arch = "arm"))]
+    #[cfg(target_arch = "x86")]
+    pub static unwinder_private_data_size: int = 5;
+
+    #[cfg(target_arch = "x86_64")]
     pub static unwinder_private_data_size: int = 2;
 
     #[cfg(target_arch = "arm")]
@@ -382,17 +386,47 @@ pub fn begin_unwind_raw(msg: *u8, file: *u8, line: uint) -> ! {
     begin_unwind(msg, file, line as uint)
 }
 
+/// The entry point for unwinding with a formatted message.
+///
+/// This is designed to reduce the amount of code required at the call
+/// site as much as possible (so that `fail!()` has as low an implact
+/// on (e.g.) the inlining of other functions as possible), by moving
+/// the actual formatting into this shared place.
+#[inline(never)] #[cold]
+pub fn begin_unwind_fmt(msg: &fmt::Arguments, file: &'static str, line: uint) -> ! {
+    // We do two allocations here, unfortunately. But (a) they're
+    // required with the current scheme, and (b) we don't handle
+    // failure + OOM properly anyway (see comment in begin_unwind
+    // below).
+    begin_unwind_inner(~fmt::format(msg), file, line)
+}
+
 /// This is the entry point of unwinding for fail!() and assert!().
-#[inline(never)] #[cold] // this is the slow path, please never inline this
+#[inline(never)] #[cold] // avoid code bloat at the call sites as much as possible
 pub fn begin_unwind<M: Any + Send>(msg: M, file: &'static str, line: uint) -> ! {
-    // Note that this should be the only allocation performed in this block.
+    // Note that this should be the only allocation performed in this code path.
     // Currently this means that fail!() on OOM will invoke this code path,
     // but then again we're not really ready for failing on OOM anyway. If
     // we do start doing this, then we should propagate this allocation to
     // be performed in the parent of this task instead of the task that's
     // failing.
-    let msg = ~msg as ~Any;
 
+    // see below for why we do the `Any` coercion here.
+    begin_unwind_inner(~msg, file, line)
+}
+
+
+/// The core of the unwinding.
+///
+/// This is non-generic to avoid instantiation bloat in other crates
+/// (which makes compilation of small crates noticably slower). (Note:
+/// we need the `Any` object anyway, we're not just creating it to
+/// avoid being generic.)
+///
+/// Do this split took the LLVM IR line counts of `fn main() { fail!()
+/// }` from ~1900/3700 (-O/no opts) to 180/590.
+#[inline(never)] #[cold] // this is the slow path, please never inline this
+fn begin_unwind_inner(msg: ~Any, file: &'static str, line: uint) -> ! {
     let mut task;
     {
         let msg_s = match msg.as_ref::<&'static str>() {
@@ -430,9 +464,10 @@ pub fn begin_unwind<M: Any + Send>(msg: M, file: &'static str, line: uint) -> ! 
             match task.stderr.take() {
                 Some(mut stderr) => {
                     Local::put(task);
-                    format_args!(|args| ::fmt::writeln(stderr, args),
-                                 "task '{}' failed at '{}', {}:{}",
-                                 n, msg_s, file, line);
+                    // FIXME: what to do when the task printing fails?
+                    let _err = format_args!(|args| ::fmt::writeln(stderr, args),
+                                            "task '{}' failed at '{}', {}:{}",
+                                            n, msg_s, file, line);
                     task = Local::take();
 
                     match util::replace(&mut task.stderr, Some(stderr)) {

@@ -30,6 +30,8 @@ This API is completely unstable and subject to change.
 #[feature(macro_rules, globs, struct_variant, managed_boxes)];
 
 extern mod extra;
+extern mod flate;
+extern mod arena;
 extern mod syntax;
 
 use back::link;
@@ -51,6 +53,11 @@ use syntax::attr;
 use syntax::diagnostic::Emitter;
 use syntax::diagnostic;
 use syntax::parse;
+
+#[cfg(stage0)]
+macro_rules! if_ok (
+    ($e:expr) => (match $e { Ok(e) => e, Err(e) => return Err(e) })
+)
 
 pub mod middle {
     pub mod trans;
@@ -229,22 +236,23 @@ pub fn run_compiler(args: &[~str], demitter: @diagnostic::Emitter) {
         version(binary);
         return;
     }
-    let input = match matches.free.len() {
+    let (input, input_file_path) = match matches.free.len() {
       0u => d::early_error(demitter, "no input filename given"),
       1u => {
         let ifile = matches.free[0].as_slice();
-        if "-" == ifile {
-            let src = str::from_utf8_owned(io::stdin().read_to_end()).unwrap();
-            d::StrInput(src.to_managed())
+        if ifile == "-" {
+            let contents = io::stdin().read_to_end().unwrap();
+            let src = str::from_utf8_owned(contents).unwrap();
+            (d::StrInput(src), None)
         } else {
-            d::FileInput(Path::new(ifile))
+            (d::FileInput(Path::new(ifile)), Some(Path::new(ifile)))
         }
       }
       _ => d::early_error(demitter, "multiple input filenames provided")
     };
 
     let sopts = d::build_session_options(binary, matches, demitter);
-    let sess = d::build_session(sopts, demitter);
+    let sess = d::build_session(sopts, input_file_path, demitter);
     let odir = matches.opt_str("out-dir").map(|o| Path::new(o));
     let ofile = matches.opt_str("o").map(|o| Path::new(o));
     let cfg = d::build_configuration(sess);
@@ -264,7 +272,7 @@ pub fn run_compiler(args: &[~str], demitter: @diagnostic::Emitter) {
           d::FileInput(ref ifile) => {
             let mut stdout = io::stdout();
             d::list_metadata(sess, &(*ifile),
-                                  &mut stdout as &mut io::Writer);
+                             &mut stdout as &mut io::Writer).unwrap();
           }
           d::StrInput(_) => {
             d::early_error(demitter, "can not list metadata for stdin");
@@ -317,9 +325,11 @@ fn parse_crate_attrs(sess: session::Session,
         d::FileInput(ref ifile) => {
             parse::parse_crate_attrs_from_file(ifile, ~[], sess.parse_sess)
         }
-        d::StrInput(src) => {
-            parse::parse_crate_attrs_from_source_str(
-                d::anon_src(), src, ~[], sess.parse_sess)
+        d::StrInput(ref src) => {
+            parse::parse_crate_attrs_from_source_str(d::anon_src(),
+                                                     (*src).clone(),
+                                                     ~[],
+                                                     sess.parse_sess)
         }
     }
 }
@@ -330,7 +340,7 @@ fn parse_crate_attrs(sess: session::Session,
 /// The diagnostic emitter yielded to the procedure should be used for reporting
 /// errors of the compiler.
 pub fn monitor(f: proc(@diagnostic::Emitter)) {
-    // XXX: This is a hack for newsched since it doesn't support split stacks.
+    // FIXME: This is a hack for newsched since it doesn't support split stacks.
     // rustc needs a lot of stack! When optimizations are disabled, it needs
     // even *more* stack than usual as well.
     #[cfg(rtopt)]
@@ -341,7 +351,7 @@ pub fn monitor(f: proc(@diagnostic::Emitter)) {
     let mut task_builder = task::task();
     task_builder.name("rustc");
 
-    // XXX: Hacks on hacks. If the env is trying to override the stack size
+    // FIXME: Hacks on hacks. If the env is trying to override the stack size
     // then *don't* set it explicitly.
     if os::getenv("RUST_MIN_STACK").is_none() {
         task_builder.opts.stack_size = Some(STACK_SIZE);

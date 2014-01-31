@@ -71,7 +71,7 @@ impl Drop for UvEventLoop {
         // after the loop has been closed because during the closing of the loop
         // the handle is required to be used apparently.
         let handle = self.uvio.handle_pool.get_ref().handle();
-        self.uvio.handle_pool.take();
+        drop(self.uvio.handle_pool.take());
         self.uvio.loop_.close();
         unsafe { uvll::free_handle(handle) }
     }
@@ -111,16 +111,16 @@ pub fn new_loop() -> ~rtio::EventLoop {
 #[test]
 fn test_callback_run_once() {
     use std::rt::rtio::EventLoop;
-    do run_in_bare_thread {
+    run_in_bare_thread(proc() {
         let mut event_loop = UvEventLoop::new();
         let mut count = 0;
         let count_ptr: *mut int = &mut count;
-        do event_loop.callback {
+        event_loop.callback(proc() {
             unsafe { *count_ptr += 1 }
-        }
+        });
         event_loop.run();
         assert_eq!(count, 1);
-    }
+    });
 }
 
 pub struct UvIoFactory {

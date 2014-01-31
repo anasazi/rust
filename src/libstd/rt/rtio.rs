@@ -16,13 +16,13 @@ use libc;
 use ops::Drop;
 use option::{Option, Some, None};
 use path::Path;
-use result::{Result, Ok, Err};
+use result::{Result, Err};
 use rt::task::Task;
 use rt::local::Local;
 
 use ai = io::net::addrinfo;
 use io;
-use io::IoError;
+use io::{IoError, IoResult};
 use io::net::ip::{IpAddr, SocketAddr};
 use io::process::{ProcessConfig, ProcessExit};
 use io::signal::Signum;
@@ -86,7 +86,7 @@ pub struct LocalIo<'a> {
 #[unsafe_destructor]
 impl<'a> Drop for LocalIo<'a> {
     fn drop(&mut self) {
-        // XXX(pcwalton): Do nothing here for now, but eventually we may want
+        // FIXME(pcwalton): Do nothing here for now, but eventually we may want
         // something. For now this serves to make `LocalIo` noncopyable.
     }
 }
@@ -116,23 +116,12 @@ impl<'a> LocalIo<'a> {
         return ret;
     }
 
-    pub fn maybe_raise<T>(f: |io: &mut IoFactory| -> Result<T, IoError>)
-        -> Option<T>
+    pub fn maybe_raise<T>(f: |io: &mut IoFactory| -> IoResult<T>)
+        -> IoResult<T>
     {
         match LocalIo::borrow() {
-            None => {
-                io::io_error::cond.raise(io::standard_error(io::IoUnavailable));
-                None
-            }
-            Some(mut io) => {
-                match f(io.get()) {
-                    Ok(t) => Some(t),
-                    Err(ioerr) => {
-                        io::io_error::cond.raise(ioerr);
-                        None
-                    }
-                }
-            }
+            None => Err(io::standard_error(io::IoUnavailable)),
+            Some(mut io) => f(io.get()),
         }
     }
 
@@ -143,7 +132,7 @@ impl<'a> LocalIo<'a> {
     /// Returns the underlying I/O factory as a trait reference.
     #[inline]
     pub fn get<'a>(&'a mut self) -> &'a mut IoFactory {
-        // XXX(pcwalton): I think this is actually sound? Could borrow check
+        // FIXME(pcwalton): I think this is actually sound? Could borrow check
         // allow this safely?
         unsafe {
             cast::transmute_copy(&self.factory)

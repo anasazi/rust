@@ -138,11 +138,11 @@ extern fn timer_cb(handle: *uvll::uv_timer_t, status: c_int) {
 
     match timer.action.take_unwrap() {
         WakeTask(task) => {
-            task.wake().map(|t| t.reawaken(true));
+            let _ = task.wake().map(|t| t.reawaken(true));
         }
-        SendOnce(chan) => { chan.try_send(()); }
+        SendOnce(chan) => { let _ = chan.try_send(()); }
         SendMany(chan, id) => {
-            chan.try_send(());
+            let _ = chan.try_send(());
 
             // Note that the above operation could have performed some form of
             // scheduling. This means that the timer may have decided to insert
@@ -245,9 +245,9 @@ mod test {
         let mut timer = TimerWatcher::new(local_loop());
         let timer_port = timer.period(1000);
 
-        do spawn {
-            timer_port.recv_opt();
-        }
+        spawn(proc() {
+            let _ = timer_port.recv_opt();
+        });
 
         // when we drop the TimerWatcher we're going to destroy the channel,
         // which must wake up the task on the other end
@@ -259,11 +259,11 @@ mod test {
         let mut timer = TimerWatcher::new(local_loop());
         let timer_port = timer.period(1000);
 
-        do spawn {
-            timer_port.recv_opt();
-        }
+        spawn(proc() {
+            let _ = timer_port.recv_opt();
+        });
 
-        timer.oneshot(1);
+        drop(timer.oneshot(1));
     }
     #[test]
     fn reset_doesnt_switch_tasks2() {
@@ -271,9 +271,9 @@ mod test {
         let mut timer = TimerWatcher::new(local_loop());
         let timer_port = timer.period(1000);
 
-        do spawn {
-            timer_port.recv_opt();
-        }
+        spawn(proc() {
+            let _ = timer_port.recv_opt();
+        });
 
         timer.sleep(1);
     }
@@ -299,7 +299,7 @@ mod test {
     #[test]
     fn receiver_goes_away_oneshot() {
         let mut timer1 = TimerWatcher::new(local_loop());
-        timer1.oneshot(1);
+        drop(timer1.oneshot(1));
         let mut timer2 = TimerWatcher::new(local_loop());
         // while sleeping, the prevous timer should fire and not have its
         // callback do something terrible.
@@ -309,7 +309,7 @@ mod test {
     #[test]
     fn receiver_goes_away_period() {
         let mut timer1 = TimerWatcher::new(local_loop());
-        timer1.period(1);
+        drop(timer1.period(1));
         let mut timer2 = TimerWatcher::new(local_loop());
         // while sleeping, the prevous timer should fire and not have its
         // callback do something terrible.

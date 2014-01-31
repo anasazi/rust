@@ -150,8 +150,9 @@ pub struct Options {
     lint_opts: ~[(lint::Lint, lint::level)],
     save_temps: bool,
     output_type: back::link::OutputType,
-    // This is mutable for rustpkg, which updates search paths based on the
-    // parsed code.
+    // This was mutable for rustpkg, which updates search paths based on the
+    // parsed code. It remains mutable in case its replacements wants to use
+    // this.
     addl_lib_search_paths: @RefCell<HashSet<Path>>,
     ar: Option<~str>,
     linker: Option<~str>,
@@ -170,6 +171,7 @@ pub struct Options {
     parse_only: bool,
     no_trans: bool,
     no_analysis: bool,
+    no_rpath: bool,
     debugging_opts: u64,
     android_cross_path: Option<~str>,
     /// Whether to write dependency files. It's (enabled, optional filename).
@@ -210,6 +212,9 @@ pub struct Session_ {
     macro_registrar_fn: RefCell<Option<ast::DefId>>,
     filesearch: @filesearch::FileSearch,
     building_library: Cell<bool>,
+    // The name of the root source file of the crate, in the local file system. The path is always
+    // expected to be absolute. `None` means that there is no source file.
+    local_crate_source_file: Option<Path>,
     working_dir: Path,
     lints: RefCell<HashMap<ast::NodeId,
                            ~[(lint::Lint, codemap::Span, ~str)]>>,
@@ -249,6 +254,9 @@ impl Session_ {
     }
     pub fn span_note(&self, sp: Span, msg: &str) {
         self.span_diagnostic.span_note(sp, msg)
+    }
+    pub fn span_end_note(&self, sp: Span, msg: &str) {
+        self.span_diagnostic.span_end_note(sp, msg)
     }
     pub fn note(&self, msg: &str) {
         self.span_diagnostic.handler().note(msg)
@@ -345,9 +353,11 @@ impl Session_ {
         self.debugging_opt(NO_LANDING_PADS)
     }
 
-    // pointless function, now...
-    pub fn str_of(&self, id: ast::Ident) -> @str {
-        token::ident_to_str(&id)
+    // DEPRECATED. This function results in a lot of allocations when they
+    // are not necessary.
+    pub fn str_of(&self, id: ast::Ident) -> ~str {
+        let string = token::get_ident(id.name);
+        string.get().to_str()
     }
 
     // pointless function, now...
@@ -388,6 +398,7 @@ pub fn basic_options() -> @Options {
         parse_only: false,
         no_trans: false,
         no_analysis: false,
+        no_rpath: false,
         debugging_opts: 0,
         android_cross_path: None,
         write_dependency_info: (false, None),
@@ -409,9 +420,18 @@ pub fn building_library(options: &Options, crate: &ast::Crate) -> bool {
         }
     }
     match syntax::attr::first_attr_value_str_by_name(crate.attrs, "crate_type") {
-        Some(s) => "lib" == s || "rlib" == s || "dylib" == s || "staticlib" == s,
+        Some(s) => {
+            s.equiv(&("lib")) ||
+            s.equiv(&("rlib")) ||
+            s.equiv(&("dylib")) ||
+            s.equiv(&("staticlib"))
+        }
         _ => false
     }
+}
+
+pub fn default_lib_output() -> OutputStyle {
+    OutputRlib
 }
 
 pub fn collect_outputs(session: &Session,
@@ -423,16 +443,22 @@ pub fn collect_outputs(session: &Session,
     }
     let mut base = session.opts.outputs.clone();
     let mut iter = attrs.iter().filter_map(|a| {
-        if "crate_type" == a.name() {
+        if a.name().equiv(&("crate_type")) {
             match a.value_str() {
-                Some(n) if "rlib" == n => Some(OutputRlib),
-                Some(n) if "dylib" == n => Some(OutputDylib),
-                Some(n) if "lib" == n => Some(OutputDylib),
-                Some(n) if "staticlib" == n => Some(OutputStaticlib),
-                Some(n) if "bin" == n => Some(OutputExecutable),
+                Some(ref n) if n.equiv(&("rlib")) => Some(OutputRlib),
+                Some(ref n) if n.equiv(&("dylib")) => Some(OutputDylib),
+                Some(ref n) if n.equiv(&("lib")) => {
+                    Some(default_lib_output())
+                }
+                Some(ref n) if n.equiv(&("staticlib")) => {
+                    Some(OutputStaticlib)
+                }
+                Some(ref n) if n.equiv(&("bin")) => Some(OutputExecutable),
                 Some(_) => {
-                    session.add_lint(lint::UnknownCrateType, ast::CRATE_NODE_ID,
-                                     a.span, ~"invalid `crate_type` value");
+                    session.add_lint(lint::UnknownCrateType,
+                                     ast::CRATE_NODE_ID,
+                                     a.span,
+                                     ~"invalid `crate_type` value");
                     None
                 }
                 _ => {

@@ -11,7 +11,6 @@
 use std::cell::RefCell;
 use std::option;
 use std::os;
-use std::io;
 use std::io::fs;
 use std::hashmap::HashSet;
 
@@ -93,7 +92,7 @@ impl FileSearch {
     pub fn search(&self, pick: pick) {
         self.for_each_lib_search_path(|lib_search_path| {
             debug!("searching {}", lib_search_path.display());
-            match io::result(|| fs::readdir(lib_search_path)) {
+            match fs::readdir(lib_search_path) {
                 Ok(files) => {
                     let mut rslt = FileDoesntMatch;
                     let is_rlib = |p: & &Path| {
@@ -160,8 +159,24 @@ fn make_rustpkg_target_lib_path(dir: &Path,
 }
 
 pub fn get_or_default_sysroot() -> Path {
-    match os::self_exe_path() {
-      option::Some(p) => { let mut p = p; p.pop(); p }
+    // Follow symlinks.  If the resolved path is relative, make it absolute.
+    fn canonicalize(path: Option<Path>) -> Option<Path> {
+        path.and_then(|mut path|
+            match fs::readlink(&path) {
+                Ok(canon) => {
+                    if canon.is_absolute() {
+                        Some(canon)
+                    } else {
+                        path.pop();
+                        Some(path.join(canon))
+                    }
+                },
+                Err(..) => Some(path),
+            })
+    }
+
+    match canonicalize(os::self_exe_name()) {
+      option::Some(p) => { let mut p = p; p.pop(); p.pop(); p }
       option::None => fail!("can't determine value for sysroot")
     }
 }

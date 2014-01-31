@@ -32,10 +32,10 @@ use syntax::fold::Folder;
 use syntax::parse::token;
 use syntax;
 
-use std::at_vec;
 use std::libc;
 use std::cast;
 use std::io::Seek;
+use std::rc::Rc;
 
 use extra::ebml::reader;
 use extra::ebml;
@@ -435,7 +435,6 @@ impl tr for ast::Def {
             ast::DefMethod(did0.tr(xcx), did1.map(|did1| did1.tr(xcx)))
           }
           ast::DefSelfTy(nid) => { ast::DefSelfTy(xcx.tr_id(nid)) }
-          ast::DefSelf(nid, m) => { ast::DefSelf(xcx.tr_id(nid), m) }
           ast::DefMod(did) => { ast::DefMod(did.tr(xcx)) }
           ast::DefForeignMod(did) => { ast::DefForeignMod(did.tr(xcx)) }
           ast::DefStatic(did, m) => { ast::DefStatic(did.tr(xcx), m) }
@@ -579,16 +578,8 @@ trait read_method_map_entry_helper {
                              -> method_map_entry;
 }
 
-fn encode_method_map_entry(ecx: &e::EncodeContext,
-                           ebml_w: &mut writer::Encoder,
-                           mme: method_map_entry) {
+fn encode_method_map_entry(ebml_w: &mut writer::Encoder, mme: method_map_entry) {
     ebml_w.emit_struct("method_map_entry", 3, |ebml_w| {
-        ebml_w.emit_struct_field("self_ty", 0u, |ebml_w| {
-            ebml_w.emit_ty(ecx, mme.self_ty);
-        });
-        ebml_w.emit_struct_field("explicit_self", 2u, |ebml_w| {
-            mme.explicit_self.encode(ebml_w);
-        });
         ebml_w.emit_struct_field("origin", 1u, |ebml_w| {
             mme.origin.encode(ebml_w);
         });
@@ -600,15 +591,6 @@ impl<'a> read_method_map_entry_helper for reader::Decoder<'a> {
                              -> method_map_entry {
         self.read_struct("method_map_entry", 3, |this| {
             method_map_entry {
-                self_ty: this.read_struct_field("self_ty", 0u, |this| {
-                    this.read_ty(xcx)
-                }),
-                explicit_self: this.read_struct_field("explicit_self",
-                                                      2,
-                                                      |this| {
-                    let explicit_self: ast::ExplicitSelf_ = Decodable::decode(this);
-                    explicit_self
-                }),
                 origin: this.read_struct_field("origin", 1, |this| {
                     let method_origin: method_origin =
                         Decodable::decode(this);
@@ -830,13 +812,13 @@ impl<'a> ebml_writer_helpers for writer::Encoder<'a> {
             this.emit_struct_field("generics", 0, |this| {
                 this.emit_struct("Generics", 2, |this| {
                     this.emit_struct_field("type_param_defs", 0, |this| {
-                        this.emit_from_vec(*tpbt.generics.type_param_defs,
+                        this.emit_from_vec(tpbt.generics.type_param_defs(),
                                            |this, type_param_def| {
                             this.emit_type_param_def(ecx, type_param_def);
                         })
                     });
                     this.emit_struct_field("region_param_defs", 1, |this| {
-                        tpbt.generics.region_param_defs.encode(this);
+                        tpbt.generics.region_param_defs().encode(this);
                     })
                 })
             });
@@ -913,7 +895,7 @@ impl<'a,'b> ast_util::IdVisitingOperation for
         // it is mutable. But I believe it's harmless since we generate
         // balanced EBML.
         //
-        // XXX(pcwalton): Don't copy this way.
+        // FIXME(pcwalton): Don't copy this way.
         let mut new_ebml_w = unsafe {
             self.new_ebml_w.unsafe_clone()
         };
@@ -1015,7 +997,7 @@ fn encode_side_tables_for_id(ecx: &e::EncodeContext,
             ebml_w.tag(c::tag_table_tcache, |ebml_w| {
                 ebml_w.id(id);
                 ebml_w.tag(c::tag_table_val, |ebml_w| {
-                    ebml_w.emit_tpbt(ecx, *tpbt);
+                    ebml_w.emit_tpbt(ecx, tpbt.clone());
                 })
             })
         }
@@ -1043,7 +1025,7 @@ fn encode_side_tables_for_id(ecx: &e::EncodeContext,
             ebml_w.tag(c::tag_table_method_map, |ebml_w| {
                 ebml_w.id(id);
                 ebml_w.tag(c::tag_table_val, |ebml_w| {
-                    encode_method_map_entry(ecx, ebml_w, *mme)
+                    encode_method_map_entry(ebml_w, *mme)
                 })
             })
         }
@@ -1082,7 +1064,7 @@ fn encode_side_tables_for_id(ecx: &e::EncodeContext,
             ebml_w.tag(c::tag_table_capture_map, |ebml_w| {
                 ebml_w.id(id);
                 ebml_w.tag(c::tag_table_val, |ebml_w| {
-                    ebml_w.emit_from_vec(*cap_vars, |ebml_w, cap_var| {
+                    ebml_w.emit_from_vec(*cap_vars.borrow(), |ebml_w, cap_var| {
                         cap_var.encode(ebml_w);
                     })
                 })
@@ -1201,8 +1183,8 @@ impl<'a> ebml_decoder_decoder_helpers for reader::Decoder<'a> {
                                 this.read_struct_field("type_param_defs",
                                                        0,
                                                        |this| {
-                                    @this.read_to_vec(|this|
-                                        this.read_type_param_def(xcx))
+                                    Rc::new(this.read_to_vec(|this|
+                                                             this.read_type_param_def(xcx)))
                             }),
                             region_param_defs:
                                 this.read_struct_field("region_param_defs",
@@ -1400,13 +1382,11 @@ fn decode_side_tables(xcx: @ExtendedDecodeContext,
                     }
                     c::tag_table_capture_map => {
                         let cvars =
-                            at_vec::to_managed_move(
-                                val_dsr.read_to_vec(
-                                    |val_dsr| val_dsr.read_capture_var(xcx)));
+                                val_dsr.read_to_vec(|val_dsr| val_dsr.read_capture_var(xcx));
                         let mut capture_map = dcx.maps
                                                  .capture_map
                                                  .borrow_mut();
-                        capture_map.get().insert(id, cvars);
+                        capture_map.get().insert(id, Rc::new(cvars));
                     }
                     _ => {
                         xcx.dcx.tcx.sess.bug(

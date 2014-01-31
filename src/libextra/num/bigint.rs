@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -80,7 +80,7 @@ pub mod BigDigit {
 /**
 A big unsigned integer type.
 
-A `BigUint`-typed value `BigUint { data: @[a, b, c] }` represents a number
+A `BigUint`-typed value `BigUint { data: ~[a, b, c] }` represents a number
 `(a + b * BigDigit::base + c * BigDigit::base^2)`.
 */
 #[deriving(Clone)]
@@ -1186,7 +1186,7 @@ impl ToPrimitive for BigInt {
                     if n < m {
                         Some(-(n as i64))
                     } else if n == m {
-                        Some(i64::min_value)
+                        Some(i64::MIN)
                     } else {
                         None
                     }
@@ -1213,7 +1213,7 @@ impl FromPrimitive for BigInt {
                 Some(BigInt::from_biguint(Plus, n))
             })
         } else if n < 0 {
-            FromPrimitive::from_u64(u64::max_value - (n as u64) + 1).and_then(
+            FromPrimitive::from_u64(u64::MAX - (n as u64) + 1).and_then(
                 |n| {
                     Some(BigInt::from_biguint(Minus, n))
                 })
@@ -1292,7 +1292,7 @@ impl ToStrRadix for BigInt {
 }
 
 impl FromStrRadix for BigInt {
-    /// Creates and initializes an BigInt.
+    /// Creates and initializes a BigInt.
     #[inline]
     fn from_str_radix(s: &str, radix: uint) -> Option<BigInt> {
         BigInt::parse_bytes(s.as_bytes(), radix)
@@ -1385,7 +1385,7 @@ impl<R: Rng> RandBigInt for R {
 }
 
 impl BigInt {
-    /// Creates and initializes an BigInt.
+    /// Creates and initializes a BigInt.
     #[inline]
     pub fn new(sign: Sign, v: ~[BigDigit]) -> BigInt {
         BigInt::from_biguint(sign, BigUint::new(v))
@@ -1625,7 +1625,7 @@ mod biguint_tests {
 
         check(Zero::zero(), 0);
         check(One::one(), 1);
-        check(i64::max_value.to_biguint().unwrap(), i64::max_value);
+        check(i64::MAX.to_biguint().unwrap(), i64::MAX);
 
         check(BigUint::new(~[                   ]), 0);
         check(BigUint::new(~[ 1                 ]), (1 << (0*BigDigit::bits)));
@@ -1635,9 +1635,9 @@ mod biguint_tests {
         check(BigUint::new(~[ 0,  0,  1         ]), (1 << (2*BigDigit::bits)));
         check(BigUint::new(~[-1, -1, -1         ]), (1 << (3*BigDigit::bits)) - 1);
         check(BigUint::new(~[ 0,  0,  0,  1     ]), (1 << (3*BigDigit::bits)));
-        check(BigUint::new(~[-1, -1, -1, -1 >> 1]), i64::max_value);
+        check(BigUint::new(~[-1, -1, -1, -1 >> 1]), i64::MAX);
 
-        assert_eq!(i64::min_value.to_biguint(), None);
+        assert_eq!(i64::MIN.to_biguint(), None);
         assert_eq!(BigUint::new(~[-1, -1, -1, -1    ]).to_i64(), None);
         assert_eq!(BigUint::new(~[ 0,  0,  0,  0,  1]).to_i64(), None);
         assert_eq!(BigUint::new(~[-1, -1, -1, -1, -1]).to_i64(), None);
@@ -1654,15 +1654,15 @@ mod biguint_tests {
 
         check(Zero::zero(), 0);
         check(One::one(), 1);
-        check(i64::max_value.to_biguint().unwrap(), i64::max_value);
+        check(i64::MAX.to_biguint().unwrap(), i64::MAX);
 
         check(BigUint::new(~[           ]), 0);
         check(BigUint::new(~[ 1         ]), (1 << (0*BigDigit::bits)));
         check(BigUint::new(~[-1         ]), (1 << (1*BigDigit::bits)) - 1);
         check(BigUint::new(~[ 0,  1     ]), (1 << (1*BigDigit::bits)));
-        check(BigUint::new(~[-1, -1 >> 1]), i64::max_value);
+        check(BigUint::new(~[-1, -1 >> 1]), i64::MAX);
 
-        assert_eq!(i64::min_value.to_biguint(), None);
+        assert_eq!(i64::MIN.to_biguint(), None);
         assert_eq!(BigUint::new(~[-1, -1    ]).to_i64(), None);
         assert_eq!(BigUint::new(~[ 0,  0,  1]).to_i64(), None);
         assert_eq!(BigUint::new(~[-1, -1, -1]).to_i64(), None);
@@ -1679,8 +1679,8 @@ mod biguint_tests {
 
         check(Zero::zero(), 0);
         check(One::one(), 1);
-        check(u64::min_value.to_biguint().unwrap(), u64::min_value);
-        check(u64::max_value.to_biguint().unwrap(), u64::max_value);
+        check(u64::MIN.to_biguint().unwrap(), u64::MIN);
+        check(u64::MAX.to_biguint().unwrap(), u64::MAX);
 
         check(BigUint::new(~[              ]), 0);
         check(BigUint::new(~[ 1            ]), (1 << (0*BigDigit::bits)));
@@ -1690,7 +1690,7 @@ mod biguint_tests {
         check(BigUint::new(~[ 0,  0,  1    ]), (1 << (2*BigDigit::bits)));
         check(BigUint::new(~[-1, -1, -1    ]), (1 << (3*BigDigit::bits)) - 1);
         check(BigUint::new(~[ 0,  0,  0,  1]), (1 << (3*BigDigit::bits)));
-        check(BigUint::new(~[-1, -1, -1, -1]), u64::max_value);
+        check(BigUint::new(~[-1, -1, -1, -1]), u64::MAX);
 
         assert_eq!(BigUint::new(~[ 0,  0,  0,  0,  1]).to_u64(), None);
         assert_eq!(BigUint::new(~[-1, -1, -1, -1, -1]).to_u64(), None);
@@ -1707,14 +1707,14 @@ mod biguint_tests {
 
         check(Zero::zero(), 0);
         check(One::one(), 1);
-        check(u64::min_value.to_biguint().unwrap(), u64::min_value);
-        check(u64::max_value.to_biguint().unwrap(), u64::max_value);
+        check(u64::MIN.to_biguint().unwrap(), u64::MIN);
+        check(u64::MAX.to_biguint().unwrap(), u64::MAX);
 
         check(BigUint::new(~[      ]), 0);
         check(BigUint::new(~[ 1    ]), (1 << (0*BigDigit::bits)));
         check(BigUint::new(~[-1    ]), (1 << (1*BigDigit::bits)) - 1);
         check(BigUint::new(~[ 0,  1]), (1 << (1*BigDigit::bits)));
-        check(BigUint::new(~[-1, -1]), u64::max_value);
+        check(BigUint::new(~[-1, -1]), u64::MAX);
 
         assert_eq!(BigUint::new(~[ 0,  0,  1]).to_u64(), None);
         assert_eq!(BigUint::new(~[-1, -1, -1]).to_u64(), None);
@@ -2052,22 +2052,22 @@ mod biguint_tests {
     fn test_rand_range() {
         let mut rng = task_rng();
 
-        10.times(|| {
+        for _ in range(0, 10) {
             assert_eq!(rng.gen_bigint_range(&FromPrimitive::from_uint(236).unwrap(),
                                             &FromPrimitive::from_uint(237).unwrap()),
                        FromPrimitive::from_uint(236).unwrap());
-        });
+        }
 
         let l = FromPrimitive::from_uint(403469000 + 2352).unwrap();
         let u = FromPrimitive::from_uint(403469000 + 3513).unwrap();
-        1000.times(|| {
+        for _ in range(0, 1000) {
             let n: BigUint = rng.gen_biguint_below(&u);
             assert!(n < u);
 
             let n: BigUint = rng.gen_biguint_range(&l, &u);
             assert!(n >= l);
             assert!(n < u);
-        })
+        }
     }
 
     #[test]
@@ -2166,11 +2166,11 @@ mod bigint_tests {
 
         check(Zero::zero(), 0);
         check(One::one(), 1);
-        check(i64::min_value.to_bigint().unwrap(), i64::min_value);
-        check(i64::max_value.to_bigint().unwrap(), i64::max_value);
+        check(i64::MIN.to_bigint().unwrap(), i64::MIN);
+        check(i64::MAX.to_bigint().unwrap(), i64::MAX);
 
         assert_eq!(
-            (i64::max_value as u64 + 1).to_bigint().unwrap().to_i64(),
+            (i64::MAX as u64 + 1).to_bigint().unwrap().to_i64(),
             None);
 
         assert_eq!(
@@ -2196,14 +2196,14 @@ mod bigint_tests {
 
         check(Zero::zero(), 0);
         check(One::one(), 1);
-        check(u64::min_value.to_bigint().unwrap(), u64::min_value);
-        check(u64::max_value.to_bigint().unwrap(), u64::max_value);
+        check(u64::MIN.to_bigint().unwrap(), u64::MIN);
+        check(u64::MAX.to_bigint().unwrap(), u64::MAX);
 
         assert_eq!(
             BigInt::from_biguint(Plus, BigUint::new(~[1, 2, 3, 4, 5])).to_u64(),
             None);
 
-        let max_value: BigUint = FromPrimitive::from_u64(u64::max_value).unwrap();
+        let max_value: BigUint = FromPrimitive::from_u64(u64::MAX).unwrap();
         assert_eq!(BigInt::from_biguint(Minus, max_value).to_u64(), None);
         assert_eq!(BigInt::from_biguint(Minus, BigUint::new(~[1, 2, 3, 4, 5])).to_u64(), None);
     }
@@ -2550,19 +2550,19 @@ mod bigint_tests {
     fn test_rand_range() {
         let mut rng = task_rng();
 
-        10.times(|| {
+        for _ in range(0, 10) {
             assert_eq!(rng.gen_bigint_range(&FromPrimitive::from_uint(236).unwrap(),
                                             &FromPrimitive::from_uint(237).unwrap()),
                        FromPrimitive::from_uint(236).unwrap());
-        });
+        }
 
         fn check(l: BigInt, u: BigInt) {
             let mut rng = task_rng();
-            1000.times(|| {
+            for _ in range(0, 1000) {
                 let n: BigInt = rng.gen_bigint_range(&l, &u);
                 assert!(n >= l);
                 assert!(n < u);
-            });
+            }
         }
         let l: BigInt = FromPrimitive::from_uint(403469000 + 2352).unwrap();
         let u: BigInt = FromPrimitive::from_uint(403469000 + 3513).unwrap();

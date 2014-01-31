@@ -15,7 +15,7 @@
 
 use std::num;
 use std::vec;
-use std::iter::{Invert, RandomAccessIterator};
+use std::iter::{Rev, RandomAccessIterator};
 
 use container::Deque;
 
@@ -192,8 +192,8 @@ impl<T> RingBuf<T> {
     }
 
     /// Back-to-front iterator.
-    pub fn rev_iter<'a>(&'a self) -> Invert<Items<'a, T>> {
-        self.iter().invert()
+    pub fn rev_iter<'a>(&'a self) -> Rev<Items<'a, T>> {
+        self.iter().rev()
     }
 
     /// Front-to-back iterator which returns mutable values.
@@ -223,8 +223,8 @@ impl<T> RingBuf<T> {
     }
 
     /// Back-to-front iterator which returns mutable values.
-    pub fn mut_rev_iter<'a>(&'a mut self) -> Invert<MutItems<'a, T>> {
-        self.mut_iter().invert()
+    pub fn mut_rev_iter<'a>(&'a mut self) -> Rev<MutItems<'a, T>> {
+        self.mut_iter().rev()
     }
 }
 
@@ -303,7 +303,7 @@ impl<'a, T> Iterator<&'a mut T> for MutItems<'a, T> {
             &mut self.remaining2
         };
         self.nelts -= 1;
-        Some(r.mut_shift_ref().get_mut_ref())
+        Some(r.mut_shift_ref().unwrap().get_mut_ref())
     }
 
     #[inline]
@@ -325,7 +325,7 @@ impl<'a, T> DoubleEndedIterator<&'a mut T> for MutItems<'a, T> {
             &mut self.remaining1
         };
         self.nelts -= 1;
-        Some(r.mut_pop_ref().get_mut_ref())
+        Some(r.mut_pop_ref().unwrap().get_mut_ref())
     }
 }
 
@@ -571,9 +571,9 @@ mod tests {
     fn bench_grow(b: &mut test::BenchHarness) {
         let mut deq = RingBuf::new();
         b.iter(|| {
-            65.times(|| {
+            for _ in range(0, 65) {
                 deq.push_front(1);
-            })
+            }
         })
     }
 

@@ -23,7 +23,7 @@ static mut TASK_COUNT: atomics::AtomicUint = atomics::INIT_ATOMIC_UINT;
 static mut TASK_LOCK: Mutex = MUTEX_INIT;
 
 pub fn increment() {
-    unsafe { TASK_COUNT.fetch_add(1, atomics::SeqCst); }
+    let _ = unsafe { TASK_COUNT.fetch_add(1, atomics::SeqCst) };
 }
 
 pub fn decrement() {
@@ -45,5 +45,6 @@ pub fn wait_for_other_tasks() {
             TASK_LOCK.wait();
         }
         TASK_LOCK.unlock();
+        TASK_LOCK.destroy();
     }
 }

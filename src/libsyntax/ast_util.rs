@@ -25,7 +25,10 @@ use std::num;
 
 pub fn path_name_i(idents: &[Ident]) -> ~str {
     // FIXME: Bad copies (#2543 -- same for everything else that says "bad")
-    idents.map(|i| token::interner_get(i.name)).connect("::")
+    idents.map(|i| {
+        let string = token::get_ident(i.name);
+        string.get().to_str()
+    }).connect("::")
 }
 
 // totally scary function: ignores all but the last element, should have
@@ -60,19 +63,19 @@ pub fn variant_def_ids(d: Def) -> Option<(DefId, DefId)> {
 
 pub fn def_id_of_def(d: Def) -> DefId {
     match d {
-      DefFn(id, _) | DefStaticMethod(id, _, _) | DefMod(id) |
-      DefForeignMod(id) | DefStatic(id, _) |
-      DefVariant(_, id, _) | DefTy(id) | DefTyParam(id, _) |
-      DefUse(id) | DefStruct(id) | DefTrait(id) | DefMethod(id, _) => {
-        id
-      }
-      DefArg(id, _) | DefLocal(id, _) | DefSelf(id, _) | DefSelfTy(id)
-      | DefUpvar(id, _, _, _) | DefBinding(id, _) | DefRegion(id)
-      | DefTyParamBinder(id) | DefLabel(id) => {
-        local_def(id)
-      }
+        DefFn(id, _) | DefStaticMethod(id, _, _) | DefMod(id) |
+        DefForeignMod(id) | DefStatic(id, _) |
+        DefVariant(_, id, _) | DefTy(id) | DefTyParam(id, _) |
+        DefUse(id) | DefStruct(id) | DefTrait(id) | DefMethod(id, _) => {
+            id
+        }
+        DefArg(id, _) | DefLocal(id, _) | DefSelfTy(id)
+        | DefUpvar(id, _, _, _) | DefBinding(id, _) | DefRegion(id)
+        | DefTyParamBinder(id) | DefLabel(id) => {
+            local_def(id)
+        }
 
-      DefPrimTy(_) => fail!()
+        DefPrimTy(_) => fail!()
     }
 }
 
@@ -292,16 +295,6 @@ pub fn struct_field_visibility(field: ast::StructField) -> Visibility {
     }
 }
 
-/* True if d is either a def_self, or a chain of def_upvars
- referring to a def_self */
-pub fn is_self(d: ast::Def) -> bool {
-  match d {
-    DefSelf(..)           => true,
-    DefUpvar(_, d, _, _) => is_self(*d),
-    _                     => false
-  }
-}
-
 /// Maps a binary operator to its precedence
 pub fn operator_prec(op: ast::BinOp) -> uint {
   match op {
@@ -340,8 +333,8 @@ pub struct IdRange {
 impl IdRange {
     pub fn max() -> IdRange {
         IdRange {
-            min: u32::max_value,
-            max: u32::min_value,
+            min: u32::MAX,
+            max: u32::MIN,
         }
     }
 
@@ -504,11 +497,8 @@ impl<'a, O: IdVisitingOperation> Visitor<()> for IdVisitor<'a, O> {
         self.operation.visit_id(node_id);
 
         match *function_kind {
-            visit::FkItemFn(_, generics, _, _) => {
-                self.visit_generics_helper(generics)
-            }
-            visit::FkMethod(_, generics, method) => {
-                self.operation.visit_id(method.self_id);
+            visit::FkItemFn(_, generics, _, _) |
+            visit::FkMethod(_, generics, _) => {
                 self.visit_generics_helper(generics)
             }
             visit::FkFnBlock => {}

@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -47,6 +47,7 @@
 use cast;
 use comm;
 use iter::Iterator;
+use kinds::marker;
 use kinds::Send;
 use ops::Drop;
 use option::{Some, None, Option};
@@ -77,24 +78,25 @@ macro_rules! select {
 
 /// The "port set" of the select interface. This structure is used to manage a
 /// set of ports which are being selected over.
-#[no_freeze]
-#[no_send]
 pub struct Select {
     priv head: *mut Packet,
     priv tail: *mut Packet,
     priv next_id: uint,
+    priv marker1: marker::NoSend,
+    priv marker2: marker::NoFreeze,
 }
 
 /// A handle to a port which is currently a member of a `Select` set of ports.
 /// This handle is used to keep the port in the set as well as interact with the
 /// underlying port.
 pub struct Handle<'port, T> {
+    /// A unique ID for this Handle.
     id: uint,
     priv selector: &'port Select,
     priv port: &'port mut Port<T>,
 }
 
-struct Packets { priv cur: *mut Packet }
+struct Packets { cur: *mut Packet }
 
 impl Select {
     /// Creates a new selection structure. This set is initially empty and
@@ -107,6 +109,8 @@ impl Select {
             head: 0 as *mut Packet,
             tail: 0 as *mut Packet,
             next_id: 1,
+            marker1: marker::NoSend,
+            marker2: marker::NoFreeze,
         }
     }
 
@@ -182,7 +186,7 @@ impl Select {
             assert!(amt > 0);
 
             let mut ready_index = amt;
-            let mut ready_id = uint::max_value;
+            let mut ready_id = uint::MAX;
             let mut iter = self.iter().enumerate();
 
             // Acquire a number of blocking contexts, and block on each one
@@ -199,11 +203,14 @@ impl Select {
                 if (*packet).decrement() {
                     Ok(())
                 } else {
+                    // Empty to_wake first to avoid tripping an assertion in
+                    // abort_selection in the disconnected case.
+                    let task = (*packet).to_wake.take_unwrap();
                     (*packet).abort_selection(false);
                     (*packet).selecting.store(false, SeqCst);
                     ready_index = i;
                     ready_id = (*packet).selection_id;
-                    Err((*packet).to_wake.take_unwrap())
+                    Err(task)
                 }
             });
 
@@ -242,7 +249,7 @@ impl Select {
                 assert!(!(*packet).selecting.load(Relaxed));
             }
 
-            assert!(ready_id != uint::max_value);
+            assert!(ready_id != uint::MAX);
             return ready_id;
         }
     }
@@ -374,12 +381,12 @@ mod test {
         let (mut p2, _c2) = Chan::<int>::new();
         let (p3, c3) = Chan::<int>::new();
 
-        do spawn {
-            20.times(task::deschedule);
+        spawn(proc() {
+            for _ in range(0, 20) { task::deschedule(); }
             c1.send(1);
             p3.recv();
-            20.times(task::deschedule);
-        }
+            for _ in range(0, 20) { task::deschedule(); }
+        });
 
         select! (
             a = p1.recv() => { assert_eq!(a, 1); },
@@ -397,12 +404,12 @@ mod test {
         let (mut p2, c2) = Chan::<int>::new();
         let (p3, c3) = Chan::<()>::new();
 
-        do spawn {
-            20.times(task::deschedule);
+        spawn(proc() {
+            for _ in range(0, 20) { task::deschedule(); }
             c1.send(1);
             c2.send(2);
             p3.recv();
-        }
+        });
 
         select! (
             a = p1.recv() => { assert_eq!(a, 1); },
@@ -423,7 +430,7 @@ mod test {
         let (mut p2, c2) = Chan::<int>::new();
         let (p3, c3) = Chan::<()>::new();
 
-        do spawn {
+        spawn(proc() {
             for i in range(0, AMT) {
                 if i % 2 == 0 {
                     c1.send(i);
@@ -432,7 +439,7 @@ mod test {
                 }
                 p3.recv();
             }
-        }
+        });
 
         for i in range(0, AMT) {
             select! (

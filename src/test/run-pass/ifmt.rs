@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -12,6 +12,7 @@
 
 #[feature(macro_rules)];
 #[deny(warnings)];
+#[allow(unused_must_use)];
 
 use std::fmt;
 use std::io::MemWriter;
@@ -22,10 +23,14 @@ struct A;
 struct B;
 
 impl fmt::Signed for A {
-    fn fmt(_: &A, f: &mut fmt::Formatter) { f.buf.write("aloha".as_bytes()); }
+    fn fmt(_: &A, f: &mut fmt::Formatter) -> fmt::Result {
+        f.buf.write("aloha".as_bytes())
+    }
 }
 impl fmt::Signed for B {
-    fn fmt(_: &B, f: &mut fmt::Formatter) { f.buf.write("adios".as_bytes()); }
+    fn fmt(_: &B, f: &mut fmt::Formatter) -> fmt::Result {
+        f.buf.write("adios".as_bytes())
+    }
 }
 
 macro_rules! t(($a:expr, $b:expr) => { assert_eq!($a, $b.to_owned()) })
@@ -58,7 +63,6 @@ pub fn main() {
     t!(format!("{}", 1.0f64), "1");
     t!(format!("{}", "a"), "a");
     t!(format!("{}", ~"a"), "a");
-    t!(format!("{}", @"a"), "a");
     t!(format!("{}", false), "false");
     t!(format!("{}", 'a'), "a");
 
@@ -73,7 +77,6 @@ pub fn main() {
     t!(format!("{:X}", 10u), "A");
     t!(format!("{:s}", "foo"), "foo");
     t!(format!("{:s}", ~"foo"), "foo");
-    t!(format!("{:s}", @"foo"), "foo");
     t!(format!("{:p}", 0x1234 as *int), "0x1234");
     t!(format!("{:p}", 0x1234 as *mut int), "0x1234");
     t!(format!("{:d}", A), "aloha");
@@ -219,6 +222,14 @@ pub fn main() {
     t!(format!("{:+10.3f}", 1.0f64),  "    +1.000");
     t!(format!("{:+10.3f}", -1.0f64), "    -1.000");
 
+    t!(format!("{:e}", 1.2345e6f32), "1.2345e6");
+    t!(format!("{:e}", 1.2345e6f64), "1.2345e6");
+    t!(format!("{:E}", 1.2345e6f64), "1.2345E6");
+    t!(format!("{:.3e}", 1.2345e6f64), "1.234e6");
+    t!(format!("{:10.3e}", 1.2345e6f64),   "   1.234e6");
+    t!(format!("{:+10.3e}", 1.2345e6f64),  "  +1.234e6");
+    t!(format!("{:+10.3e}", -1.2345e6f64), "  -1.234e6");
+
     // Escaping
     t!(format!("\\{"), "{");
     t!(format!("\\}"), "}");
@@ -280,9 +291,9 @@ fn test_format_args() {
     let mut buf = MemWriter::new();
     {
         let w = &mut buf as &mut io::Writer;
-        format_args!(|args| { fmt::write(w, args) }, "{}", 1);
-        format_args!(|args| { fmt::write(w, args) }, "test");
-        format_args!(|args| { fmt::write(w, args) }, "{test}", test=3);
+        format_args!(|args| { fmt::write(w, args); }, "{}", 1);
+        format_args!(|args| { fmt::write(w, args); }, "test");
+        format_args!(|args| { fmt::write(w, args); }, "{test}", test=3);
     }
     let s = str::from_utf8_owned(buf.unwrap()).unwrap();
     t!(s, "1test3");

@@ -40,6 +40,7 @@ via `close` and `delete` methods.
 #[crate_type = "dylib"];
 
 #[feature(macro_rules)];
+#[deny(unused_result, unused_must_use)];
 
 #[cfg(test)] extern mod green;
 
@@ -207,7 +208,7 @@ fn wait_until_woken_after(slot: *mut Option<BlockedTask>, f: ||) {
 
 fn wakeup(slot: &mut Option<BlockedTask>) {
     assert!(slot.is_some());
-    slot.take_unwrap().wake().map(|t| t.reawaken(true));
+    let _ = slot.take_unwrap().wake().map(|t| t.reawaken(true));
 }
 
 pub struct Request {
@@ -259,7 +260,7 @@ impl Drop for Request {
     }
 }
 
-/// XXX: Loop(*handle) is buggy with destructors. Normal structs
+/// FIXME: Loop(*handle) is buggy with destructors. Normal structs
 /// with dtors may not be destructured, but tuple structs can,
 /// but the results are not correct.
 pub struct Loop {
@@ -276,7 +277,7 @@ impl Loop {
     pub fn wrap(handle: *uvll::uv_loop_t) -> Loop { Loop { handle: handle } }
 
     pub fn run(&mut self) {
-        unsafe { uvll::uv_run(self.handle, uvll::RUN_DEFAULT) };
+        assert_eq!(unsafe { uvll::uv_run(self.handle, uvll::RUN_DEFAULT) }, 0);
     }
 
     pub fn close(&mut self) {
@@ -284,7 +285,7 @@ impl Loop {
     }
 }
 
-// XXX: Need to define the error constants like EOF so they can be
+// FIXME: Need to define the error constants like EOF so they can be
 // compared to the UvError type
 
 pub struct UvError(c_int);
@@ -349,7 +350,7 @@ pub fn uv_error_to_io_error(uverr: UvError) -> IoError {
             uvll::EADDRNOTAVAIL => io::ConnectionRefused,
             err => {
                 uvdebug!("uverr.code {}", err as int);
-                // XXX: Need to map remaining uv error types
+                // FIXME: Need to map remaining uv error types
                 io::OtherIoError
             }
         };
@@ -433,10 +434,10 @@ mod test {
 
     #[test]
     fn loop_smoke_test() {
-        do run_in_bare_thread {
+        run_in_bare_thread(proc() {
             let mut loop_ = Loop::new();
             loop_.run();
             loop_.close();
-        }
+        });
     }
 }

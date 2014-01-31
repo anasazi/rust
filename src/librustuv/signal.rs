@@ -85,9 +85,9 @@ mod test {
         let _signal = SignalWatcher::new(local_loop(), signal::Interrupt,
                                          chan);
 
-        do spawn {
-            port.try_recv();
-        }
+        spawn(proc() {
+            let _ = port.recv_opt();
+        });
 
         // when we drop the SignalWatcher we're going to destroy the channel,
         // which must wake up the task on the other end

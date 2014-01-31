@@ -103,7 +103,8 @@ pub fn spawn_opts(opts: TaskOpts, f: proc()) {
         let mut f = Some(f);
         let mut task = task;
         task.put_runtime(ops as ~rt::Runtime);
-        task.run(|| { f.take_unwrap()() });
+        let t = task.run(|| { f.take_unwrap()() });
+        drop(t);
         bookkeeping::decrement();
     })
 }
@@ -272,19 +273,19 @@ mod tests {
     #[test]
     fn smoke() {
         let (p, c) = Chan::new();
-        do spawn {
+        spawn(proc() {
             c.send(());
-        }
+        });
         p.recv();
     }
 
     #[test]
     fn smoke_fail() {
         let (p, c) = Chan::<()>::new();
-        do spawn {
+        spawn(proc() {
             let _c = c;
             fail!()
-        }
+        });
         assert_eq!(p.recv_opt(), None);
     }
 
@@ -311,38 +312,38 @@ mod tests {
     #[test]
     fn yield_test() {
         let (p, c) = Chan::new();
-        do spawn {
-            10.times(task::deschedule);
+        spawn(proc() {
+            for _ in range(0, 10) { task::deschedule(); }
             c.send(());
-        }
+        });
         p.recv();
     }
 
     #[test]
     fn spawn_children() {
         let (p, c) = Chan::new();
-        do spawn {
+        spawn(proc() {
             let (p, c2) = Chan::new();
-            do spawn {
+            spawn(proc() {
                 let (p, c3) = Chan::new();
-                do spawn {
+                spawn(proc() {
                     c3.send(());
-                }
+                });
                 p.recv();
                 c2.send(());
-            }
+            });
             p.recv();
             c.send(());
-        }
+        });
         p.recv();
     }
 
     #[test]
     fn spawn_inherits() {
         let (p, c) = Chan::new();
-        do spawn {
+        spawn(proc() {
             let c = c;
-            do spawn {
+            spawn(proc() {
                 let mut task: ~Task = Local::take();
                 match task.maybe_take_runtime::<Ops>() {
                     Some(ops) => {
@@ -352,8 +353,8 @@ mod tests {
                 }
                 Local::put(task);
                 c.send(());
-            }
-        }
+            });
+        });
         p.recv();
     }
 }

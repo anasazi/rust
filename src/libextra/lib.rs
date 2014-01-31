@@ -1,4 +1,4 @@
-// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -34,6 +34,11 @@ Rust extras are part of the standard Rust distribution.
 #[deny(non_camel_case_types)];
 #[deny(missing_doc)];
 
+#[cfg(stage0)]
+macro_rules! if_ok (
+    ($e:expr) => (match $e { Ok(e) => e, Err(e) => return Err(e) })
+)
+
 // Utility modules
 
 pub mod c_vec;
@@ -67,10 +72,7 @@ pub mod ebml;
 pub mod getopts;
 pub mod json;
 pub mod tempfile;
-pub mod glob;
-pub mod term;
 pub mod time;
-pub mod arena;
 pub mod base64;
 pub mod workcache;
 pub mod enum_set;
@@ -82,15 +84,12 @@ pub mod rational;
 pub mod complex;
 pub mod stats;
 pub mod semver;
-pub mod flate;
 pub mod hex;
 pub mod uuid;
 
 
 #[cfg(unicode)]
 mod unicode;
-
-pub mod terminfo;
 
 // Compiler support modules
 

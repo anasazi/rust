@@ -23,14 +23,13 @@ use metadata::tydecode::{parse_ty_data, parse_def_id,
 use middle::ty::{ImplContainer, TraitContainer};
 use middle::ty;
 use middle::typeck;
-use middle::astencode;
 use middle::astencode::vtable_decoder_helpers;
 
-use std::at_vec;
 use std::u64;
 use std::io;
 use std::io::extensions::u64_from_be_bytes;
 use std::option;
+use std::rc::Rc;
 use std::vec;
 use extra::ebml::reader;
 use extra::ebml;
@@ -228,16 +227,6 @@ fn doc_method_fty(doc: ebml::Doc, tcx: ty::ctxt, cdata: Cmd) -> ty::BareFnTy {
                           |_, did| translate_def_id(cdata, did))
 }
 
-fn doc_transformed_self_ty(doc: ebml::Doc,
-                           tcx: ty::ctxt,
-                           cdata: Cmd) -> Option<ty::t>
-{
-    reader::maybe_get_doc(doc, tag_item_method_transformed_self_ty).map(|tp| {
-        parse_ty_data(tp.data, cdata.cnum, tp.start, tcx,
-                      |_, did| translate_def_id(cdata, did))
-    })
-}
-
 pub fn item_type(_item_id: ast::DefId, item: ebml::Doc,
                  tcx: ty::ctxt, cdata: Cmd) -> ty::t {
     doc_type(item, tcx, cdata)
@@ -257,7 +246,7 @@ fn item_ty_param_defs(item: ebml::Doc,
                       tcx: ty::ctxt,
                       cdata: Cmd,
                       tag: uint)
-                      -> @~[ty::TypeParameterDef] {
+                      -> Rc<~[ty::TypeParameterDef]> {
     let mut bounds = ~[];
     reader::tagged_docs(item, tag, |p| {
         let bd = parse_type_param_def_data(
@@ -266,15 +255,15 @@ fn item_ty_param_defs(item: ebml::Doc,
         bounds.push(bd);
         true
     });
-    @bounds
+    Rc::new(bounds)
 }
 
 fn item_region_param_defs(item_doc: ebml::Doc,
                           tcx: ty::ctxt,
                           cdata: Cmd)
-                          -> @[ty::RegionParameterDef] {
-    at_vec::build(None, |push| {
-        reader::tagged_docs(item_doc, tag_region_param_def, |rp_doc| {
+                          -> Rc<~[ty::RegionParameterDef]> {
+    let mut v = ~[];
+    reader::tagged_docs(item_doc, tag_region_param_def, |rp_doc| {
             let ident_str_doc = reader::get_doc(rp_doc,
                                                 tag_region_param_def_ident);
             let ident = item_name(tcx.sess.intr(), ident_str_doc);
@@ -282,11 +271,11 @@ fn item_region_param_defs(item_doc: ebml::Doc,
                                              tag_region_param_def_def_id);
             let def_id = reader::with_doc_data(def_id_doc, parse_def_id);
             let def_id = translate_def_id(cdata, def_id);
-            push(ty::RegionParameterDef { ident: ident,
-                                          def_id: def_id });
+            v.push(ty::RegionParameterDef { ident: ident,
+                                            def_id: def_id });
             true
         });
-    })
+    Rc::new(v)
 }
 
 fn item_ty_param_count(item: ebml::Doc) -> uint {
@@ -782,9 +771,9 @@ fn get_explicit_self(item: ebml::Doc) -> ast::ExplicitSelf_ {
     let explicit_self_kind = string[0];
     match explicit_self_kind as char {
         's' => ast::SelfStatic,
-        'v' => ast::SelfValue(get_mutability(string[1])),
+        'v' => ast::SelfValue,
         '@' => ast::SelfBox,
-        '~' => ast::SelfUniq(get_mutability(string[1])),
+        '~' => ast::SelfUniq,
         // FIXME(#4846) expl. region
         '&' => ast::SelfRegion(None, get_mutability(string[1])),
         _ => fail!("unknown self type code: `{}`", explicit_self_kind as char)
@@ -848,7 +837,6 @@ pub fn get_method(intr: @IdentInterner, cdata: Cmd, id: ast::NodeId,
     let type_param_defs = item_ty_param_defs(method_doc, tcx, cdata,
                                              tag_item_method_tps);
     let rp_defs = item_region_param_defs(method_doc, tcx, cdata);
-    let transformed_self_ty = doc_transformed_self_ty(method_doc, tcx, cdata);
     let fty = doc_method_fty(method_doc, tcx, cdata);
     let vis = item_visibility(method_doc);
     let explicit_self = get_explicit_self(method_doc);
@@ -860,7 +848,6 @@ pub fn get_method(intr: @IdentInterner, cdata: Cmd, id: ast::NodeId,
             type_param_defs: type_param_defs,
             region_param_defs: rp_defs,
         },
-        transformed_self_ty,
         fty,
         explicit_self,
         vis,
@@ -993,9 +980,26 @@ pub fn get_static_methods_if_impl(intr: @IdentInterner,
     return Some(static_impl_methods);
 }
 
+/// If node_id is the constructor of a tuple struct, retrieve the NodeId of
+/// the actual type definition, otherwise, return None
+pub fn get_tuple_struct_definition_if_ctor(cdata: Cmd,
+                                           node_id: ast::NodeId) -> Option<ast::NodeId> {
+    let item = lookup_item(node_id, cdata.data());
+    let mut ret = None;
+    reader::tagged_docs(item, tag_items_data_item_is_tuple_struct_ctor, |_| {
+        ret = Some(item_reqd_and_translated_parent_item(cdata.cnum, item));
+        false
+    });
+    ret.map(|x| x.node)
+}
+
 pub fn get_item_attrs(cdata: Cmd,
                       node_id: ast::NodeId,
                       f: |~[@ast::MetaItem]|) {
+    // The attributes for a tuple struct are attached to the definition, not the ctor;
+    // we assume that someone passing in a tuple struct ctor is actually wanting to
+    // look at the definition
+    let node_id = get_tuple_struct_definition_if_ctor(cdata, node_id).unwrap_or(node_id);
     let item = lookup_item(node_id, cdata.data());
     reader::tagged_docs(item, tag_attributes, |attributes| {
         reader::tagged_docs(attributes, tag_attribute, |attribute| {
@@ -1055,15 +1059,15 @@ fn get_meta_items(md: ebml::Doc) -> ~[@ast::MetaItem] {
     let mut items: ~[@ast::MetaItem] = ~[];
     reader::tagged_docs(md, tag_meta_item_word, |meta_item_doc| {
         let nd = reader::get_doc(meta_item_doc, tag_meta_item_name);
-        let n = nd.as_str_slice().to_managed();
+        let n = token::intern_and_get_ident(nd.as_str_slice());
         items.push(attr::mk_word_item(n));
         true
     });
     reader::tagged_docs(md, tag_meta_item_name_value, |meta_item_doc| {
         let nd = reader::get_doc(meta_item_doc, tag_meta_item_name);
         let vd = reader::get_doc(meta_item_doc, tag_meta_item_value);
-        let n = nd.as_str_slice().to_managed();
-        let v = vd.as_str_slice().to_managed();
+        let n = token::intern_and_get_ident(nd.as_str_slice());
+        let v = token::intern_and_get_ident(vd.as_str_slice());
         // FIXME (#623): Should be able to decode MetaNameValue variants,
         // but currently the encoder just drops them
         items.push(attr::mk_name_value_item_str(n, v));
@@ -1071,7 +1075,7 @@ fn get_meta_items(md: ebml::Doc) -> ~[@ast::MetaItem] {
     });
     reader::tagged_docs(md, tag_meta_item_list, |meta_item_doc| {
         let nd = reader::get_doc(meta_item_doc, tag_meta_item_name);
-        let n = nd.as_str_slice().to_managed();
+        let n = token::intern_and_get_ident(nd.as_str_slice());
         let subitems = get_meta_items(meta_item_doc);
         items.push(attr::mk_list_item(n, subitems));
         true
@@ -1107,15 +1111,15 @@ fn get_attributes(md: ebml::Doc) -> ~[ast::Attribute] {
 }
 
 fn list_crate_attributes(intr: @IdentInterner, md: ebml::Doc, hash: &str,
-                         out: &mut io::Writer) {
-    write!(out, "=Crate Attributes ({})=\n", hash);
+                         out: &mut io::Writer) -> io::IoResult<()> {
+    if_ok!(write!(out, "=Crate Attributes ({})=\n", hash));
 
     let r = get_attributes(md);
     for attr in r.iter() {
-        write!(out, "{}\n", pprust::attribute_to_str(attr, intr));
+        if_ok!(write!(out, "{}\n", pprust::attribute_to_str(attr, intr)));
     }
 
-    write!(out, "\n\n");
+    write!(out, "\n\n")
 }
 
 pub fn get_crate_attributes(data: &[u8]) -> ~[ast::Attribute] {
@@ -1126,8 +1130,8 @@ pub fn get_crate_attributes(data: &[u8]) -> ~[ast::Attribute] {
 pub struct CrateDep {
     cnum: ast::CrateNum,
     name: ast::Ident,
-    vers: @str,
-    hash: @str
+    vers: ~str,
+    hash: ~str
 }
 
 pub fn get_crate_deps(data: &[u8]) -> ~[CrateDep] {
@@ -1135,9 +1139,9 @@ pub fn get_crate_deps(data: &[u8]) -> ~[CrateDep] {
     let cratedoc = reader::Doc(data);
     let depsdoc = reader::get_doc(cratedoc, tag_crate_deps);
     let mut crate_num = 1;
-    fn docstr(doc: ebml::Doc, tag_: uint) -> @str {
+    fn docstr(doc: ebml::Doc, tag_: uint) -> ~str {
         let d = reader::get_doc(doc, tag_);
-        d.as_str_slice().to_managed()
+        d.as_str_slice().to_str()
     }
     reader::tagged_docs(depsdoc, tag_crate_dep, |depdoc| {
         deps.push(CrateDep {cnum: crate_num,
@@ -1150,38 +1154,44 @@ pub fn get_crate_deps(data: &[u8]) -> ~[CrateDep] {
     return deps;
 }
 
-fn list_crate_deps(data: &[u8], out: &mut io::Writer) {
-    write!(out, "=External Dependencies=\n");
+fn list_crate_deps(data: &[u8], out: &mut io::Writer) -> io::IoResult<()> {
+    if_ok!(write!(out, "=External Dependencies=\n"));
 
     let r = get_crate_deps(data);
     for dep in r.iter() {
-        write!(out, "{} {}-{}-{}\n",
-                 dep.cnum, token::ident_to_str(&dep.name), dep.hash, dep.vers);
+        let string = token::get_ident(dep.name.name);
+        if_ok!(write!(out,
+                      "{} {}-{}-{}\n",
+                      dep.cnum,
+                      string.get(),
+                      dep.hash,
+                      dep.vers));
     }
 
-    write!(out, "\n");
+    if_ok!(write!(out, "\n"));
+    Ok(())
 }
 
-pub fn get_crate_hash(data: &[u8]) -> @str {
+pub fn get_crate_hash(data: &[u8]) -> ~str {
     let cratedoc = reader::Doc(data);
     let hashdoc = reader::get_doc(cratedoc, tag_crate_hash);
-    hashdoc.as_str_slice().to_managed()
+    hashdoc.as_str_slice().to_str()
 }
 
-pub fn get_crate_vers(data: &[u8]) -> @str {
+pub fn get_crate_vers(data: &[u8]) -> ~str {
     let attrs = decoder::get_crate_attributes(data);
     match attr::find_crateid(attrs) {
-        None => @"0.0",
-        Some(crateid) => crateid.version_or_default().to_managed(),
+        None => ~"0.0",
+        Some(crateid) => crateid.version_or_default().to_str(),
     }
 }
 
 pub fn list_crate_metadata(intr: @IdentInterner, bytes: &[u8],
-                           out: &mut io::Writer) {
+                           out: &mut io::Writer) -> io::IoResult<()> {
     let hash = get_crate_hash(bytes);
     let md = reader::Doc(bytes);
-    list_crate_attributes(intr, md, hash, out);
-    list_crate_deps(bytes, out);
+    if_ok!(list_crate_attributes(intr, md, hash, out));
+    list_crate_deps(bytes, out)
 }
 
 // Translates a def_id from an external crate to a def_id for the current
@@ -1282,12 +1292,12 @@ pub fn get_macro_registrar_fn(cdata: Cmd) -> Option<ast::DefId> {
         .map(|doc| item_def_id(doc, cdata))
 }
 
-pub fn get_exported_macros(cdata: Cmd) -> ~[@ast::Item] {
+pub fn get_exported_macros(cdata: Cmd) -> ~[~str] {
     let macros = reader::get_doc(reader::Doc(cdata.data()),
                                  tag_exported_macros);
     let mut result = ~[];
     reader::tagged_docs(macros, tag_macro_def, |macro_doc| {
-        result.push(astencode::decode_exported_macro(macro_doc));
+        result.push(macro_doc.as_str());
         true
     });
     result

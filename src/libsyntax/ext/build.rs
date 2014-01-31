@@ -18,6 +18,8 @@ use ext::quote::rt::*;
 use fold::Folder;
 use opt_vec;
 use opt_vec::OptVec;
+use parse::token::special_idents;
+use parse::token;
 
 pub struct Field {
     ident: ast::Ident,
@@ -65,7 +67,10 @@ pub trait AstBuilder {
     fn ty_field_imm(&self, span: Span, name: Ident, ty: P<ast::Ty>) -> ast::TypeField;
     fn strip_bounds(&self, bounds: &Generics) -> Generics;
 
-    fn typaram(&self, id: ast::Ident, bounds: OptVec<ast::TyParamBound>) -> ast::TyParam;
+    fn typaram(&self,
+               id: ast::Ident,
+               bounds: OptVec<ast::TyParamBound>,
+               default: Option<P<ast::Ty>>) -> ast::TyParam;
 
     fn trait_ref(&self, path: ast::Path) -> ast::TraitRef;
     fn typarambound(&self, path: ast::Path) -> ast::TyParamBound;
@@ -130,13 +135,13 @@ pub trait AstBuilder {
     fn expr_vec(&self, sp: Span, exprs: ~[@ast::Expr]) -> @ast::Expr;
     fn expr_vec_uniq(&self, sp: Span, exprs: ~[@ast::Expr]) -> @ast::Expr;
     fn expr_vec_slice(&self, sp: Span, exprs: ~[@ast::Expr]) -> @ast::Expr;
-    fn expr_str(&self, sp: Span, s: @str) -> @ast::Expr;
-    fn expr_str_uniq(&self, sp: Span, s: @str) -> @ast::Expr;
+    fn expr_str(&self, sp: Span, s: InternedString) -> @ast::Expr;
+    fn expr_str_uniq(&self, sp: Span, s: InternedString) -> @ast::Expr;
 
     fn expr_some(&self, sp: Span, expr: @ast::Expr) -> @ast::Expr;
     fn expr_none(&self, sp: Span) -> @ast::Expr;
 
-    fn expr_fail(&self, span: Span, msg: @str) -> @ast::Expr;
+    fn expr_fail(&self, span: Span, msg: InternedString) -> @ast::Expr;
     fn expr_unreachable(&self, span: Span) -> @ast::Expr;
 
     fn pat(&self, span: Span, pat: ast::Pat_) -> @ast::Pat;
@@ -179,7 +184,7 @@ pub trait AstBuilder {
             name: Ident, attrs: ~[ast::Attribute], node: ast::Item_) -> @ast::Item;
 
     fn arg(&self, span: Span, name: Ident, ty: P<ast::Ty>) -> ast::Arg;
-    // XXX unused self
+    // FIXME unused self
     fn fn_decl(&self, inputs: ~[ast::Arg], output: P<ast::Ty>) -> P<ast::FnDecl>;
 
     fn item_fn_poly(&self,
@@ -224,9 +229,17 @@ pub trait AstBuilder {
 
     fn attribute(&self, sp: Span, mi: @ast::MetaItem) -> ast::Attribute;
 
-    fn meta_word(&self, sp: Span, w: @str) -> @ast::MetaItem;
-    fn meta_list(&self, sp: Span, name: @str, mis: ~[@ast::MetaItem]) -> @ast::MetaItem;
-    fn meta_name_value(&self, sp: Span, name: @str, value: ast::Lit_) -> @ast::MetaItem;
+    fn meta_word(&self, sp: Span, w: InternedString) -> @ast::MetaItem;
+    fn meta_list(&self,
+                 sp: Span,
+                 name: InternedString,
+                 mis: ~[@ast::MetaItem])
+                 -> @ast::MetaItem;
+    fn meta_name_value(&self,
+                       sp: Span,
+                       name: InternedString,
+                       value: ast::Lit_)
+                       -> @ast::MetaItem;
 
     fn view_use(&self, sp: Span,
                 vis: ast::Visibility, vp: ~[@ast::ViewPath]) -> ast::ViewItem;
@@ -353,8 +366,16 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
         })
     }
 
-    fn typaram(&self, id: ast::Ident, bounds: OptVec<ast::TyParamBound>) -> ast::TyParam {
-        ast::TyParam { ident: id, id: ast::DUMMY_NODE_ID, bounds: bounds }
+    fn typaram(&self,
+               id: ast::Ident,
+               bounds: OptVec<ast::TyParamBound>,
+               default: Option<P<ast::Ty>>) -> ast::TyParam {
+        ast::TyParam {
+            ident: id,
+            id: ast::DUMMY_NODE_ID,
+            bounds: bounds,
+            default: default
+        }
     }
 
     // these are strange, and probably shouldn't be used outside of
@@ -478,7 +499,7 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
         self.expr_path(self.path_ident(span, id))
     }
     fn expr_self(&self, span: Span) -> @ast::Expr {
-        self.expr(span, ast::ExprSelf)
+        self.expr_ident(span, special_idents::self_)
     }
 
     fn expr_binary(&self, sp: Span, op: ast::BinOp,
@@ -523,9 +544,9 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
     fn expr_method_call(&self, span: Span,
                         expr: @ast::Expr,
                         ident: ast::Ident,
-                        args: ~[@ast::Expr]) -> @ast::Expr {
-        self.expr(span,
-                  ast::ExprMethodCall(ast::DUMMY_NODE_ID, expr, ident, ~[], args, ast::NoSugar))
+                        mut args: ~[@ast::Expr]) -> @ast::Expr {
+        args.unshift(expr);
+        self.expr(span, ast::ExprMethodCall(ast::DUMMY_NODE_ID, ident, ~[], args, ast::NoSugar))
     }
     fn expr_block(&self, b: P<ast::Block>) -> @ast::Expr {
         self.expr(b.span, ast::ExprBlock(b))
@@ -569,10 +590,10 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
     fn expr_vec_slice(&self, sp: Span, exprs: ~[@ast::Expr]) -> @ast::Expr {
         self.expr_vstore(sp, self.expr_vec(sp, exprs), ast::ExprVstoreSlice)
     }
-    fn expr_str(&self, sp: Span, s: @str) -> @ast::Expr {
+    fn expr_str(&self, sp: Span, s: InternedString) -> @ast::Expr {
         self.expr_lit(sp, ast::LitStr(s, ast::CookedStr))
     }
-    fn expr_str_uniq(&self, sp: Span, s: @str) -> @ast::Expr {
+    fn expr_str_uniq(&self, sp: Span, s: InternedString) -> @ast::Expr {
         self.expr_vstore(sp, self.expr_str(sp, s), ast::ExprVstoreUniq)
     }
 
@@ -600,7 +621,7 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
         self.expr_path(none)
     }
 
-    fn expr_fail(&self, span: Span, msg: @str) -> @ast::Expr {
+    fn expr_fail(&self, span: Span, msg: InternedString) -> @ast::Expr {
         let loc = self.codemap().lookup_char_pos(span.lo);
         self.expr_call_global(
             span,
@@ -611,13 +632,16 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
             ],
             ~[
                 self.expr_str(span, msg),
-                self.expr_str(span, loc.file.name),
+                self.expr_str(span,
+                              token::intern_and_get_ident(loc.file.name)),
                 self.expr_uint(span, loc.line),
             ])
     }
 
     fn expr_unreachable(&self, span: Span) -> @ast::Expr {
-        self.expr_fail(span, @"internal error: entered unreachable code")
+        self.expr_fail(span,
+                       InternedString::new(
+                           "internal error: entered unreachable code"))
     }
 
 
@@ -724,7 +748,7 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
         }
     }
 
-    // XXX unused self
+    // FIXME unused self
     fn fn_decl(&self, inputs: ~[ast::Arg], output: P<ast::Ty>) -> P<ast::FnDecl> {
         P(ast::FnDecl {
             inputs: inputs,
@@ -736,7 +760,7 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
 
     fn item(&self, span: Span,
             name: Ident, attrs: ~[ast::Attribute], node: ast::Item_) -> @ast::Item {
-        // XXX: Would be nice if our generated code didn't violate
+        // FIXME: Would be nice if our generated code didn't violate
         // Rust coding conventions
         @ast::Item { ident: name,
                     attrs: attrs,
@@ -854,13 +878,21 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
         })
     }
 
-    fn meta_word(&self, sp: Span, w: @str) -> @ast::MetaItem {
+    fn meta_word(&self, sp: Span, w: InternedString) -> @ast::MetaItem {
         @respan(sp, ast::MetaWord(w))
     }
-    fn meta_list(&self, sp: Span, name: @str, mis: ~[@ast::MetaItem]) -> @ast::MetaItem {
+    fn meta_list(&self,
+                 sp: Span,
+                 name: InternedString,
+                 mis: ~[@ast::MetaItem])
+                 -> @ast::MetaItem {
         @respan(sp, ast::MetaList(name, mis))
     }
-    fn meta_name_value(&self, sp: Span, name: @str, value: ast::Lit_) -> @ast::MetaItem {
+    fn meta_name_value(&self,
+                       sp: Span,
+                       name: InternedString,
+                       value: ast::Lit_)
+                       -> @ast::MetaItem {
         @respan(sp, ast::MetaNameValue(name, respan(sp, value)))
     }
 

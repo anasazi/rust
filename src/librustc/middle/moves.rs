@@ -136,9 +136,9 @@ use util::ppaux::Repr;
 use util::common::indenter;
 use util::ppaux::UserString;
 
-use std::at_vec;
 use std::cell::RefCell;
 use std::hashmap::{HashSet, HashMap};
+use std::rc::Rc;
 use syntax::ast::*;
 use syntax::ast_util;
 use syntax::visit;
@@ -159,7 +159,7 @@ pub struct CaptureVar {
     mode: CaptureMode // How variable is being accessed
 }
 
-pub type CaptureMap = @RefCell<HashMap<NodeId, @[CaptureVar]>>;
+pub type CaptureMap = @RefCell<HashMap<NodeId, Rc<~[CaptureVar]>>>;
 
 pub type MovesMap = @RefCell<HashSet<NodeId>>;
 
@@ -227,10 +227,9 @@ pub fn compute_moves(tcx: ty::ctxt,
 
 pub fn moved_variable_node_id_from_def(def: Def) -> Option<NodeId> {
     match def {
-      DefBinding(nid, _) |
-      DefArg(nid, _) |
-      DefLocal(nid, _) |
-      DefSelf(nid, _) => Some(nid),
+        DefBinding(nid, _) |
+        DefArg(nid, _) |
+        DefLocal(nid, _) => Some(nid),
 
       _ => None
     }
@@ -344,7 +343,7 @@ impl VisitContext {
         debug!("comp_mode = {:?}", comp_mode);
 
         match expr.node {
-            ExprPath(..) | ExprSelf => {
+            ExprPath(..) => {
                 match comp_mode {
                     Move => {
                         let def_map = self.tcx.def_map.borrow();
@@ -413,10 +412,7 @@ impl VisitContext {
                 self.use_fn_args(callee.id, *args);
             }
 
-            ExprMethodCall(callee_id, rcvr, _, _, ref args, _) => { // callee.m(args)
-                // Implicit self is equivalent to & mode, but every
-                // other kind should be + mode.
-                self.use_receiver(rcvr);
+            ExprMethodCall(callee_id, _, _, ref args, _) => { // callee.m(args)
                 self.use_fn_args(callee_id, *args);
             }
 
@@ -574,10 +570,6 @@ impl VisitContext {
                 self.consume_expr(count);
             }
 
-            ExprDoBody(base) => {
-                self.use_expr(base, comp_mode);
-            }
-
             ExprFnBlock(ref decl, body) |
             ExprProc(ref decl, body) => {
                 for a in decl.inputs.iter() {
@@ -620,7 +612,7 @@ impl VisitContext {
             return false;
         }
 
-        self.use_receiver(receiver_expr);
+        self.use_fn_arg(receiver_expr);
 
         // for overloaded operatrs, we are always passing in a
         // reference, so it's always read mode:
@@ -675,11 +667,6 @@ impl VisitContext {
         })
     }
 
-    pub fn use_receiver(&mut self,
-                        receiver_expr: @Expr) {
-        self.use_fn_arg(receiver_expr);
-    }
-
     pub fn use_fn_args(&mut self,
                        _: NodeId,
                        arg_exprs: &[@Expr]) {
@@ -694,23 +681,22 @@ impl VisitContext {
         self.consume_expr(arg_expr)
     }
 
-    pub fn compute_captures(&mut self, fn_expr_id: NodeId) -> @[CaptureVar] {
+    pub fn compute_captures(&mut self, fn_expr_id: NodeId) -> Rc<~[CaptureVar]> {
         debug!("compute_capture_vars(fn_expr_id={:?})", fn_expr_id);
         let _indenter = indenter();
 
         let fn_ty = ty::node_id_to_type(self.tcx, fn_expr_id);
         let sigil = ty::ty_closure_sigil(fn_ty);
         let freevars = freevars::get_freevars(self.tcx, fn_expr_id);
-        if sigil == BorrowedSigil {
+        let v = if sigil == BorrowedSigil {
             // || captures everything by ref
-            at_vec::from_fn(freevars.len(), |i| {
-                let fvar = &freevars[i];
-                CaptureVar {def: fvar.def, span: fvar.span, mode: CapRef}
-            })
+            freevars.iter()
+                    .map(|fvar| CaptureVar {def: fvar.def, span: fvar.span, mode: CapRef})
+                    .collect()
         } else {
             // @fn() and ~fn() capture by copy or by move depending on type
-            at_vec::from_fn(freevars.len(), |i| {
-                let fvar = &freevars[i];
+            freevars.iter()
+                    .map(|fvar| {
                 let fvar_def_id = ast_util::def_id_of_def(fvar.def).node;
                 let fvar_ty = ty::node_id_to_type(self.tcx, fvar_def_id);
                 debug!("fvar_def_id={:?} fvar_ty={}",
@@ -721,7 +707,9 @@ impl VisitContext {
                     CapCopy
                 };
                 CaptureVar {def: fvar.def, span: fvar.span, mode:mode}
-            })
-        }
+
+                }).collect()
+        };
+        Rc::new(v)
     }
 }

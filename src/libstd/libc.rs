@@ -267,7 +267,7 @@ pub mod types {
                 pub enum timezone {}
             }
             pub mod bsd44 {
-                use libc::types::os::arch::c95::c_uint;
+                use libc::types::os::arch::c95::{c_char, c_int, c_uint};
 
                 pub type socklen_t = u32;
                 pub type sa_family_t = u16;
@@ -308,6 +308,16 @@ pub mod types {
                 pub struct ip6_mreq {
                     ipv6mr_multiaddr: in6_addr,
                     ipv6mr_interface: c_uint,
+                }
+                pub struct addrinfo {
+                    ai_flags: c_int,
+                    ai_family: c_int,
+                    ai_socktype: c_int,
+                    ai_protocol: c_int,
+                    ai_addrlen: socklen_t,
+                    ai_addr: *sockaddr,
+                    ai_canonname: *c_char,
+                    ai_next: *addrinfo
                 }
             }
         }
@@ -624,7 +634,7 @@ pub mod types {
                 pub enum timezone {}
             }
             pub mod bsd44 {
-                use libc::types::os::arch::c95::c_uint;
+                use libc::types::os::arch::c95::{c_char, c_int, c_uint};
 
                 pub type socklen_t = u32;
                 pub type sa_family_t = u8;
@@ -670,6 +680,16 @@ pub mod types {
                 pub struct ip6_mreq {
                     ipv6mr_multiaddr: in6_addr,
                     ipv6mr_interface: c_uint,
+                }
+                pub struct addrinfo {
+                    ai_flags: c_int,
+                    ai_family: c_int,
+                    ai_socktype: c_int,
+                    ai_protocol: c_int,
+                    ai_addrlen: socklen_t,
+                    ai_canonname: *c_char,
+                    ai_addr: *sockaddr,
+                    ai_next: *addrinfo
                 }
             }
         }
@@ -811,7 +831,7 @@ pub mod types {
             }
 
             pub mod bsd44 {
-                use libc::types::os::arch::c95::{c_int, c_uint};
+                use libc::types::os::arch::c95::{c_char, c_int, c_uint, size_t};
 
                 pub type SOCKET = c_uint;
                 pub type socklen_t = c_int;
@@ -853,6 +873,16 @@ pub mod types {
                 pub struct ip6_mreq {
                     ipv6mr_multiaddr: in6_addr,
                     ipv6mr_interface: c_uint,
+                }
+                pub struct addrinfo {
+                    ai_flags: c_int,
+                    ai_family: c_int,
+                    ai_socktype: c_int,
+                    ai_protocol: c_int,
+                    ai_addrlen: size_t,
+                    ai_canonname: *c_char,
+                    ai_addr: *sockaddr,
+                    ai_next: *addrinfo
                 }
             }
         }
@@ -1121,7 +1151,7 @@ pub mod types {
             }
 
             pub mod bsd44 {
-                use libc::types::os::arch::c95::{c_int, c_uint};
+                use libc::types::os::arch::c95::{c_char, c_int, c_uint};
 
                 pub type socklen_t = c_int;
                 pub type sa_family_t = u8;
@@ -1167,6 +1197,16 @@ pub mod types {
                 pub struct ip6_mreq {
                     ipv6mr_multiaddr: in6_addr,
                     ipv6mr_interface: c_uint,
+                }
+                pub struct addrinfo {
+                    ai_flags: c_int,
+                    ai_family: c_int,
+                    ai_socktype: c_int,
+                    ai_protocol: c_int,
+                    ai_addrlen: socklen_t,
+                    ai_canonname: *c_char,
+                    ai_addr: *sockaddr,
+                    ai_next: *addrinfo
                 }
             }
         }
@@ -1507,6 +1547,7 @@ pub mod consts {
             pub static SOL_SOCKET: c_int = 0xffff;
             pub static SO_KEEPALIVE: c_int = 8;
             pub static SO_BROADCAST: c_int = 32;
+            pub static SO_REUSEADDR: c_int = 4;
         }
         pub mod extra {
             use libc::types::os::arch::c95::c_int;
@@ -2133,7 +2174,7 @@ pub mod consts {
             pub static EDQUOT: c_int = 1133;
         }
         pub mod posix01 {
-            use libc::types::os::arch::c95::c_int;
+            use libc::types::os::arch::c95::{c_int, size_t};
 
             pub static SIGTRAP : c_int = 5;
 
@@ -2187,6 +2228,17 @@ pub mod consts {
             pub static PTHREAD_CREATE_JOINABLE: c_int = 0;
             pub static PTHREAD_CREATE_DETACHED: c_int = 1;
 
+            #[cfg(target_os = "android")]
+            pub static PTHREAD_STACK_MIN: size_t = 8192;
+
+            #[cfg(target_arch = "arm", target_os = "linux")]
+            #[cfg(target_arch = "x86", target_os = "linux")]
+            #[cfg(target_arch = "x86_64", target_os = "linux")]
+            pub static PTHREAD_STACK_MIN: size_t = 16384;
+
+            #[cfg(target_arch = "mips", target_os = "linux")]
+            pub static PTHREAD_STACK_MIN: size_t = 131072;
+
             pub static CLOCK_REALTIME: c_int = 0;
             pub static CLOCK_MONOTONIC: c_int = 1;
         }
@@ -2226,6 +2278,7 @@ pub mod consts {
             pub static SOL_SOCKET: c_int = 1;
             pub static SO_KEEPALIVE: c_int = 9;
             pub static SO_BROADCAST: c_int = 6;
+            pub static SO_REUSEADDR: c_int = 2;
         }
         #[cfg(target_arch = "x86")]
         #[cfg(target_arch = "x86_64")]
@@ -2566,7 +2619,7 @@ pub mod consts {
             pub static ELAST : c_int = 99;
         }
         pub mod posix01 {
-            use libc::types::os::arch::c95::c_int;
+            use libc::types::os::arch::c95::{c_int, size_t};
 
             pub static SIGTRAP : c_int = 5;
 
@@ -2620,6 +2673,14 @@ pub mod consts {
             pub static PTHREAD_CREATE_JOINABLE: c_int = 0;
             pub static PTHREAD_CREATE_DETACHED: c_int = 1;
 
+            #[cfg(target_arch = "arm")]
+            pub static PTHREAD_STACK_MIN: size_t = 4096;
+
+            #[cfg(target_arch = "mips")]
+            #[cfg(target_arch = "x86")]
+            #[cfg(target_arch = "x86_64")]
+            pub static PTHREAD_STACK_MIN: size_t = 2048;
+
             pub static CLOCK_REALTIME: c_int = 0;
             pub static CLOCK_MONOTONIC: c_int = 4;
         }
@@ -2667,6 +2728,7 @@ pub mod consts {
             pub static SOL_SOCKET: c_int = 0xffff;
             pub static SO_KEEPALIVE: c_int = 0x0008;
             pub static SO_BROADCAST: c_int = 0x0020;
+            pub static SO_REUSEADDR: c_int = 0x0004;
         }
         pub mod extra {
             use libc::types::os::arch::c95::c_int;
@@ -2823,6 +2885,7 @@ pub mod consts {
             pub static MAP_PRIVATE : c_int = 0x0002;
             pub static MAP_FIXED : c_int = 0x0010;
             pub static MAP_ANON : c_int = 0x1000;
+            pub static MAP_STACK : c_int = 0;
 
             pub static MAP_FAILED : *c_void = -1 as *c_void;
 
@@ -2946,7 +3009,7 @@ pub mod consts {
             pub static ELAST : c_int = 106;
         }
         pub mod posix01 {
-            use libc::types::os::arch::c95::c_int;
+            use libc::types::os::arch::c95::{c_int, size_t};
 
             pub static SIGTRAP : c_int = 5;
 
@@ -2999,6 +3062,7 @@ pub mod consts {
 
             pub static PTHREAD_CREATE_JOINABLE: c_int = 1;
             pub static PTHREAD_CREATE_DETACHED: c_int = 2;
+            pub static PTHREAD_STACK_MIN: size_t = 8192;
         }
         pub mod posix08 {
         }
@@ -3042,6 +3106,7 @@ pub mod consts {
             pub static SOL_SOCKET: c_int = 0xffff;
             pub static SO_KEEPALIVE: c_int = 0x0008;
             pub static SO_BROADCAST: c_int = 0x0020;
+            pub static SO_REUSEADDR: c_int = 0x0004;
         }
         pub mod extra {
             use libc::types::os::arch::c95::c_int;
@@ -3225,7 +3290,7 @@ pub mod funcs {
                 pub fn calloc(nobj: size_t, size: size_t) -> *c_void;
                 pub fn malloc(size: size_t) -> *mut c_void;
                 pub fn realloc(p: *mut c_void, size: size_t) -> *mut c_void;
-                pub fn free(p: *c_void);
+                pub fn free(p: *mut c_void);
                 pub fn exit(status: c_int) -> !;
                 // Omitted: atexit.
                 pub fn system(s: *c_char) -> c_int;
@@ -3548,6 +3613,7 @@ pub mod funcs {
                 pub fn setsid() -> pid_t;
                 pub fn setuid(uid: uid_t) -> c_int;
                 pub fn sleep(secs: c_uint) -> c_uint;
+                pub fn usleep(secs: c_uint) -> c_int;
                 pub fn sysconf(name: c_int) -> c_long;
                 pub fn tcgetpgrp(fd: c_int) -> pid_t;
                 pub fn ttyname(fd: c_int) -> *c_char;
