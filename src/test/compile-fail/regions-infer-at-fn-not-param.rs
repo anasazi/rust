@@ -9,20 +9,20 @@
 // except according to those terms.
 
 struct parameterized1<'a> {
-    g: 'a ||
+    g: ||: 'a
 }
 
 struct not_parameterized1 {
-    g: 'static ||
+    g: ||: 'static
 }
 
 struct not_parameterized2 {
-    g: 'static ||
+    g: ||: 'static
 }
 
 fn take1(p: parameterized1) -> parameterized1 { p }
 //~^ ERROR mismatched types
-//~^^ ERROR cannot infer an appropriate lifetime
+//~^^ ERROR cannot infer
 
 fn take3(p: not_parameterized1) -> not_parameterized1 { p }
 fn take4(p: not_parameterized2) -> not_parameterized2 { p }

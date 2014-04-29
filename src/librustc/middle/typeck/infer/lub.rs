@@ -21,31 +21,27 @@ use middle::typeck::infer::to_str::InferStr;
 use middle::typeck::infer::{cres, InferCtxt};
 use middle::typeck::infer::fold_regions_in_sig;
 use middle::typeck::infer::{TypeTrace, Subtype};
-use std::hashmap::HashMap;
+use collections::HashMap;
 use syntax::ast::{Many, Once, NodeId};
-use syntax::ast::{ExternFn, ImpureFn, UnsafeFn};
-use syntax::ast::{Onceness, Purity};
+use syntax::ast::{ExternFn, NormalFn, UnsafeFn};
+use syntax::ast::{Onceness, FnStyle};
 use util::ppaux::mt_to_str;
 
-pub struct Lub(CombineFields);  // least-upper-bound: common supertype
+pub struct Lub<'f>(pub CombineFields<'f>);  // least-upper-bound: common supertype
 
-impl Lub {
-    pub fn get_ref<'a>(&'a self) -> &'a CombineFields { let Lub(ref v) = *self; v }
-    pub fn bot_ty(&self, b: ty::t) -> cres<ty::t> { Ok(b) }
-    pub fn ty_bot(&self, b: ty::t) -> cres<ty::t> {
-        self.bot_ty(b) // commutative
-    }
+impl<'f> Lub<'f> {
+    pub fn get_ref<'a>(&'a self) -> &'a CombineFields<'f> { let Lub(ref v) = *self; v }
 }
 
-impl Combine for Lub {
-    fn infcx(&self) -> @InferCtxt { self.get_ref().infcx }
-    fn tag(&self) -> ~str { ~"lub" }
+impl<'f> Combine for Lub<'f> {
+    fn infcx<'a>(&'a self) -> &'a InferCtxt<'a> { self.get_ref().infcx }
+    fn tag(&self) -> ~str { "lub".to_owned() }
     fn a_is_expected(&self) -> bool { self.get_ref().a_is_expected }
-    fn trace(&self) -> TypeTrace { self.get_ref().trace }
+    fn trace(&self) -> TypeTrace { self.get_ref().trace.clone() }
 
-    fn sub(&self) -> Sub { Sub(*self.get_ref()) }
-    fn lub(&self) -> Lub { Lub(*self.get_ref()) }
-    fn glb(&self) -> Glb { Glb(*self.get_ref()) }
+    fn sub<'a>(&'a self) -> Sub<'a> { Sub(self.get_ref().clone()) }
+    fn lub<'a>(&'a self) -> Lub<'a> { Lub(self.get_ref().clone()) }
+    fn glb<'a>(&'a self) -> Glb<'a> { Glb(self.get_ref().clone()) }
 
     fn mts(&self, a: &ty::mt, b: &ty::mt) -> cres<ty::mt> {
         let tcx = self.get_ref().infcx.tcx;
@@ -76,13 +72,13 @@ impl Combine for Lub {
     }
 
     fn contratys(&self, a: ty::t, b: ty::t) -> cres<ty::t> {
-        Glb(*self.get_ref()).tys(a, b)
+        self.glb().tys(a, b)
     }
 
-    fn purities(&self, a: Purity, b: Purity) -> cres<Purity> {
+    fn fn_styles(&self, a: FnStyle, b: FnStyle) -> cres<FnStyle> {
         match (a, b) {
           (UnsafeFn, _) | (_, UnsafeFn) => Ok(UnsafeFn),
-          (ImpureFn, _) | (_, ImpureFn) => Ok(ImpureFn),
+          (NormalFn, _) | (_, NormalFn) => Ok(NormalFn),
           (ExternFn, ExternFn) => Ok(ExternFn),
         }
     }
@@ -102,7 +98,7 @@ impl Combine for Lub {
 
     fn contraregions(&self, a: ty::Region, b: ty::Region)
                     -> cres<ty::Region> {
-        return Glb(*self.get_ref()).regions(a, b);
+        self.glb().regions(a, b)
     }
 
     fn regions(&self, a: ty::Region, b: ty::Region) -> cres<ty::Region> {
@@ -111,7 +107,7 @@ impl Combine for Lub {
                a.inf_str(self.get_ref().infcx),
                b.inf_str(self.get_ref().infcx));
 
-        Ok(self.get_ref().infcx.region_vars.lub_regions(Subtype(self.get_ref().trace), a, b))
+        Ok(self.get_ref().infcx.region_vars.lub_regions(Subtype(self.trace()), a, b))
     }
 
     fn fn_sigs(&self, a: &ty::FnSig, b: &ty::FnSig) -> cres<ty::FnSig> {
@@ -126,11 +122,11 @@ impl Combine for Lub {
 
         // Instantiate each bound region with a fresh region variable.
         let (a_with_fresh, a_map) =
-            self.get_ref().infcx.replace_bound_regions_with_fresh_regions(
-                self.get_ref().trace, a);
+            self.get_ref().infcx.replace_late_bound_regions_with_fresh_regions(
+                self.trace(), a);
         let (b_with_fresh, _) =
-            self.get_ref().infcx.replace_bound_regions_with_fresh_regions(
-                self.get_ref().trace, b);
+            self.get_ref().infcx.replace_late_bound_regions_with_fresh_regions(
+                self.trace(), b);
 
         // Collect constraints.
         let sig0 = if_ok!(super_fn_sigs(self, &a_with_fresh, &b_with_fresh));
@@ -143,7 +139,7 @@ impl Combine for Lub {
             fold_regions_in_sig(
                 self.get_ref().infcx.tcx,
                 &sig0,
-                |r| generalize_region(self, snapshot, new_vars,
+                |r| generalize_region(self, snapshot, new_vars.as_slice(),
                                       sig0.binder_id, &a_map, r));
         return Ok(sig1);
 

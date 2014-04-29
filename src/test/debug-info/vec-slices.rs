@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,9 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-android: FIXME(#10381)
+// ignore-win32: FIXME #13256
+// ignore-android: FIXME(#10381)
 
-// compile-flags:-Z extra-debug-info
+// compile-flags:-g
 // debugger:set print pretty off
 // debugger:rbreak zzz
 // debugger:run
@@ -47,13 +48,21 @@
 // debugger:print padded_struct.data_ptr[1]
 // check:$13 = {x = 13, y = 14, z = 15}
 
-#[allow(unused_variable)];
+// debugger:print 'vec-slices::MUT_VECT_SLICE'.length
+// check:$14 = 2
+// debugger:print *((int64_t[2]*)('vec-slices::MUT_VECT_SLICE'.data_ptr))
+// check:$15 = {64, 65}
+
+#![allow(unused_variable)]
 
 struct AStruct {
     x: i16,
     y: i32,
     z: i16
 }
+
+static VECT_SLICE: &'static [i64] = &[64, 65];
+static mut MUT_VECT_SLICE: &'static [i64] = &[32];
 
 fn main() {
     let empty: &[i64] = &[];
@@ -67,6 +76,10 @@ fn main() {
         AStruct { x: 10, y: 11, z: 12 },
         AStruct { x: 13, y: 14, z: 15 }
     ];
+
+    unsafe {
+        MUT_VECT_SLICE = VECT_SLICE;
+    }
 
     zzz();
 }

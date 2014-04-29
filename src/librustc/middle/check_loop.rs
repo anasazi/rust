@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use middle::ty;
+use driver::session::Session;
 
 use syntax::ast;
 use syntax::codemap::Span;
@@ -20,15 +20,15 @@ enum Context {
     Normal, Loop, Closure
 }
 
-struct CheckLoopVisitor {
-    tcx: ty::ctxt,
+struct CheckLoopVisitor<'a> {
+    sess: &'a Session,
 }
 
-pub fn check_crate(tcx: ty::ctxt, crate: &ast::Crate) {
-    visit::walk_crate(&mut CheckLoopVisitor { tcx: tcx }, crate, Normal)
+pub fn check_crate(sess: &Session, krate: &ast::Crate) {
+    visit::walk_crate(&mut CheckLoopVisitor { sess: sess }, krate, Normal)
 }
 
-impl Visitor<Context> for CheckLoopVisitor {
+impl<'a> Visitor<Context> for CheckLoopVisitor<'a> {
     fn visit_item(&mut self, i: &ast::Item, _cx: Context) {
         visit::walk_item(self, i, Normal);
     }
@@ -52,17 +52,15 @@ impl Visitor<Context> for CheckLoopVisitor {
     }
 }
 
-impl CheckLoopVisitor {
+impl<'a> CheckLoopVisitor<'a> {
     fn require_loop(&self, name: &str, cx: Context, span: Span) {
         match cx {
             Loop => {}
             Closure => {
-                self.tcx.sess.span_err(span, format!("`{}` inside of a closure",
-                                                     name));
+                self.sess.span_err(span, format!("`{}` inside of a closure", name));
             }
             Normal => {
-                self.tcx.sess.span_err(span, format!("`{}` outside of loop",
-                                                     name));
+                self.sess.span_err(span, format!("`{}` outside of loop", name));
             }
         }
     }

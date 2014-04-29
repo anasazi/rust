@@ -16,11 +16,10 @@ collector is task-local so `Gc<T>` is not sendable.
 
 */
 
-#[allow(experimental)];
+#![allow(experimental)]
 
 use kinds::marker;
-use kinds::Send;
-use clone::{Clone, DeepClone};
+use clone::Clone;
 use managed;
 
 /// Immutable garbage-collected pointer type
@@ -30,14 +29,14 @@ use managed;
                   task annihilation. For now, cycles need to be broken manually by using `Rc<T>` \
                   with a non-owning `Weak<T>` pointer. A tracing garbage collector is planned."]
 pub struct Gc<T> {
-    priv ptr: @T,
-    priv marker: marker::NoSend,
+    ptr: @T,
+    marker: marker::NoSend,
 }
 
 #[cfg(test)]
 pub struct Gc<T> {
-    priv ptr: @T,
-    priv marker: marker::NoSend,
+    ptr: @T,
+    marker: marker::NoSend,
 }
 
 impl<T: 'static> Gc<T> {
@@ -78,16 +77,6 @@ pub static GC: () = ();
 #[cfg(test)]
 pub static GC: () = ();
 
-/// The `Send` bound restricts this to acyclic graphs where it is well-defined.
-///
-/// A `Freeze` bound would also work, but `Send` *or* `Freeze` cannot be expressed.
-impl<T: DeepClone + Send + 'static> DeepClone for Gc<T> {
-    #[inline]
-    fn deep_clone(&self) -> Gc<T> {
-        Gc::new(self.borrow().deep_clone())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use prelude::*;
@@ -98,20 +87,8 @@ mod tests {
     fn test_clone() {
         let x = Gc::new(RefCell::new(5));
         let y = x.clone();
-        x.borrow().with_mut(|inner| {
-            *inner = 20;
-        });
-        assert_eq!(y.borrow().with(|x| *x), 20);
-    }
-
-    #[test]
-    fn test_deep_clone() {
-        let x = Gc::new(RefCell::new(5));
-        let y = x.deep_clone();
-        x.borrow().with_mut(|inner| {
-            *inner = 20;
-        });
-        assert_eq!(y.borrow().with(|x| *x), 5);
+        *x.borrow().borrow_mut() = 20;
+        assert_eq!(*y.borrow().borrow(), 20);
     }
 
     #[test]

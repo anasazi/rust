@@ -8,17 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern mod extra;
-
 use std::task;
+use std::task::TaskBuilder;
 
 pub fn main() { test00(); }
 
-fn start(_task_number: int) { info!("Started / Finished task."); }
+fn start(_task_number: int) { println!("Started / Finished task."); }
 
 fn test00() {
     let i: int = 0;
-    let mut builder = task::task();
+    let mut builder = TaskBuilder::new();
     let mut result = builder.future_result();
     builder.spawn(proc() {
         start(i)
@@ -34,5 +33,5 @@ fn test00() {
     // Try joining tasks that have already finished.
     result.recv();
 
-    info!("Joined task.");
+    println!("Joined task.");
 }

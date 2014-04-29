@@ -8,25 +8,39 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+/*! Utility implementations of Reader and Writer */
+
 use prelude::*;
 use cmp;
 use io;
-use vec::bytes::MutableByteVector;
+use slice::bytes::MutableByteVector;
 
 /// Wraps a `Reader`, limiting the number of bytes that can be read from it.
-pub struct LimitReader<'a, R> {
-    priv limit: uint,
-    priv inner: &'a mut R
+pub struct LimitReader<R> {
+    limit: uint,
+    inner: R
 }
 
-impl<'a, R: Reader> LimitReader<'a, R> {
+impl<R: Reader> LimitReader<R> {
     /// Creates a new `LimitReader`
-    pub fn new<'a>(r: &'a mut R, limit: uint) -> LimitReader<'a, R> {
+    pub fn new(r: R, limit: uint) -> LimitReader<R> {
         LimitReader { limit: limit, inner: r }
     }
+
+    /// Consumes the `LimitReader`, returning the underlying `Reader`.
+    pub fn unwrap(self) -> R { self.inner }
+
+    /// Returns the number of bytes that can be read before the `LimitReader`
+    /// will return EOF.
+    ///
+    /// # Note
+    ///
+    /// The reader may reach EOF after reading fewer bytes than indicated by
+    /// this method if the underlying reader reaches EOF.
+    pub fn limit(&self) -> uint { self.limit }
 }
 
-impl<'a, R: Reader> Reader for LimitReader<'a, R> {
+impl<R: Reader> Reader for LimitReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::IoResult<uint> {
         if self.limit == 0 {
             return Err(io::standard_error(io::EndOfFile));
@@ -71,12 +85,12 @@ impl Reader for NullReader {
 
 /// A `Writer` which multiplexes writes to a set of `Writers`.
 pub struct MultiWriter {
-    priv writers: ~[~Writer]
+    writers: Vec<~Writer>
 }
 
 impl MultiWriter {
     /// Creates a new `MultiWriter`
-    pub fn new(writers: ~[~Writer]) -> MultiWriter {
+    pub fn new(writers: Vec<~Writer>) -> MultiWriter {
         MultiWriter { writers: writers }
     }
 }
@@ -104,8 +118,8 @@ impl Writer for MultiWriter {
 /// A `Reader` which chains input from multiple `Readers`, reading each to
 /// completion before moving onto the next.
 pub struct ChainedReader<I, R> {
-    priv readers: I,
-    priv cur_reader: Option<R>,
+    readers: I,
+    cur_reader: Option<R>,
 }
 
 impl<R: Reader, I: Iterator<R>> ChainedReader<I, R> {
@@ -142,8 +156,8 @@ impl<R: Reader, I: Iterator<R>> Reader for ChainedReader<I, R> {
 /// A `Reader` which forwards input from another `Reader`, passing it along to
 /// a `Writer` as well. Similar to the `tee(1)` command.
 pub struct TeeReader<R, W> {
-    priv reader: R,
-    priv writer: W
+    reader: R,
+    writer: W,
 }
 
 impl<R: Reader, W: Writer> TeeReader<R, W> {
@@ -177,7 +191,7 @@ pub fn copy<R: Reader, W: Writer>(r: &mut R, w: &mut W) -> io::IoResult<()> {
             Err(ref e) if e.kind == io::EndOfFile => return Ok(()),
             Err(e) => return Err(e),
         };
-        if_ok!(w.write(buf.slice_to(len)));
+        try!(w.write(buf.slice_to(len)));
     }
 }
 
@@ -189,22 +203,33 @@ mod test {
     use prelude::*;
 
     #[test]
-    fn test_bounded_reader_unlimited() {
-        let mut r = MemReader::new(~[0, 1, 2]);
+    fn test_limit_reader_unlimited() {
+        let mut r = MemReader::new(vec!(0, 1, 2));
         {
-            let mut r = LimitReader::new(&mut r, 4);
-            assert_eq!(~[0, 1, 2], r.read_to_end().unwrap());
+            let mut r = LimitReader::new(r.by_ref(), 4);
+            assert_eq!(vec!(0, 1, 2), r.read_to_end().unwrap());
         }
     }
 
     #[test]
-    fn test_bound_reader_limited() {
-        let mut r = MemReader::new(~[0, 1, 2]);
+    fn test_limit_reader_limited() {
+        let mut r = MemReader::new(vec!(0, 1, 2));
         {
-            let mut r = LimitReader::new(&mut r, 2);
-            assert_eq!(~[0, 1], r.read_to_end().unwrap());
+            let mut r = LimitReader::new(r.by_ref(), 2);
+            assert_eq!(vec!(0, 1), r.read_to_end().unwrap());
         }
-        assert_eq!(~[2], r.read_to_end().unwrap());
+        assert_eq!(vec!(2), r.read_to_end().unwrap());
+    }
+
+    #[test]
+    fn test_limit_reader_limit() {
+        let r = MemReader::new(vec!(0, 1, 2));
+        let mut r = LimitReader::new(r, 3);
+        assert_eq!(3, r.limit());
+        assert_eq!(0, r.read_byte().unwrap());
+        assert_eq!(2, r.limit());
+        assert_eq!(vec!(1, 2), r.read_to_end().unwrap());
+        assert_eq!(0, r.limit());
     }
 
     #[test]
@@ -248,8 +273,8 @@ mod test {
             }
         }
 
-        let mut multi = MultiWriter::new(~[~TestWriter as ~Writer,
-                                           ~TestWriter as ~Writer]);
+        let mut multi = MultiWriter::new(vec!(~TestWriter as ~Writer,
+                                              ~TestWriter as ~Writer));
         multi.write([1, 2, 3]).unwrap();
         assert_eq!(2, unsafe { writes });
         assert_eq!(0, unsafe { flushes });
@@ -260,26 +285,26 @@ mod test {
 
     #[test]
     fn test_chained_reader() {
-        let rs = ~[MemReader::new(~[0, 1]), MemReader::new(~[]),
-                   MemReader::new(~[2, 3])];
+        let rs = vec!(MemReader::new(vec!(0, 1)), MemReader::new(vec!()),
+                      MemReader::new(vec!(2, 3)));
         let mut r = ChainedReader::new(rs.move_iter());
-        assert_eq!(~[0, 1, 2, 3], r.read_to_end().unwrap());
+        assert_eq!(vec!(0, 1, 2, 3), r.read_to_end().unwrap());
     }
 
     #[test]
     fn test_tee_reader() {
-        let mut r = TeeReader::new(MemReader::new(~[0, 1, 2]),
+        let mut r = TeeReader::new(MemReader::new(vec!(0, 1, 2)),
                                    MemWriter::new());
-        assert_eq!(~[0, 1, 2], r.read_to_end().unwrap());
+        assert_eq!(vec!(0, 1, 2), r.read_to_end().unwrap());
         let (_, w) = r.unwrap();
-        assert_eq!(~[0, 1, 2], w.unwrap());
+        assert_eq!(vec!(0, 1, 2), w.unwrap());
     }
 
     #[test]
     fn test_copy() {
-        let mut r = MemReader::new(~[0, 1, 2, 3, 4]);
+        let mut r = MemReader::new(vec!(0, 1, 2, 3, 4));
         let mut w = MemWriter::new();
         copy(&mut r, &mut w).unwrap();
-        assert_eq!(~[0, 1, 2, 3, 4], w.unwrap());
+        assert_eq!(vec!(0, 1, 2, 3, 4), w.unwrap());
     }
 }

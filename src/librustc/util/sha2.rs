@@ -14,30 +14,27 @@
 
 use std::iter::range_step;
 use std::num::Zero;
-use std::vec;
-use std::vec::bytes::{MutableByteVector, copy_memory};
-use extra::hex::ToHex;
+use std::slice::bytes::{MutableByteVector, copy_memory};
+use serialize::hex::ToHex;
 
 /// Write a u32 into a vector, which must be 4 bytes long. The value is written in big-endian
 /// format.
 fn write_u32_be(dst: &mut[u8], input: u32) {
-    use std::cast::transmute;
-    use std::unstable::intrinsics::to_be32;
+    use std::mem::to_be32;
     assert!(dst.len() == 4);
     unsafe {
-        let x: *mut i32 = transmute(dst.unsafe_mut_ref(0));
-        *x = to_be32(input as i32);
+        let x = dst.unsafe_mut_ref(0) as *mut _ as *mut u32;
+        *x = to_be32(input);
     }
 }
 
 /// Read a vector of bytes into a vector of u32s. The values are read in big-endian format.
 fn read_u32v_be(dst: &mut[u32], input: &[u8]) {
-    use std::cast::transmute;
-    use std::unstable::intrinsics::to_be32;
+    use std::mem::to_be32;
     assert!(dst.len() * 4 == input.len());
     unsafe {
-        let mut x: *mut i32 = transmute(dst.unsafe_mut_ref(0));
-        let mut y: *i32 = transmute(input.unsafe_ref(0));
+        let mut x = dst.unsafe_mut_ref(0) as *mut _ as *mut u32;
+        let mut y = input.unsafe_ref(0) as *_ as *u32;
         for _ in range(0, dst.len()) {
             *x = to_be32(*y);
             x = x.offset(1);
@@ -64,12 +61,12 @@ fn add_bytes_to_bits<T: Int + CheckedAdd + ToBits>(bits: T, bytes: T) -> T {
     let (new_high_bits, new_low_bits) = bytes.to_bits();
 
     if new_high_bits > Zero::zero() {
-        fail!("Numeric overflow occured.")
+        fail!("numeric overflow occured.")
     }
 
     match bits.checked_add(&new_low_bits) {
         Some(x) => return x,
-        None => fail!("Numeric overflow occured.")
+        None => fail!("numeric overflow occured.")
     }
 }
 
@@ -149,14 +146,14 @@ impl FixedBuffer for FixedBuffer64 {
             }
         }
 
-        // While we have at least a full buffer size chunks's worth of data, process that data
+        // While we have at least a full buffer size chunk's worth of data, process that data
         // without copying it into the buffer
         while input.len() - i >= size {
             func(input.slice(i, i + size));
             i += size;
         }
 
-        // Copy any input data into the buffer. At this point in the method, the ammount of
+        // Copy any input data into the buffer. At this point in the method, the amount of
         // data left in the input vector will be less than the buffer size and the buffer will
         // be empty.
         let input_remaining = input.len() - i;
@@ -253,55 +250,55 @@ pub trait Digest {
 
     /// Convenience function that retrieves the result of a digest as a
     /// newly allocated vec of bytes.
-    fn result_bytes(&mut self) -> ~[u8] {
-        let mut buf = vec::from_elem((self.output_bits()+7)/8, 0u8);
-        self.result(buf);
+    fn result_bytes(&mut self) -> Vec<u8> {
+        let mut buf = Vec::from_elem((self.output_bits()+7)/8, 0u8);
+        self.result(buf.as_mut_slice());
         buf
     }
 
     /// Convenience function that retrieves the result of a digest as a
     /// ~str in hexadecimal format.
     fn result_str(&mut self) -> ~str {
-        self.result_bytes().to_hex()
+        self.result_bytes().as_slice().to_hex()
     }
 }
 
 // A structure that represents that state of a digest computation for the SHA-2 512 family of digest
 // functions
 struct Engine256State {
-    H0: u32,
-    H1: u32,
-    H2: u32,
-    H3: u32,
-    H4: u32,
-    H5: u32,
-    H6: u32,
-    H7: u32,
+    h0: u32,
+    h1: u32,
+    h2: u32,
+    h3: u32,
+    h4: u32,
+    h5: u32,
+    h6: u32,
+    h7: u32,
 }
 
 impl Engine256State {
     fn new(h: &[u32, ..8]) -> Engine256State {
         return Engine256State {
-            H0: h[0],
-            H1: h[1],
-            H2: h[2],
-            H3: h[3],
-            H4: h[4],
-            H5: h[5],
-            H6: h[6],
-            H7: h[7]
+            h0: h[0],
+            h1: h[1],
+            h2: h[2],
+            h3: h[3],
+            h4: h[4],
+            h5: h[5],
+            h6: h[6],
+            h7: h[7]
         };
     }
 
     fn reset(&mut self, h: &[u32, ..8]) {
-        self.H0 = h[0];
-        self.H1 = h[1];
-        self.H2 = h[2];
-        self.H3 = h[3];
-        self.H4 = h[4];
-        self.H5 = h[5];
-        self.H6 = h[6];
-        self.H7 = h[7];
+        self.h0 = h[0];
+        self.h1 = h[1];
+        self.h2 = h[2];
+        self.h3 = h[3];
+        self.h4 = h[4];
+        self.h5 = h[5];
+        self.h6 = h[6];
+        self.h7 = h[7];
     }
 
     fn process_block(&mut self, data: &[u8]) {
@@ -329,21 +326,21 @@ impl Engine256State {
             ((x >> 17) | (x << 15)) ^ ((x >> 19) | (x << 13)) ^ (x >> 10)
         }
 
-        let mut a = self.H0;
-        let mut b = self.H1;
-        let mut c = self.H2;
-        let mut d = self.H3;
-        let mut e = self.H4;
-        let mut f = self.H5;
-        let mut g = self.H6;
-        let mut h = self.H7;
+        let mut a = self.h0;
+        let mut b = self.h1;
+        let mut c = self.h2;
+        let mut d = self.h3;
+        let mut e = self.h4;
+        let mut f = self.h5;
+        let mut g = self.h6;
+        let mut h = self.h7;
 
-        let mut W = [0u32, ..64];
+        let mut w = [0u32, ..64];
 
         // Sha-512 and Sha-256 use basically the same calculations which are implemented
         // by these macros. Inlining the calculations seems to result in better generated code.
         macro_rules! schedule_round( ($t:expr) => (
-                W[$t] = sigma1(W[$t - 2]) + W[$t - 7] + sigma0(W[$t - 15]) + W[$t - 16];
+                w[$t] = sigma1(w[$t - 2]) + w[$t - 7] + sigma0(w[$t - 15]) + w[$t - 16];
                 )
         )
 
@@ -351,14 +348,14 @@ impl Engine256State {
             ($A:ident, $B:ident, $C:ident, $D:ident,
              $E:ident, $F:ident, $G:ident, $H:ident, $K:ident, $t:expr) => (
                 {
-                    $H += sum1($E) + ch($E, $F, $G) + $K[$t] + W[$t];
+                    $H += sum1($E) + ch($E, $F, $G) + $K[$t] + w[$t];
                     $D += $H;
                     $H += sum0($A) + maj($A, $B, $C);
                 }
              )
         )
 
-        read_u32v_be(W.mut_slice(0, 16), data);
+        read_u32v_be(w.mut_slice(0, 16), data);
 
         // Putting the message schedule inside the same loop as the round calculations allows for
         // the compiler to generate better code.
@@ -393,14 +390,14 @@ impl Engine256State {
             sha2_round!(b, c, d, e, f, g, h, a, K32, t + 7);
         }
 
-        self.H0 += a;
-        self.H1 += b;
-        self.H2 += c;
-        self.H3 += d;
-        self.H4 += e;
-        self.H5 += f;
-        self.H6 += g;
-        self.H7 += h;
+        self.h0 += a;
+        self.h1 += b;
+        self.h2 += c;
+        self.h3 += d;
+        self.h4 += e;
+        self.h5 += f;
+        self.h6 += g;
+        self.h7 += h;
     }
 }
 
@@ -453,7 +450,8 @@ impl Engine256 {
         assert!(!self.finished)
         // Assumes that input.len() can be converted to u64 without overflow
         self.length_bits = add_bytes_to_bits(self.length_bits, input.len() as u64);
-        self.buffer.input(input, |input: &[u8]| { self.state.process_block(input) });
+        let self_state = &mut self.state;
+        self.buffer.input(input, |input: &[u8]| { self_state.process_block(input) });
     }
 
     fn finish(&mut self) {
@@ -461,10 +459,11 @@ impl Engine256 {
             return;
         }
 
-        self.buffer.standard_padding(8, |input: &[u8]| { self.state.process_block(input) });
+        let self_state = &mut self.state;
+        self.buffer.standard_padding(8, |input: &[u8]| { self_state.process_block(input) });
         write_u32_be(self.buffer.next(4), (self.length_bits >> 32) as u32 );
         write_u32_be(self.buffer.next(4), self.length_bits as u32);
-        self.state.process_block(self.buffer.full_buffer());
+        self_state.process_block(self.buffer.full_buffer());
 
         self.finished = true;
     }
@@ -472,7 +471,7 @@ impl Engine256 {
 
 /// The SHA-256 hash algorithm
 pub struct Sha256 {
-    priv engine: Engine256
+    engine: Engine256
 }
 
 impl Sha256 {
@@ -492,14 +491,14 @@ impl Digest for Sha256 {
     fn result(&mut self, out: &mut [u8]) {
         self.engine.finish();
 
-        write_u32_be(out.mut_slice(0, 4), self.engine.state.H0);
-        write_u32_be(out.mut_slice(4, 8), self.engine.state.H1);
-        write_u32_be(out.mut_slice(8, 12), self.engine.state.H2);
-        write_u32_be(out.mut_slice(12, 16), self.engine.state.H3);
-        write_u32_be(out.mut_slice(16, 20), self.engine.state.H4);
-        write_u32_be(out.mut_slice(20, 24), self.engine.state.H5);
-        write_u32_be(out.mut_slice(24, 28), self.engine.state.H6);
-        write_u32_be(out.mut_slice(28, 32), self.engine.state.H7);
+        write_u32_be(out.mut_slice(0, 4), self.engine.state.h0);
+        write_u32_be(out.mut_slice(4, 8), self.engine.state.h1);
+        write_u32_be(out.mut_slice(8, 12), self.engine.state.h2);
+        write_u32_be(out.mut_slice(12, 16), self.engine.state.h3);
+        write_u32_be(out.mut_slice(16, 20), self.engine.state.h4);
+        write_u32_be(out.mut_slice(20, 24), self.engine.state.h5);
+        write_u32_be(out.mut_slice(24, 28), self.engine.state.h6);
+        write_u32_be(out.mut_slice(28, 32), self.engine.state.h7);
     }
 
     fn reset(&mut self) {
@@ -522,12 +521,13 @@ static H256: [u32, ..8] = [
 
 #[cfg(test)]
 mod tests {
+    extern crate rand;
+
     use super::{Digest, Sha256, FixedBuffer};
     use std::num::Bounded;
-    use std::vec;
-    use std::rand::isaac::IsaacRng;
-    use std::rand::Rng;
-    use extra::hex::FromHex;
+    use self::rand::isaac::IsaacRng;
+    use self::rand::Rng;
+    use serialize::hex::FromHex;
 
     // A normal addition - no overflow occurs
     #[test]
@@ -574,33 +574,35 @@ mod tests {
     #[test]
     fn test_sha256() {
         // Examples from wikipedia
-        let wikipedia_tests = ~[
+        let wikipedia_tests = vec!(
             Test {
-                input: ~"",
-                output_str: ~"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                input: "".to_owned(),
+                output_str: "e3b0c44298fc1c149afb\
+            f4c8996fb92427ae41e4649b934ca495991b7852b855".to_owned()
             },
             Test {
-                input: ~"The quick brown fox jumps over the lazy dog",
-                output_str: ~"d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592"
+                input: "The quick brown fox jumps over the lazy dog".to_owned(),
+                output_str: "d7a8fbb307d7809469ca\
+            9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592".to_owned()
             },
             Test {
-                input: ~"The quick brown fox jumps over the lazy dog.",
-                output_str: ~"ef537f25c895bfa782526529a9b63d97aa631564d5d789c2b765448c8635fb6c"
-            },
-        ];
+                input: "The quick brown fox jumps over the lazy dog.".to_owned(),
+                output_str: "ef537f25c895bfa78252\
+            6529a9b63d97aa631564d5d789c2b765448c8635fb6c".to_owned()
+            });
 
         let tests = wikipedia_tests;
 
         let mut sh = ~Sha256::new();
 
-        test_hash(sh, tests);
+        test_hash(sh, tests.as_slice());
     }
 
     /// Feed 1,000,000 'a's into the digest with varying input sizes and check that the result is
     /// correct.
     fn test_digest_1million_random<D: Digest>(digest: &mut D, blocksize: uint, expected: &str) {
         let total_size = 1000000;
-        let buffer = vec::from_elem(blocksize * 2, 'a' as u8);
+        let buffer = Vec::from_elem(blocksize * 2, 'a' as u8);
         let mut rng = IsaacRng::new_unseeded();
         let mut count = 0;
 
@@ -618,7 +620,12 @@ mod tests {
         let result_bytes = digest.result_bytes();
 
         assert_eq!(expected, result_str.as_slice());
-        assert_eq!(expected.from_hex().unwrap(), result_bytes);
+
+        let expected_vec: Vec<u8> = expected.from_hex()
+                                            .unwrap()
+                                            .move_iter()
+                                            .collect();
+        assert_eq!(expected_vec, result_bytes);
     }
 
     #[test]
@@ -633,36 +640,37 @@ mod tests {
 
 #[cfg(test)]
 mod bench {
-    use extra::test::BenchHarness;
+    extern crate test;
+    use self::test::Bencher;
     use super::{Sha256, FixedBuffer, Digest};
 
     #[bench]
-    pub fn sha256_10(bh: &mut BenchHarness) {
+    pub fn sha256_10(b: &mut Bencher) {
         let mut sh = Sha256::new();
         let bytes = [1u8, ..10];
-        bh.iter(|| {
+        b.iter(|| {
             sh.input(bytes);
         });
-        bh.bytes = bytes.len() as u64;
+        b.bytes = bytes.len() as u64;
     }
 
     #[bench]
-    pub fn sha256_1k(bh: &mut BenchHarness) {
+    pub fn sha256_1k(b: &mut Bencher) {
         let mut sh = Sha256::new();
         let bytes = [1u8, ..1024];
-        bh.iter(|| {
+        b.iter(|| {
             sh.input(bytes);
         });
-        bh.bytes = bytes.len() as u64;
+        b.bytes = bytes.len() as u64;
     }
 
     #[bench]
-    pub fn sha256_64k(bh: &mut BenchHarness) {
+    pub fn sha256_64k(b: &mut Bencher) {
         let mut sh = Sha256::new();
         let bytes = [1u8, ..65536];
-        bh.iter(|| {
+        b.iter(|| {
             sh.input(bytes);
         });
-        bh.bytes = bytes.len() as u64;
+        b.bytes = bytes.len() as u64;
     }
 }

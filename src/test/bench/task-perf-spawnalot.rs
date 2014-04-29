@@ -25,13 +25,13 @@ fn g() { }
 fn main() {
     let args = os::args();
     let args = if os::getenv("RUST_BENCH").is_some() {
-        ~[~"", ~"400"]
+        vec!("".to_owned(), "400".to_owned())
     } else if args.len() <= 1u {
-        ~[~"", ~"10"]
+        vec!("".to_owned(), "10".to_owned())
     } else {
-        args
+        args.move_iter().collect()
     };
-    let n = from_str::<uint>(args[1]).unwrap();
+    let n = from_str::<uint>(*args.get(1)).unwrap();
     let mut i = 0u;
     while i < n { task::spawn(proc() f(n) ); i += 1u; }
 }

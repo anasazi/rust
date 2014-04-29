@@ -8,10 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[allow(unnecessary_allocation)];
+#![allow(unnecessary_allocation)]
 
 // rustc --test match_borrowed_str.rs.rs && ./match_borrowed_str.rs
-extern mod extra;
 
 fn compare(x: &str, y: &str) -> bool
 {
@@ -25,5 +24,5 @@ fn compare(x: &str, y: &str) -> bool
 pub fn main()
 {
     assert!(compare("foo", "foo"));
-    assert!(compare(~"foo", ~"foo"));
+    assert!(compare("foo".to_owned(), "foo".to_owned()));
 }

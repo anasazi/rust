@@ -10,27 +10,31 @@
 
 use std::io::{BufferedReader, File};
 
-pub struct ExpectedError { line: uint, kind: ~str, msg: ~str }
+pub struct ExpectedError {
+    pub line: uint,
+    pub kind: ~str,
+    pub msg: ~str,
+}
 
 // Load any test directives embedded in the file
-pub fn load_errors(testfile: &Path) -> ~[ExpectedError] {
+pub fn load_errors(testfile: &Path) -> Vec<ExpectedError> {
 
-    let mut error_patterns = ~[];
+    let mut error_patterns = Vec::new();
     let mut rdr = BufferedReader::new(File::open(testfile).unwrap());
     let mut line_num = 1u;
     for ln in rdr.lines() {
-        error_patterns.push_all_move(parse_expected(line_num, ln));
+        error_patterns.push_all_move(parse_expected(line_num, ln.unwrap()));
         line_num += 1u;
     }
     return error_patterns;
 }
 
-fn parse_expected(line_num: uint, line: ~str) -> ~[ExpectedError] {
+fn parse_expected(line_num: uint, line: ~str) -> Vec<ExpectedError> {
     let line = line.trim();
-    let error_tag = ~"//~";
+    let error_tag = "//~".to_owned();
     let mut idx;
     match line.find_str(error_tag) {
-      None => return ~[],
+      None => return Vec::new(),
       Some(nn) => { idx = (nn as uint) + error_tag.len(); }
     }
 
@@ -57,6 +61,6 @@ fn parse_expected(line_num: uint, line: ~str) -> ~[ExpectedError] {
 
     debug!("line={} kind={} msg={}", line_num - adjust_line, kind, msg);
 
-    return ~[ExpectedError{line: line_num - adjust_line, kind: kind,
-                           msg: msg}];
+    return vec!(ExpectedError{line: line_num - adjust_line, kind: kind,
+                           msg: msg});
 }

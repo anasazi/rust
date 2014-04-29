@@ -26,12 +26,6 @@ pub trait Send {
     // empty.
 }
 
-/// Types that are either immutable or have inherited mutability.
-#[lang="freeze"]
-pub trait Freeze {
-    // empty.
-}
-
 /// Types with a constant size known at compile-time.
 #[lang="sized"]
 pub trait Sized {
@@ -39,11 +33,59 @@ pub trait Sized {
 }
 
 /// Types that can be copied by simply copying bits (i.e. `memcpy`).
-///
-/// The name "POD" stands for "Plain Old Data" and is borrowed from C++.
-#[lang="pod"]
-pub trait Pod {
+#[lang="copy"]
+pub trait Copy {
     // Empty.
+}
+
+/// Types that can be safely shared between tasks when aliased.
+///
+/// The precise definition is: a type `T` is `Share` if `&T` is
+/// thread-safe. In other words, there is no possibility of data races
+/// when passing `&T` references between tasks.
+///
+/// As one would expect, primitive types like `u8` and `f64` are all
+/// `Share`, and so are simple aggregate types containing them (like
+/// tuples, structs and enums). More instances of basic `Share` types
+/// include "immutable" types like `&T` and those with simple
+/// inherited mutability, such as `~T`, `Vec<T>` and most other
+/// collection types. (Generic parameters need to be `Share` for their
+/// container to be `Share`.)
+///
+/// A somewhat surprising consequence of the definition is `&mut T` is
+/// `Share` (if `T` is `Share`) even though it seems that it might
+/// provide unsynchronised mutation. The trick is a mutable reference
+/// stored in an aliasable reference (that is, `& &mut T`) becomes
+/// read-only, as if it were a `& &T`, hence there is no risk of a data
+/// race.
+///
+/// Types that are not `Share` are those that have "interior
+/// mutability" in a non-thread-safe way, such as `Cell` and `RefCell`
+/// in `std::cell`. These types allow for mutation of their contents
+/// even when in an immutable, aliasable slot, e.g. the contents of
+/// `&Cell<T>` can be `.set`, and do not ensure data races are
+/// impossible, hence they cannot be `Share`. A higher level example
+/// of a non-`Share` type is the reference counted pointer
+/// `std::rc::Rc`, because any reference `&Rc<T>` can clone a new
+/// reference, which modifies the reference counts in a non-atomic
+/// way.
+///
+/// For cases when one does need thread-safe interior mutability,
+/// types like the atomics in `std::sync` and `Mutex` & `RWLock` in
+/// the `sync` crate do ensure that any mutation cannot cause data
+/// races.  Hence these types are `Share`.
+///
+/// Users writing their own types with interior mutability (or anything
+/// else that is not thread-safe) should use the `NoShare` marker type
+/// (from `std::kinds::marker`) to ensure that the compiler doesn't
+/// consider the user-defined type to be `Share`.  Any types with
+/// interior mutability must also use the `std::ty::Unsafe` wrapper
+/// around the value(s) which can be mutated when behind a `&`
+/// reference; not doing this is undefined behaviour (for example,
+/// `transmute`-ing from `&T` to `&mut T` is illegal).
+#[lang="share"]
+pub trait Share {
+    // Empty
 }
 
 /// Marker types are special types that are used with unsafe code to
@@ -69,7 +111,9 @@ pub mod marker {
     /// Given a struct `S` that includes a type parameter `T`
     /// but does not actually *reference* that type parameter:
     ///
-    /// ```
+    /// ```ignore
+    /// use std::cast;
+    ///
     /// struct S<T> { x: *() }
     /// fn get<T>(s: &S<T>) -> T {
     ///    unsafe {
@@ -82,10 +126,10 @@ pub mod marker {
     /// The type system would currently infer that the value of
     /// the type parameter `T` is irrelevant, and hence a `S<int>` is
     /// a subtype of `S<~[int]>` (or, for that matter, `S<U>` for
-    /// for any `U`). But this is incorrect because `get()` converts the
+    /// any `U`). But this is incorrect because `get()` converts the
     /// `*()` into a `*T` and reads from it. Therefore, we should include the
     /// a marker field `CovariantType<T>` to inform the type checker that
-    /// `S<T>` is a subtype of `S<U>` if `T` is a a subtype of `U`
+    /// `S<T>` is a subtype of `S<U>` if `T` is a subtype of `U`
     /// (for example, `S<&'static int>` is a subtype of `S<&'a int>`
     /// for some lifetime `'a`, but not the other way around).
     #[lang="covariant_type"]
@@ -109,6 +153,8 @@ pub mod marker {
     /// but does not actually *reference* that type parameter:
     ///
     /// ```
+    /// use std::cast;
+    ///
     /// struct S<T> { x: *() }
     /// fn get<T>(s: &S<T>, v: T) {
     ///    unsafe {
@@ -121,7 +167,7 @@ pub mod marker {
     /// The type system would currently infer that the value of
     /// the type parameter `T` is irrelevant, and hence a `S<int>` is
     /// a subtype of `S<~[int]>` (or, for that matter, `S<U>` for
-    /// for any `U`). But this is incorrect because `get()` converts the
+    /// any `U`). But this is incorrect because `get()` converts the
     /// `*()` into a `fn(T)` and then passes a value of type `T` to it.
     ///
     /// Supplying a `ContravariantType` marker would correct the
@@ -147,7 +193,8 @@ pub mod marker {
     /// "interior" mutability:
     ///
     /// ```
-    /// struct Cell<T> { priv value: T }
+    /// pub struct Cell<T> { value: T }
+    /// # fn main() {}
     /// ```
     ///
     /// The type system would infer that `value` is only read here and
@@ -204,14 +251,6 @@ pub mod marker {
     #[deriving(Eq,Clone)]
     pub struct InvariantLifetime<'a>;
 
-    /// A type which is considered "not freezable", meaning that
-    /// its contents could change even if stored in an immutable
-    /// context or it is the referent of an `&T` pointer. This is
-    /// typically embedded in other types, such as `Cell`.
-    #[lang="no_freeze_bound"]
-    #[deriving(Eq,Clone)]
-    pub struct NoFreeze;
-
     /// A type which is considered "not sendable", meaning that it cannot
     /// be safely sent between tasks, even if it is owned. This is
     /// typically embedded in other types, such as `Gc`, to ensure that
@@ -223,9 +262,16 @@ pub mod marker {
     /// A type which is considered "not POD", meaning that it is not
     /// implicitly copyable. This is typically embedded in other types to
     /// ensure that they are never copied, even if they lack a destructor.
-    #[lang="no_pod_bound"]
+    #[lang="no_copy_bound"]
     #[deriving(Eq,Clone)]
-    pub struct NoPod;
+    pub struct NoCopy;
+
+    /// A type which is considered "not sharable", meaning that
+    /// its contents are not threadsafe, hence they cannot be
+    /// shared between tasks.
+    #[lang="no_share_bound"]
+    #[deriving(Eq,Clone)]
+    pub struct NoShare;
 
     /// A type which is considered managed by the GC. This is typically
     /// embedded in other types.

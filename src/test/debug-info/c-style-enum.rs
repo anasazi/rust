@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,35 +8,71 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-android: FIXME(#10381)
+// ignore-win32: FIXME #13256
+// ignore-android: FIXME(#10381)
 
-// compile-flags:-Z extra-debug-info
+// compile-flags:-g
 // debugger:rbreak zzz
+
+// debugger:print 'c-style-enum::SINGLE_VARIANT'
+// check:$1 = TheOnlyVariant
+
+// debugger:print 'c-style-enum::AUTO_ONE'
+// check:$2 = One
+
+// debugger:print 'c-style-enum::AUTO_TWO'
+// check:$3 = One
+
+// debugger:print 'c-style-enum::AUTO_THREE'
+// check:$4 = One
+
+// debugger:print 'c-style-enum::MANUAL_ONE'
+// check:$5 = OneHundred
+
+// debugger:print 'c-style-enum::MANUAL_TWO'
+// check:$6 = OneHundred
+
+// debugger:print 'c-style-enum::MANUAL_THREE'
+// check:$7 = OneHundred
+
 // debugger:run
 // debugger:finish
 
 // debugger:print auto_one
-// check:$1 = One
+// check:$8 = One
 
 // debugger:print auto_two
-// check:$2 = Two
+// check:$9 = Two
 
 // debugger:print auto_three
-// check:$3 = Three
+// check:$10 = Three
 
 // debugger:print manual_one_hundred
-// check:$4 = OneHundred
+// check:$11 = OneHundred
 
 // debugger:print manual_one_thousand
-// check:$5 = OneThousand
+// check:$12 = OneThousand
 
 // debugger:print manual_one_million
-// check:$6 = OneMillion
+// check:$13 = OneMillion
 
 // debugger:print single_variant
-// check:$7 = TheOnlyVariant
+// check:$14 = TheOnlyVariant
 
-#[allow(unused_variable)];
+// debugger:print 'c-style-enum::AUTO_TWO'
+// check:$15 = Two
+
+// debugger:print 'c-style-enum::AUTO_THREE'
+// check:$16 = Three
+
+// debugger:print 'c-style-enum::MANUAL_TWO'
+// check:$17 = OneThousand
+
+// debugger:print 'c-style-enum::MANUAL_THREE'
+// check:$18 = OneMillion
+
+#![allow(unused_variable)]
+#![allow(dead_code)]
 
 enum AutoDiscriminant {
     One,
@@ -54,6 +90,16 @@ enum SingleVariant {
     TheOnlyVariant
 }
 
+static SINGLE_VARIANT: SingleVariant = TheOnlyVariant;
+
+static mut AUTO_ONE: AutoDiscriminant = One;
+static mut AUTO_TWO: AutoDiscriminant = One;
+static mut AUTO_THREE: AutoDiscriminant = One;
+
+static mut MANUAL_ONE: ManualDiscriminant = OneHundred;
+static mut MANUAL_TWO: ManualDiscriminant = OneHundred;
+static mut MANUAL_THREE: ManualDiscriminant = OneHundred;
+
 fn main() {
 
     let auto_one = One;
@@ -65,6 +111,14 @@ fn main() {
     let manual_one_million = OneMillion;
 
     let single_variant = TheOnlyVariant;
+
+    unsafe {
+        AUTO_TWO = Two;
+        AUTO_THREE = Three;
+
+        MANUAL_TWO = OneThousand;
+        MANUAL_THREE = OneMillion;
+    };
 
     zzz();
 }

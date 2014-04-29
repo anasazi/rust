@@ -11,8 +11,6 @@
 // Coroutines represent nothing more than a context and a stack
 // segment.
 
-use std::rt::env;
-
 use context::Context;
 use stack::{StackPool, Stack};
 
@@ -24,29 +22,13 @@ pub struct Coroutine {
     ///
     /// Servo needs this to be public in order to tell SpiderMonkey
     /// about the stack bounds.
-    current_stack_segment: Stack,
+    pub current_stack_segment: Stack,
 
     /// Always valid if the task is alive and not running.
-    saved_context: Context
+    pub saved_context: Context
 }
 
 impl Coroutine {
-    pub fn new(stack_pool: &mut StackPool,
-               stack_size: Option<uint>,
-               start: proc())
-               -> Coroutine {
-        let stack_size = match stack_size {
-            Some(size) => size,
-            None => env::min_stack()
-        };
-        let mut stack = stack_pool.take_stack(stack_size);
-        let initial_context = Context::new(start, &mut stack);
-        Coroutine {
-            current_stack_segment: stack,
-            saved_context: initial_context
-        }
-    }
-
     pub fn empty() -> Coroutine {
         Coroutine {
             current_stack_segment: unsafe { Stack::dummy_stack() },

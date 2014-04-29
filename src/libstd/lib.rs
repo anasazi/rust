@@ -8,76 +8,141 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! # The Rust standard library
+//! # The Rust Standard Library
 //!
-//! The Rust standard library is a group of interrelated modules defining
-//! the core language traits, operations on built-in data types, collections,
-//! platform abstractions, the task scheduler, runtime support for language
-//! features and other common functionality.
+//! The Rust Standard Library provides the essential runtime
+//! functionality for building portable Rust software.
+//! It is linked to all Rust crates by default.
 //!
-//! `std` includes modules corresponding to each of the integer types,
-//! each of the floating point types, the `bool` type, tuples, characters,
-//! strings (`str`), vectors (`vec`), managed boxes (`managed`), owned
-//! boxes (`owned`), and unsafe pointers and references (`ptr`, `borrowed`).
-//! Additionally, `std` provides pervasive types (`option` and `result`),
-//! task creation and communication primitives (`task`, `comm`), platform
-//! abstractions (`os` and `path`), basic I/O abstractions (`io`), common
-//! traits (`kinds`, `ops`, `cmp`, `num`, `to_str`), and complete bindings
-//! to the C standard library (`libc`).
+//! ## Intrinsic types and operations
 //!
-//! # Standard library injection and the Rust prelude
+//! The [`ptr`](ptr/index.html), [`mem`](mem/index.html),
+//! and [`cast`](cast/index.html) modules deal with unsafe pointers,
+//! memory manipulation, and coercion.
+//! [`kinds`](kinds/index.html) defines the special built-in traits,
+//! and [`raw`](raw/index.html) the runtime representation of Rust types.
+//! These are some of the lowest-level building blocks of Rust
+//! abstractions.
 //!
-//! `std` is imported at the topmost level of every crate by default, as
-//! if the first line of each crate was
+//! ## Math on primitive types and math traits
 //!
-//!     extern mod std;
+//! Although basic operations on primitive types are implemented
+//! directly by the compiler, the standard library additionally
+//! defines many common operations through traits defined in
+//! mod [`num`](num/index.html).
 //!
-//! This means that the contents of std can be accessed from any context
-//! with the `std::` path prefix, as in `use std::vec`, `use std::task::spawn`,
-//! etc.
+//! ## Pervasive types
 //!
-//! Additionally, `std` contains a `prelude` module that reexports many of the
-//! most common types, traits and functions. The contents of the prelude are
-//! imported into every *module* by default.  Implicitly, all modules behave as if
-//! they contained the following prologue:
+//! The [`option`](option/index.html) and [`result`](result/index.html)
+//! modules define optional and error-handling types, `Option` and `Result`.
+//! [`iter`](iter/index.html) defines Rust's iterator protocol
+//! along with a wide variety of iterators.
+//! [`Cell` and `RefCell`](cell/index.html) are for creating types that
+//! manage their own mutability.
 //!
-//!     use std::prelude::*;
+//! ## Vectors, slices and strings
+//!
+//! The common container type, `Vec`, a growable vector backed by an
+//! array, lives in the [`vec`](vec/index.html) module. References to
+//! arrays, `&[T]`, more commonly called "slices", are built-in types
+//! for which the [`slice`](slice/index.html) module defines many
+//! methods.
+//!
+//! UTF-8 strings, `~str` and `&str`, are built-in types, and the
+//! standard library defines methods for them on a variety of traits
+//! in the [`str`](str/index.html) module. Rust strings are immutable;
+//! use the `StrBuf` type defined in [`strbuf`](strbuf/index.html)
+//! for a mutable string builder.
+//!
+//! For converting to strings use the [`format!`](fmt/index.html)
+//! macro, and for converting from strings use the
+//! [`FromStr`](from_str/index.html) trait.
+//!
+//! ## Platform abstractions
+//!
+//! Besides basic data types, the standard library is largely concerned
+//! with abstracting over differences in common platforms, most notably
+//! Windows and Unix derivatives. The [`os`](os/index.html) module
+//! provides a number of basic functions for interacting with the
+//! operating environment, including program arguments, environment
+//! variables, and directory navigation. The [`path`](path/index.html)
+//! module encapsulates the platform-specific rules for dealing
+//! with file paths.
+//!
+//! `std` also includes modules for interoperating with the
+//! C language: [`c_str`](c_str/index.html) and
+//! [`c_vec`](c_vec/index.html).
+//!
+//! ## Concurrency, I/O, and the runtime
+//!
+//! The [`task`](task/index.html) module contains Rust's threading abstractions,
+//! while [`comm`](comm/index.html) contains the channel types for message
+//! passing. [`sync`](sync/index.html) contains further, primitive, shared
+//! memory types, including [`atomics`](sync/atomics/index.html).
+//!
+//! Common types of I/O, including files, TCP, UPD, pipes, Unix domain sockets,
+//! timers, and process spawning, are defined in the [`io`](io/index.html).
+//!
+//! Rust's I/O and concurrency depends on a small runtime interface
+//! that lives, along with its support code, in mod [`rt`](rt/index.html).
+//! While a notable part of the standard library's architecture, this
+//! module is not intended for public use.
+//!
+//! ## The Rust prelude and macros
+//!
+//! Finally, the [`prelude`](prelude/index.html) defines a set of
+//! common set of traits, types, and functions that are made available
+//! to all code by default. [`macros`](macros/index.html) contains
+//! all the standard macros, such as `assert!`, `fail!`, `println!`.
 
-#[crate_id = "std#0.10-pre"];
-#[comment = "The Rust standard library"];
-#[license = "MIT/ASL2"];
-#[crate_type = "rlib"];
-#[crate_type = "dylib"];
-#[doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk.png",
-      html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-      html_root_url = "http://static.rust-lang.org/doc/master")];
-
-#[feature(macro_rules, globs, asm, managed_boxes, thread_local, link_args, simd)];
+#![crate_id = "std#0.11-pre"]
+#![comment = "The Rust standard library"]
+#![license = "MIT/ASL2"]
+#![crate_type = "rlib"]
+#![crate_type = "dylib"]
+#![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
+       html_favicon_url = "http://www.rust-lang.org/favicon.ico",
+       html_root_url = "http://static.rust-lang.org/doc/master")]
+#![feature(macro_rules, globs, asm, managed_boxes, thread_local, link_args,
+           simd, linkage, default_type_params, phase, concat_idents, quad_precision_float)]
 
 // Don't link to std. We are std.
-#[no_std];
+#![no_std]
 
-#[deny(non_camel_case_types)];
-#[deny(missing_doc)];
-#[allow(unknown_features)];
+#![deny(missing_doc)]
 
 // When testing libstd, bring in libuv as the I/O backend so tests can print
 // things and all of the std::io tests have an I/O interface to run on top
 // of
-#[cfg(test)] extern mod rustuv = "rustuv";
-#[cfg(test)] extern mod native = "native";
-#[cfg(test)] extern mod green = "green";
+#[cfg(test)] extern crate rustuv;
+#[cfg(test)] extern crate native;
+#[cfg(test)] extern crate green;
+#[cfg(test)] #[phase(syntax, link)] extern crate log;
 
-// Make extra accessible for benchmarking
-#[cfg(test)] extern mod extra = "extra";
+// Make and rand accessible for benchmarking/testcases
+#[cfg(test)] extern crate rand;
+
+// we wrap some libc stuff
+extern crate libc;
 
 // Make std testable by not duplicating lang items. See #2912
-#[cfg(test)] extern mod realstd = "std";
+#[cfg(test)] extern crate realstd = "std";
 #[cfg(test)] pub use kinds = realstd::kinds;
 #[cfg(test)] pub use ops = realstd::ops;
 #[cfg(test)] pub use cmp = realstd::cmp;
+#[cfg(test)] pub use ty = realstd::ty;
 
-mod macros;
+// Run tests with libgreen instead of libnative.
+//
+// FIXME: This egregiously hacks around starting the test runner in a different
+//        threading mode than the default by reaching into the auto-generated
+//        '__test' module.
+#[cfg(test)] #[start]
+fn start(argc: int, argv: **u8) -> int {
+    green::start(argc, argv, rustuv::event_loop, __test::main)
+}
+
+pub mod macros;
 
 mod rtdeps;
 
@@ -112,16 +177,16 @@ pub mod bool;
 pub mod char;
 pub mod tuple;
 
+pub mod slice;
 pub mod vec;
-pub mod vec_ng;
 pub mod str;
+pub mod strbuf;
 
 pub mod ascii;
-pub mod send_str;
 
 pub mod ptr;
 pub mod owned;
-pub mod managed;
+mod managed;
 mod reference;
 pub mod rc;
 pub mod gc;
@@ -132,6 +197,7 @@ pub mod gc;
 #[cfg(not(test))] pub mod kinds;
 #[cfg(not(test))] pub mod ops;
 #[cfg(not(test))] pub mod cmp;
+#[cfg(not(test))] pub mod ty;
 
 
 /* Common traits */
@@ -140,21 +206,17 @@ pub mod from_str;
 pub mod num;
 pub mod iter;
 pub mod to_str;
-pub mod to_bytes;
 pub mod clone;
 pub mod hash;
 pub mod container;
 pub mod default;
 pub mod any;
 
-
 /* Common data structures */
 
 pub mod option;
 pub mod result;
-pub mod hashmap;
 pub mod cell;
-pub mod trie;
 
 
 /* Tasks and communication */
@@ -167,21 +229,14 @@ pub mod sync;
 
 /* Runtime and platform support */
 
-#[unstable]
-pub mod libc;
 pub mod c_str;
+pub mod c_vec;
 pub mod os;
 pub mod io;
 pub mod path;
-pub mod rand;
-pub mod run;
 pub mod cast;
 pub mod fmt;
 pub mod cleanup;
-#[deprecated]
-pub mod condition;
-pub mod logging;
-pub mod util;
 pub mod mem;
 
 
@@ -195,13 +250,14 @@ pub mod reflect;
 // Private APIs
 #[unstable]
 pub mod unstable;
-
+#[experimental]
+pub mod intrinsics;
+#[experimental]
+pub mod raw;
 
 /* For internal use, not exported */
 
 mod unicode;
-#[path = "num/cmath.rs"]
-mod cmath;
 
 // FIXME #7809: This shouldn't be pub, and it should be reexported under 'unstable'
 // but name resolution doesn't work without it being pub.
@@ -216,17 +272,17 @@ mod std {
     pub use clone;
     pub use cmp;
     pub use comm;
-    pub use condition;
     pub use fmt;
+    pub use hash;
     pub use io;
     pub use kinds;
     pub use local_data;
-    pub use logging;
     pub use option;
     pub use os;
     pub use rt;
     pub use str;
-    pub use to_bytes;
     pub use to_str;
+    pub use ty;
     pub use unstable;
+    pub use vec;
 }

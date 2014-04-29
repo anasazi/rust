@@ -12,17 +12,16 @@ use middle::cfg::*;
 use middle::graph;
 use middle::typeck;
 use middle::ty;
-use std::hashmap::HashMap;
 use syntax::ast;
 use syntax::ast_util;
-use syntax::opt_vec;
+use util::nodemap::NodeMap;
 
-struct CFGBuilder {
-    tcx: ty::ctxt,
-    method_map: typeck::method_map,
-    exit_map: HashMap<ast::NodeId, CFGIndex>,
+struct CFGBuilder<'a> {
+    tcx: &'a ty::ctxt,
+    method_map: typeck::MethodMap,
+    exit_map: NodeMap<CFGIndex>,
     graph: CFGGraph,
-    loop_scopes: ~[LoopScope],
+    loop_scopes: Vec<LoopScope> ,
 }
 
 struct LoopScope {
@@ -31,15 +30,15 @@ struct LoopScope {
     break_index: CFGIndex,    // where to go on a `break
 }
 
-pub fn construct(tcx: ty::ctxt,
-                 method_map: typeck::method_map,
+pub fn construct(tcx: &ty::ctxt,
+                 method_map: typeck::MethodMap,
                  blk: &ast::Block) -> CFG {
     let mut cfg_builder = CFGBuilder {
-        exit_map: HashMap::new(),
+        exit_map: NodeMap::new(),
         graph: graph::Graph::new(),
         tcx: tcx,
         method_map: method_map,
-        loop_scopes: ~[]
+        loop_scopes: Vec::new()
     };
     let entry = cfg_builder.add_node(0, []);
     let exit = cfg_builder.block(blk, entry);
@@ -50,7 +49,7 @@ pub fn construct(tcx: ty::ctxt,
          exit: exit}
 }
 
-impl CFGBuilder {
+impl<'a> CFGBuilder<'a> {
     fn block(&mut self, blk: &ast::Block, pred: CFGIndex) -> CFGIndex {
         let mut stmts_exit = pred;
         for &stmt in blk.stmts.iter() {
@@ -298,14 +297,15 @@ impl CFGBuilder {
                 let mut guard_exit = discr_exit;
                 for arm in arms.iter() {
                     guard_exit = self.opt_expr(arm.guard, guard_exit); // 2
-                    let pats_exit = self.pats_any(arm.pats, guard_exit); // 3
-                    let body_exit = self.block(arm.body, pats_exit);    // 4
+                    let pats_exit = self.pats_any(arm.pats.as_slice(),
+                                                  guard_exit); // 3
+                    let body_exit = self.expr(arm.body, pats_exit);      // 4
                     self.add_contained_edge(body_exit, expr_exit);       // 5
                 }
                 expr_exit
             }
 
-            ast::ExprBinary(_, op, l, r) if ast_util::lazy_binop(op) => {
+            ast::ExprBinary(op, l, r) if ast_util::lazy_binop(op) => {
                 //
                 //     [pred]
                 //       |
@@ -327,7 +327,7 @@ impl CFGBuilder {
 
             ast::ExprRet(v) => {
                 let v_exit = self.opt_expr(v, pred);
-                let loop_scope = self.loop_scopes[0];
+                let loop_scope = *self.loop_scopes.get(0);
                 self.add_exiting_edge(expr, v_exit,
                                       loop_scope, loop_scope.break_index);
                 self.add_node(expr.id, [])
@@ -347,49 +347,49 @@ impl CFGBuilder {
                 self.add_node(expr.id, [])
             }
 
-            ast::ExprVec(ref elems, _) => {
-                self.straightline(expr, pred, *elems)
+            ast::ExprVec(ref elems) => {
+                self.straightline(expr, pred, elems.as_slice())
             }
 
-            ast::ExprCall(func, ref args, _) => {
-                self.call(expr, pred, func, *args)
+            ast::ExprCall(func, ref args) => {
+                self.call(expr, pred, func, args.as_slice())
             }
 
-            ast::ExprMethodCall(_, _, _, ref args, _) => {
-                self.call(expr, pred, args[0], args.slice_from(1))
+            ast::ExprMethodCall(_, _, ref args) => {
+                self.call(expr, pred, *args.get(0), args.slice_from(1))
             }
 
-            ast::ExprIndex(_, l, r) |
-            ast::ExprBinary(_, _, l, r) if self.is_method_call(expr) => {
+            ast::ExprIndex(l, r) |
+            ast::ExprBinary(_, l, r) if self.is_method_call(expr) => {
                 self.call(expr, pred, l, [r])
             }
 
-            ast::ExprUnary(_, _, e) if self.is_method_call(expr) => {
+            ast::ExprUnary(_, e) if self.is_method_call(expr) => {
                 self.call(expr, pred, e, [])
             }
 
             ast::ExprTup(ref exprs) => {
-                self.straightline(expr, pred, *exprs)
+                self.straightline(expr, pred, exprs.as_slice())
             }
 
             ast::ExprStruct(_, ref fields, base) => {
                 let base_exit = self.opt_expr(base, pred);
-                let field_exprs: ~[@ast::Expr] =
+                let field_exprs: Vec<@ast::Expr> =
                     fields.iter().map(|f| f.expr).collect();
-                self.straightline(expr, base_exit, field_exprs)
+                self.straightline(expr, base_exit, field_exprs.as_slice())
             }
 
-            ast::ExprRepeat(elem, count, _) => {
+            ast::ExprRepeat(elem, count) => {
                 self.straightline(expr, pred, [elem, count])
             }
 
             ast::ExprAssign(l, r) |
-            ast::ExprAssignOp(_, _, l, r) => {
+            ast::ExprAssignOp(_, l, r) => {
                 self.straightline(expr, pred, [r, l])
             }
 
-            ast::ExprIndex(_, l, r) |
-            ast::ExprBinary(_, _, l, r) => { // NB: && and || handled earlier
+            ast::ExprIndex(l, r) |
+            ast::ExprBinary(_, l, r) => { // NB: && and || handled earlier
                 self.straightline(expr, pred, [l, r])
             }
 
@@ -399,14 +399,13 @@ impl CFGBuilder {
 
             ast::ExprAddrOf(_, e) |
             ast::ExprCast(e, _) |
-            ast::ExprUnary(_, _, e) |
+            ast::ExprUnary(_, e) |
             ast::ExprParen(e) |
             ast::ExprVstore(e, _) |
             ast::ExprField(e, _, _) => {
                 self.straightline(expr, pred, [e])
             }
 
-            ast::ExprLogLevel |
             ast::ExprMac(..) |
             ast::ExprInlineAsm(..) |
             ast::ExprFnBlock(..) |
@@ -470,7 +469,7 @@ impl CFGBuilder {
     fn add_contained_edge(&mut self,
                           source: CFGIndex,
                           target: CFGIndex) {
-        let data = CFGEdgeData {exiting_scopes: opt_vec::Empty};
+        let data = CFGEdgeData {exiting_scopes: vec!() };
         self.graph.add_edge(source, target, data);
     }
 
@@ -479,9 +478,10 @@ impl CFGBuilder {
                         from_index: CFGIndex,
                         to_loop: LoopScope,
                         to_index: CFGIndex) {
-        let mut data = CFGEdgeData {exiting_scopes: opt_vec::Empty};
+        let mut data = CFGEdgeData {exiting_scopes: vec!() };
         let mut scope_id = from_expr.id;
         while scope_id != to_loop.loop_id {
+
             data.exiting_scopes.push(scope_id);
             scope_id = self.tcx.region_maps.encl_scope(scope_id);
         }
@@ -490,15 +490,14 @@ impl CFGBuilder {
 
     fn find_scope(&self,
                   expr: @ast::Expr,
-                  label: Option<ast::Name>) -> LoopScope {
+                  label: Option<ast::Ident>) -> LoopScope {
         match label {
             None => {
                 return *self.loop_scopes.last().unwrap();
             }
 
             Some(_) => {
-                let def_map = self.tcx.def_map.borrow();
-                match def_map.get().find(&expr.id) {
+                match self.tcx.def_map.borrow().find(&expr.id) {
                     Some(&ast::DefLabel(loop_id)) => {
                         for l in self.loop_scopes.iter() {
                             if l.loop_id == loop_id {
@@ -507,13 +506,13 @@ impl CFGBuilder {
                         }
                         self.tcx.sess.span_bug(
                             expr.span,
-                            format!("No loop scope for id {:?}", loop_id));
+                            format!("no loop scope for id {:?}", loop_id));
                     }
 
                     r => {
                         self.tcx.sess.span_bug(
                             expr.span,
-                            format!("Bad entry `{:?}` in def_map for label", r));
+                            format!("bad entry `{:?}` in def_map for label", r));
                     }
                 }
             }
@@ -521,7 +520,7 @@ impl CFGBuilder {
     }
 
     fn is_method_call(&self, expr: &ast::Expr) -> bool {
-        let method_map = self.method_map.borrow();
-        method_map.get().contains_key(&expr.id)
+        let method_call = typeck::MethodCall::expr(expr.id);
+        self.method_map.borrow().contains_key(&method_call)
     }
 }

@@ -14,7 +14,7 @@ More runtime type reflection
 
 */
 
-#[allow(missing_doc)];
+#![allow(missing_doc)]
 
 use cast::transmute;
 use char;
@@ -22,17 +22,18 @@ use container::Container;
 use io;
 use iter::Iterator;
 use option::{Some, None, Option};
-use ptr;
+use ptr::RawPtr;
 use reflect;
 use reflect::{MovePtr, align};
 use result::{Ok, Err};
 use str::StrSlice;
 use to_str::ToStr;
-use vec::OwnedVector;
-use unstable::intrinsics::{Disr, Opaque, TyDesc, TyVisitor, get_tydesc, visit_tydesc};
-use unstable::raw;
+use slice::Vector;
+use intrinsics::{Disr, Opaque, TyDesc, TyVisitor, get_tydesc, visit_tydesc};
+use raw;
+use vec::Vec;
 
-macro_rules! if_ok( ($me:expr, $e:expr) => (
+macro_rules! try( ($me:expr, $e:expr) => (
     match $e {
         Ok(()) => {},
         Err(e) => { $me.last_err = Some(e); return false; }
@@ -60,19 +61,13 @@ impl Repr for bool {
 
 impl Repr for int {
     fn write_repr(&self, writer: &mut io::Writer) -> io::IoResult<()> {
-        ::int::to_str_bytes(*self, 10u, |bits| {
-            writer.write(bits)
-        })
+        write!(writer, "{}", *self)
     }
 }
 
 macro_rules! int_repr(($ty:ident, $suffix:expr) => (impl Repr for $ty {
     fn write_repr(&self, writer: &mut io::Writer) -> io::IoResult<()> {
-        ::$ty::to_str_bytes(*self, 10u, |bits| {
-            writer.write(bits).and_then(|()| {
-                writer.write(bytes!($suffix))
-            })
-        })
+        write!(writer, "{}{}", *self, $suffix)
     }
 }))
 
@@ -107,19 +102,19 @@ enum VariantState {
 }
 
 pub struct ReprVisitor<'a> {
-    priv ptr: *u8,
-    priv ptr_stk: ~[*u8],
-    priv var_stk: ~[VariantState],
-    priv writer: &'a mut io::Writer,
-    priv last_err: Option<io::IoError>,
+    ptr: *u8,
+    ptr_stk: Vec<*u8>,
+    var_stk: Vec<VariantState>,
+    writer: &'a mut io::Writer,
+    last_err: Option<io::IoError>,
 }
 
 pub fn ReprVisitor<'a>(ptr: *u8,
                        writer: &'a mut io::Writer) -> ReprVisitor<'a> {
     ReprVisitor {
         ptr: ptr,
-        ptr_stk: ~[],
-        var_stk: ~[],
+        ptr_stk: vec!(),
+        var_stk: vec!(),
         writer: writer,
         last_err: None,
     }
@@ -160,8 +155,8 @@ impl<'a> ReprVisitor<'a> {
             // issues we have to recreate it here.
             let u = ReprVisitor {
                 ptr: ptr,
-                ptr_stk: ~[],
-                var_stk: ~[],
+                ptr_stk: vec!(),
+                var_stk: vec!(),
                 writer: ::cast::transmute_copy(&self.writer),
                 last_err: None,
             };
@@ -181,23 +176,23 @@ impl<'a> ReprVisitor<'a> {
     #[inline]
     pub fn write<T:Repr>(&mut self) -> bool {
         self.get(|this, v:&T| {
-            if_ok!(this, v.write_repr(this.writer));
+            try!(this, v.write_repr(this.writer));
             true
         })
     }
 
     pub fn write_escaped_slice(&mut self, slice: &str) -> bool {
-        if_ok!(self, self.writer.write(['"' as u8]));
+        try!(self, self.writer.write(['"' as u8]));
         for ch in slice.chars() {
             if !self.write_escaped_char(ch, true) { return false }
         }
-        if_ok!(self, self.writer.write(['"' as u8]));
+        try!(self, self.writer.write(['"' as u8]));
         true
     }
 
     pub fn write_mut_qualifier(&mut self, mtbl: uint) -> bool {
         if mtbl == 0 {
-            if_ok!(self, self.writer.write("mut ".as_bytes()));
+            try!(self, self.writer.write("mut ".as_bytes()));
         } else if mtbl == 1 {
             // skip, this is ast::m_imm
         } else {
@@ -209,7 +204,7 @@ impl<'a> ReprVisitor<'a> {
     pub fn write_vec_range(&mut self, ptr: *(), len: uint, inner: *TyDesc) -> bool {
         let mut p = ptr as *u8;
         let (sz, al) = unsafe { ((*inner).size, (*inner).align) };
-        if_ok!(self, self.writer.write(['[' as u8]));
+        try!(self, self.writer.write(['[' as u8]));
         let mut first = true;
         let mut left = len;
         // unit structs have 0 size, and don't loop forever.
@@ -218,22 +213,22 @@ impl<'a> ReprVisitor<'a> {
             if first {
                 first = false;
             } else {
-                if_ok!(self, self.writer.write(", ".as_bytes()));
+                try!(self, self.writer.write(", ".as_bytes()));
             }
             self.visit_ptr_inner(p as *u8, inner);
-            p = align(unsafe { ptr::offset(p, sz as int) as uint }, al) as *u8;
+            p = align(unsafe { p.offset(sz as int) as uint }, al) as *u8;
             left -= dec;
         }
-        if_ok!(self, self.writer.write([']' as u8]));
+        try!(self, self.writer.write([']' as u8]));
         true
     }
 
     pub fn write_unboxed_vec_repr(&mut self, _: uint, v: &raw::Vec<()>, inner: *TyDesc) -> bool {
-        self.write_vec_range(ptr::to_unsafe_ptr(&v.data), v.fill, inner)
+        self.write_vec_range(&v.data, v.fill, inner)
     }
 
     fn write_escaped_char(&mut self, ch: char, is_str: bool) -> bool {
-        if_ok!(self, match ch {
+        try!(self, match ch {
             '\t' => self.writer.write("\\t".as_bytes()),
             '\r' => self.writer.write("\\r".as_bytes()),
             '\n' => self.writer.write("\\n".as_bytes()),
@@ -266,7 +261,7 @@ impl<'a> ReprVisitor<'a> {
 
 impl<'a> TyVisitor for ReprVisitor<'a> {
     fn visit_bot(&mut self) -> bool {
-        if_ok!(self, self.writer.write("!".as_bytes()));
+        try!(self, self.writer.write("!".as_bytes()));
         true
     }
     fn visit_nil(&mut self) -> bool { self.write::<()>() }
@@ -285,12 +280,14 @@ impl<'a> TyVisitor for ReprVisitor<'a> {
 
     fn visit_f32(&mut self) -> bool { self.write::<f32>() }
     fn visit_f64(&mut self) -> bool { self.write::<f64>() }
+    #[cfg(not(stage0))]
+    fn visit_f128(&mut self) -> bool { fail!("not implemented") }
 
     fn visit_char(&mut self) -> bool {
         self.get::<char>(|this, &ch| {
-            if_ok!(this, this.writer.write(['\'' as u8]));
+            try!(this, this.writer.write(['\'' as u8]));
             if !this.write_escaped_char(ch, false) { return false }
-            if_ok!(this, this.writer.write(['\'' as u8]));
+            try!(this, this.writer.write(['\'' as u8]));
             true
         })
     }
@@ -301,7 +298,7 @@ impl<'a> TyVisitor for ReprVisitor<'a> {
 
     fn visit_estr_uniq(&mut self) -> bool {
         self.get::<~str>(|this, s| {
-            if_ok!(this, this.writer.write(['~' as u8]));
+            try!(this, this.writer.write(['~' as u8]));
             this.write_escaped_slice(*s)
         })
     }
@@ -315,16 +312,16 @@ impl<'a> TyVisitor for ReprVisitor<'a> {
                         _align: uint) -> bool { fail!(); }
 
     fn visit_box(&mut self, mtbl: uint, inner: *TyDesc) -> bool {
-        if_ok!(self, self.writer.write(['@' as u8]));
+        try!(self, self.writer.write(['@' as u8]));
         self.write_mut_qualifier(mtbl);
         self.get::<&raw::Box<()>>(|this, b| {
-            let p = ptr::to_unsafe_ptr(&b.data) as *u8;
+            let p = &b.data as *() as *u8;
             this.visit_ptr_inner(p, inner)
         })
     }
 
     fn visit_uniq(&mut self, _mtbl: uint, inner: *TyDesc) -> bool {
-        if_ok!(self, self.writer.write(['~' as u8]));
+        try!(self, self.writer.write(['~' as u8]));
         self.get::<*u8>(|this, b| {
             this.visit_ptr_inner(*b, inner)
         })
@@ -332,33 +329,24 @@ impl<'a> TyVisitor for ReprVisitor<'a> {
 
     fn visit_ptr(&mut self, mtbl: uint, _inner: *TyDesc) -> bool {
         self.get::<*u8>(|this, p| {
-            if_ok!(this, write!(this.writer, "({} as *", *p));
+            try!(this, write!(this.writer, "({} as *", *p));
             this.write_mut_qualifier(mtbl);
-            if_ok!(this, this.writer.write("())".as_bytes()));
+            try!(this, this.writer.write("())".as_bytes()));
             true
         })
     }
 
     fn visit_rptr(&mut self, mtbl: uint, inner: *TyDesc) -> bool {
-        if_ok!(self, self.writer.write(['&' as u8]));
+        try!(self, self.writer.write(['&' as u8]));
         self.write_mut_qualifier(mtbl);
         self.get::<*u8>(|this, p| {
             this.visit_ptr_inner(*p, inner)
         })
     }
 
-    // Type no longer exists, vestigial function.
-    fn visit_vec(&mut self, _mtbl: uint, _inner: *TyDesc) -> bool { fail!(); }
-
-    fn visit_unboxed_vec(&mut self, mtbl: uint, inner: *TyDesc) -> bool {
-        self.get::<raw::Vec<()>>(|this, b| {
-            this.write_unboxed_vec_repr(mtbl, b, inner)
-        })
-    }
-
     fn visit_evec_box(&mut self, mtbl: uint, inner: *TyDesc) -> bool {
         self.get::<&raw::Box<raw::Vec<()>>>(|this, b| {
-            if_ok!(this, this.writer.write(['@' as u8]));
+            try!(this, this.writer.write(['@' as u8]));
             this.write_mut_qualifier(mtbl);
             this.write_unboxed_vec_repr(mtbl, &b.data, inner)
         })
@@ -366,14 +354,14 @@ impl<'a> TyVisitor for ReprVisitor<'a> {
 
     fn visit_evec_uniq(&mut self, mtbl: uint, inner: *TyDesc) -> bool {
         self.get::<&raw::Vec<()>>(|this, b| {
-            if_ok!(this, this.writer.write(['~' as u8]));
+            try!(this, this.writer.write(['~' as u8]));
             this.write_unboxed_vec_repr(mtbl, *b, inner)
         })
     }
 
     fn visit_evec_slice(&mut self, mtbl: uint, inner: *TyDesc) -> bool {
         self.get::<raw::Slice<()>>(|this, s| {
-            if_ok!(this, this.writer.write(['&' as u8]));
+            try!(this, this.writer.write(['&' as u8]));
             this.write_mut_qualifier(mtbl);
             let size = unsafe {
                 if (*inner).size == 0 { 1 } else { (*inner).size }
@@ -386,42 +374,42 @@ impl<'a> TyVisitor for ReprVisitor<'a> {
                         _: uint, inner: *TyDesc) -> bool {
         let assumed_size = if sz == 0 { n } else { sz };
         self.get::<()>(|this, b| {
-            this.write_vec_range(ptr::to_unsafe_ptr(b), assumed_size, inner)
+            this.write_vec_range(b, assumed_size, inner)
         })
     }
 
     fn visit_enter_rec(&mut self, _n_fields: uint,
                        _sz: uint, _align: uint) -> bool {
-        if_ok!(self, self.writer.write(['{' as u8]));
+        try!(self, self.writer.write(['{' as u8]));
         true
     }
 
     fn visit_rec_field(&mut self, i: uint, name: &str,
                        mtbl: uint, inner: *TyDesc) -> bool {
         if i != 0 {
-            if_ok!(self, self.writer.write(", ".as_bytes()));
+            try!(self, self.writer.write(", ".as_bytes()));
         }
         self.write_mut_qualifier(mtbl);
-        if_ok!(self, self.writer.write(name.as_bytes()));
-        if_ok!(self, self.writer.write(": ".as_bytes()));
+        try!(self, self.writer.write(name.as_bytes()));
+        try!(self, self.writer.write(": ".as_bytes()));
         self.visit_inner(inner);
         true
     }
 
     fn visit_leave_rec(&mut self, _n_fields: uint,
                        _sz: uint, _align: uint) -> bool {
-        if_ok!(self, self.writer.write(['}' as u8]));
+        try!(self, self.writer.write(['}' as u8]));
         true
     }
 
     fn visit_enter_class(&mut self, name: &str, named_fields: bool, n_fields: uint,
                          _sz: uint, _align: uint) -> bool {
-        if_ok!(self, self.writer.write(name.as_bytes()));
+        try!(self, self.writer.write(name.as_bytes()));
         if n_fields != 0 {
             if named_fields {
-                if_ok!(self, self.writer.write(['{' as u8]));
+                try!(self, self.writer.write(['{' as u8]));
             } else {
-                if_ok!(self, self.writer.write(['(' as u8]));
+                try!(self, self.writer.write(['(' as u8]));
             }
         }
         true
@@ -430,11 +418,11 @@ impl<'a> TyVisitor for ReprVisitor<'a> {
     fn visit_class_field(&mut self, i: uint, name: &str, named: bool,
                          _mtbl: uint, inner: *TyDesc) -> bool {
         if i != 0 {
-            if_ok!(self, self.writer.write(", ".as_bytes()));
+            try!(self, self.writer.write(", ".as_bytes()));
         }
         if named {
-            if_ok!(self, self.writer.write(name.as_bytes()));
-            if_ok!(self, self.writer.write(": ".as_bytes()));
+            try!(self, self.writer.write(name.as_bytes()));
+            try!(self, self.writer.write(": ".as_bytes()));
         }
         self.visit_inner(inner);
         true
@@ -444,9 +432,9 @@ impl<'a> TyVisitor for ReprVisitor<'a> {
                          _sz: uint, _align: uint) -> bool {
         if n_fields != 0 {
             if named_fields {
-                if_ok!(self, self.writer.write(['}' as u8]));
+                try!(self, self.writer.write(['}' as u8]));
             } else {
-                if_ok!(self, self.writer.write([')' as u8]));
+                try!(self, self.writer.write([')' as u8]));
             }
         }
         true
@@ -454,13 +442,13 @@ impl<'a> TyVisitor for ReprVisitor<'a> {
 
     fn visit_enter_tup(&mut self, _n_fields: uint,
                        _sz: uint, _align: uint) -> bool {
-        if_ok!(self, self.writer.write(['(' as u8]));
+        try!(self, self.writer.write(['(' as u8]));
         true
     }
 
     fn visit_tup_field(&mut self, i: uint, inner: *TyDesc) -> bool {
         if i != 0 {
-            if_ok!(self, self.writer.write(", ".as_bytes()));
+            try!(self, self.writer.write(", ".as_bytes()));
         }
         self.visit_inner(inner);
         true
@@ -469,9 +457,9 @@ impl<'a> TyVisitor for ReprVisitor<'a> {
     fn visit_leave_tup(&mut self, _n_fields: uint,
                        _sz: uint, _align: uint) -> bool {
         if _n_fields == 1 {
-            if_ok!(self, self.writer.write([',' as u8]));
+            try!(self, self.writer.write([',' as u8]));
         }
-        if_ok!(self, self.writer.write([')' as u8]));
+        try!(self, self.writer.write([')' as u8]));
         true
     }
 
@@ -507,9 +495,9 @@ impl<'a> TyVisitor for ReprVisitor<'a> {
         }
 
         if write {
-            if_ok!(self, self.writer.write(name.as_bytes()));
+            try!(self, self.writer.write(name.as_bytes()));
             if n_fields > 0 {
-                if_ok!(self, self.writer.write(['(' as u8]));
+                try!(self, self.writer.write(['(' as u8]));
             }
         }
         true
@@ -520,10 +508,10 @@ impl<'a> TyVisitor for ReprVisitor<'a> {
                                 _offset: uint,
                                 inner: *TyDesc)
                                 -> bool {
-        match self.var_stk[self.var_stk.len() - 1] {
+        match *self.var_stk.get(self.var_stk.len() - 1) {
             Matched => {
                 if i != 0 {
-                    if_ok!(self, self.writer.write(", ".as_bytes()));
+                    try!(self, self.writer.write(", ".as_bytes()));
                 }
                 if ! self.visit_inner(inner) {
                     return false;
@@ -538,10 +526,10 @@ impl<'a> TyVisitor for ReprVisitor<'a> {
                                 _disr_val: Disr,
                                 n_fields: uint,
                                 _name: &str) -> bool {
-        match self.var_stk[self.var_stk.len() - 1] {
+        match *self.var_stk.get(self.var_stk.len() - 1) {
             Matched => {
                 if n_fields > 0 {
-                    if_ok!(self, self.writer.write([')' as u8]));
+                    try!(self, self.writer.write([')' as u8]));
                 }
             }
             _ => ()
@@ -563,29 +551,29 @@ impl<'a> TyVisitor for ReprVisitor<'a> {
 
     fn visit_enter_fn(&mut self, _purity: uint, _proto: uint,
                       _n_inputs: uint, _retstyle: uint) -> bool {
-        if_ok!(self, self.writer.write("fn(".as_bytes()));
+        try!(self, self.writer.write("fn(".as_bytes()));
         true
     }
 
     fn visit_fn_input(&mut self, i: uint, _mode: uint, inner: *TyDesc) -> bool {
         if i != 0 {
-            if_ok!(self, self.writer.write(", ".as_bytes()));
+            try!(self, self.writer.write(", ".as_bytes()));
         }
         let name = unsafe { (*inner).name };
-        if_ok!(self, self.writer.write(name.as_bytes()));
+        try!(self, self.writer.write(name.as_bytes()));
         true
     }
 
     fn visit_fn_output(&mut self, _retstyle: uint, variadic: bool,
                        inner: *TyDesc) -> bool {
         if variadic {
-            if_ok!(self, self.writer.write(", ...".as_bytes()));
+            try!(self, self.writer.write(", ...".as_bytes()));
         }
-        if_ok!(self, self.writer.write(")".as_bytes()));
+        try!(self, self.writer.write(")".as_bytes()));
         let name = unsafe { (*inner).name };
         if name != "()" {
-            if_ok!(self, self.writer.write(" -> ".as_bytes()));
-            if_ok!(self, self.writer.write(name.as_bytes()));
+            try!(self, self.writer.write(" -> ".as_bytes()));
+            try!(self, self.writer.write(name.as_bytes()));
         }
         true
     }
@@ -595,18 +583,17 @@ impl<'a> TyVisitor for ReprVisitor<'a> {
 
 
     fn visit_trait(&mut self, name: &str) -> bool {
-        if_ok!(self, self.writer.write(name.as_bytes()));
+        try!(self, self.writer.write(name.as_bytes()));
         true
     }
 
     fn visit_param(&mut self, _i: uint) -> bool { true }
     fn visit_self(&mut self) -> bool { true }
-    fn visit_type(&mut self) -> bool { true }
 }
 
 pub fn write_repr<T>(writer: &mut io::Writer, object: &T) -> io::IoResult<()> {
     unsafe {
-        let ptr = ptr::to_unsafe_ptr(object) as *u8;
+        let ptr = object as *T as *u8;
         let tydesc = get_tydesc::<T>();
         let u = ReprVisitor(ptr, writer);
         let mut v = reflect::MovePtrAdaptor(u);
@@ -624,7 +611,7 @@ pub fn repr_to_str<T>(t: &T) -> ~str {
 
     let mut result = io::MemWriter::new();
     write_repr(&mut result as &mut io::Writer, t).unwrap();
-    str::from_utf8_owned(result.unwrap()).unwrap()
+    str::from_utf8(result.unwrap().as_slice()).unwrap().to_owned()
 }
 
 #[cfg(test)]
@@ -636,13 +623,13 @@ fn test_repr() {
     use str;
     use str::Str;
     use io::stdio::println;
-    use util::swap;
     use char::is_alphabetic;
+    use mem::swap;
 
     fn exact_test<T>(t: &T, e:&str) {
         let mut m = io::MemWriter::new();
         write_repr(&mut m as &mut io::Writer, t).unwrap();
-        let s = str::from_utf8_owned(m.unwrap()).unwrap();
+        let s = str::from_utf8(m.unwrap().as_slice()).unwrap().to_owned();
         assert_eq!(s.as_slice(), e);
     }
 
@@ -651,7 +638,8 @@ fn test_repr() {
     exact_test(&false, "false");
     exact_test(&1.234, "1.234f64");
     exact_test(&(&"hello"), "\"hello\"");
-    exact_test(&(~"he\u10f3llo"), "~\"he\\u10f3llo\"");
+    // FIXME What do I do about this one?
+    exact_test(&("he\u10f3llo".to_owned()), "~\"he\\u10f3llo\"");
 
     exact_test(&(@10), "@10");
     exact_test(&(~10), "~10");
@@ -673,13 +661,13 @@ fn test_repr() {
                "@repr::P{a: 10, b: 1.234f64}");
     exact_test(&(~P{a:10, b:1.234}),
                "~repr::P{a: 10, b: 1.234f64}");
-    exact_test(&(10u8, ~"hello"),
+    exact_test(&(10u8, "hello".to_owned()),
                "(10u8, ~\"hello\")");
-    exact_test(&(10u16, ~"hello"),
+    exact_test(&(10u16, "hello".to_owned()),
                "(10u16, ~\"hello\")");
-    exact_test(&(10u32, ~"hello"),
+    exact_test(&(10u32, "hello".to_owned()),
                "(10u32, ~\"hello\")");
-    exact_test(&(10u64, ~"hello"),
+    exact_test(&(10u64, "hello".to_owned()),
                "(10u64, ~\"hello\")");
 
     exact_test(&(&[1, 2]), "&[1, 2]");
@@ -693,7 +681,7 @@ fn test_repr() {
     exact_test(&println, "fn(&str)");
     exact_test(&swap::<int>, "fn(&mut int, &mut int)");
     exact_test(&is_alphabetic, "fn(char) -> bool");
-    exact_test(&(~5 as ~ToStr), "~to_str::ToStr:Send");
+    exact_test(&(~5 as ~ToStr), "~to_str::ToStr<no-bounds>");
 
     struct Foo;
     exact_test(&(~[Foo, Foo]), "~[repr::test_repr::Foo, repr::test_repr::Foo]");

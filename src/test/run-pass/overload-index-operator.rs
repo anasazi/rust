@@ -14,8 +14,7 @@
 use std::ops::Index;
 
 struct AssociationList<K,V> {
-    pairs: ~[AssociationPair<K,V>]
-}
+    pairs: Vec<AssociationPair<K,V>> }
 
 #[deriving(Clone)]
 struct AssociationPair<K,V> {
@@ -41,10 +40,10 @@ impl<K:Eq,V:Clone> Index<K,V> for AssociationList<K,V> {
 }
 
 pub fn main() {
-    let foo = ~"foo";
-    let bar = ~"bar";
+    let foo = "foo".to_owned();
+    let bar = "bar".to_owned();
 
-    let mut list = AssociationList {pairs: ~[]};
+    let mut list = AssociationList {pairs: Vec::new()};
     list.push(foo.clone(), 22);
     list.push(bar.clone(), 44);
 

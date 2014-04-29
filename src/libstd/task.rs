@@ -11,103 +11,65 @@
 /*!
  * Utilities for managing and scheduling tasks
  *
- * An executing Rust program consists of a tree of tasks, each with their own
- * stack, and sole ownership of their allocated heap data. Tasks communicate
- * with each other using ports and channels (see std::rt::comm for more info
- * about how communication works).
+ * An executing Rust program consists of a collection of tasks, each with their
+ * own stack, and sole ownership of their allocated heap data. Tasks communicate
+ * with each other using channels (see `std::comm` for more info about how
+ * communication works).
  *
- * Tasks can be spawned in 3 different modes.
- *
- *  * Bidirectionally linked: This is the default mode and it's what ```spawn``` does.
- *  Failures will be propagated from parent to child and vice versa.
- *
- *  * Unidirectionally linked (parent->child): This type of task can be created with
- *  ```spawn_supervised```. In this case, failures are propagated from parent to child
- *  but not the other way around.
- *
- *  * Unlinked: Tasks can be completely unlinked. These tasks can be created by using
- *  ```spawn_unlinked```. In this case failures are not propagated at all.
- *
- * Tasks' failure modes can be further configured. For instance, parent tasks can (un)watch
- * children failures. Please, refer to TaskBuilder's documentation bellow for more information.
- *
- * When a (bi|uni)directionally linked task fails, its failure will be propagated to all tasks
- * linked to it, this will cause such tasks to fail by a `linked failure`.
+ * Failure in one task does not propagate to any others (not to parent, not to
+ * child).  Failure propagation is instead handled by using the channel send()
+ * and recv() methods which will fail if the other end has hung up already.
  *
  * Task Scheduling:
  *
- * By default, every task is created in the same scheduler as its parent, where it
- * is scheduled cooperatively with all other tasks in that scheduler. Some specialized
- * applications may want more control over their scheduling, in which case they can be
- * spawned into a new scheduler with the specific properties required. See TaskBuilder's
- * documentation bellow for more information.
+ * By default, every task is created with the same "flavor" as the calling task.
+ * This flavor refers to the scheduling mode, with two possibilities currently
+ * being 1:1 and M:N modes. Green (M:N) tasks are cooperatively scheduled and
+ * native (1:1) tasks are scheduled by the OS kernel.
  *
  * # Example
  *
- * ```
+ * ```rust
  * spawn(proc() {
- *     log(error, "Hello, World!");
+ *     println!("Hello, World!");
  * })
  * ```
  */
 
-#[allow(missing_doc)];
-
 use any::Any;
-use comm::{Chan, Port};
+use comm::{Sender, Receiver, channel};
 use io::Writer;
 use kinds::{Send, marker};
-use logging::Logger;
 use option::{None, Some, Option};
 use result::{Result, Ok, Err};
 use rt::local::Local;
 use rt::task::Task;
-use send_str::{SendStr, IntoSendStr};
-use str::Str;
+use str::{Str, SendStr, IntoMaybeOwned};
 
 #[cfg(test)] use any::{AnyOwnExt, AnyRefExt};
-#[cfg(test)] use comm::SharedChan;
-#[cfg(test)] use ptr;
 #[cfg(test)] use result;
+#[cfg(test)] use str::StrSlice;
 
 /// Indicates the manner in which a task exited.
 ///
 /// A task that completes without failing is considered to exit successfully.
-/// Supervised ancestors and linked siblings may yet fail after this task
-/// succeeds. Also note that in such a case, it may be nondeterministic whether
-/// linked failure or successful exit happen first.
 ///
-/// If you wish for this result's delivery to block until all linked and/or
+/// If you wish for this result's delivery to block until all
 /// children tasks complete, recommend using a result future.
-pub type TaskResult = Result<(), ~Any>;
+pub type TaskResult = Result<(), ~Any:Send>;
 
-/**
- * Task configuration options
- *
- * # Fields
- *
- * * watched - Make parent task collect exit status notifications from child
- *             before reporting its own exit status. (This delays the parent
- *             task's death and cleanup until after all transitively watched
- *             children also exit.) True by default.
- *
- * * notify_chan - Enable lifecycle notifications on the given channel
- *
- * * name - A name for the task-to-be, for identification in failure messages.
- *
- * * sched - Specify the configuration of a new scheduler to create the task
- *           in. This is of particular importance for libraries which want to call
- *           into foreign code that blocks. Without doing so in a different
- *           scheduler other tasks will be impeded or even blocked indefinitely.
- */
+/// Task configuration options
 pub struct TaskOpts {
-    watched: bool,
-    notify_chan: Option<Chan<TaskResult>>,
-    name: Option<SendStr>,
-    stack_size: Option<uint>,
-    logger: Option<~Logger>,
-    stdout: Option<~Writer>,
-    stderr: Option<~Writer>,
+    /// Enable lifecycle notifications on the given channel
+    pub notify_chan: Option<Sender<TaskResult>>,
+    /// A name for the task-to-be, for identification in failure messages
+    pub name: Option<SendStr>,
+    /// The size of the stack for the spawned task
+    pub stack_size: Option<uint>,
+    /// Task-local stdout
+    pub stdout: Option<~Writer:Send>,
+    /// Task-local stderr
+    pub stderr: Option<~Writer:Send>,
 }
 
 /**
@@ -123,35 +85,21 @@ pub struct TaskOpts {
 // sidestep that whole issue by making builders uncopyable and making
 // the run function move them in.
 pub struct TaskBuilder {
-    opts: TaskOpts,
-    priv gen_body: Option<proc(v: proc()) -> proc()>,
-    priv nopod: Option<marker::NoPod>,
-}
-
-/**
- * Generate the base configuration for spawning a task, off of which more
- * configuration methods can be chained.
- * For example, task().unlinked().spawn is equivalent to spawn_unlinked.
- */
-pub fn task() -> TaskBuilder {
-    TaskBuilder {
-        opts: TaskOpts::new(),
-        gen_body: None,
-        nopod: None,
-    }
+    /// Options to spawn the new task with
+    pub opts: TaskOpts,
+    gen_body: Option<proc(v: proc():Send):Send -> proc():Send>,
+    nocopy: Option<marker::NoCopy>,
 }
 
 impl TaskBuilder {
-    /// Cause the parent task to collect the child's exit status (and that of
-    /// all transitively-watched grandchildren) before reporting its own.
-    pub fn watched(&mut self) {
-        self.opts.watched = true;
-    }
-
-    /// Allow the child task to outlive the parent task, at the possible cost
-    /// of the parent reporting success even if the child task fails later.
-    pub fn unwatched(&mut self) {
-        self.opts.watched = false;
+     /// Generate the base configuration for spawning a task, off of which more
+     /// configuration methods can be chained.
+    pub fn new() -> TaskBuilder {
+        TaskBuilder {
+            opts: TaskOpts::new(),
+            gen_body: None,
+            nocopy: None,
+        }
     }
 
     /// Get a future representing the exit status of the task.
@@ -161,15 +109,9 @@ impl TaskBuilder {
     /// spawned; as such, do not invoke .get() on it directly;
     /// rather, store it in an outer variable/list for later use.
     ///
-    /// Note that the future returned by this function is only useful for
-    /// obtaining the value of the next task to be spawning with the
-    /// builder. If additional tasks are spawned with the same builder
-    /// then a new result future must be obtained prior to spawning each
-    /// task.
-    ///
     /// # Failure
     /// Fails if a future_result was already set for this task.
-    pub fn future_result(&mut self) -> Port<TaskResult> {
+    pub fn future_result(&mut self) -> Receiver<TaskResult> {
         // FIXME (#3725): Once linked failure and notification are
         // handled in the library, I can imagine implementing this by just
         // registering an arbitrary number of task::on_exit handlers and
@@ -180,18 +122,19 @@ impl TaskBuilder {
         }
 
         // Construct the future and give it to the caller.
-        let (notify_pipe_po, notify_pipe_ch) = Chan::new();
+        let (tx, rx) = channel();
 
         // Reconfigure self to use a notify channel.
-        self.opts.notify_chan = Some(notify_pipe_ch);
+        self.opts.notify_chan = Some(tx);
 
-        notify_pipe_po
+        rx
     }
 
     /// Name the task-to-be. Currently the name is used for identification
     /// only in failure messages.
-    pub fn name<S: IntoSendStr>(&mut self, name: S) {
-        self.opts.name = Some(name.into_send_str());
+    pub fn named<S: IntoMaybeOwned<'static>>(mut self, name: S) -> TaskBuilder {
+        self.opts.name = Some(name.into_maybe_owned());
+        self
     }
 
     /**
@@ -206,22 +149,15 @@ impl TaskBuilder {
      * generator by applying the task body which results from the
      * existing body generator to the new body generator.
      */
-    pub fn add_wrapper(&mut self, wrapper: proc(v: proc()) -> proc()) {
-        let prev_gen_body = self.gen_body.take();
-        let prev_gen_body = match prev_gen_body {
-            Some(gen) => gen,
-            None => {
-                let f: proc(proc()) -> proc() = proc(body) body;
-                f
-            }
+    pub fn with_wrapper(mut self,
+                        wrapper: proc(v: proc():Send):Send -> proc():Send)
+        -> TaskBuilder
+    {
+        self.gen_body = match self.gen_body.take() {
+            Some(prev) => Some(proc(body) { wrapper(prev(body)) }),
+            None => Some(wrapper)
         };
-        let next_gen_body = {
-            let f: proc(proc()) -> proc() = proc(body) {
-                wrapper(prev_gen_body(body))
-            };
-            f
-        };
-        self.gen_body = Some(next_gen_body);
+        self
     }
 
     /**
@@ -230,13 +166,8 @@ impl TaskBuilder {
      * Sets up a new task with its own call stack and schedules it to run
      * the provided unique closure. The task has the properties and behavior
      * specified by the task_builder.
-     *
-     * # Failure
-     *
-     * When spawning into a new scheduler, the number of threads requested
-     * must be greater than zero.
      */
-    pub fn spawn(mut self, f: proc()) {
+    pub fn spawn(mut self, f: proc():Send) {
         let gen_body = self.gen_body.take();
         let f = match gen_body {
             Some(gen) => gen(f),
@@ -259,17 +190,17 @@ impl TaskBuilder {
      * # Failure
      * Fails if a future_result was already set for this task.
      */
-    pub fn try<T:Send>(mut self, f: proc() -> T) -> Result<T, ~Any> {
-        let (po, ch) = Chan::new();
+    pub fn try<T:Send>(mut self, f: proc():Send -> T) -> Result<T, ~Any:Send> {
+        let (tx, rx) = channel();
 
         let result = self.future_result();
 
         self.spawn(proc() {
-            ch.send(f());
+            tx.send(f());
         });
 
         match result.recv() {
-            Ok(())     => Ok(po.recv()),
+            Ok(())     => Ok(rx.recv()),
             Err(cause) => Err(cause)
         }
     }
@@ -281,17 +212,12 @@ impl TaskOpts {
     pub fn new() -> TaskOpts {
         /*!
          * The default task options
-         *
-         * By default all tasks are supervised by their parent, are spawned
-         * into the same scheduler, and do not post lifecycle notifications.
          */
 
         TaskOpts {
-            watched: true,
             notify_chan: None,
             name: None,
             stack_size: None,
-            logger: None,
             stdout: None,
             stderr: None,
         }
@@ -305,22 +231,17 @@ impl TaskOpts {
 /// Sets up a new task with its own call stack and schedules it to run
 /// the provided unique closure.
 ///
-/// This function is equivalent to `task().spawn(f)`.
-pub fn spawn(f: proc()) {
-    let task = task();
-    task.spawn(f)
+/// This function is equivalent to `TaskBuilder::new().spawn(f)`.
+pub fn spawn(f: proc():Send) {
+    TaskBuilder::new().spawn(f)
 }
 
-pub fn try<T:Send>(f: proc() -> T) -> Result<T, ~Any> {
-    /*!
-     * Execute a function in another task and return either the return value
-     * of the function or result::err.
-     *
-     * This is equivalent to task().supervised().try.
-     */
-
-    let task = task();
-    task.try(f)
+/// Execute a function in another task and return either the return value of
+/// the function or an error if the task failed
+///
+/// This is equivalent to TaskBuilder::new().try
+pub fn try<T:Send>(f: proc():Send -> T) -> Result<T, ~Any:Send> {
+    TaskBuilder::new().try(f)
 }
 
 
@@ -330,8 +251,8 @@ pub fn try<T:Send>(f: proc() -> T) -> Result<T, ~Any> {
 pub fn with_task_name<U>(blk: |Option<&str>| -> U) -> U {
     use rt::task::Task;
 
-    let mut task = Local::borrow(None::<Task>);
-    match task.get().name {
+    let task = Local::borrow(None::<Task>);
+    match task.name {
         Some(ref name) => blk(Some(name.as_slice())),
         None => blk(None)
     }
@@ -349,11 +270,8 @@ pub fn deschedule() {
 
 pub fn failing() -> bool {
     //! True if the running task has failed
-
     use rt::task::Task;
-
-    let mut local = Local::borrow(None::<Task>);
-    local.get().unwinder.unwinding()
+    Local::borrow(None::<Task>).unwinder.unwinding()
 }
 
 // The following 8 tests test the following 2^3 combinations:
@@ -373,9 +291,7 @@ fn test_unnamed_task() {
 
 #[test]
 fn test_owned_named_task() {
-    let mut t = task();
-    t.name(~"ada lovelace");
-    t.spawn(proc() {
+    TaskBuilder::new().named("ada lovelace".to_owned()).spawn(proc() {
         with_task_name(|name| {
             assert!(name.unwrap() == "ada lovelace");
         })
@@ -384,9 +300,7 @@ fn test_owned_named_task() {
 
 #[test]
 fn test_static_named_task() {
-    let mut t = task();
-    t.name("ada lovelace");
-    t.spawn(proc() {
+    TaskBuilder::new().named("ada lovelace").spawn(proc() {
         with_task_name(|name| {
             assert!(name.unwrap() == "ada lovelace");
         })
@@ -395,9 +309,7 @@ fn test_static_named_task() {
 
 #[test]
 fn test_send_named_task() {
-    let mut t = task();
-    t.name("ada lovelace".into_send_str());
-    t.spawn(proc() {
+    TaskBuilder::new().named("ada lovelace".into_maybe_owned()).spawn(proc() {
         with_task_name(|name| {
             assert!(name.unwrap() == "ada lovelace");
         })
@@ -406,37 +318,34 @@ fn test_send_named_task() {
 
 #[test]
 fn test_run_basic() {
-    let (po, ch) = Chan::new();
-    task().spawn(proc() {
-        ch.send(());
+    let (tx, rx) = channel();
+    TaskBuilder::new().spawn(proc() {
+        tx.send(());
     });
-    po.recv();
+    rx.recv();
 }
 
 #[test]
-fn test_add_wrapper() {
-    let (po, ch) = Chan::new();
-    let mut b0 = task();
-    b0.add_wrapper(proc(body) {
-        let ch = ch;
-        let result: proc() = proc() {
+fn test_with_wrapper() {
+    let (tx, rx) = channel();
+    TaskBuilder::new().with_wrapper(proc(body) {
+        let result: proc():Send = proc() {
             body();
-            ch.send(());
+            tx.send(());
         };
         result
-    });
-    b0.spawn(proc() { });
-    po.recv();
+    }).spawn(proc() { });
+    rx.recv();
 }
 
 #[test]
 fn test_future_result() {
-    let mut builder = task();
+    let mut builder = TaskBuilder::new();
     let result = builder.future_result();
     builder.spawn(proc() {});
     assert!(result.recv().is_ok());
 
-    let mut builder = task();
+    let mut builder = TaskBuilder::new();
     let result = builder.future_result();
     builder.spawn(proc() {
         fail!();
@@ -446,7 +355,7 @@ fn test_future_result() {
 
 #[test] #[should_fail]
 fn test_back_to_the_future_result() {
-    let mut builder = task();
+    let mut builder = TaskBuilder::new();
     builder.future_result();
     builder.future_result();
 }
@@ -454,9 +363,9 @@ fn test_back_to_the_future_result() {
 #[test]
 fn test_try_success() {
     match try(proc() {
-        ~"Success!"
-    }) {
-        result::Ok(~"Success!") => (),
+        "Success!".to_owned()
+    }).as_ref().map(|s| s.as_slice()) {
+        result::Ok("Success!") => (),
         _ => fail!()
     }
 }
@@ -475,50 +384,49 @@ fn test_try_fail() {
 fn test_spawn_sched() {
     use clone::Clone;
 
-    let (po, ch) = SharedChan::new();
+    let (tx, rx) = channel();
 
-    fn f(i: int, ch: SharedChan<()>) {
-        let ch = ch.clone();
+    fn f(i: int, tx: Sender<()>) {
+        let tx = tx.clone();
         spawn(proc() {
             if i == 0 {
-                ch.send(());
+                tx.send(());
             } else {
-                f(i - 1, ch);
+                f(i - 1, tx);
             }
         });
 
     }
-    f(10, ch);
-    po.recv();
+    f(10, tx);
+    rx.recv();
 }
 
 #[test]
 fn test_spawn_sched_childs_on_default_sched() {
-    let (po, ch) = Chan::new();
+    let (tx, rx) = channel();
 
     spawn(proc() {
-        let ch = ch;
         spawn(proc() {
-            ch.send(());
+            tx.send(());
         });
     });
 
-    po.recv();
+    rx.recv();
 }
 
 #[cfg(test)]
-fn avoid_copying_the_body(spawnfn: |v: proc()|) {
-    let (p, ch) = Chan::<uint>::new();
+fn avoid_copying_the_body(spawnfn: |v: proc():Send|) {
+    let (tx, rx) = channel::<uint>();
 
     let x = ~1;
-    let x_in_parent = ptr::to_unsafe_ptr(&*x) as uint;
+    let x_in_parent = (&*x) as *int as uint;
 
     spawnfn(proc() {
-        let x_in_child = ptr::to_unsafe_ptr(&*x) as uint;
-        ch.send(x_in_child);
+        let x_in_child = (&*x) as *int as uint;
+        tx.send(x_in_child);
     });
 
-    let x_in_child = p.recv();
+    let x_in_child = rx.recv();
     assert_eq!(x_in_parent, x_in_child);
 }
 
@@ -530,7 +438,7 @@ fn test_avoid_copying_the_body_spawn() {
 #[test]
 fn test_avoid_copying_the_body_task_spawn() {
     avoid_copying_the_body(|f| {
-        let builder = task();
+        let builder = TaskBuilder::new();
         builder.spawn(proc() {
             f();
         });
@@ -553,18 +461,14 @@ fn test_child_doesnt_ref_parent() {
     // (well, it would if the constant were 8000+ - I lowered it to be more
     // valgrind-friendly. try this at home, instead..!)
     static generations: uint = 16;
-    fn child_no(x: uint) -> proc() {
+    fn child_no(x: uint) -> proc():Send {
         return proc() {
             if x < generations {
-                let mut t = task();
-                t.unwatched();
-                t.spawn(child_no(x+1));
+                TaskBuilder::new().spawn(child_no(x+1));
             }
         }
     }
-    let mut t = task();
-    t.unwatched();
-    t.spawn(child_no(0));
+    TaskBuilder::new().spawn(child_no(0));
 }
 
 #[test]
@@ -589,12 +493,12 @@ fn test_try_fail_message_static_str() {
 #[test]
 fn test_try_fail_message_owned_str() {
     match try(proc() {
-        fail!(~"owned string");
+        fail!("owned string".to_owned());
     }) {
         Err(e) => {
             type T = ~str;
             assert!(e.is::<T>());
-            assert_eq!(*e.move::<T>().unwrap(), ~"owned string");
+            assert_eq!(*e.move::<T>().unwrap(), "owned string".to_owned());
         }
         Ok(()) => fail!()
     }
@@ -603,10 +507,10 @@ fn test_try_fail_message_owned_str() {
 #[test]
 fn test_try_fail_message_any() {
     match try(proc() {
-        fail!(~413u16 as ~Any);
+        fail!(~413u16 as ~Any:Send);
     }) {
         Err(e) => {
-            type T = ~Any;
+            type T = ~Any:Send;
             assert!(e.is::<T>());
             let any = e.move::<T>().unwrap();
             assert!(any.is::<u16>());

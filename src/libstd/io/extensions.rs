@@ -10,17 +10,22 @@
 
 //! Utility mixins that apply to all Readers and Writers
 
+#![allow(missing_doc)]
+
 // FIXME: Not sure how this should be structured
 // FIXME: Iteration should probably be considered separately
 
 use container::Container;
 use iter::Iterator;
-use option::Option;
-use io::Reader;
-use vec::{OwnedVector, ImmutableVector};
+use option::{Option, Some, None};
+use result::{Ok, Err};
+use io;
+use io::{IoError, IoResult, Reader};
+use slice::{ImmutableVector, Vector};
+use ptr::RawPtr;
 
 /// An iterator that reads a single byte on each iteration,
-/// until `.read_byte()` returns `None`.
+/// until `.read_byte()` returns `EndOfFile`.
 ///
 /// # Notes about the Iteration Protocol
 ///
@@ -28,42 +33,62 @@ use vec::{OwnedVector, ImmutableVector};
 /// an iteration, but continue to yield elements if iteration
 /// is attempted again.
 ///
-/// # Failure
+/// # Error
 ///
-/// Raises the same conditions as the `read` method, for
-/// each call to its `.next()` method.
-/// Yields `None` if the condition is handled.
+/// Any error other than `EndOfFile` that is produced by the underlying Reader
+/// is returned by the iterator and should be handled by the caller.
 pub struct Bytes<'r, T> {
-    priv reader: &'r mut T,
+    reader: &'r mut T,
 }
 
 impl<'r, R: Reader> Bytes<'r, R> {
+    /// Constructs a new byte iterator from the given Reader instance.
     pub fn new(r: &'r mut R) -> Bytes<'r, R> {
-        Bytes { reader: r }
+        Bytes {
+            reader: r,
+        }
     }
 }
 
-impl<'r, R: Reader> Iterator<u8> for Bytes<'r, R> {
+impl<'r, R: Reader> Iterator<IoResult<u8>> for Bytes<'r, R> {
     #[inline]
-    fn next(&mut self) -> Option<u8> {
-        self.reader.read_byte().ok()
+    fn next(&mut self) -> Option<IoResult<u8>> {
+        match self.reader.read_byte() {
+            Ok(x) => Some(Ok(x)),
+            Err(IoError { kind: io::EndOfFile, .. }) => None,
+            Err(e) => Some(Err(e))
+        }
     }
 }
 
+/// Converts an 8-bit to 64-bit unsigned value to a little-endian byte
+/// representation of the given size. If the size is not big enough to
+/// represent the value, then the high-order bytes are truncated.
+///
+/// Arguments:
+///
+/// * `n`: The value to convert.
+/// * `size`: The size of the value, in bytes. This must be 8 or less, or task
+///           failure occurs. If this is less than 8, then a value of that
+///           many bytes is produced. For example, if `size` is 4, then a
+///           32-bit byte representation is produced.
+/// * `f`: A callback that receives the value.
+///
+/// This function returns the value returned by the callback, for convenience.
 pub fn u64_to_le_bytes<T>(n: u64, size: uint, f: |v: &[u8]| -> T) -> T {
-    use unstable::intrinsics::{to_le16, to_le32, to_le64};
+    use mem::{to_le16, to_le32, to_le64};
     use cast::transmute;
 
     // LLVM fails to properly optimize this when using shifts instead of the to_le* intrinsics
     assert!(size <= 8u);
     match size {
       1u => f(&[n as u8]),
-      2u => f(unsafe { transmute::<i16, [u8, ..2]>(to_le16(n as i16)) }),
-      4u => f(unsafe { transmute::<i32, [u8, ..4]>(to_le32(n as i32)) }),
-      8u => f(unsafe { transmute::<i64, [u8, ..8]>(to_le64(n as i64)) }),
+      2u => f(unsafe { transmute::<_, [u8, ..2]>(to_le16(n as u16)) }),
+      4u => f(unsafe { transmute::<_, [u8, ..4]>(to_le32(n as u32)) }),
+      8u => f(unsafe { transmute::<_, [u8, ..8]>(to_le64(n)) }),
       _ => {
 
-        let mut bytes: ~[u8] = ~[];
+        let mut bytes = vec!();
         let mut i = size;
         let mut n = n;
         while i > 0u {
@@ -71,42 +96,64 @@ pub fn u64_to_le_bytes<T>(n: u64, size: uint, f: |v: &[u8]| -> T) -> T {
             n >>= 8_u64;
             i -= 1u;
         }
-        f(bytes)
+        f(bytes.as_slice())
       }
     }
 }
 
+/// Converts an 8-bit to 64-bit unsigned value to a big-endian byte
+/// representation of the given size. If the size is not big enough to
+/// represent the value, then the high-order bytes are truncated.
+///
+/// Arguments:
+///
+/// * `n`: The value to convert.
+/// * `size`: The size of the value, in bytes. This must be 8 or less, or task
+///           failure occurs. If this is less than 8, then a value of that
+///           many bytes is produced. For example, if `size` is 4, then a
+///           32-bit byte representation is produced.
+/// * `f`: A callback that receives the value.
+///
+/// This function returns the value returned by the callback, for convenience.
 pub fn u64_to_be_bytes<T>(n: u64, size: uint, f: |v: &[u8]| -> T) -> T {
-    use unstable::intrinsics::{to_be16, to_be32, to_be64};
+    use mem::{to_be16, to_be32, to_be64};
     use cast::transmute;
 
     // LLVM fails to properly optimize this when using shifts instead of the to_be* intrinsics
     assert!(size <= 8u);
     match size {
       1u => f(&[n as u8]),
-      2u => f(unsafe { transmute::<i16, [u8, ..2]>(to_be16(n as i16)) }),
-      4u => f(unsafe { transmute::<i32, [u8, ..4]>(to_be32(n as i32)) }),
-      8u => f(unsafe { transmute::<i64, [u8, ..8]>(to_be64(n as i64)) }),
+      2u => f(unsafe { transmute::<_, [u8, ..2]>(to_be16(n as u16)) }),
+      4u => f(unsafe { transmute::<_, [u8, ..4]>(to_be32(n as u32)) }),
+      8u => f(unsafe { transmute::<_, [u8, ..8]>(to_be64(n)) }),
       _ => {
-        let mut bytes: ~[u8] = ~[];
+        let mut bytes = vec!();
         let mut i = size;
         while i > 0u {
             let shift = ((i - 1u) * 8u) as u64;
             bytes.push((n >> shift) as u8);
             i -= 1u;
         }
-        f(bytes)
+        f(bytes.as_slice())
       }
     }
 }
 
-pub fn u64_from_be_bytes(data: &[u8],
-                         start: uint,
-                         size: uint)
-                      -> u64 {
-    use ptr::{copy_nonoverlapping_memory, offset, mut_offset};
-    use unstable::intrinsics::from_be64;
-    use vec::MutableVector;
+/// Extracts an 8-bit to 64-bit unsigned big-endian value from the given byte
+/// buffer and returns it as a 64-bit value.
+///
+/// Arguments:
+///
+/// * `data`: The buffer in which to extract the value.
+/// * `start`: The offset at which to extract the value.
+/// * `size`: The size of the value in bytes to extract. This must be 8 or
+///           less, or task failure occurs. If this is less than 8, then only
+///           that many bytes are parsed. For example, if `size` is 4, then a
+///           32-bit value is parsed.
+pub fn u64_from_be_bytes(data: &[u8], start: uint, size: uint) -> u64 {
+    use ptr::{copy_nonoverlapping_memory};
+    use mem::from_be64;
+    use slice::MutableVector;
 
     assert!(size <= 8u);
 
@@ -116,10 +163,10 @@ pub fn u64_from_be_bytes(data: &[u8],
 
     let mut buf = [0u8, ..8];
     unsafe {
-        let ptr = offset(data.as_ptr(), start as int);
+        let ptr = data.as_ptr().offset(start as int);
         let out = buf.as_mut_ptr();
-        copy_nonoverlapping_memory(mut_offset(out, (8 - size) as int), ptr, size);
-        from_be64(*(out as *i64)) as u64
+        copy_nonoverlapping_memory(out.offset((8 - size) as int), ptr, size);
+        from_be64(*(out as *u64))
     }
 }
 
@@ -220,7 +267,7 @@ mod test {
 
     #[test]
     fn read_byte() {
-        let mut reader = MemReader::new(~[10]);
+        let mut reader = MemReader::new(vec!(10));
         let byte = reader.read_byte();
         assert!(byte == Ok(10));
     }
@@ -254,7 +301,7 @@ mod test {
             count: 0,
         };
         let byte = reader.bytes().next();
-        assert!(byte == Some(10));
+        assert!(byte == Some(Ok(10)));
     }
 
     #[test]
@@ -269,14 +316,14 @@ mod test {
         let mut reader = ErroringReader;
         let mut it = reader.bytes();
         let byte = it.next();
-        assert!(byte.is_none());
+        assert!(byte.unwrap().is_err());
     }
 
     #[test]
     fn read_bytes() {
-        let mut reader = MemReader::new(~[10, 11, 12, 13]);
-        let bytes = reader.read_bytes(4).unwrap();
-        assert!(bytes == ~[10, 11, 12, 13]);
+        let mut reader = MemReader::new(vec!(10, 11, 12, 13));
+        let bytes = reader.read_exact(4).unwrap();
+        assert!(bytes == vec!(10, 11, 12, 13));
     }
 
     #[test]
@@ -284,50 +331,50 @@ mod test {
         let mut reader = PartialReader {
             count: 0,
         };
-        let bytes = reader.read_bytes(4).unwrap();
-        assert!(bytes == ~[10, 11, 12, 13]);
+        let bytes = reader.read_exact(4).unwrap();
+        assert!(bytes == vec!(10, 11, 12, 13));
     }
 
     #[test]
     fn read_bytes_eof() {
-        let mut reader = MemReader::new(~[10, 11]);
-        assert!(reader.read_bytes(4).is_err());
+        let mut reader = MemReader::new(vec!(10, 11));
+        assert!(reader.read_exact(4).is_err());
     }
 
     #[test]
-    fn push_bytes() {
-        let mut reader = MemReader::new(~[10, 11, 12, 13]);
-        let mut buf = ~[8, 9];
-        reader.push_bytes(&mut buf, 4).unwrap();
-        assert!(buf == ~[8, 9, 10, 11, 12, 13]);
+    fn push_exact() {
+        let mut reader = MemReader::new(vec!(10, 11, 12, 13));
+        let mut buf = vec!(8, 9);
+        reader.push_exact(&mut buf, 4).unwrap();
+        assert!(buf == vec!(8, 9, 10, 11, 12, 13));
     }
 
     #[test]
-    fn push_bytes_partial() {
+    fn push_exact_partial() {
         let mut reader = PartialReader {
             count: 0,
         };
-        let mut buf = ~[8, 9];
-        reader.push_bytes(&mut buf, 4).unwrap();
-        assert!(buf == ~[8, 9, 10, 11, 12, 13]);
+        let mut buf = vec!(8, 9);
+        reader.push_exact(&mut buf, 4).unwrap();
+        assert!(buf == vec!(8, 9, 10, 11, 12, 13));
     }
 
     #[test]
-    fn push_bytes_eof() {
-        let mut reader = MemReader::new(~[10, 11]);
-        let mut buf = ~[8, 9];
-        assert!(reader.push_bytes(&mut buf, 4).is_err());
-        assert!(buf == ~[8, 9, 10, 11]);
+    fn push_exact_eof() {
+        let mut reader = MemReader::new(vec!(10, 11));
+        let mut buf = vec!(8, 9);
+        assert!(reader.push_exact(&mut buf, 4).is_err());
+        assert!(buf == vec!(8, 9, 10, 11));
     }
 
     #[test]
-    fn push_bytes_error() {
+    fn push_exact_error() {
         let mut reader = ErroringLaterReader {
             count: 0,
         };
-        let mut buf = ~[8, 9];
-        assert!(reader.push_bytes(&mut buf, 4).is_err());
-        assert!(buf == ~[8, 9, 10]);
+        let mut buf = vec!(8, 9);
+        assert!(reader.push_exact(&mut buf, 4).is_err());
+        assert!(buf == vec!(8, 9, 10));
     }
 
     #[test]
@@ -336,7 +383,7 @@ mod test {
             count: 0,
         };
         let buf = reader.read_to_end().unwrap();
-        assert!(buf == ~[10, 11, 12, 13]);
+        assert!(buf == vec!(10, 11, 12, 13));
     }
 
     #[test]
@@ -346,7 +393,7 @@ mod test {
             count: 0,
         };
         let buf = reader.read_to_end().unwrap();
-        assert!(buf == ~[10, 11]);
+        assert!(buf == vec!(10, 11));
     }
 
     #[test]
@@ -455,21 +502,23 @@ mod test {
 
 #[cfg(test)]
 mod bench {
-    use extra::test::BenchHarness;
+    extern crate test;
+
     use container::Container;
+    use prelude::*;
+    use self::test::Bencher;
 
     macro_rules! u64_from_be_bytes_bench_impl(
         ($size:expr, $stride:expr, $start_index:expr) =>
         ({
-            use vec;
             use super::u64_from_be_bytes;
 
-            let data = vec::from_fn($stride*100+$start_index, |i| i as u8);
+            let data = Vec::from_fn($stride*100+$start_index, |i| i as u8);
             let mut sum = 0u64;
-            bh.iter(|| {
+            b.iter(|| {
                 let mut i = $start_index;
                 while i < data.len() {
-                    sum += u64_from_be_bytes(data, i, $size);
+                    sum += u64_from_be_bytes(data.as_slice(), i, $size);
                     i += $stride;
                 }
             });
@@ -477,32 +526,32 @@ mod bench {
     )
 
     #[bench]
-    fn u64_from_be_bytes_4_aligned(bh: &mut BenchHarness) {
+    fn u64_from_be_bytes_4_aligned(b: &mut Bencher) {
         u64_from_be_bytes_bench_impl!(4, 4, 0);
     }
 
     #[bench]
-    fn u64_from_be_bytes_4_unaligned(bh: &mut BenchHarness) {
+    fn u64_from_be_bytes_4_unaligned(b: &mut Bencher) {
         u64_from_be_bytes_bench_impl!(4, 4, 1);
     }
 
     #[bench]
-    fn u64_from_be_bytes_7_aligned(bh: &mut BenchHarness) {
+    fn u64_from_be_bytes_7_aligned(b: &mut Bencher) {
         u64_from_be_bytes_bench_impl!(7, 8, 0);
     }
 
     #[bench]
-    fn u64_from_be_bytes_7_unaligned(bh: &mut BenchHarness) {
+    fn u64_from_be_bytes_7_unaligned(b: &mut Bencher) {
         u64_from_be_bytes_bench_impl!(7, 8, 1);
     }
 
     #[bench]
-    fn u64_from_be_bytes_8_aligned(bh: &mut BenchHarness) {
+    fn u64_from_be_bytes_8_aligned(b: &mut Bencher) {
         u64_from_be_bytes_bench_impl!(8, 8, 0);
     }
 
     #[bench]
-    fn u64_from_be_bytes_8_unaligned(bh: &mut BenchHarness) {
+    fn u64_from_be_bytes_8_unaligned(b: &mut Bencher) {
         u64_from_be_bytes_bench_impl!(8, 8, 1);
     }
 }

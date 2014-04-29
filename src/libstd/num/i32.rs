@@ -10,32 +10,35 @@
 
 //! Operations and constants for signed 32-bits integers (`i32` type)
 
-#[allow(non_uppercase_statics)];
+#![allow(non_uppercase_statics)]
 
 use prelude::*;
 
 use default::Default;
+use from_str::FromStr;
 use num::{Bitwise, Bounded, CheckedAdd, CheckedSub, CheckedMul};
 use num::{CheckedDiv, Zero, One, strconv};
 use num::{ToStrRadix, FromStrRadix};
 use option::{Option, Some, None};
 use str;
-use unstable::intrinsics;
+use intrinsics;
 
 int_module!(i32, 32)
 
 impl Bitwise for i32 {
-    /// Counts the number of bits set. Wraps LLVM's `ctpop` intrinsic.
+    /// Returns the number of ones in the binary representation of the number.
     #[inline]
-    fn population_count(&self) -> i32 { unsafe { intrinsics::ctpop32(*self) } }
+    fn count_ones(&self) -> i32 { unsafe { intrinsics::ctpop32(*self as u32) as i32 } }
 
-    /// Counts the number of leading zeros. Wraps LLVM's `ctlz` intrinsic.
+    /// Returns the number of leading zeros in the in the binary representation
+    /// of the number.
     #[inline]
-    fn leading_zeros(&self) -> i32 { unsafe { intrinsics::ctlz32(*self) } }
+    fn leading_zeros(&self) -> i32 { unsafe { intrinsics::ctlz32(*self as u32) as i32 } }
 
-    /// Counts the number of trailing zeros. Wraps LLVM's `cttz` intrinsic.
+    /// Returns the number of trailing zeros in the in the binary representation
+    /// of the number.
     #[inline]
-    fn trailing_zeros(&self) -> i32 { unsafe { intrinsics::cttz32(*self) } }
+    fn trailing_zeros(&self) -> i32 { unsafe { intrinsics::cttz32(*self as u32) as i32 } }
 }
 
 impl CheckedAdd for i32 {

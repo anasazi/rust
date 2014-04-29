@@ -10,21 +10,22 @@
 
 //! Operations on ASCII strings and characters
 
-use to_str::{ToStr,IntoStr};
+use to_str::{IntoStr};
 use str;
 use str::Str;
 use str::StrSlice;
 use str::OwnedStr;
 use container::Container;
 use cast;
+use fmt;
 use iter::Iterator;
-use vec::{ImmutableVector, MutableVector, Vector};
-use to_bytes::IterBytes;
+use slice::{ImmutableVector, MutableVector, Vector};
+use vec::Vec;
 use option::{Option, Some, None};
 
 /// Datatype to hold one ascii character. It wraps a `u8`, with the highest bit always zero.
-#[deriving(Clone, Eq, Ord, TotalOrd, TotalEq)]
-pub struct Ascii { priv chr: u8 }
+#[deriving(Clone, Eq, Ord, TotalOrd, TotalEq, Hash)]
+pub struct Ascii { chr: u8 }
 
 impl Ascii {
     /// Converts an ascii character into a `u8`.
@@ -42,19 +43,19 @@ impl Ascii {
     /// Convert to lowercase.
     #[inline]
     pub fn to_lower(self) -> Ascii {
-        Ascii{chr: ASCII_LOWER_MAP[self.chr]}
+        Ascii{chr: ASCII_LOWER_MAP[self.chr as uint]}
     }
 
     /// Convert to uppercase.
     #[inline]
     pub fn to_upper(self) -> Ascii {
-        Ascii{chr: ASCII_UPPER_MAP[self.chr]}
+        Ascii{chr: ASCII_UPPER_MAP[self.chr as uint]}
     }
 
     /// Compares two ascii characters of equality, ignoring case.
     #[inline]
     pub fn eq_ignore_case(self, other: Ascii) -> bool {
-        ASCII_LOWER_MAP[self.chr] == ASCII_LOWER_MAP[other.chr]
+        ASCII_LOWER_MAP[self.chr as uint] == ASCII_LOWER_MAP[other.chr as uint]
     }
 
     // the following methods are like ctype, and the implementation is inspired by musl
@@ -126,11 +127,9 @@ impl Ascii {
     }
 }
 
-impl ToStr for Ascii {
-    #[inline]
-    fn to_str(&self) -> ~str {
-        // self.chr is always a valid utf8 byte, no need for the check
-        unsafe { str::raw::from_byte(self.chr) }
+impl<'a> fmt::Show for Ascii {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        (self.chr as char).fmt(f)
     }
 }
 
@@ -286,12 +285,12 @@ impl<'a> AsciiStr for &'a [Ascii] {
 
     #[inline]
     fn to_lower(&self) -> ~[Ascii] {
-        self.map(|a| a.to_lower())
+        self.iter().map(|a| a.to_lower()).collect()
     }
 
     #[inline]
     fn to_upper(&self) -> ~[Ascii] {
-        self.map(|a| a.to_upper())
+        self.iter().map(|a| a.to_upper()).collect()
     }
 
     #[inline]
@@ -307,10 +306,11 @@ impl IntoStr for ~[Ascii] {
     }
 }
 
-impl IterBytes for Ascii {
+impl IntoStr for Vec<Ascii> {
     #[inline]
-    fn iter_bytes(&self, _lsb0: bool, f: |buf: &[u8]| -> bool) -> bool {
-        f([self.to_byte()])
+    fn into_str(self) -> ~str {
+        let v: ~[Ascii] = self.move_iter().collect();
+        unsafe { cast::transmute(v) }
     }
 }
 
@@ -370,8 +370,12 @@ impl<'a> StrAsciiExt for &'a str {
 
     #[inline]
     fn eq_ignore_ascii_case(&self, other: &str) -> bool {
-        self.len() == other.len() && self.as_bytes().iter().zip(other.as_bytes().iter()).all(
-            |(byte_self, byte_other)| ASCII_LOWER_MAP[*byte_self] == ASCII_LOWER_MAP[*byte_other])
+        self.len() == other.len() &&
+            self.as_bytes().iter().zip(other.as_bytes().iter()).all(
+            |(byte_self, byte_other)| {
+                ASCII_LOWER_MAP[*byte_self as uint] ==
+                    ASCII_LOWER_MAP[*byte_other as uint]
+            })
     }
 }
 
@@ -392,7 +396,7 @@ unsafe fn str_map_bytes(string: ~str, map: &'static [u8]) -> ~str {
     let mut bytes = string.into_bytes();
 
     for b in bytes.mut_iter() {
-        *b = map[*b];
+        *b = map[*b as uint];
     }
 
     str::raw::from_utf8_owned(bytes)
@@ -400,7 +404,7 @@ unsafe fn str_map_bytes(string: ~str, map: &'static [u8]) -> ~str {
 
 #[inline]
 unsafe fn str_copy_map_bytes(string: &str, map: &'static [u8]) -> ~str {
-    let bytes = string.bytes().map(|b| map[b]).to_owned_vec();
+    let bytes = string.bytes().map(|b| map[b as uint]).collect::<~[_]>();
 
     str::raw::from_utf8_owned(bytes)
 }
@@ -482,11 +486,17 @@ mod tests {
     use super::*;
     use str::from_char;
     use char::from_u32;
+    use vec::Vec;
+    use str::StrSlice;
 
     macro_rules! v2ascii (
-        ( [$($e:expr),*]) => ( [$(Ascii{chr:$e}),*]);
+        ( [$($e:expr),*]) => (&[$(Ascii{chr:$e}),*]);
         (&[$($e:expr),*]) => (&[$(Ascii{chr:$e}),*]);
         (~[$($e:expr),*]) => (~[$(Ascii{chr:$e}),*]);
+    )
+
+    macro_rules! vec2ascii (
+        ($($e:expr),*) => (Vec::from_slice([$(Ascii{chr:$e}),*]));
     )
 
     #[test]
@@ -527,14 +537,14 @@ mod tests {
         // FIXME: #5475 borrowchk error, owned vectors do not live long enough
         // if chained-from directly
         let v = ~[40u8, 32u8, 59u8]; assert_eq!(v.to_ascii(), v2ascii!([40, 32, 59]));
-        let v = ~"( ;";              assert_eq!(v.to_ascii(), v2ascii!([40, 32, 59]));
+        let v = "( ;".to_owned();              assert_eq!(v.to_ascii(), v2ascii!([40, 32, 59]));
 
-        assert_eq!("abCDef&?#".to_ascii().to_lower().into_str(), ~"abcdef&?#");
-        assert_eq!("abCDef&?#".to_ascii().to_upper().into_str(), ~"ABCDEF&?#");
+        assert_eq!("abCDef&?#".to_ascii().to_lower().into_str(), "abcdef&?#".to_owned());
+        assert_eq!("abCDef&?#".to_ascii().to_upper().into_str(), "ABCDEF&?#".to_owned());
 
-        assert_eq!("".to_ascii().to_lower().into_str(), ~"");
-        assert_eq!("YMCA".to_ascii().to_lower().into_str(), ~"ymca");
-        assert_eq!("abcDEFxyz:.;".to_ascii().to_upper().into_str(), ~"ABCDEFXYZ:.;");
+        assert_eq!("".to_ascii().to_lower().into_str(), "".to_owned());
+        assert_eq!("YMCA".to_ascii().to_lower().into_str(), "ymca".to_owned());
+        assert_eq!("abcDEFxyz:.;".to_ascii().to_upper().into_str(), "ABCDEFXYZ:.;".to_owned());
 
         assert!("aBcDeF&?#".to_ascii().eq_ignore_case("AbCdEf&?#".to_ascii()));
 
@@ -545,8 +555,20 @@ mod tests {
     }
 
     #[test]
+    fn test_ascii_vec_ng() {
+        assert_eq!(Vec::from_slice("abCDef&?#".to_ascii().to_lower()).into_str(),
+                   "abcdef&?#".to_owned());
+        assert_eq!(Vec::from_slice("abCDef&?#".to_ascii().to_upper()).into_str(),
+                   "ABCDEF&?#".to_owned());
+        assert_eq!(Vec::from_slice("".to_ascii().to_lower()).into_str(), "".to_owned());
+        assert_eq!(Vec::from_slice("YMCA".to_ascii().to_lower()).into_str(), "ymca".to_owned());
+        assert_eq!(Vec::from_slice("abcDEFxyz:.;".to_ascii().to_upper()).into_str(),
+                   "ABCDEFXYZ:.;".to_owned());
+    }
+
+    #[test]
     fn test_owned_ascii_vec() {
-        assert_eq!((~"( ;").into_ascii(), v2ascii!(~[40, 32, 59]));
+        assert_eq!(("( ;".to_owned()).into_ascii(), v2ascii!(~[40, 32, 59]));
         assert_eq!((~[40u8, 32u8, 59u8]).into_ascii(), v2ascii!(~[40, 32, 59]));
     }
 
@@ -558,7 +580,8 @@ mod tests {
 
     #[test]
     fn test_ascii_into_str() {
-        assert_eq!(v2ascii!(~[40, 32, 59]).into_str(), ~"( ;");
+        assert_eq!(v2ascii!(~[40, 32, 59]).into_str(), "( ;".to_owned());
+        assert_eq!(vec2ascii!(40, 32, 59).into_str(), "( ;".to_owned());
     }
 
     #[test]
@@ -605,14 +628,14 @@ mod tests {
         assert_eq!((~[40u8, 32u8, 59u8]).into_ascii_opt(), Some(v2ascii!(~[40, 32, 59])));
         assert_eq!((~[127u8, 128u8, 255u8]).into_ascii_opt(), None);
 
-        assert_eq!((~"( ;").into_ascii_opt(), Some(v2ascii!(~[40, 32, 59])));
-        assert_eq!((~"zoä华").into_ascii_opt(), None);
+        assert_eq!(("( ;".to_owned()).into_ascii_opt(), Some(v2ascii!(~[40, 32, 59])));
+        assert_eq!(("zoä华".to_owned()).into_ascii_opt(), None);
     }
 
     #[test]
     fn test_to_ascii_upper() {
-        assert_eq!("url()URL()uRl()ürl".to_ascii_upper(), ~"URL()URL()URL()üRL");
-        assert_eq!("hıKß".to_ascii_upper(), ~"HıKß");
+        assert_eq!("url()URL()uRl()ürl".to_ascii_upper(), "URL()URL()URL()üRL".to_owned());
+        assert_eq!("hıKß".to_ascii_upper(), "HıKß".to_owned());
 
         let mut i = 0;
         while i <= 500 {
@@ -626,9 +649,9 @@ mod tests {
 
     #[test]
     fn test_to_ascii_lower() {
-        assert_eq!("url()URL()uRl()Ürl".to_ascii_lower(), ~"url()url()url()Ürl");
+        assert_eq!("url()URL()uRl()Ürl".to_ascii_lower(), "url()url()url()Ürl".to_owned());
         // Dotted capital I, Kelvin sign, Sharp S.
-        assert_eq!("HİKß".to_ascii_lower(), ~"hİKß");
+        assert_eq!("HİKß".to_ascii_lower(), "hİKß".to_owned());
 
         let mut i = 0;
         while i <= 500 {
@@ -642,8 +665,9 @@ mod tests {
 
     #[test]
     fn test_into_ascii_upper() {
-        assert_eq!((~"url()URL()uRl()ürl").into_ascii_upper(), ~"URL()URL()URL()üRL");
-        assert_eq!((~"hıKß").into_ascii_upper(), ~"HıKß");
+        assert_eq!(("url()URL()uRl()ürl".to_owned()).into_ascii_upper(),
+                   "URL()URL()URL()üRL".to_owned());
+        assert_eq!(("hıKß".to_owned()).into_ascii_upper(), "HıKß".to_owned());
 
         let mut i = 0;
         while i <= 500 {
@@ -657,9 +681,10 @@ mod tests {
 
     #[test]
     fn test_into_ascii_lower() {
-        assert_eq!((~"url()URL()uRl()Ürl").into_ascii_lower(), ~"url()url()url()Ürl");
+        assert_eq!(("url()URL()uRl()Ürl".to_owned()).into_ascii_lower(),
+                   "url()url()url()Ürl".to_owned());
         // Dotted capital I, Kelvin sign, Sharp S.
-        assert_eq!((~"HİKß").into_ascii_lower(), ~"hİKß");
+        assert_eq!(("HİKß".to_owned()).into_ascii_lower(), "hİKß".to_owned());
 
         let mut i = 0;
         while i <= 500 {
@@ -695,8 +720,12 @@ mod tests {
     #[test]
     fn test_to_str() {
         let s = Ascii{ chr: 't' as u8 }.to_str();
-        assert_eq!(s, ~"t");
+        assert_eq!(s, "t".to_owned());
     }
 
-
+    #[test]
+    fn test_show() {
+        let c = Ascii { chr: 't' as u8 };
+        assert_eq!(format!("{}", c), "t".to_owned());
+    }
 }

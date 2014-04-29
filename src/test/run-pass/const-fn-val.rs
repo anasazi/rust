@@ -12,10 +12,10 @@ fn foo() -> int {
     return 0xca7f000d;
 }
 
-struct Bar<'a> { f: 'a || -> int }
+struct Bar<'a> { f: ||: 'a -> int }
 
-static b : Bar<'static> = Bar { f: foo };
+static mut b : Bar<'static> = Bar { f: foo };
 
 pub fn main() {
-    assert_eq!((b.f)(), 0xca7f000d);
+    unsafe { assert_eq!((b.f)(), 0xca7f000d); }
 }

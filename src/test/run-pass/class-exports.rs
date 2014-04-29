@@ -1,6 +1,5 @@
-// xfail-fast
 
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -34,5 +33,5 @@ mod kitty {
 }
 
 pub fn main() {
-  assert_eq!(cat(~"Spreckles").get_name(), ~"Spreckles");
+  assert_eq!(cat("Spreckles".to_owned()).get_name(), "Spreckles".to_owned());
 }

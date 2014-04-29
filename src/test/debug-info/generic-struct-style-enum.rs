@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,9 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-android: FIXME(#10381)
+// ignore-tidy-linelength
+// ignore-android: FIXME(#10381)
 
-// compile-flags:-Z extra-debug-info
+// compile-flags:-g
 // debugger:set print union on
 // debugger:rbreak zzz
 // debugger:run
@@ -28,7 +29,7 @@
 // debugger:print univariant
 // check:$4 = {a = -1}
 
-#[feature(struct_variant)];
+#![feature(struct_variant)]
 
 // NOTE: This is a copy of the non-generic test case. The `Txx` type parameters have to be
 // substituted with something of size `xx` bits and the same alignment as an integer type of the

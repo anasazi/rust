@@ -13,42 +13,46 @@ use codemap::Span;
 use ext::base::ExtCtxt;
 use ext::build::AstBuilder;
 use ext::deriving::generic::*;
+use parse::token::InternedString;
 
-pub fn expand_deriving_default(cx: &ExtCtxt,
+pub fn expand_deriving_default(cx: &mut ExtCtxt,
                             span: Span,
                             mitem: @MetaItem,
-                            in_items: ~[@Item])
-    -> ~[@Item] {
+                            item: @Item,
+                            push: |@Item|) {
+    let inline = cx.meta_word(span, InternedString::new("inline"));
+    let attrs = vec!(cx.attribute(span, inline));
     let trait_def = TraitDef {
-        cx: cx, span: span,
-
-        path: Path::new(~["std", "default", "Default"]),
-        additional_bounds: ~[],
+        span: span,
+        attributes: Vec::new(),
+        path: Path::new(vec!("std", "default", "Default")),
+        additional_bounds: Vec::new(),
         generics: LifetimeBounds::empty(),
-        methods: ~[
+        methods: vec!(
             MethodDef {
                 name: "default",
                 generics: LifetimeBounds::empty(),
                 explicit_self: None,
-                args: ~[],
+                args: Vec::new(),
                 ret_ty: Self,
-                inline: true,
+                attributes: attrs,
                 const_nonmatching: false,
-                combine_substructure: default_substructure
-            },
-        ]
+                combine_substructure: combine_substructure(|a, b, c| {
+                    default_substructure(a, b, c)
+                })
+            })
     };
-    trait_def.expand(mitem, in_items)
+    trait_def.expand(cx, mitem, item, push)
 }
 
-fn default_substructure(cx: &ExtCtxt, trait_span: Span, substr: &Substructure) -> @Expr {
-    let default_ident = ~[
+fn default_substructure(cx: &mut ExtCtxt, trait_span: Span, substr: &Substructure) -> @Expr {
+    let default_ident = vec!(
         cx.ident_of("std"),
         cx.ident_of("default"),
         cx.ident_of("Default"),
         cx.ident_of("default")
-    ];
-    let default_call = |span| cx.expr_call_global(span, default_ident.clone(), ~[]);
+    );
+    let default_call = |span| cx.expr_call_global(span, default_ident.clone(), Vec::new());
 
     return match *substr.fields {
         StaticStruct(_, ref summary) => {
@@ -57,14 +61,14 @@ fn default_substructure(cx: &ExtCtxt, trait_span: Span, substr: &Substructure) -
                     if fields.is_empty() {
                         cx.expr_ident(trait_span, substr.type_ident)
                     } else {
-                        let exprs = fields.map(|sp| default_call(*sp));
+                        let exprs = fields.iter().map(|sp| default_call(*sp)).collect();
                         cx.expr_call_ident(trait_span, substr.type_ident, exprs)
                     }
                 }
                 Named(ref fields) => {
-                    let default_fields = fields.map(|&(ident, span)| {
+                    let default_fields = fields.iter().map(|&(ident, span)| {
                         cx.field_imm(span, ident, default_call(span))
-                    });
+                    }).collect();
                     cx.expr_struct_ident(trait_span, substr.type_ident, default_fields)
                 }
             }

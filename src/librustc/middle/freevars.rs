@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -11,11 +11,12 @@
 // A pass that annotates for each loops and functions with the free
 // variables that they contain.
 
+#![allow(non_camel_case_types)]
 
 use middle::resolve;
 use middle::ty;
+use util::nodemap::{NodeMap, NodeSet};
 
-use std::hashmap::HashMap;
 use syntax::codemap::Span;
 use syntax::{ast, ast_util};
 use syntax::visit;
@@ -25,19 +26,18 @@ use syntax::visit::Visitor;
 // (The def_upvar will already have been stripped).
 #[deriving(Encodable, Decodable)]
 pub struct freevar_entry {
-    def: ast::Def, //< The variable being accessed free.
-    span: Span     //< First span where it is accessed (there can be multiple)
+    pub def: ast::Def, //< The variable being accessed free.
+    pub span: Span     //< First span where it is accessed (there can be multiple)
 }
-pub type freevar_info = @~[@freevar_entry];
-pub type freevar_map = HashMap<ast::NodeId, freevar_info>;
+pub type freevar_map = NodeMap<Vec<freevar_entry>>;
 
-struct CollectFreevarsVisitor {
-    seen: HashMap<ast::NodeId, ()>,
-    refs: ~[@freevar_entry],
-    def_map: resolve::DefMap,
+struct CollectFreevarsVisitor<'a> {
+    seen: NodeSet,
+    refs: Vec<freevar_entry>,
+    def_map: &'a resolve::DefMap,
 }
 
-impl Visitor<int> for CollectFreevarsVisitor {
+impl<'a> Visitor<int> for CollectFreevarsVisitor<'a> {
 
     fn visit_item(&mut self, _: &ast::Item, _: int) {
         // ignore_item
@@ -50,8 +50,7 @@ impl Visitor<int> for CollectFreevarsVisitor {
             }
             ast::ExprPath(..) => {
                 let mut i = 0;
-                let def_map = self.def_map.borrow();
-                match def_map.get().find(&expr.id) {
+                match self.def_map.borrow().find(&expr.id) {
                     None => fail!("path not found"),
                     Some(&df) => {
                         let mut def = df;
@@ -64,12 +63,12 @@ impl Visitor<int> for CollectFreevarsVisitor {
                         }
                         if i == depth { // Made it to end of loop
                             let dnum = ast_util::def_id_of_def(def).node;
-                            if !self.seen.contains_key(&dnum) {
-                                self.refs.push(@freevar_entry {
+                            if !self.seen.contains(&dnum) {
+                                self.refs.push(freevar_entry {
                                     def: def,
                                     span: expr.span,
                                 });
-                                self.seen.insert(dnum, ());
+                                self.seen.insert(dnum);
                             }
                         }
                     }
@@ -87,30 +86,23 @@ impl Visitor<int> for CollectFreevarsVisitor {
 // Since we want to be able to collect upvars in some arbitrary piece
 // of the AST, we take a walker function that we invoke with a visitor
 // in order to start the search.
-fn collect_freevars(def_map: resolve::DefMap, blk: &ast::Block) -> freevar_info {
-    let seen = HashMap::new();
-    let refs = ~[];
-
+fn collect_freevars(def_map: &resolve::DefMap, blk: &ast::Block) -> Vec<freevar_entry> {
     let mut v = CollectFreevarsVisitor {
-        seen: seen,
-        refs: refs,
+        seen: NodeSet::new(),
+        refs: Vec::new(),
         def_map: def_map,
     };
 
     v.visit_block(blk, 1);
-    let CollectFreevarsVisitor {
-        refs,
-        ..
-    } = v;
-    return @refs;
+    v.refs
 }
 
-struct AnnotateFreevarsVisitor {
-    def_map: resolve::DefMap,
+struct AnnotateFreevarsVisitor<'a> {
+    def_map: &'a resolve::DefMap,
     freevars: freevar_map,
 }
 
-impl Visitor<()> for AnnotateFreevarsVisitor {
+impl<'a> Visitor<()> for AnnotateFreevarsVisitor<'a> {
     fn visit_fn(&mut self, fk: &visit::FnKind, fd: &ast::FnDecl,
                 blk: &ast::Block, s: Span, nid: ast::NodeId, _: ()) {
         let vars = collect_freevars(self.def_map, blk);
@@ -124,29 +116,20 @@ impl Visitor<()> for AnnotateFreevarsVisitor {
 // efficient as it fully recomputes the free variables at every
 // node of interest rather than building up the free variables in
 // one pass. This could be improved upon if it turns out to matter.
-pub fn annotate_freevars(def_map: resolve::DefMap, crate: &ast::Crate) ->
+pub fn annotate_freevars(def_map: &resolve::DefMap, krate: &ast::Crate) ->
    freevar_map {
     let mut visitor = AnnotateFreevarsVisitor {
         def_map: def_map,
-        freevars: HashMap::new(),
+        freevars: NodeMap::new(),
     };
-    visit::walk_crate(&mut visitor, crate, ());
+    visit::walk_crate(&mut visitor, krate, ());
 
-    let AnnotateFreevarsVisitor {
-        freevars,
-        ..
-    } = visitor;
-    freevars
+    visitor.freevars
 }
 
-pub fn get_freevars(tcx: ty::ctxt, fid: ast::NodeId) -> freevar_info {
-    let freevars = tcx.freevars.borrow();
-    match freevars.get().find(&fid) {
-        None => fail!("get_freevars: {} has no freevars", fid),
-        Some(&d) => return d
+pub fn with_freevars<T>(tcx: &ty::ctxt, fid: ast::NodeId, f: |&[freevar_entry]| -> T) -> T {
+    match tcx.freevars.borrow().find(&fid) {
+        None => fail!("with_freevars: {} has no freevars", fid),
+        Some(d) => f(d.as_slice())
     }
-}
-
-pub fn has_freevars(tcx: ty::ctxt, fid: ast::NodeId) -> bool {
-    !get_freevars(tcx, fid).is_empty()
 }

@@ -9,7 +9,7 @@
 // except according to those terms.
 
 /*jslint browser: true, es5: true */
-/*globals $: true, searchIndex: true, rootPath: true, allPaths: true */
+/*globals $: true, rootPath: true */
 
 (function() {
     "use strict";
@@ -23,7 +23,8 @@
             map(function(s) {
                 var pair = s.split("=");
                 params[decodeURIComponent(pair[0])] =
-                    typeof pair[1] === "undefined" ? null : decodeURIComponent(pair[1]);
+                    typeof pair[1] === "undefined" ?
+                            null : decodeURIComponent(pair[1]);
             });
         return params;
     }
@@ -111,26 +112,31 @@
         document.location.href = url;
     });
 
-    function initSearch(searchIndex) {
-        var currentResults, index, params = getQueryStringParams();
+    function initSearch(rawSearchIndex) {
+        var currentResults, index, searchIndex;
+        var params = getQueryStringParams();
 
-        // Populate search bar with query string search term when provided.
-        $(".search-input")[0].value = params.search || '';
+        // Populate search bar with query string search term when provided,
+        // but only if the input bar is empty. This avoid the obnoxious issue
+        // where you start trying to do a search, and the index loads, and
+        // suddenly your search is gone!
+        if ($(".search-input")[0].value === "") {
+            $(".search-input")[0].value = params.search || '';
+        }
 
         /**
          * Executes the query and builds an index of results
          * @param  {[Object]} query     [The user query]
          * @param  {[type]} max         [The maximum results returned]
-         * @param  {[type]} searchWords [The list of search words to query against]
+         * @param  {[type]} searchWords [The list of search words to query
+         *                               against]
          * @return {[type]}             [A search index of results]
          */
         function execQuery(query, max, searchWords) {
             var valLower = query.query.toLowerCase(),
                 val = valLower,
-                typeFilter = query.type,
+                typeFilter = itemTypeFromName(query.type),
                 results = [],
-                aa = 0,
-                bb = 0,
                 split = valLower.split("::");
 
             //remove empty keywords
@@ -142,14 +148,16 @@
             }
 
             // quoted values mean literal search
-            bb = searchWords.length;
-            if ((val.charAt(0) === "\"" || val.charAt(0) === "'") && val.charAt(val.length - 1) === val.charAt(0)) {
+            var nSearchWords = searchWords.length;
+            if ((val.charAt(0) === "\"" || val.charAt(0) === "'") &&
+                val.charAt(val.length - 1) === val.charAt(0))
+            {
                 val = val.substr(1, val.length - 2);
-                for (aa = 0; aa < bb; aa += 1) {
-                    if (searchWords[aa] === val) {
+                for (var i = 0; i < nSearchWords; i += 1) {
+                    if (searchWords[i] === val) {
                         // filter type: ... queries
-                        if (!typeFilter || typeFilter === searchIndex[aa].ty) {
-                            results.push([aa, -1]);
+                        if (typeFilter < 0 || typeFilter === searchIndex[i].ty) {
+                            results.push({id: i, index: -1});
                         }
                     }
                     if (results.length === max) {
@@ -160,11 +168,14 @@
                 // gather matching search results up to a certain maximum
                 val = val.replace(/\_/g, "");
                 for (var i = 0; i < split.length; i++) {
-                    for (aa = 0; aa < bb; aa += 1) {
-                        if (searchWords[aa].indexOf(split[i]) > -1 || searchWords[aa].indexOf(val) > -1 || searchWords[aa].replace(/_/g, "").indexOf(val) > -1) {
+                    for (var j = 0; j < nSearchWords; j += 1) {
+                        if (searchWords[j].indexOf(split[i]) > -1 ||
+                            searchWords[j].indexOf(val) > -1 ||
+                            searchWords[j].replace(/_/g, "").indexOf(val) > -1)
+                        {
                             // filter type: ... queries
-                            if (!typeFilter || typeFilter === searchIndex[aa].ty) {
-                                results.push([aa, searchWords[aa].replace(/_/g, "").indexOf(val)]);
+                            if (typeFilter < 0 || typeFilter === searchIndex[j].ty) {
+                                results.push({id: j, index: searchWords[j].replace(/_/g, "").indexOf(val)});
                             }
                         }
                         if (results.length === max) {
@@ -174,88 +185,99 @@
                 }
             }
 
-            bb = results.length;
-            for (aa = 0; aa < bb; aa += 1) {
-                results[aa].push(searchIndex[results[aa][0]].ty);
-                results[aa].push(searchIndex[results[aa][0]].path);
-                results[aa].push(searchIndex[results[aa][0]].name);
-                results[aa].push(searchIndex[results[aa][0]].parent);
+            var nresults = results.length;
+            for (var i = 0; i < nresults; i += 1) {
+                results[i].word = searchWords[results[i].id];
+                results[i].item = searchIndex[results[i].id] || {};
             }
             // if there are no results then return to default and fail
             if (results.length === 0) {
                 return [];
             }
 
-            // sort by exact match
-            results.sort(function search_complete_sort0(aaa, bbb) {
-                if (searchWords[aaa[0]] === valLower && searchWords[bbb[0]] !== valLower) {
-                    return 1;
-                }
+            results.sort(function(aaa, bbb) {
+                var a, b;
+
+                // sort by crate (non-current crate goes later)
+                a = (aaa.item.crate !== window.currentCrate);
+                b = (bbb.item.crate !== window.currentCrate);
+                if (a !== b) return a - b;
+
+                // sort by exact match (mismatch goes later)
+                a = (aaa.word !== valLower);
+                b = (bbb.word !== valLower);
+                if (a !== b) return a - b;
+
+                // sort by item name length (longer goes later)
+                a = aaa.word.length;
+                b = bbb.word.length;
+                if (a !== b) return a - b;
+
+                // sort by item name (lexicographically larger goes later)
+                a = aaa.word;
+                b = bbb.word;
+                if (a !== b) return (a > b ? +1 : -1);
+
+                // sort by index of keyword in item name (no literal occurrence goes later)
+                a = (aaa.index < 0);
+                b = (bbb.index < 0);
+                if (a !== b) return a - b;
+                // (later literal occurrence, if any, goes later)
+                a = aaa.index;
+                b = bbb.index;
+                if (a !== b) return a - b;
+
+                // sort by description (no description goes later)
+                a = (aaa.item.desc === '');
+                b = (bbb.item.desc === '');
+                if (a !== b) return a - b;
+
+                // sort by type (later occurrence in `itemTypes` goes later)
+                a = aaa.item.ty;
+                b = bbb.item.ty;
+                if (a !== b) return a - b;
+
+                // sort by path (lexicographically larger goes later)
+                a = aaa.item.path;
+                b = bbb.item.path;
+                if (a !== b) return (a > b ? +1 : -1);
+
+                // que sera, sera
+                return 0;
             });
-            // first sorting attempt
-            // sort by item name length
-            results.sort(function search_complete_sort1(aaa, bbb) {
-                if (searchWords[aaa[0]].length > searchWords[bbb[0]].length) {
-                    return 1;
-                }
-            });
-            // second sorting attempt
-            // sort by item name
-            results.sort(function search_complete_sort1(aaa, bbb) {
-                if (searchWords[aaa[0]].length === searchWords[bbb[0]].length && searchWords[aaa[0]] > searchWords[bbb[0]]) {
-                    return 1;
-                }
-            });
-            // third sorting attempt
-            // sort by index of keyword in item name
-            if (results[0][1] !== -1) {
-                results.sort(function search_complete_sort1(aaa, bbb) {
-                    if (aaa[1] > bbb[1] && bbb[1] === 0) {
-                        return 1;
-                    }
-                });
-            }
-            // fourth sorting attempt
-            // sort by type
-            results.sort(function search_complete_sort3(aaa, bbb) {
-                if (searchWords[aaa[0]] === searchWords[bbb[0]] && aaa[2] > bbb[2]) {
-                    return 1;
-                }
-            });
-            // fifth sorting attempt
-            // sort by path
-            results.sort(function search_complete_sort4(aaa, bbb) {
-                if (searchWords[aaa[0]] === searchWords[bbb[0]] && aaa[2] === bbb[2] && aaa[3] > bbb[3]) {
-                    return 1;
-                }
-            });
-            // sixth sorting attempt
+
             // remove duplicates, according to the data provided
-            for (aa = results.length - 1; aa > 0; aa -= 1) {
-                if (searchWords[results[aa][0]] === searchWords[results[aa - 1][0]] && results[aa][2] === results[aa - 1][2] && results[aa][3] === results[aa - 1][3]) {
-                    results[aa][0] = -1;
+            for (var i = results.length - 1; i > 0; i -= 1) {
+                if (results[i].word === results[i - 1].word &&
+                    results[i].item.ty === results[i - 1].item.ty &&
+                    results[i].item.path === results[i - 1].item.path)
+                {
+                    results[i].id = -1;
                 }
             }
             for (var i = 0; i < results.length; i++) {
                 var result = results[i],
-                    name = result[4].toLowerCase(),
-                    path = result[3].toLowerCase(),
-                    parent = allPaths[result[5]];
+                    name = result.item.name.toLowerCase(),
+                    path = result.item.path.toLowerCase(),
+                    parent = result.item.parent;
 
                 var valid = validateResult(name, path, split, parent);
                 if (!valid) {
-                    result[0] = -1;
+                    result.id = -1;
                 }
             }
             return results;
         }
 
         /**
-         * Validate performs the following boolean logic. For example: "File::open" will give
-         * IF A PARENT EXISTS => ("file" && "open") exists in (name || path || parent)
-         * OR => ("file" && "open") exists in (name || path )
+         * Validate performs the following boolean logic. For example:
+         * "File::open" will give IF A PARENT EXISTS => ("file" && "open")
+         * exists in (name || path || parent) OR => ("file" && "open") exists in
+         * (name || path )
          *
-         * This could be written functionally, but I wanted to minimise functions on stack.
+         * This could be written functionally, but I wanted to minimise
+         * functions on stack.
+         *
          * @param  {[string]} name   [The name of the result]
          * @param  {[string]} path   [The path of the result]
          * @param  {[string]} keys   [The keys to be used (["file", "open"])]
@@ -268,8 +290,13 @@
             //if there is a parent, then validate against parent
             if (parent !== undefined) {
                 for (var i = 0; i < keys.length; i++) {
-                    // if previous keys are valid and current key is in the path, name or parent
-                    if ((validate) && (name.toLowerCase().indexOf(keys[i]) > -1 || path.toLowerCase().indexOf(keys[i]) > -1 || parent.name.toLowerCase().indexOf(keys[i]) > -1)) {
+                    // if previous keys are valid and current key is in the
+                    // path, name or parent
+                    if ((validate) &&
+                        (name.toLowerCase().indexOf(keys[i]) > -1 ||
+                         path.toLowerCase().indexOf(keys[i]) > -1 ||
+                         parent.name.toLowerCase().indexOf(keys[i]) > -1))
+                    {
                         validate = true;
                     } else {
                         validate = false;
@@ -277,8 +304,12 @@
                 }
             } else {
                 for (var i = 0; i < keys.length; i++) {
-                    // if previous keys are valid and current key is in the path, name
-                    if ((validate) && (name.toLowerCase().indexOf(keys[i]) > -1 || path.toLowerCase().indexOf(keys[i]) > -1)) {
+                    // if previous keys are valid and current key is in the
+                    // path, name
+                    if ((validate) &&
+                        (name.toLowerCase().indexOf(keys[i]) > -1 ||
+                         path.toLowerCase().indexOf(keys[i]) > -1))
+                    {
                         validate = true;
                     } else {
                         validate = false;
@@ -293,7 +324,10 @@
 
             matches = query.match(/^(fn|mod|str(uct)?|enum|trait|t(ype)?d(ef)?)\s*:\s*/i);
             if (matches) {
-                type = matches[1].replace(/^td$/, 'typedef').replace(/^str$/, 'struct').replace(/^tdef$/, 'typedef').replace(/^typed$/, 'typedef');
+                type = matches[1].replace(/^td$/, 'typedef')
+                                 .replace(/^str$/, 'struct')
+                                 .replace(/^tdef$/, 'typedef')
+                                 .replace(/^typed$/, 'typedef');
                 query = query.substring(matches[0].length);
             }
 
@@ -309,7 +343,6 @@
 
             $results.on('click', function() {
                 var dst = $(this).find('a')[0];
-                console.log(window.location.pathname, dst.pathname);
                 if (window.location.pathname == dst.pathname) {
                     $('#search').addClass('hidden');
                     $('#main').removeClass('hidden');
@@ -357,7 +390,8 @@
             var output, shown, query = getQuery();
 
             currentResults = query.id;
-            output = '<h1>Results for ' + query.query + (query.type ? ' (type: ' + query.type + ')' : '') + '</h1>';
+            output = '<h1>Results for ' + query.query +
+                    (query.type ? ' (type: ' + query.type + ')' : '') + '</h1>';
             output += '<table class="search-results">';
 
             if (results.length > 0) {
@@ -372,7 +406,7 @@
 
                     shown.push(item);
                     name = item.name;
-                    type = item.ty;
+                    type = itemTypes[item.ty];
 
                     output += '<tr class="' + type + ' result"><td>';
 
@@ -389,12 +423,12 @@
                             '/index.html" class="' + type +
                             '">' + name + '</a>';
                     } else if (item.parent !== undefined) {
-                        var myparent = allPaths[item.parent];
+                        var myparent = item.parent;
                         var anchor = '#' + type + '.' + name;
                         output += item.path + '::' + myparent.name +
                             '::<a href="' + rootPath +
                             item.path.replace(/::/g, '/') +
-                            '/' + myparent.type +
+                            '/' + itemTypes[myparent.ty] +
                             '.' + myparent.name +
                             '.html' + anchor +
                             '" class="' + type +
@@ -444,21 +478,23 @@
                 return;
             }
 
-            // Because searching is incremental by character, only the most recent search query
-            // is added to the browser history.
+            // Because searching is incremental by character, only the most
+            // recent search query is added to the browser history.
             if (browserSupportsHistoryApi()) {
                 if (!history.state && !params.search) {
-                    history.pushState(query, "", "?search=" + encodeURIComponent(query.query));
+                    history.pushState(query, "", "?search=" +
+                                                encodeURIComponent(query.query));
                 } else {
-                    history.replaceState(query, "", "?search=" + encodeURIComponent(query.query));
+                    history.replaceState(query, "", "?search=" +
+                                                encodeURIComponent(query.query));
                 }
             }
 
             resultIndex = execQuery(query, 20000, index);
             len = resultIndex.length;
             for (i = 0; i < len; i += 1) {
-                if (resultIndex[i][0] > -1) {
-                    obj = searchIndex[resultIndex[i][0]];
+                if (resultIndex[i].id > -1) {
+                    obj = searchIndex[resultIndex[i].id];
                     filterdata.push([obj.name, obj.ty, obj.path, obj.desc]);
                     results.push(obj);
                 }
@@ -467,91 +503,81 @@
                 }
             }
 
-            // TODO add sorting capability through this function?
-            //
-            //            // the handler for the table heading filtering
-            //            filterdraw = function search_complete_filterdraw(node) {
-            //                var name = "",
-            //                    arrow = "",
-            //                    op = 0,
-            //                    tbody = node.parentNode.parentNode.nextSibling,
-            //                    anchora = {},
-            //                    tra = {},
-            //                    tha = {},
-            //                    td1a = {},
-            //                    td2a = {},
-            //                    td3a = {},
-            //                    aaa = 0,
-            //                    bbb = 0;
-            //
-            //                // the 4 following conditions set the rules for each
-            //                // table heading
-            //                if (node === ths[0]) {
-            //                    op = 0;
-            //                    name = "name";
-            //                    ths[1].innerHTML = ths[1].innerHTML.split(" ")[0];
-            //                    ths[2].innerHTML = ths[2].innerHTML.split(" ")[0];
-            //                    ths[3].innerHTML = ths[3].innerHTML.split(" ")[0];
-            //                }
-            //                if (node === ths[1]) {
-            //                    op = 1;
-            //                    name = "type";
-            //                    ths[0].innerHTML = ths[0].innerHTML.split(" ")[0];
-            //                    ths[2].innerHTML = ths[2].innerHTML.split(" ")[0];
-            //                    ths[3].innerHTML = ths[3].innerHTML.split(" ")[0];
-            //                }
-            //                if (node === ths[2]) {
-            //                    op = 2;
-            //                    name = "path";
-            //                    ths[0].innerHTML = ths[0].innerHTML.split(" ")[0];
-            //                    ths[1].innerHTML = ths[1].innerHTML.split(" ")[0];
-            //                    ths[3].innerHTML = ths[3].innerHTML.split(" ")[0];
-            //                }
-            //                if (node === ths[3]) {
-            //                    op = 3;
-            //                    name = "description";
-            //                    ths[0].innerHTML = ths[0].innerHTML.split(" ")[0];
-            //                    ths[1].innerHTML = ths[1].innerHTML.split(" ")[0];
-            //                    ths[2].innerHTML = ths[2].innerHTML.split(" ")[0];
-            //                }
-            //
-            //                // ascending or descending search
-            //                arrow = node.innerHTML.split(" ")[1];
-            //                if (arrow === undefined || arrow === "\u25b2") {
-            //                    arrow = "\u25bc";
-            //                } else {
-            //                    arrow = "\u25b2";
-            //                }
-            //
-            //                // filter the data
-            //                filterdata.sort(function search_complete_filterDraw_sort(xx, yy) {
-            //                    if ((arrow === "\u25b2" && xx[op].toLowerCase() < yy[op].toLowerCase()) || (arrow === "\u25bc" && xx[op].toLowerCase() > yy[op].toLowerCase())) {
-            //                        return 1;
-            //                    }
-            //                });
-            //            };
-
             showResults(results);
         }
 
-        function buildIndex(searchIndex) {
-            var len = searchIndex.length,
-                i = 0,
-                searchWords = [];
+        // This mapping table should match the discriminants of
+        // `rustdoc::html::item_type::ItemType` type in Rust.
+        var itemTypes = ["mod",
+                         "struct",
+                         "enum",
+                         "fn",
+                         "typedef",
+                         "static",
+                         "trait",
+                         "impl",
+                         "viewitem",
+                         "tymethod",
+                         "method",
+                         "structfield",
+                         "variant",
+                         "ffi",
+                         "ffs",
+                         "macro"];
 
-            // before any analysis is performed lets gather the search terms to
-            // search against apart from the rest of the data.  This is a quick
-            // operation that is cached for the life of the page state so that
-            // all other search operations have access to this cached data for
-            // faster analysis operations
-            for (i = 0; i < len; i += 1) {
-                if (typeof searchIndex[i].name === "string") {
-                    searchWords.push(searchIndex[i].name.toLowerCase());
-                } else {
-                    searchWords.push("");
+        function itemTypeFromName(typename) {
+            for (var i = 0; i < itemTypes.length; ++i) {
+                if (itemTypes[i] === typename) return i;
+            }
+            return -1;
+        }
+
+        function buildIndex(rawSearchIndex) {
+            searchIndex = [];
+            var searchWords = [];
+            for (var crate in rawSearchIndex) {
+                if (!rawSearchIndex.hasOwnProperty(crate)) { continue }
+
+                // an array of [(Number) item type,
+                //              (String) name,
+                //              (String) full path or empty string for previous path,
+                //              (String) description,
+                //              (optional Number) the parent path index to `paths`]
+                var items = rawSearchIndex[crate].items;
+                // an array of [(Number) item type,
+                //              (String) name]
+                var paths = rawSearchIndex[crate].paths;
+
+                // convert `paths` into an object form
+                var len = paths.length;
+                for (var i = 0; i < len; ++i) {
+                    paths[i] = {ty: paths[i][0], name: paths[i][1]};
+                }
+
+                // convert `items` into an object form, and construct word indices.
+                //
+                // before any analysis is performed lets gather the search terms to
+                // search against apart from the rest of the data.  This is a quick
+                // operation that is cached for the life of the page state so that
+                // all other search operations have access to this cached data for
+                // faster analysis operations
+                var len = items.length;
+                var lastPath = "";
+                for (var i = 0; i < len; i += 1) {
+                    var rawRow = items[i];
+                    var row = {crate: crate, ty: rawRow[0], name: rawRow[1],
+                               path: rawRow[2] || lastPath, desc: rawRow[3],
+                               parent: paths[rawRow[4]]};
+                    searchIndex.push(row);
+                    if (typeof row.name === "string") {
+                        var word = row.name.toLowerCase();
+                        searchWords.push(word);
+                    } else {
+                        searchWords.push("");
+                    }
+                    lastPath = row.path;
                 }
             }
-
             return searchWords;
         }
 
@@ -562,32 +588,66 @@
                 clearTimeout(keyUpTimeout);
                 keyUpTimeout = setTimeout(search, 100);
             });
-            // Push and pop states are used to add search results to the browser history.
+
+            // Push and pop states are used to add search results to the browser
+            // history.
             if (browserSupportsHistoryApi()) {
                 $(window).on('popstate', function(e) {
                     var params = getQueryStringParams();
-                    // When browsing back from search results the main page visibility must be reset.
+                    // When browsing back from search results the main page
+                    // visibility must be reset.
                     if (!params.search) {
                         $('#main.content').removeClass('hidden');
                         $('#search.content').addClass('hidden');
                     }
-                    // When browsing forward to search results the previous search will be repeated,
-                    // so the currentResults are cleared to ensure the search is successful.
+                    // When browsing forward to search results the previous
+                    // search will be repeated, so the currentResults are
+                    // cleared to ensure the search is successful.
                     currentResults = null;
-                    // Synchronize search bar with query string state and perform the search.
+                    // Synchronize search bar with query string state and
+                    // perform the search. This will empty the bar if there's
+                    // nothing there, which lets you really go back to a
+                    // previous state with nothing in the bar.
                     $('.search-input').val(params.search);
-                    // Some browsers fire 'onpopstate' for every page load (Chrome), while others fire the
-                    // event only when actually popping a state (Firefox), which is why search() is called
-                    // both here and at the end of the startSearch() function.
+                    // Some browsers fire 'onpopstate' for every page load
+                    // (Chrome), while others fire the event only when actually
+                    // popping a state (Firefox), which is why search() is
+                    // called both here and at the end of the startSearch()
+                    // function.
                     search();
                 });
             }
             search();
         }
 
-        index = buildIndex(searchIndex);
+        index = buildIndex(rawSearchIndex);
         startSearch();
+
+        // Draw a convenient sidebar of known crates if we have a listing
+        if (rootPath == '../') {
+            var sidebar = $('.sidebar');
+            var div = $('<div>').attr('class', 'block crate');
+            div.append($('<h2>').text('Crates'));
+
+            var crates = [];
+            for (var crate in rawSearchIndex) {
+                if (!rawSearchIndex.hasOwnProperty(crate)) { continue }
+                crates.push(crate);
+            }
+            crates.sort();
+            for (var i = 0; i < crates.length; i++) {
+                var klass = 'crate';
+                if (crates[i] == window.currentCrate) {
+                    klass += ' current';
+                }
+                div.append($('<a>', {'href': '../' + crates[i] + '/index.html',
+                                    'class': klass}).text(crates[i]));
+                div.append($('<br>'));
+            }
+            sidebar.append(div);
+        }
     }
 
-    initSearch(searchIndex);
+    window.initSearch = initSearch;
 }());
+

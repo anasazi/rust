@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -23,27 +23,32 @@
 
 use cast;
 use clone::Clone;
+use iter::Iterator;
 use kinds::Send;
 use ops::Drop;
 use ptr::RawPtr;
-use sync::atomics::{AtomicUint, SeqCst, Relaxed, Acquire};
-use vec;
+use sync::atomics::{fence, AtomicUint, Relaxed, Acquire, Release};
+use ty::Unsafe;
+use vec::Vec;
 
 /// An atomically reference counted pointer.
 ///
 /// Enforces no shared-memory safety.
 #[unsafe_no_drop_flag]
 pub struct UnsafeArc<T> {
-    priv data: *mut ArcData<T>,
+    data: *mut ArcData<T>,
 }
 
 struct ArcData<T> {
     count: AtomicUint,
-    data: T,
+    data: Unsafe<T>,
 }
 
 unsafe fn new_inner<T: Send>(data: T, refcount: uint) -> *mut ArcData<T> {
-    let data = ~ArcData { count: AtomicUint::new(refcount), data: data };
+    let data = ~ArcData {
+                    count: AtomicUint::new(refcount),
+                    data: Unsafe::new(data)
+                 };
     cast::transmute(data)
 }
 
@@ -69,7 +74,8 @@ impl<T: Send> UnsafeArc<T> {
                 ~[] // need to free data here
             } else {
                 let ptr = new_inner(data, num_handles);
-                vec::from_fn(num_handles, |_| UnsafeArc { data: ptr })
+                let v = Vec::from_fn(num_handles, |_| UnsafeArc { data: ptr });
+                v.move_iter().collect()
             }
         }
     }
@@ -80,8 +86,9 @@ impl<T: Send> UnsafeArc<T> {
     #[inline]
     pub fn get(&self) -> *mut T {
         unsafe {
-            assert!((*self.data).count.load(Relaxed) > 0);
-            return &mut (*self.data).data as *mut T;
+            // FIXME(#12049): this needs some sort of debug assertion
+            if cfg!(test) { assert!((*self.data).count.load(Relaxed) > 0); }
+            return (*self.data).data.get();
         }
     }
 
@@ -90,8 +97,17 @@ impl<T: Send> UnsafeArc<T> {
     #[inline]
     pub fn get_immut(&self) -> *T {
         unsafe {
-            assert!((*self.data).count.load(Relaxed) > 0);
-            return &(*self.data).data as *T;
+            // FIXME(#12049): this needs some sort of debug assertion
+            if cfg!(test) { assert!((*self.data).count.load(Relaxed) > 0); }
+            return (*self.data).data.get() as *T;
+        }
+    }
+
+    /// checks if this is the only reference to the arc protected data
+    #[inline]
+    pub fn is_owned(&self) -> bool {
+        unsafe {
+            (*self.data).count.load(Relaxed) == 1
         }
     }
 }
@@ -99,9 +115,18 @@ impl<T: Send> UnsafeArc<T> {
 impl<T: Send> Clone for UnsafeArc<T> {
     fn clone(&self) -> UnsafeArc<T> {
         unsafe {
-            // This barrier might be unnecessary, but I'm not sure...
-            let old_count = (*self.data).count.fetch_add(1, Acquire);
-            assert!(old_count >= 1);
+            // Using a relaxed ordering is alright here, as knowledge of the original reference
+            // prevents other threads from erroneously deleting the object.
+            //
+            // As explained in the [Boost documentation][1],
+            //  Increasing the reference counter can always be done with memory_order_relaxed: New
+            //  references to an object can only be formed from an existing reference, and passing
+            //  an existing reference from one thread to another must already provide any required
+            //  synchronization.
+            // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
+            let old_count = (*self.data).count.fetch_add(1, Relaxed);
+            // FIXME(#12049): this needs some sort of debug assertion
+            if cfg!(test) { assert!(old_count >= 1); }
             return UnsafeArc { data: self.data };
         }
     }
@@ -116,11 +141,26 @@ impl<T> Drop for UnsafeArc<T>{
             if self.data.is_null() {
                 return
             }
-            // Must be acquire+release, not just release, to make sure this
-            // doesn't get reordered to after the unwrapper pointer load.
-            let old_count = (*self.data).count.fetch_sub(1, SeqCst);
-            assert!(old_count >= 1);
+            // Because `fetch_sub` is already atomic, we do not need to synchronize with other
+            // threads unless we are going to delete the object.
+            let old_count = (*self.data).count.fetch_sub(1, Release);
+            // FIXME(#12049): this needs some sort of debug assertion
+            if cfg!(test) { assert!(old_count >= 1); }
             if old_count == 1 {
+                // This fence is needed to prevent reordering of use of the data and deletion of
+                // the data. Because it is marked `Release`, the decreasing of the reference count
+                // sychronizes with this `Acquire` fence. This means that use of the data happens
+                // before decreasing the refernce count, which happens before this fence, which
+                // happens before the deletion of the data.
+                //
+                // As explained in the [Boost documentation][1],
+                //  It is important to enforce any possible access to the object in one thread
+                //  (through an existing reference) to *happen before* deleting the object in a
+                //  different thread. This is achieved by a "release" operation after dropping a
+                //  reference (any access to the object through this reference must obviously
+                //  happened before), and an "acquire" operation before deleting the object.
+                // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
+                fence(Acquire);
                 let _: ~ArcData<T> = cast::transmute(self.data);
             }
         }
@@ -141,12 +181,12 @@ mod tests {
     #[test]
     fn arclike_newN() {
         // Tests that the many-refcounts-at-once constructors don't leak.
-        let _ = UnsafeArc::new2(~~"hello");
-        let x = UnsafeArc::newN(~~"hello", 0);
+        let _ = UnsafeArc::new2("hello".to_owned().to_owned());
+        let x = UnsafeArc::newN("hello".to_owned().to_owned(), 0);
         assert_eq!(x.len(), 0)
-        let x = UnsafeArc::newN(~~"hello", 1);
+        let x = UnsafeArc::newN("hello".to_owned().to_owned(), 1);
         assert_eq!(x.len(), 1)
-        let x = UnsafeArc::newN(~~"hello", 10);
+        let x = UnsafeArc::newN("hello".to_owned().to_owned(), 10);
         assert_eq!(x.len(), 10)
     }
 }

@@ -11,7 +11,10 @@
 // Tests that the borrow checker checks all components of a path when moving
 // out.
 
-#[no_std];
+#![no_std]
+
+#[lang="sized"]
+pub trait Sized {}
 
 struct S {
   x : ~int

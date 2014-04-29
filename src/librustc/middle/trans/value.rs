@@ -11,9 +11,9 @@
 use lib::llvm::{llvm, UseRef, ValueRef};
 use middle::trans::basic_block::BasicBlock;
 use middle::trans::common::Block;
-use std::libc::c_uint;
+use libc::c_uint;
 
-pub struct Value(ValueRef);
+pub struct Value(pub ValueRef);
 
 macro_rules! opt_val ( ($e:expr) => (
     unsafe {
@@ -152,7 +152,7 @@ impl Use {
 
 /// Iterator for the users of a value
 pub struct Users {
-    priv next: Option<Use>
+    next: Option<Use>
 }
 
 impl Iterator<Value> for Users {

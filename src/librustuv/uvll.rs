@@ -27,15 +27,15 @@
  * the mappings should be added in this module.
  */
 
-#[allow(non_camel_case_types)]; // C types
+#![allow(non_camel_case_types)] // C types
 
-use std::libc::{size_t, c_int, c_uint, c_void, c_char, c_double};
-use std::libc::{ssize_t, sockaddr, free, addrinfo};
-use std::libc;
+use libc::{size_t, c_int, c_uint, c_void, c_char, c_double};
+use libc::{ssize_t, sockaddr, free, addrinfo};
+use libc;
 use std::rt::global_heap::malloc_raw;
 
 #[cfg(test)]
-use std::libc::uintptr_t;
+use libc::uintptr_t;
 
 pub use self::errors::{EACCES, ECONNREFUSED, ECONNRESET, EPIPE, ECONNABORTED,
                        ECANCELED, EBADF, ENOTCONN, ENOENT, EADDRNOTAVAIL};
@@ -49,7 +49,7 @@ pub static UNKNOWN: c_int = -4094;
 
 #[cfg(windows)]
 pub mod errors {
-    use std::libc::c_int;
+    use libc::c_int;
 
     pub static EACCES: c_int = -4092;
     pub static ECONNREFUSED: c_int = -4078;
@@ -64,8 +64,8 @@ pub mod errors {
 }
 #[cfg(not(windows))]
 pub mod errors {
-    use std::libc;
-    use std::libc::c_int;
+    use libc;
+    use libc::c_int;
 
     pub static EACCES: c_int = -libc::EACCES;
     pub static ECONNREFUSED: c_int = -libc::ECONNREFUSED;
@@ -100,15 +100,15 @@ pub type uv_buf_len_t = libc::c_ulong;
 // see libuv/include/uv-unix.h
 #[cfg(unix)]
 pub struct uv_buf_t {
-    base: *u8,
-    len: uv_buf_len_t,
+    pub base: *u8,
+    pub len: uv_buf_len_t,
 }
 
 // see libuv/include/uv-win.h
 #[cfg(windows)]
 pub struct uv_buf_t {
-    len: uv_buf_len_t,
-    base: *u8,
+    pub len: uv_buf_len_t,
+    pub base: *u8,
 }
 
 #[repr(C)]
@@ -119,23 +119,23 @@ pub enum uv_run_mode {
 }
 
 pub struct uv_process_options_t {
-    exit_cb: uv_exit_cb,
-    file: *libc::c_char,
-    args: **libc::c_char,
-    env: **libc::c_char,
-    cwd: *libc::c_char,
-    flags: libc::c_uint,
-    stdio_count: libc::c_int,
-    stdio: *uv_stdio_container_t,
-    uid: uv_uid_t,
-    gid: uv_gid_t,
+    pub exit_cb: uv_exit_cb,
+    pub file: *libc::c_char,
+    pub args: **libc::c_char,
+    pub env: **libc::c_char,
+    pub cwd: *libc::c_char,
+    pub flags: libc::c_uint,
+    pub stdio_count: libc::c_int,
+    pub stdio: *uv_stdio_container_t,
+    pub uid: uv_uid_t,
+    pub gid: uv_gid_t,
 }
 
 // These fields are private because they must be interfaced with through the
 // functions below.
 pub struct uv_stdio_container_t {
-    priv flags: libc::c_int,
-    priv stream: *uv_stream_t,
+    flags: libc::c_int,
+    stream: *uv_stream_t,
 }
 
 pub type uv_handle_t = c_void;
@@ -157,29 +157,30 @@ pub type uv_process_t = c_void;
 pub type uv_pipe_t = c_void;
 pub type uv_tty_t = c_void;
 pub type uv_signal_t = c_void;
+pub type uv_shutdown_t = c_void;
 
 pub struct uv_timespec_t {
-    tv_sec: libc::c_long,
-    tv_nsec: libc::c_long
+    pub tv_sec: libc::c_long,
+    pub tv_nsec: libc::c_long
 }
 
 pub struct uv_stat_t {
-    st_dev: libc::uint64_t,
-    st_mode: libc::uint64_t,
-    st_nlink: libc::uint64_t,
-    st_uid: libc::uint64_t,
-    st_gid: libc::uint64_t,
-    st_rdev: libc::uint64_t,
-    st_ino: libc::uint64_t,
-    st_size: libc::uint64_t,
-    st_blksize: libc::uint64_t,
-    st_blocks: libc::uint64_t,
-    st_flags: libc::uint64_t,
-    st_gen: libc::uint64_t,
-    st_atim: uv_timespec_t,
-    st_mtim: uv_timespec_t,
-    st_ctim: uv_timespec_t,
-    st_birthtim: uv_timespec_t
+    pub st_dev: libc::uint64_t,
+    pub st_mode: libc::uint64_t,
+    pub st_nlink: libc::uint64_t,
+    pub st_uid: libc::uint64_t,
+    pub st_gid: libc::uint64_t,
+    pub st_rdev: libc::uint64_t,
+    pub st_ino: libc::uint64_t,
+    pub st_size: libc::uint64_t,
+    pub st_blksize: libc::uint64_t,
+    pub st_blocks: libc::uint64_t,
+    pub st_flags: libc::uint64_t,
+    pub st_gen: libc::uint64_t,
+    pub st_atim: uv_timespec_t,
+    pub st_mtim: uv_timespec_t,
+    pub st_ctim: uv_timespec_t,
+    pub st_birthtim: uv_timespec_t
 }
 
 impl uv_stat_t {
@@ -211,8 +212,7 @@ impl uv_stat_t {
     }
 }
 
-pub type uv_idle_cb = extern "C" fn(handle: *uv_idle_t,
-                                    status: c_int);
+pub type uv_idle_cb = extern "C" fn(handle: *uv_idle_t);
 pub type uv_alloc_cb = extern "C" fn(stream: *uv_stream_t,
                                      suggested_size: size_t,
                                      buf: *mut uv_buf_t);
@@ -229,14 +229,12 @@ pub type uv_udp_recv_cb = extern "C" fn(handle: *uv_udp_t,
 pub type uv_close_cb = extern "C" fn(handle: *uv_handle_t);
 pub type uv_walk_cb = extern "C" fn(handle: *uv_handle_t,
                                     arg: *c_void);
-pub type uv_async_cb = extern "C" fn(handle: *uv_async_t,
-                                     status: c_int);
+pub type uv_async_cb = extern "C" fn(handle: *uv_async_t);
 pub type uv_connect_cb = extern "C" fn(handle: *uv_connect_t,
                                        status: c_int);
 pub type uv_connection_cb = extern "C" fn(handle: *uv_connection_t,
                                           status: c_int);
-pub type uv_timer_cb = extern "C" fn(handle: *uv_timer_t,
-                                     status: c_int);
+pub type uv_timer_cb = extern "C" fn(handle: *uv_timer_t);
 pub type uv_write_cb = extern "C" fn(handle: *uv_write_t,
                                      status: c_int);
 pub type uv_getaddrinfo_cb = extern "C" fn(req: *uv_getaddrinfo_t,
@@ -248,6 +246,7 @@ pub type uv_exit_cb = extern "C" fn(handle: *uv_process_t,
 pub type uv_signal_cb = extern "C" fn(handle: *uv_signal_t,
                                       signum: c_int);
 pub type uv_fs_cb = extern "C" fn(req: *uv_fs_t);
+pub type uv_shutdown_cb = extern "C" fn(req: *uv_shutdown_t, status: c_int);
 
 #[cfg(unix)] pub type uv_uid_t = libc::types::os::arch::posix88::uid_t;
 #[cfg(unix)] pub type uv_gid_t = libc::types::os::arch::posix88::gid_t;
@@ -424,7 +423,7 @@ pub unsafe fn set_stdio_container_stream(c: *uv_stdio_container_t,
 }
 
 // data access helpers
-pub unsafe fn get_result_from_fs_req(req: *uv_fs_t) -> c_int {
+pub unsafe fn get_result_from_fs_req(req: *uv_fs_t) -> ssize_t {
     rust_uv_get_result_from_fs_req(req)
 }
 pub unsafe fn get_ptr_from_fs_req(req: *uv_fs_t) -> *libc::c_void {
@@ -499,7 +498,7 @@ extern {
     fn rust_uv_get_udp_handle_from_send_req(req: *uv_udp_send_t) -> *uv_udp_t;
 
     fn rust_uv_populate_uv_stat(req_in: *uv_fs_t, stat_out: *uv_stat_t);
-    fn rust_uv_get_result_from_fs_req(req: *uv_fs_t) -> c_int;
+    fn rust_uv_get_result_from_fs_req(req: *uv_fs_t) -> ssize_t;
     fn rust_uv_get_ptr_from_fs_req(req: *uv_fs_t) -> *libc::c_void;
     fn rust_uv_get_path_from_fs_req(req: *uv_fs_t) -> *c_char;
     fn rust_uv_get_loop_from_fs_req(req: *uv_fs_t) -> *uv_loop_t;
@@ -539,6 +538,8 @@ extern {
                          on_alloc: uv_alloc_cb,
                          on_read: uv_read_cb) -> c_int;
     pub fn uv_read_stop(stream: *uv_stream_t) -> c_int;
+    pub fn uv_shutdown(req: *uv_shutdown_t, handle: *uv_stream_t,
+                       cb: uv_shutdown_cb) -> c_int;
 
     // idle bindings
     pub fn uv_idle_init(l: *uv_loop_t, i: *uv_idle_t) -> c_int;
@@ -593,10 +594,12 @@ extern {
                       flags: c_int, mode: c_int, cb: uv_fs_cb) -> c_int;
     pub fn uv_fs_unlink(loop_ptr: *uv_loop_t, req: *uv_fs_t, path: *c_char,
                         cb: uv_fs_cb) -> c_int;
-    pub fn uv_fs_write(l: *uv_loop_t, req: *uv_fs_t, fd: c_int, buf: *c_void,
-                       len: size_t, offset: i64, cb: uv_fs_cb) -> c_int;
-    pub fn uv_fs_read(l: *uv_loop_t, req: *uv_fs_t, fd: c_int, buf: *c_void,
-                      len: size_t, offset: i64, cb: uv_fs_cb) -> c_int;
+    pub fn uv_fs_write(l: *uv_loop_t, req: *uv_fs_t, fd: c_int,
+                       bufs: *uv_buf_t, nbufs: c_uint,
+                       offset: i64, cb: uv_fs_cb) -> c_int;
+    pub fn uv_fs_read(l: *uv_loop_t, req: *uv_fs_t, fd: c_int,
+                      bufs: *uv_buf_t, nbufs: c_uint,
+                      offset: i64, cb: uv_fs_cb) -> c_int;
     pub fn uv_fs_close(l: *uv_loop_t, req: *uv_fs_t, fd: c_int,
                        cb: uv_fs_cb) -> c_int;
     pub fn uv_fs_stat(l: *uv_loop_t, req: *uv_fs_t, path: *c_char,
@@ -645,6 +648,7 @@ extern {
     pub fn uv_spawn(loop_ptr: *uv_loop_t, outptr: *uv_process_t,
                     options: *uv_process_options_t) -> c_int;
     pub fn uv_process_kill(p: *uv_process_t, signum: c_int) -> c_int;
+    pub fn uv_kill(pid: c_int, signum: c_int) -> c_int;
 
     // pipes
     pub fn uv_pipe_init(l: *uv_loop_t, p: *uv_pipe_t, ipc: c_int) -> c_int;

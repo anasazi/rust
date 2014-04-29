@@ -10,27 +10,28 @@
 
 use clean;
 
-use extra;
 use dl = std::unstable::dynamic_lib;
+use serialize::json;
+use std::strbuf::StrBuf;
 
-pub type PluginJson = Option<(~str, extra::json::Json)>;
+pub type PluginJson = Option<(~str, json::Json)>;
 pub type PluginResult = (clean::Crate, PluginJson);
-pub type plugin_callback = extern fn (clean::Crate) -> PluginResult;
+pub type PluginCallback = fn (clean::Crate) -> PluginResult;
 
 /// Manages loading and running of plugins
 pub struct PluginManager {
-    priv dylibs: ~[dl::DynamicLibrary],
-    priv callbacks: ~[plugin_callback],
+    dylibs: Vec<dl::DynamicLibrary> ,
+    callbacks: Vec<PluginCallback> ,
     /// The directory plugins will be loaded from
-    prefix: Path,
+    pub prefix: Path,
 }
 
 impl PluginManager {
     /// Create a new plugin manager
     pub fn new(prefix: Path) -> PluginManager {
         PluginManager {
-            dylibs: ~[],
-            callbacks: ~[],
+            dylibs: Vec::new(),
+            callbacks: Vec::new(),
             prefix: prefix,
         }
     }
@@ -53,38 +54,40 @@ impl PluginManager {
     ///
     /// This is to run passes over the cleaned crate. Plugins run this way
     /// correspond to the A-aux tag on Github.
-    pub fn add_plugin(&mut self, plugin: plugin_callback) {
+    pub fn add_plugin(&mut self, plugin: PluginCallback) {
         self.callbacks.push(plugin);
     }
     /// Run all the loaded plugins over the crate, returning their results
-    pub fn run_plugins(&self, crate: clean::Crate) -> (clean::Crate, ~[PluginJson]) {
-        let mut out_json = ~[];
-        let mut crate = crate;
+    pub fn run_plugins(&self, krate: clean::Crate) -> (clean::Crate, Vec<PluginJson> ) {
+        let mut out_json = Vec::new();
+        let mut krate = krate;
         for &callback in self.callbacks.iter() {
-            let (c, res) = callback(crate);
-            crate = c;
+            let (c, res) = callback(krate);
+            krate = c;
             out_json.push(res);
         }
-        (crate, out_json)
+        (krate, out_json)
     }
 }
 
 #[cfg(target_os="win32")]
-fn libname(mut n: ~str) -> ~str {
+fn libname(n: ~str) -> ~str {
+    let mut n = StrBuf::from_owned_str(n);
     n.push_str(".dll");
-    n
+    n.into_owned()
 }
 
 #[cfg(target_os="macos")]
-fn libname(mut n: ~str) -> ~str {
+fn libname(n: ~str) -> ~str {
+    let mut n = StrBuf::from_owned_str(n);
     n.push_str(".dylib");
-    n
+    n.into_owned()
 }
 
 #[cfg(not(target_os="win32"), not(target_os="macos"))]
 fn libname(n: ~str) -> ~str {
-    let mut i = ~"lib";
+    let mut i = StrBuf::from_str("lib");
     i.push_str(n);
     i.push_str(".so");
-    i
+    i.into_owned()
 }

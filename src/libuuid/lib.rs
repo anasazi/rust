@@ -54,26 +54,36 @@ Examples of string representations:
 
 */
 
-#[crate_id = "uuid#0.10-pre"];
-#[crate_type = "rlib"];
-#[crate_type = "dylib"];
-#[license = "MIT/ASL2"];
+#![crate_id = "uuid#0.11-pre"]
+#![crate_type = "rlib"]
+#![crate_type = "dylib"]
+#![license = "MIT/ASL2"]
+#![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
+       html_favicon_url = "http://www.rust-lang.org/favicon.ico",
+       html_root_url = "http://static.rust-lang.org/doc/master")]
 
-extern mod extra;
+#![feature(default_type_params)]
 
-use std::str;
-use std::vec;
-use std::num::FromStrRadix;
-use std::char::Char;
-use std::container::Container;
-use std::to_str::ToStr;
-use std::rand;
-use std::rand::Rng;
-use std::cmp::Eq;
+// test harness access
+#[cfg(test)]
+extern crate test;
+
+extern crate rand;
+extern crate serialize;
+
 use std::cast::{transmute,transmute_copy};
-use std::to_bytes::{IterBytes, Cb};
+use std::char::Char;
+use std::default::Default;
+use std::fmt;
+use std::from_str::FromStr;
+use std::hash::Hash;
+use std::num::FromStrRadix;
+use std::str;
+use std::slice;
 
-use extra::serialize::{Encoder, Encodable, Decoder, Decodable};
+use rand::Rng;
+
+use serialize::{Encoder, Encodable, Decoder, Decodable};
 
 /// A 128-bit (16 byte) buffer containing the ID
 pub type UuidBytes = [u8, ..16];
@@ -111,9 +121,10 @@ pub struct Uuid {
     /// The 128-bit number stored in 16 bytes
     bytes: UuidBytes
 }
-impl IterBytes for Uuid {
-    fn iter_bytes(&self, _: bool, f: Cb) -> bool {
-        f(self.bytes.slice_from(0))
+
+impl<S: Writer> Hash<S> for Uuid {
+    fn hash(&self, state: &mut S) {
+        self.bytes.hash(state)
     }
 }
 
@@ -139,22 +150,21 @@ pub enum ParseError {
 }
 
 /// Converts a ParseError to a string
-impl ToStr for ParseError {
-    #[inline]
-    fn to_str(&self) -> ~str {
+impl fmt::Show for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             ErrorInvalidLength(found) =>
-                format!("Invalid length; expecting 32, 36 or 45 chars, found {}",
-                        found),
+                write!(f.buf, "Invalid length; expecting 32, 36 or 45 chars, \
+                               found {}", found),
             ErrorInvalidCharacter(found, pos) =>
-                format!("Invalid character; found `{}` (0x{:02x}) at offset {}",
-                        found, found as uint, pos),
+                write!(f.buf, "Invalid character; found `{}` (0x{:02x}) at \
+                               offset {}", found, found as uint, pos),
             ErrorInvalidGroups(found) =>
-                format!("Malformed; wrong number of groups: expected 1 or 5, found {}",
-                        found),
+                write!(f.buf, "Malformed; wrong number of groups: expected 1 \
+                               or 5, found {}", found),
             ErrorInvalidGroupLength(group, found, expecting) =>
-                format!("Malformed; length of group {} was {}, expecting {}",
-                        group, found, expecting),
+                write!(f.buf, "Malformed; length of group {} was {}, \
+                               expecting {}", group, found, expecting),
         }
     }
 }
@@ -186,7 +196,7 @@ impl Uuid {
     pub fn new_v4() -> Uuid {
         let ub = rand::task_rng().gen_vec(16);
         let mut uuid = Uuid{ bytes: [0, .. 16] };
-        vec::bytes::copy_memory(uuid.bytes, ub);
+        slice::bytes::copy_memory(uuid.bytes, ub.as_slice());
         uuid.set_variant(VariantRFC4122);
         uuid.set_version(Version4Random);
         uuid
@@ -200,7 +210,7 @@ impl Uuid {
     /// * `d3` A 16-bit word
     /// * `d4` Array of 8 octets
     pub fn from_fields(d1: u32, d2: u16, d3: u16, d4: &[u8]) -> Uuid {
-        use std::unstable::intrinsics::{to_be16, to_be32};
+        use std::mem::{to_be16, to_be32};
 
         // First construct a temporary field-based struct
         let mut fields = UuidFields {
@@ -210,10 +220,10 @@ impl Uuid {
                 data4: [0, ..8]
         };
 
-        fields.data1 = to_be32(d1 as i32) as u32;
-        fields.data2 = to_be16(d2 as i16) as u16;
-        fields.data3 = to_be16(d3 as i16) as u16;
-        vec::bytes::copy_memory(fields.data4, d4);
+        fields.data1 = to_be32(d1);
+        fields.data2 = to_be16(d2);
+        fields.data3 = to_be16(d3);
+        slice::bytes::copy_memory(fields.data4, d4);
 
         unsafe {
             transmute(fields)
@@ -230,7 +240,7 @@ impl Uuid {
         }
 
         let mut uuid = Uuid{ bytes: [0, .. 16] };
-        vec::bytes::copy_memory(uuid.bytes, b);
+        slice::bytes::copy_memory(uuid.bytes, b);
         Some(uuid)
     }
 
@@ -293,7 +303,7 @@ impl Uuid {
     ///
     /// This represents the algorithm used to generate the contents
     pub fn get_version(&self) -> Option<UuidVersion> {
-        let v = (self.bytes[6] >> 4);
+        let v = self.bytes[6] >> 4;
         match v {
             1 => Some(Version1Mac),
             2 => Some(Version2Dce),
@@ -305,7 +315,7 @@ impl Uuid {
     }
 
     /// Return an array of 16 octets containing the UUID data
-    pub fn to_bytes<'a>(&'a self) -> &'a [u8] {
+    pub fn as_bytes<'a>(&'a self) -> &'a [u8] {
         self.bytes.as_slice()
     }
 
@@ -313,29 +323,29 @@ impl Uuid {
     ///
     /// Example: `936DA01F9ABD4d9d80C702AF85C822A8`
     pub fn to_simple_str(&self) -> ~str {
-        let mut s: ~[u8] = vec::from_elem(32, 0u8);
+        let mut s: Vec<u8> = Vec::from_elem(32, 0u8);
         for i in range(0u, 16u) {
             let digit = format!("{:02x}", self.bytes[i] as uint);
-            s[i*2+0] = digit[0];
-            s[i*2+1] = digit[1];
+            *s.get_mut(i*2+0) = digit[0];
+            *s.get_mut(i*2+1) = digit[1];
         }
-        str::from_utf8_owned(s).unwrap()
+        str::from_utf8(s.as_slice()).unwrap().to_str()
     }
 
     /// Returns a string of hexadecimal digits, separated into groups with a hyphen.
     ///
     /// Example: `550e8400-e29b-41d4-a716-446655440000`
     pub fn to_hyphenated_str(&self) -> ~str {
-        use std::unstable::intrinsics::{to_be16, to_be32};
+        use std::mem::{to_be16, to_be32};
         // Convert to field-based struct as it matches groups in output.
         // Ensure fields are in network byte order, as per RFC.
         let mut uf: UuidFields;
         unsafe {
             uf = transmute_copy(&self.bytes);
         }
-        uf.data1 = to_be32(uf.data1 as i32) as u32;
-        uf.data2 = to_be16(uf.data2 as i16) as u16;
-        uf.data3 = to_be16(uf.data3 as i16) as u16;
+        uf.data1 = to_be32(uf.data1);
+        uf.data2 = to_be16(uf.data2);
+        uf.data3 = to_be16(uf.data3);
         let s = format!("{:08x}-{:04x}-{:04x}-{:02x}{:02x}-\
                          {:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
             uf.data1,
@@ -383,17 +393,17 @@ impl Uuid {
         }
 
         // Split string up by hyphens into groups
-        let hex_groups: ~[&str] = us.split_str("-").collect();
+        let hex_groups: Vec<&str> = us.split_str("-").collect();
 
         // Get the length of each group
-        let group_lens: ~[uint] = hex_groups.iter().map(|&v| v.len()).collect();
+        let group_lens: Vec<uint> = hex_groups.iter().map(|&v| v.len()).collect();
 
         // Ensure the group lengths are valid
         match group_lens.len() {
             // Single group, no hyphens
             1 => {
-                if group_lens[0] != 32 {
-                    return Err(ErrorInvalidLength(group_lens[0]));
+                if *group_lens.get(0) != 32 {
+                    return Err(ErrorInvalidLength(*group_lens.get(0)));
                 }
             },
             // Five groups, hyphens in between each
@@ -462,9 +472,9 @@ impl FromStr for Uuid {
 }
 
 /// Convert the UUID to a hexadecimal-based string representation
-impl ToStr for Uuid {
-    fn to_str(&self) -> ~str {
-        self.to_simple_str()
+impl fmt::Show for Uuid {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f.buf, "{}", self.to_simple_str())
     }
 }
 
@@ -477,27 +487,20 @@ impl Eq for Uuid {
     }
 }
 
-/// Test two UUIDs for equality
-///
-/// UUIDs are equal only when they are byte-for-byte identical
-impl TotalEq for Uuid {
-    fn equals(&self, other: &Uuid) -> bool {
-        self.bytes == other.bytes
-    }
-}
+impl TotalEq for Uuid {}
 
 // FIXME #9845: Test these more thoroughly
-impl<T: Encoder> Encodable<T> for Uuid {
+impl<T: Encoder<E>, E> Encodable<T, E> for Uuid {
     /// Encode a UUID as a hypenated string
-    fn encode(&self, e: &mut T) {
-        e.emit_str(self.to_hyphenated_str());
+    fn encode(&self, e: &mut T) -> Result<(), E> {
+        e.emit_str(self.to_hyphenated_str())
     }
 }
 
-impl<T: Decoder> Decodable<T> for Uuid {
+impl<T: Decoder<E>, E> Decodable<T, E> for Uuid {
     /// Decode a UUID from a string
-    fn decode(d: &mut T) -> Uuid {
-        from_str(d.read_str()).unwrap()
+    fn decode(d: &mut T) -> Result<Uuid, E> {
+        Ok(from_str(try!(d.read_str())).unwrap())
     }
 }
 
@@ -507,7 +510,7 @@ impl rand::Rand for Uuid {
     fn rand<R: rand::Rng>(rng: &mut R) -> Uuid {
         let ub = rng.gen_vec(16);
         let mut uuid = Uuid{ bytes: [0, .. 16] };
-        vec::bytes::copy_memory(uuid.bytes, ub);
+        slice::bytes::copy_memory(uuid.bytes, ub.as_slice());
         uuid.set_variant(VariantRFC4122);
         uuid.set_version(Version4Random);
         uuid
@@ -516,11 +519,13 @@ impl rand::Rand for Uuid {
 
 #[cfg(test)]
 mod test {
+    extern crate collections;
+    extern crate rand;
+
     use super::{Uuid, VariantMicrosoft, VariantNCS, VariantRFC4122,
                 Version1Mac, Version2Dce, Version3Md5, Version4Random,
                 Version5Sha1};
     use std::str;
-    use std::rand;
     use std::io::MemWriter;
 
     #[test]
@@ -681,7 +686,10 @@ mod test {
         let hs = uuid1.to_hyphenated_str();
         let ss = uuid1.to_str();
 
-        let hsn = str::from_chars(hs.chars().filter(|&c| c != '-').collect::<~[char]>());
+        let hsn = str::from_chars(hs.chars()
+                                    .filter(|&c| c != '-')
+                                    .collect::<Vec<char>>()
+                                    .as_slice());
 
         assert!(hsn == ss);
     }
@@ -715,30 +723,30 @@ mod test {
         let d1: u32 = 0xa1a2a3a4;
         let d2: u16 = 0xb1b2;
         let d3: u16 = 0xc1c2;
-        let d4: ~[u8] = ~[0xd1, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8];
+        let d4: Vec<u8> = vec!(0xd1, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8);
 
-        let u = Uuid::from_fields(d1, d2, d3, d4);
+        let u = Uuid::from_fields(d1, d2, d3, d4.as_slice());
 
-        let expected = ~"a1a2a3a4b1b2c1c2d1d2d3d4d5d6d7d8";
+        let expected = "a1a2a3a4b1b2c1c2d1d2d3d4d5d6d7d8".to_owned();
         let result = u.to_simple_str();
         assert!(result == expected);
     }
 
     #[test]
     fn test_from_bytes() {
-        let b = ~[ 0xa1, 0xa2, 0xa3, 0xa4, 0xb1, 0xb2, 0xc1, 0xc2,
-                   0xd1, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8 ];
+        let b = vec!( 0xa1, 0xa2, 0xa3, 0xa4, 0xb1, 0xb2, 0xc1, 0xc2,
+                   0xd1, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8 );
 
-        let u = Uuid::from_bytes(b).unwrap();
-        let expected = ~"a1a2a3a4b1b2c1c2d1d2d3d4d5d6d7d8";
+        let u = Uuid::from_bytes(b.as_slice()).unwrap();
+        let expected = "a1a2a3a4b1b2c1c2d1d2d3d4d5d6d7d8".to_owned();
 
         assert!(u.to_simple_str() == expected);
     }
 
     #[test]
-    fn test_to_bytes() {
+    fn test_as_bytes() {
         let u = Uuid::new_v4();
-        let ub = u.to_bytes();
+        let ub = u.as_bytes();
 
         assert!(ub.len() == 16);
         assert!(! ub.iter().all(|&b| b == 0));
@@ -751,7 +759,7 @@ mod test {
 
         let u = Uuid::from_bytes(b_in.clone()).unwrap();
 
-        let b_out = u.to_bytes();
+        let b_out = u.as_bytes();
 
         assert!(b_in == b_out);
     }
@@ -774,9 +782,9 @@ mod test {
 
     #[test]
     fn test_rand_rand() {
-        let mut rng = rand::rng();
+        let mut rng = rand::task_rng();
         let u: ~Uuid = rand::Rand::rand(&mut rng);
-        let ub = u.to_bytes();
+        let ub = u.as_bytes();
 
         assert!(ub.len() == 16);
         assert!(! ub.iter().all(|&b| b == 0));
@@ -784,20 +792,20 @@ mod test {
 
     #[test]
     fn test_serialize_round_trip() {
-        use extra::ebml;
-        use extra::serialize::{Encodable, Decodable};
+        use serialize::ebml;
+        use serialize::{Encodable, Decodable};
 
         let u = Uuid::new_v4();
         let mut wr = MemWriter::new();
-        u.encode(&mut ebml::writer::Encoder(&mut wr));
+        let _ = u.encode(&mut ebml::writer::Encoder(&mut wr));
         let doc = ebml::reader::Doc(wr.get_ref());
-        let u2 = Decodable::decode(&mut ebml::reader::Decoder(doc));
+        let u2 = Decodable::decode(&mut ebml::reader::Decoder(doc)).unwrap();
         assert_eq!(u, u2);
     }
 
     #[test]
     fn test_iterbytes_impl_for_uuid() {
-        use std::hashmap::HashSet;
+        use self::collections::HashSet;
         let mut set = HashSet::new();
         let id1 = Uuid::new_v4();
         let id2 = Uuid::new_v4();
@@ -809,28 +817,29 @@ mod test {
 
 #[cfg(test)]
 mod bench {
+    extern crate test;
+    use self::test::Bencher;
     use super::Uuid;
-    use extra::test::BenchHarness;
 
     #[bench]
-    pub fn create_uuids(bh: &mut BenchHarness) {
-        bh.iter(|| {
+    pub fn create_uuids(b: &mut Bencher) {
+        b.iter(|| {
             Uuid::new_v4();
         })
     }
 
     #[bench]
-    pub fn uuid_to_str(bh: &mut BenchHarness) {
+    pub fn uuid_to_str(b: &mut Bencher) {
         let u = Uuid::new_v4();
-        bh.iter(|| {
+        b.iter(|| {
             u.to_str();
         })
     }
 
     #[bench]
-    pub fn parse_str(bh: &mut BenchHarness) {
+    pub fn parse_str(b: &mut Bencher) {
         let s = "urn:uuid:F9168C5E-CEB2-4faa-B6BF-329BF39FA1E4";
-        bh.iter(|| {
+        b.iter(|| {
             Uuid::parse_string(s).unwrap();
         })
     }

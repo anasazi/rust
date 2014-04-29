@@ -41,10 +41,10 @@ clean-misc:
 	@$(call E, cleaning)
 	$(Q)rm -f $(RUNTIME_OBJS) $(RUNTIME_DEF)
 	$(Q)rm -f $(RUSTLLVM_LIB_OBJS) $(RUSTLLVM_OBJS_OBJS) $(RUSTLLVM_DEF)
-	$(Q)rm -Rf $(DOCS)
 	$(Q)rm -Rf $(GENERATED)
 	$(Q)rm -Rf tmp/*
-	$(Q)rm -Rf rust-stage0-*.tar.bz2 $(PKG_NAME)-*.tar.gz $(PKG_NAME)-*.exe dist
+	$(Q)rm -Rf rust-stage0-*.tar.bz2 $(PKG_NAME)-*.tar.gz $(PKG_NAME)-*.exe
+	$(Q)rm -Rf dist/*
 	$(Q)rm -Rf doc
 
 define CLEAN_GENERIC
@@ -54,14 +54,17 @@ clean-generic-$(2)-$(1):
 	         $(1)/rt \
 		 $(1)/test \
 		 $(1)/stage* \
+		 -type f \(           \
          -name '*.[odasS]' -o \
          -name '*.so' -o      \
          -name '*.dylib' -o   \
+         -name '*.rlib' -o   \
          -name 'stamp.*' -o   \
          -name '*.lib' -o     \
          -name '*.dll' -o     \
          -name '*.def' -o     \
          -name '*.bc'         \
+         \)                   \
          | xargs rm -f
 	$(Q)find $(1)\
          -name '*.dSYM'       \
@@ -76,6 +79,7 @@ define CLEAN_HOST_STAGE_N
 clean$(1)_H_$(2):							    \
 	    $$(foreach crate,$$(CRATES),clean$(1)_H_$(2)-lib-$$(crate))	    \
 	    $$(foreach tool,$$(TOOLS),clean$(1)_H_$(2)-tool-$$(tool))
+	$$(Q)rm -fr $(2)/rt/libbacktrace
 
 clean$(1)_H_$(2)-tool-%:
 	$$(Q)rm -f $$(HBIN$(1)_H_$(2))/$$*$$(X_$(2))
@@ -96,6 +100,7 @@ clean$(1)_T_$(2)_H_$(3):						       \
 	    $$(foreach crate,$$(CRATES),clean$(1)_T_$(2)_H_$(3)-lib-$$(crate))  \
 	    $$(foreach tool,$$(TOOLS),clean$(1)_T_$(2)_H_$(3)-tool-$$(tool))
 	$$(Q)rm -f $$(TLIB$(1)_T_$(2)_H_$(3))/libmorestack.a
+	$$(Q)rm -f $$(TLIB$(1)_T_$(2)_H_$(3))/libcompiler-rt.a
 	$(Q)rm -f $$(TLIB$(1)_T_$(2)_H_$(3))/librun_pass_stage* # For unix
 	$(Q)rm -f $$(TLIB$(1)_T_$(2)_H_$(3))/run_pass_stage* # For windows
 

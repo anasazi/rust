@@ -17,7 +17,7 @@ fn a(_x: ~Foo:) {
 fn b(_x: ~Foo:Send) {
 }
 
-fn c(x: ~Foo:Freeze+Send) {
+fn c(x: ~Foo:Share+Send) {
     a(x);
 }
 
@@ -26,7 +26,7 @@ fn d(x: ~Foo:Send) {
 }
 
 fn e(x: ~Foo) { // sugar for ~Foo:Owned
-    b(x);
+    a(x);
 }
 
 pub fn main() { }

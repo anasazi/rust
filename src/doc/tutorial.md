@@ -33,7 +33,7 @@ pleasant high-level features include:
 This is an introductory tutorial for the Rust programming language. It
 covers the fundamentals of the language, including the syntax, the
 type system and memory model, generics, and modules. [Additional
-tutorials](#what-next) cover specific language features in greater
+tutorials](#what-next?) cover specific language features in greater
 depth.
 
 This tutorial assumes that the reader is already familiar with one or
@@ -51,14 +51,14 @@ fragments of programs that don't compile on their own. To try them
 out, you might have to wrap them in `fn main() { ... }`, and make sure
 they don't contain references to names that aren't actually defined.
 
-> ***Warning:*** Rust is a language under ongoing development. Notes
+> *Warning:* Rust is a language under ongoing development. Notes
 > about potential changes to the language, implementation
 > deficiencies, and other caveats appear offset in blockquotes.
 
 # Getting started
 
-> **NOTE**: The tarball and installer links are for the most recent release,
-> not master.
+> *Warning:* The tarball and installer links are for the most recent
+> release, not master. To use master, you **must** build from [git].
 
 The Rust compiler currently must be built from a [tarball] or [git], unless
 you are on Windows, in which case using the [installer][win-exe] is
@@ -79,14 +79,11 @@ Snapshot binaries are currently built and tested on several platforms:
 You may find that other platforms work, but these are our "tier 1"
 supported build environments that are most likely to work.
 
-> ***Note:*** Windows users should read the detailed
-> "[getting started][wiki-start]" notes on the wiki. Even when using
+> *Note:* Windows users should read the detailed
+> [Getting started][wiki-start] notes on the wiki. Even when using
 > the binary installer, the Windows build requires a MinGW installation,
-> the precise details of which are not discussed here. Finally, `rustc` may
-> need to be [referred to as `rustc.exe`][bug-3319]. It's a bummer, we
-> know.
+> the precise details of which are not discussed here.
 
-[bug-3319]: https://github.com/mozilla/rust/issues/3319
 [wiki-start]: https://github.com/mozilla/rust/wiki/Note-getting-started-developing-Rust
 [git]: https://github.com/mozilla/rust.git
 
@@ -103,9 +100,9 @@ If you've fulfilled those prerequisites, something along these lines
 should work.
 
 ~~~~ {.notrust}
-$ curl -O http://static.rust-lang.org/dist/rust-0.9.tar.gz
-$ tar -xzf rust-0.9.tar.gz
-$ cd rust-0.9
+$ curl -O http://static.rust-lang.org/dist/rust-nightly.tar.gz
+$ tar -xzf rust-nightly.tar.gz
+$ cd rust-nightly
 $ ./configure
 $ make && make install
 ~~~~
@@ -120,8 +117,8 @@ When complete, `make install` will place several programs into
 `/usr/local/bin`: `rustc`, the Rust compiler, and `rustdoc`, the
 API-documentation tool.
 
-[tarball]: http://static.rust-lang.org/dist/rust-0.9.tar.gz
-[win-exe]: http://static.rust-lang.org/dist/rust-0.9-install.exe
+[tarball]: http://static.rust-lang.org/dist/rust-nightly.tar.gz
+[win-exe]: http://static.rust-lang.org/dist/rust-nightly-install.exe
 
 ## Compiling your first program
 
@@ -133,6 +130,10 @@ fn main() {
     println!("hello?");
 }
 ~~~~
+> *Note:* An identifier followed by an exclamation point, like
+> `println!`, is a macro invocation.  Macros are explained
+> [later](#syntax-extensions); for now just remember to include the
+> exclamation point.
 
 If the Rust compiler was installed successfully, running `rustc
 hello.rs` will produce an executable called `hello` (or `hello.exe` on
@@ -293,7 +294,7 @@ braced block gives the whole block the value of that last expression.
 
 Put another way, the semicolon in Rust *ignores the value of an expression*.
 Thus, if the branches of the `if` had looked like `{ 4; }`, the above example
-would simply assign `()` (nil or void) to `price`. But without the semicolon, each
+would simply assign `()` (unit or void) to `price`. But without the semicolon, each
 branch has a different value, and `price` gets the value of the branch that
 was taken.
 
@@ -352,7 +353,7 @@ before the opening and after the closing quote, and can contain any sequence of
 characters except their closing delimiter.  More on strings
 [later](#vectors-and-strings).
 
-The nil type, written `()`, has a single value, also written `()`.
+The unit type, written `()`, has a single value, also written `()`.
 
 ## Operators
 
@@ -495,22 +496,20 @@ reject the previous example if the arm with the wildcard pattern was
 omitted.
 
 A powerful application of pattern matching is *destructuring*:
-matching in order to bind names to the contents of data
-types.
+matching in order to bind names to the contents of data types.
 
-> ***Note:*** The following code makes use of tuples (`(f64, f64)`) which
+> *Note:* The following code makes use of tuples (`(f64, f64)`) which
 > are explained in section 5.3. For now you can think of tuples as a list of
 > items.
 
 ~~~~
 use std::f64;
-use std::num::atan;
 fn angle(vector: (f64, f64)) -> f64 {
     let pi = f64::consts::PI;
     match vector {
       (0.0, y) if y < 0.0 => 1.5 * pi,
-      (0.0, y) => 0.5 * pi,
-      (x, y) => atan(y / x)
+      (0.0, _) => 0.5 * pi,
+      (x, y) => (y / x).atan()
     }
 }
 ~~~~
@@ -519,7 +518,9 @@ A variable name in a pattern matches any value, *and* binds that name
 to the value of the matched value inside of the arm's action. Thus, `(0.0,
 y)` matches any tuple whose first element is zero, and binds `y` to
 the second element. `(x, y)` matches any two-element tuple, and binds both
-elements to variables.
+elements to variables. `(0.0,_)` matches any tuple whose first element is zero
+and does not bind anything to the second element.
+
 A subpattern can also be bound to a variable, using `variable @ pattern`. For
 example:
 
@@ -579,6 +580,32 @@ loop {
 
 This code prints out a weird sequence of numbers and stops as soon as
 it finds one that can be divided by five.
+
+There is also a for-loop that can be used to iterate over a range of numbers:
+
+~~~~
+for n in range(0, 5) {
+    println!("{}", n);
+}
+~~~~
+
+The snippet above prints integer numbers under 5 starting at 0.
+
+More generally, a for loop works with anything implementing the `Iterator` trait.
+Data structures can provide one or more methods that return iterators over
+their contents. For example, strings support iteration over their contents in
+various ways:
+
+~~~~
+let s = "Hello";
+for c in s.chars() {
+    println!("{}", c);
+}
+~~~~
+
+The snippet above prints the characters in "Hello" vertically, adding a new
+line after each character.
+
 
 # Data structures
 
@@ -645,8 +672,43 @@ match mypoint {
 
 ## Enums
 
-Enums are datatypes that have several alternate representations. For
-example, consider the following type:
+Enums are datatypes with several alternate representations. A simple `enum`
+defines one or more constants, all of which have the same type:
+
+~~~~
+enum Direction {
+    North,
+    East,
+    South,
+    West
+}
+~~~~
+
+Each variant of this enum has a unique and constant integral discriminator
+value. If no explicit discriminator is specified for a variant, the value
+defaults to the value of the previous variant plus one. If the first variant
+does not have a discriminator, it defaults to 0. For example, the value of
+`North` is 0, `East` is 1, `South` is 2, and `West` is 3.
+
+When an enum has simple integer discriminators, you can apply the `as` cast
+operator to convert a variant to its discriminator value as an `int`:
+
+~~~~
+# enum Direction { North }
+println!( "{:?} => {}", North, North as int );
+~~~~
+
+It is possible to set the discriminator values to chosen constant values:
+
+~~~~
+enum Color {
+  Red = 0xff0000,
+  Green = 0x00ff00,
+  Blue = 0x0000ff
+}
+~~~~
+
+Variants do not have to be simple values; they may be more complex:
 
 ~~~~
 # struct Point { x: f64, y: f64 }
@@ -662,50 +724,14 @@ two `Point` structs. The run-time representation of such a value
 includes an identifier of the actual form that it holds, much like the
 "tagged union" pattern in C, but with better static guarantees.
 
-The above declaration will define a type `Shape` that can refer to
-such shapes, and two functions, `Circle` and `Rectangle`, which can be
-used to construct values of the type (taking arguments of the
-specified types). So `Circle(Point { x: 0.0, y: 0.0 }, 10.0)` is the way to
-create a new circle.
+This declaration defines a type `Shape` that can refer to such shapes, and two
+functions, `Circle` and `Rectangle`, which can be used to construct values of
+the type. To create a new Circle, write `Circle(Point { x: 0.0, y: 0.0 },
+10.0)`.
 
-Enum variants need not have parameters. This `enum` declaration,
-for example, is equivalent to a C enum:
-
-~~~~
-enum Direction {
-    North,
-    East,
-    South,
-    West
-}
-~~~~
-
-This declaration defines `North`, `East`, `South`, and `West` as constants,
-all of which have type `Direction`.
-
-When an enum is C-like (that is, when none of the variants have
-parameters), it is possible to explicitly set the discriminator values
-to a constant value:
-
-~~~~
-enum Color {
-  Red = 0xff0000,
-  Green = 0x00ff00,
-  Blue = 0x0000ff
-}
-~~~~
-
-If an explicit discriminator is not specified for a variant, the value
-defaults to the value of the previous variant plus one. If the first
-variant does not have a discriminator, it defaults to 0. For example,
-the value of `North` is 0, `East` is 1, `South` is 2, and `West` is 3.
-
-When an enum is C-like, you can apply the `as` cast operator to
-convert it to its discriminator value as an `int`.
-
-For enum types with multiple variants, destructuring is the only way to
-get at their contents. All variant constructors can be used as
-patterns, as in this definition of `area`:
+All of these variant constructors may be used as patterns. The only way to
+access the contents of an enum instance is the destructuring of a match. For
+example:
 
 ~~~~
 use std::f64;
@@ -719,10 +745,8 @@ fn area(sh: Shape) -> f64 {
 }
 ~~~~
 
-You can write a lone `_` to ignore an individual field, and can
-ignore all fields of a variant like: `Circle(..)`. As in their
-introduction form, nullary enum patterns are written without
-parentheses.
+Use a lone `_` to ignore an individual field. Ignore all fields of a variant
+like: `Circle(..)`. Nullary enum patterns are written without parentheses:
 
 ~~~~
 # struct Point { x: f64, y: f64 }
@@ -757,7 +781,7 @@ fn area(sh: Shape) -> f64 {
 }
 ~~~~
 
-> ***Note:*** This feature of the compiler is currently gated behind the
+> *Note:* This feature of the compiler is currently gated behind the
 > `#[feature(struct_variant)]` directive. More about these directives can be
 > found in the manual.
 
@@ -771,7 +795,7 @@ unit, `()`, as the empty tuple if you like).
 ~~~~
 let mytup: (int, int, f64) = (10, 20, 30.0);
 match mytup {
-  (a, b, c) => info!("{}", a + b + (c as int))
+  (a, b, c) => println!("{}", a + b + (c as int))
 }
 ~~~~
 
@@ -788,7 +812,7 @@ For example:
 struct MyTup(int, int, f64);
 let mytup: MyTup = MyTup(10, 20, 30.0);
 match mytup {
-  MyTup(a, b, c) => info!("{}", a + b + (c as int))
+  MyTup(a, b, c) => println!("{}", a + b + (c as int))
 }
 ~~~~
 
@@ -817,7 +841,6 @@ values can be extracted with pattern matching:
 
 ~~~
 # struct Inches(int);
-
 let length_with_unit = Inches(10);
 let Inches(integer_length) = length_with_unit;
 println!("length is {} inches", integer_length);
@@ -853,7 +876,7 @@ fn line(a: int, b: int, x: int) -> int {
 It's better Rust style to write a return value this way instead of
 writing an explicit `return`. The utility of `return` comes in when
 returning early from a function. Functions that do not return a value
-are said to return nil, `()`, and both the return type and the return
+are said to return unit, `()`, and both the return type and the return
 value may be omitted from the definition. The following two functions
 are equivalent.
 
@@ -1002,7 +1025,7 @@ type was invalid because the size was infinite!
 
 An *owned box* (`~`) uses a dynamic memory allocation to provide the invariant
 of always being the size of a pointer, regardless of the contained type. This
-can be leverage to create a valid `List` definition:
+can be leveraged to create a valid `List` definition:
 
 ~~~
 enum List {
@@ -1030,12 +1053,14 @@ being destroyed along with the owner. Since the `list` variable above is
 immutable, the whole list is immutable. The memory allocation itself is the
 box, while the owner holds onto a pointer to it:
 
-              List box             List box           List box            List box
-            +--------------+    +--------------+    +--------------+    +--------------+
-    list -> | Cons | 1 | ~ | -> | Cons | 2 | ~ | -> | Cons | 3 | ~ | -> | Nil          |
-            +--------------+    +--------------+    +--------------+    +--------------+
+~~~ {.notrust}
+          List box             List box           List box            List box
+        +--------------+    +--------------+    +--------------+    +--------------+
+list -> | Cons | 1 | ~ | -> | Cons | 2 | ~ | -> | Cons | 3 | ~ | -> | Nil          |
+        +--------------+    +--------------+    +--------------+    +--------------+
+~~~
 
-> Note: the above diagram shows the logical contents of the enum. The actual
+> *Note:* the above diagram shows the logical contents of the enum. The actual
 > memory layout of the enum may vary. For example, for the `List` enum shown
 > above, Rust guarantees that there will be no enum tag field in the actual
 > structure. See the language reference for more details.
@@ -1090,7 +1115,7 @@ let z = x; // no new memory allocated, `x` can no longer be used
 ~~~~
 
 The `clone` method is provided by the `Clone` trait, and can be derived for
-our `List` type. Traits will be explained in detail later.
+our `List` type. Traits will be explained in detail [later](#traits).
 
 ~~~{.ignore}
 #[deriving(Clone)]
@@ -1145,7 +1170,7 @@ ownership of a list to be passed in rather than just mutating it in-place.
 The obvious signature for a `List` equality comparison is the following:
 
 ~~~{.ignore}
-fn eq(xs: List, ys: List) -> bool { ... }
+fn eq(xs: List, ys: List) -> bool { /* ... */ }
 ~~~
 
 However, this will cause both lists to be moved into the function. Ownership
@@ -1153,7 +1178,7 @@ isn't required to compare the lists, so the function should take *references*
 (&T) instead.
 
 ~~~{.ignore}
-fn eq(xs: &List, ys: &List) -> bool { ... }
+fn eq(xs: &List, ys: &List) -> bool { /* ... */ }
 ~~~
 
 A reference is a *non-owning* view of a value. A reference can be obtained with the `&` (address-of)
@@ -1183,8 +1208,8 @@ let ys = Cons(5, ~Cons(10, ~Nil));
 assert!(eq(&xs, &ys));
 ~~~
 
-Note that Rust doesn't guarantee [tail-call](http://en.wikipedia.org/wiki/Tail_call) optimization,
-but LLVM is able to handle a simple case like this with optimizations enabled.
+> *Note:* Rust doesn't guarantee [tail-call](http://en.wikipedia.org/wiki/Tail_call) optimization,
+> but LLVM is able to handle a simple case like this with optimizations enabled.
 
 ## Lists of other types
 
@@ -1193,6 +1218,9 @@ leveraging Rust's support for generics, it can be extended to work for any
 element type.
 
 The `u32` in the previous definition can be substituted with a type parameter:
+
+> *Note:* The following code introduces generics, which are explained in a
+> [dedicated section](#generics).
 
 ~~~
 enum List<T> {
@@ -1312,10 +1340,14 @@ impl<T: Eq> Eq for List<T> {
 
 let xs = Cons(5, ~Cons(10, ~Nil));
 let ys = Cons(5, ~Cons(10, ~Nil));
+// The methods below are part of the Eq trait,
+// which we implemented on our linked list.
 assert!(xs.eq(&ys));
-assert!(xs == ys);
 assert!(!xs.ne(&ys));
-assert!(!(xs != ys));
+
+// The Eq trait also allows us to use the shorthand infix operators.
+assert!(xs == ys);    // `xs == ys` is short for `xs.eq(&ys)`
+assert!(!(xs != ys)); // `xs != ys` is short for `xs.ne(&ys)`
 ~~~
 
 # More on boxes
@@ -1361,7 +1393,7 @@ let mut y = ~5; // mutable
 In contrast with
 owned boxes, where the holder of an owned box is the owner of the pointed-to
 memory, references never imply ownership - they are "borrowed".
-A reference can be borrowed to
+You can borrow a reference to
 any object, and the compiler verifies that it cannot outlive the lifetime of
 the object.
 
@@ -1375,20 +1407,17 @@ struct Point {
 ~~~~
 
 We can use this simple definition to allocate points in many different
-ways. For example, in this code, each of these three local variables
+ways. For example, in this code, each of these local variables
 contains a point, but allocated in a different location:
 
 ~~~
 # struct Point { x: f64, y: f64 }
 let on_the_stack : Point  =  Point { x: 3.0, y: 4.0 };
-let managed_box  : @Point = @Point { x: 5.0, y: 1.0 };
 let owned_box    : ~Point = ~Point { x: 7.0, y: 9.0 };
 ~~~
 
 Suppose we want to write a procedure that computes the distance
-between any two points, no matter where they are stored. For example,
-we might like to compute the distance between `on_the_stack` and
-`managed_box`, or between `managed_box` and `owned_box`. One option is
+between any two points, no matter where they are stored. One option is
 to define a function that takes two arguments of type point—that is,
 it takes the points by value. But this will cause the points to be
 copied when we call the function. For points, this is probably not so
@@ -1397,11 +1426,10 @@ that takes the points by pointer. We can use references to do this:
 
 ~~~
 # struct Point { x: f64, y: f64 }
-# fn sqrt(f: f64) -> f64 { 0.0 }
 fn compute_distance(p1: &Point, p2: &Point) -> f64 {
     let x_d = p1.x - p2.x;
     let y_d = p1.y - p2.y;
-    sqrt(x_d * x_d + y_d * y_d)
+    (x_d * x_d + y_d * y_d).sqrt()
 }
 ~~~
 
@@ -1410,11 +1438,9 @@ Now we can call `compute_distance()` in various ways:
 ~~~
 # struct Point{ x: f64, y: f64 };
 # let on_the_stack : Point  =  Point { x: 3.0, y: 4.0 };
-# let managed_box  : @Point = @Point { x: 5.0, y: 1.0 };
 # let owned_box    : ~Point = ~Point { x: 7.0, y: 9.0 };
 # fn compute_distance(p1: &Point, p2: &Point) -> f64 { 0.0 }
-compute_distance(&on_the_stack, managed_box);
-compute_distance(managed_box, owned_box);
+compute_distance(&on_the_stack, owned_box);
 ~~~
 
 Here the `&` operator is used to take the address of the variable
@@ -1424,11 +1450,11 @@ reference. We also call this _borrowing_ the local variable
 `on_the_stack`, because we are creating an alias: that is, another
 route to the same data.
 
-In the case of the boxes `managed_box` and `owned_box`, however, no
+In the case of `owned_box`, however, no
 explicit action is necessary. The compiler will automatically convert
-a box like `@point` or `~point` to a reference like
+a box `~point` to a reference like
 `&point`. This is another form of borrowing; in this case, the
-contents of the managed/owned box are being lent out.
+contents of the owned box are being lent out.
 
 Whenever a value is borrowed, there are some limitations on what you
 can do with the original. For example, if the contents of a variable
@@ -1444,14 +1470,14 @@ For a more in-depth explanation of references and lifetimes, read the
 
 ## Freezing
 
-Lending an immutable pointer to an object freezes it and prevents mutation.
+Lending an &-pointer to an object freezes it and prevents mutation—even if the object was declared as `mut`.
 `Freeze` objects have freezing enforced statically at compile-time. An example
 of a non-`Freeze` type is [`RefCell<T>`][refcell].
 
 ~~~~
 let mut x = 5;
 {
-    let y = &x; // `x` is now frozen, it cannot be modified
+    let y = &x; // `x` is now frozen. It cannot be modified or re-assigned.
 }
 // `x` is now unfrozen again
 # x = 3;
@@ -1465,11 +1491,10 @@ Rust uses the unary star operator (`*`) to access the contents of a
 box or pointer, similarly to C.
 
 ~~~
-let managed = @10;
-let owned = ~20;
-let borrowed = &30;
+let owned = ~10;
+let borrowed = &20;
 
-let sum = *managed + *owned + *borrowed;
+let sum = *owned + *borrowed;
 ~~~
 
 Dereferenced mutable pointers may appear on the left hand side of
@@ -1477,14 +1502,13 @@ assignments. Such an assignment modifies the value that the pointer
 points to.
 
 ~~~
-let managed = @10;
-let mut owned = ~20;
+let mut owned = ~10;
 
-let mut value = 30;
+let mut value = 20;
 let borrowed = &mut value;
 
 *owned = *borrowed + 100;
-*borrowed = *managed + 1000;
+*borrowed = *owned + 1000;
 ~~~
 
 Pointers have high operator precedence, but lower precedence than the
@@ -1495,7 +1519,7 @@ can sometimes make code awkward and parenthesis-filled.
 # struct Point { x: f64, y: f64 }
 # enum Shape { Rectangle(Point, Point) }
 # impl Shape { fn area(&self) -> int { 0 } }
-let start = @Point { x: 10.0, y: 20.0 };
+let start = ~Point { x: 10.0, y: 20.0 };
 let end = ~Point { x: (*start).x + 100.0, y: (*start).y + 100.0 };
 let rect = &Rectangle(*start, *end);
 let area = (*rect).area();
@@ -1509,7 +1533,7 @@ dot), so in most cases, explicitly dereferencing the receiver is not necessary.
 # struct Point { x: f64, y: f64 }
 # enum Shape { Rectangle(Point, Point) }
 # impl Shape { fn area(&self) -> int { 0 } }
-let start = @Point { x: 10.0, y: 20.0 };
+let start = ~Point { x: 10.0, y: 20.0 };
 let end = ~Point { x: start.x + 100.0, y: start.y + 100.0 };
 let rect = &Rectangle(*start, *end);
 let area = rect.area();
@@ -1521,7 +1545,7 @@ something silly like
 
 ~~~
 # struct Point { x: f64, y: f64 }
-let point = &@~Point { x: 10.0, y: 20.0 };
+let point = &~Point { x: 10.0, y: 20.0 };
 println!("{:f}", point.x);
 ~~~
 
@@ -1554,17 +1578,19 @@ allocated memory on the heap. A unique vector owns the elements it contains, so
 the elements are mutable if the vector is mutable.
 
 ~~~
+use std::strbuf::StrBuf;
+
 // A dynamically sized vector (unique vector)
-let mut numbers = ~[1, 2, 3];
+let mut numbers = vec![1, 2, 3];
 numbers.push(4);
 numbers.push(5);
 
 // The type of a unique vector is written as `~[int]`
-let more_numbers: ~[int] = numbers;
+let more_numbers: ~[int] = numbers.move_iter().collect();
 
 // The original `numbers` value can no longer be used, due to move semantics.
 
-let mut string = ~"fo";
+let mut string = StrBuf::from_str("fo");
 string.push_char('o');
 ~~~
 
@@ -1653,7 +1679,7 @@ let x = Rc::new([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 let y = x.clone(); // a new owner
 let z = x; // this moves `x` into `z`, rather than creating a new owner
 
-assert_eq!(*z.borrow(), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+assert!(*z == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 
 // the variable is mutable, but not the contents of the box
 let mut a = Rc::new([10, 9, 8, 7, 6, 5, 4, 3, 2, 1]);
@@ -1672,7 +1698,7 @@ let x = Gc::new([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 let y = x; // does not perform a move, unlike with `Rc`
 let z = x;
 
-assert_eq!(*z.borrow(), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+assert!(*z.borrow() == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 ~~~
 
 With shared ownership, mutability cannot be inherited so the boxes are always immutable. However,
@@ -1730,7 +1756,10 @@ access local variables in the enclosing scope.
 
 ~~~~
 let mut max = 0;
-[1, 2, 3].map(|x| if *x > max { max = *x });
+let f = |x: int| if x > max { max = x };
+for x in [1, 2, 3].iter() {
+    f(*x);
+}
 ~~~~
 
 Stack closures are very efficient because their environment is
@@ -1746,10 +1775,23 @@ pervasively in Rust code.
 
 Owned closures, written `proc`,
 hold on to things that can safely be sent between
-processes. They copy the values they close over, much like managed
-closures, but they also own them: that is, no other code can access
+processes. They copy the values they close over,
+but they also own them: that is, no other code can access
 them. Owned closures are used in concurrent code, particularly
 for spawning [tasks][tasks].
+
+Closures can be used to spawn tasks.
+A practical example of this pattern is found when using the `spawn` function,
+which starts a new task.
+
+~~~~
+use std::task::spawn;
+
+// proc is the closure which will be spawned.
+spawn(proc() {
+    println!("I'm a new task")
+});
+~~~~
 
 ## Closure compatibility
 
@@ -1768,48 +1810,9 @@ call_twice(closure);
 call_twice(function);
 ~~~~
 
-> ***Note:*** Both the syntax and the semantics will be changing
+> *Note:* Both the syntax and the semantics will be changing
 > in small ways. At the moment they can be unsound in some
 > scenarios, particularly with non-copyable types.
-
-## Do syntax
-
-The `do` expression makes it easier to call functions that take procedures
-as arguments.
-
-Consider this function that takes a procedure:
-
-~~~~
-fn call_it(op: proc(v: int)) {
-    op(10)
-}
-~~~~
-
-As a caller, if we use a closure to provide the final operator
-argument, we can write it in a way that has a pleasant, block-like
-structure.
-
-~~~~
-# fn call_it(op: proc(v: int)) { }
-call_it(proc(n) {
-    println!("{}", n);
-});
-~~~~
-
-A practical example of this pattern is found when using the `spawn` function,
-which starts a new task.
-
-~~~~
-use std::task::spawn;
-spawn(proc() {
-    debug!("I'm a new task")
-});
-~~~~
-
-If you want to see the output of `debug!` statements, you will need to turn on
-`debug!` logging.  To enable `debug!` logging, set the RUST_LOG environment
-variable to the name of your crate, which, for a file named `foo.rs`, will be
-`foo` (e.g., with bash, `export RUST_LOG=foo`).
 
 # Methods
 
@@ -1855,7 +1858,7 @@ like any other function, except for the name `self`.
 
 The type of `self` is the type on which the method is implemented,
 or a pointer thereof. As an argument it is written either `self`,
-`&self`, `@self`, or `~self`.
+`&self`, or `~self`.
 A caller must in turn have a compatible pointer type to call the method.
 
 ~~~
@@ -1867,17 +1870,15 @@ A caller must in turn have a compatible pointer type to call the method.
 #     Rectangle(Point, Point)
 # }
 impl Shape {
-    fn draw_reference(&self) { ... }
-    fn draw_managed(@self) { ... }
-    fn draw_owned(~self) { ... }
-    fn draw_value(self) { ... }
+    fn draw_reference(&self) { /* ... */ }
+    fn draw_owned(~self) { /* ... */ }
+    fn draw_value(self) { /* ... */ }
 }
 
 let s = Circle(Point { x: 1.0, y: 2.0 }, 3.0);
 
-(@s).draw_managed();
-(~s).draw_owned();
 (&s).draw_reference();
+(~s).draw_owned();
 s.draw_value();
 ~~~
 
@@ -1894,16 +1895,14 @@ to a reference.
 #     Rectangle(Point, Point)
 # }
 # impl Shape {
-#    fn draw_reference(&self) { ... }
-#    fn draw_managed(@self) { ... }
-#    fn draw_owned(~self) { ... }
-#    fn draw_value(self) { ... }
+#    fn draw_reference(&self) { /* ... */ }
+#    fn draw_owned(~self) { /* ... */ }
+#    fn draw_value(self) { /* ... */ }
 # }
 # let s = Circle(Point { x: 1.0, y: 2.0 }, 3.0);
-// As with typical function arguments, managed and owned pointers
+// As with typical function arguments, owned pointers
 // are automatically converted to references
 
-(@s).draw_reference();
 (~s).draw_reference();
 
 // Unlike typical function arguments, the self value will
@@ -1914,7 +1913,7 @@ s.draw_reference();
 (& &s).draw_reference();
 
 // ... and dereferenced and borrowed
-(&@~s).draw_reference();
+(&~s).draw_reference();
 ~~~
 
 Implementations may also define standalone (sometimes called "static")
@@ -1923,8 +1922,8 @@ These methods are the preferred way to define constructor functions.
 
 ~~~~ {.ignore}
 impl Circle {
-    fn area(&self) -> f64 { ... }
-    fn new(area: f64) -> Circle { ... }
+    fn area(&self) -> f64 { /* ... */ }
+    fn new(area: f64) -> Circle { /* ... */ }
 }
 ~~~~
 
@@ -1950,8 +1949,8 @@ vector consisting of the result of applying `function` to each element
 of `vector`:
 
 ~~~~
-fn map<T, U>(vector: &[T], function: |v: &T| -> U) -> ~[U] {
-    let mut accumulator = ~[];
+fn map<T, U>(vector: &[T], function: |v: &T| -> U) -> Vec<U> {
+    let mut accumulator = Vec::new();
     for element in vector.iter() {
         accumulator.push(function(element));
     }
@@ -1977,8 +1976,8 @@ illegal to copy and pass by value.
 Generic `type`, `struct`, and `enum` declarations follow the same pattern:
 
 ~~~~
-use std::hashmap::HashMap;
-type Set<T> = HashMap<T, ()>;
+extern crate collections;
+type Set<T> = collections::HashMap<T, ()>;
 
 struct Stack<T> {
     elements: ~[T]
@@ -1988,6 +1987,7 @@ enum Option<T> {
     Some(T),
     None
 }
+# fn main() {}
 ~~~~
 
 These declarations can be instantiated to valid types like `Set<int>`,
@@ -2005,7 +2005,7 @@ a function that returns `Option<T>` instead of `T`.
 fn radius(shape: Shape) -> Option<f64> {
     match shape {
         Circle(_, radius) => Some(radius),
-        Rectangle(..)      => None
+        Rectangle(..)     => None
     }
 }
 ~~~~
@@ -2020,8 +2020,8 @@ C++ templates.
 
 ## Traits
 
-Within a generic function -- that is, a function parameterized by a
-type parameter, say, `T` -- the operations we can do on arguments of
+Within a generic function—that is, a function parameterized by a
+type parameter, say, `T`—the operations we can do on arguments of
 type `T` are quite limited.  After all, since we don't know what type
 `T` will be instantiated with, we can't safely modify or query values
 of type `T`.  This is where _traits_ come into play. Traits are Rust's
@@ -2082,19 +2082,20 @@ and may not be overridden:
 
 * `Send` - Sendable types.
 Types are sendable
-unless they contain managed boxes, managed closures, or references.
+unless they contain references.
 
-* `Freeze` - Constant (immutable) types.
-These are types that do not contain anything intrinsically mutable.
-Intrinsically mutable values include `Cell` in the standard library.
+* `Share` - Types that are *threadsafe*
+These are types that are safe to be used across several threads with access to
+a `&T` pointer. `MutexArc` is an example of a *sharable* type with internal mutable data.
 
 * `'static` - Non-borrowed types.
 These are types that do not contain any data whose lifetime is bound to
 a particular stack frame. These are types that do not contain any
 references, or types where the only contained references
-have the `'static` lifetime.
+have the `'static` lifetime. (For more on named lifetimes and their uses,
+see the [references and lifetimes guide][lifetimes].)
 
-> ***Note:*** These two traits were referred to as 'kinds' in earlier
+> *Note:* These built-in traits were referred to as 'kinds' in earlier
 > iterations of the language, and often still are.
 
 Additionally, the `Drop` trait is used to define destructors. This
@@ -2137,7 +2138,7 @@ We say that the `Printable` trait _provides_ a `print` method with the
 given signature.  This means that we can call `print` on an argument
 of any type that implements the `Printable` trait.
 
-Rust's built-in `Send` and `Freeze` types are examples of traits that
+Rust's built-in `Send` and `Share` types are examples of traits that
 don't provide any methods.
 
 Traits may be implemented for specific types with [impls]. An impl for
@@ -2159,7 +2160,7 @@ impl Printable for ~str {
 }
 
 # 1.print();
-# (~"foo").print();
+# ("foo".to_owned()).print();
 ~~~~
 
 Methods defined in an impl for a trait may be called just like
@@ -2209,7 +2210,7 @@ impl Printable for bool {}
 impl Printable for f32 {}
 
 # 1.print();
-# (~"foo").print();
+# ("foo".to_owned()).print();
 # true.print();
 # 3.14159.print();
 ~~~~
@@ -2247,7 +2248,7 @@ defining one.
 
 The type parameters bound by a trait are in scope in each of the
 method declarations. So, re-declaring the type parameter
-`T` as an explicit type parameter for `len`, in either the trait or
+`T` as an explicit type parameter for `length`, in either the trait or
 the impl, would be a compile-time error.
 
 Within a trait definition, `Self` is a special type that you can think
@@ -2288,7 +2289,7 @@ impl Shape for Circle {
     fn new(area: f64) -> Circle { Circle { radius: (area / PI).sqrt() } }
 }
 impl Shape for Square {
-    fn new(area: f64) -> Square { Square { length: (area).sqrt() } }
+    fn new(area: f64) -> Square { Square { length: area.sqrt() } }
 }
 
 let area = 42.5;
@@ -2366,29 +2367,29 @@ an _object_.
 
 ~~~~
 # trait Drawable { fn draw(&self); }
-fn draw_all(shapes: &[@Drawable]) {
+fn draw_all(shapes: &[~Drawable]) {
     for shape in shapes.iter() { shape.draw(); }
 }
 ~~~~
 
-In this example, there is no type parameter. Instead, the `@Drawable`
-type denotes any managed box value that implements the `Drawable`
-trait. To construct such a value, you use the `as` operator to cast a
-value to an object:
+In this example, there is no type parameter. Instead, the `~Drawable`
+type denotes any owned box value that implements the `Drawable` trait.
+To construct such a value, you use the `as` operator to cast a value
+to an object:
 
 ~~~~
 # type Circle = int; type Rectangle = bool;
 # trait Drawable { fn draw(&self); }
 # fn new_circle() -> Circle { 1 }
 # fn new_rectangle() -> Rectangle { true }
-# fn draw_all(shapes: &[@Drawable]) {}
+# fn draw_all(shapes: &[~Drawable]) {}
 
-impl Drawable for Circle { fn draw(&self) { ... } }
-impl Drawable for Rectangle { fn draw(&self) { ... } }
+impl Drawable for Circle { fn draw(&self) { /* ... */ } }
+impl Drawable for Rectangle { fn draw(&self) { /* ... */ } }
 
-let c: @Circle = @new_circle();
-let r: @Rectangle = @new_rectangle();
-draw_all([c as @Drawable, r as @Drawable]);
+let c: ~Circle = ~new_circle();
+let r: ~Rectangle = ~new_rectangle();
+draw_all([c as ~Drawable, r as ~Drawable]);
 ~~~~
 
 We omit the code for `new_circle` and `new_rectangle`; imagine that
@@ -2397,7 +2398,7 @@ that, like strings and vectors, objects have dynamic size and may
 only be referred to via one of the pointer types.
 Other pointer types work as well.
 Casts to traits may only be done with compatible pointers so,
-for example, an `@Circle` may not be cast to an `~Drawable`.
+for example, an `&Circle` may not be cast to an `~Drawable`.
 
 ~~~
 # type Circle = int; type Rectangle = int;
@@ -2405,8 +2406,6 @@ for example, an `@Circle` may not be cast to an `~Drawable`.
 # impl Drawable for int { fn draw(&self) {} }
 # fn new_circle() -> int { 1 }
 # fn new_rectangle() -> int { 2 }
-// A managed object
-let boxy: @Drawable = @new_circle() as @Drawable;
 // An owned object
 let owny: ~Drawable = ~new_circle() as ~Drawable;
 // A borrowed object
@@ -2420,28 +2419,28 @@ select the method to call at runtime.
 
 This usage of traits is similar to Java interfaces.
 
-By default, each of the three storage classes for traits enforce a
-particular set of built-in kinds that their contents must fulfill in
-order to be packaged up in a trait object of that storage class.
+There are some built-in bounds, such as `Send` and `Share`, which are properties
+of the components of types. By design, trait objects don't know the exact type
+of their contents and so the compiler cannot reason about those properties.
 
-* The contents of owned traits (`~Trait`) must fulfill the `Send` bound.
-* The contents of managed traits (`@Trait`) must fulfill the `'static` bound.
-* The contents of reference traits (`&Trait`) are not constrained by any bound.
+You can instruct the compiler, however, that the contents of a trait object must
+acribe to a particular bound with a trailing colon (`:`). These are examples of
+valid types:
 
-Consequently, the trait objects themselves automatically fulfill their
-respective kind bounds. However, this default behavior can be overridden by
-specifying a list of bounds on the trait type, for example, by writing `~Trait:`
-(which indicates that the contents of the owned trait need not fulfill any
-bounds), or by writing `~Trait:Send+Freeze`, which indicates that in addition
-to fulfilling `Send`, contents must also fulfill `Freeze`, and as a consequence,
-the trait itself fulfills `Freeze`.
+~~~rust
+trait Foo {}
+trait Bar<T> {}
 
-* `~Trait:Send` is equivalent to `~Trait`.
-* `@Trait:'static` is equivalent to `@Trait`.
-* `&Trait:` is equivalent to `&Trait`.
+fn sendable_foo(f: ~Foo:Send) { /* ... */ }
+fn shareable_bar<T: Share>(b: &Bar<T>: Share) { /* ... */ }
+~~~
+
+When no colon is specified (such as the type `~Foo`), it is inferred that the
+value ascribes to no bounds. They must be added manually if any bounds are
+necessary for usage.
 
 Builtin kind bounds can also be specified on closure types in the same way (for
-example, by writing `fn:Freeze()`), and the default behaviours are the same as
+example, by writing `fn:Send()`), and the default behaviours are the same as
 for traits of the same storage class.
 
 ## Trait inheritance
@@ -2502,12 +2501,12 @@ use std::f64::consts::PI;
 # impl Circle for CircleStruct { fn radius(&self) -> f64 { (self.area() / PI).sqrt() } }
 # impl Shape for CircleStruct { fn area(&self) -> f64 { PI * square(self.radius) } }
 
-let concrete = @CircleStruct{center:Point{x:3f,y:4f},radius:5f};
-let mycircle: @Circle = concrete as @Circle;
+let concrete = ~CircleStruct{center:Point{x:3.0,y:4.0},radius:5.0};
+let mycircle: ~Circle = concrete as ~Circle;
 let nonsense = mycircle.radius() * mycircle.area();
 ~~~
 
-> ***Note:*** Trait inheritance does not actually work with objects yet
+> *Note:* Trait inheritance does not actually work with objects yet
 
 ## Deriving implementations for traits
 
@@ -2522,13 +2521,13 @@ of type `ABC` can be randomly generated and converted to a string:
 #[deriving(Eq)]
 struct Circle { radius: f64 }
 
-#[deriving(Rand, ToStr)]
+#[deriving(Clone, Show)]
 enum ABC { A, B, C }
 ~~~
 
 The full list of derivable traits is `Eq`, `TotalEq`, `Ord`,
-`TotalOrd`, `Encodable` `Decodable`, `Clone`, `DeepClone`,
-`IterBytes`, `Rand`, `Default`, `Zero`, and `ToStr`.
+`TotalOrd`, `Encodable` `Decodable`, `Clone`,
+`Hash`, `Rand`, `Default`, `Zero`, `FromPrimitive` and `Show`.
 
 # Crates and the module system
 
@@ -2589,8 +2588,6 @@ As you can see, your module hierarchy is now three modules deep: There is the cr
 function, and the module `farm`. The module `farm` also contains two functions and a third module `barn`,
 which contains a function `hay`.
 
-(In case you already stumbled over `extern mod`: It isn't directly related to a bare `mod`, we'll get to it later. )
-
 ## Paths and visibility
 
 We've now defined a nice module hierarchy. But how do we access the items in it from our `main` function?
@@ -2644,8 +2641,8 @@ Rust doesn't support encapsulation: both struct fields and methods can
 be private. But this encapsulation is at the module level, not the
 struct level.
 
-For convenience, fields are _public_ by default, and can be made _private_ with
-the `priv` keyword:
+Fields are _private_ by default, and can be made _public_ with
+the `pub` keyword:
 
 ~~~
 mod farm {
@@ -2654,13 +2651,13 @@ mod farm {
 # impl Human { pub fn rest(&self) { } }
 # pub fn make_me_a_farm() -> Farm { Farm { chickens: ~[], farmer: Human(0) } }
     pub struct Farm {
-        priv chickens: ~[Chicken],
-        farmer: Human
+        chickens: ~[Chicken],
+        pub farmer: Human
     }
 
     impl Farm {
-        fn feed_chickens(&self) { ... }
-        pub fn add_chicken(&self, c: Chicken) { ... }
+        fn feed_chickens(&self) { /* ... */ }
+        pub fn add_chicken(&self, c: Chicken) { /* ... */ }
     }
 
     pub fn feed_animals(farm: &Farm) {
@@ -2687,25 +2684,24 @@ manual.
 
 ## Files and modules
 
-One important aspect about Rusts module system is that source files are not important:
-You define a module hierarchy, populate it with all your definitions, define visibility,
-maybe put in a `fn main()`, and that's it: No need to think about source files.
+One important aspect of Rust's module system is that source files and modules are not the same thing. You define a module hierarchy, populate it with all your definitions, define visibility, maybe put in a `fn main()`, and that's it.
 
-The only file that's relevant is the one that contains the body of your crate root,
-and it's only relevant because you have to pass that file to `rustc` to compile your crate.
+The only file that's relevant when compiling is the one that contains the body
+of your crate root, and it's only relevant because you have to pass that file
+to `rustc` to compile your crate.
 
-And in principle, that's all you need: You can write any Rust program as one giant source file that contains your
-crate root and everything below it in `mod ... { ... }` declarations.
+In principle, that's all you need: You can write any Rust program as one giant source file that contains your
+crate root and everything else in `mod ... { ... }` declarations.
 
-However, in practice you usually want to split you code up into multiple source files to make it more manageable.
-In order to do that, Rust allows you to move the body of any module into it's own source file, which works like this:
+However, in practice you usually want to split up your code into multiple
+source files to make it more manageable. Rust allows you to move the body of
+any module into its own source file. If you declare a module without its body,
+like `mod foo;`, the compiler will look for the files `foo.rs` and `foo/mod.rs`
+inside some directory (usually the same as of the source file containing the
+`mod foo;` declaration). If it finds either, it uses the content of that file
+as the body of the module. If it finds both, that's a compile error.
 
-If you declare a module without its body, like `mod foo;`, the compiler will look for the
-files `foo.rs` and `foo/mod.rs` inside some directory (usually the same as of the source file containing
-the `mod foo;`). If it finds either, it uses the content of that file as the body of the module.
-If it finds both, that's a compile error.
-
-So, if we want to move the content of `mod farm` into it's own file, it would look like this:
+To move the content of `mod farm` into its own file, you can write:
 
 ~~~~ {.ignore}
 // `main.rs` - contains body of the crate root
@@ -2730,17 +2726,14 @@ pub mod barn {
 
 In short, `mod foo;` is just syntactic sugar for `mod foo { /* content of <...>/foo.rs or <...>/foo/mod.rs */ }`.
 
-This also means that having two or more identical `mod foo;` somewhere
-in your crate hierarchy is generally a bad idea,
-just like copy-and-paste-ing a module into two or more places is one.
+This also means that having two or more identical `mod foo;` declarations
+somewhere in your crate hierarchy is generally a bad idea,
+just like copy-and-paste-ing a module into multiple places is a bad idea.
 Both will result in duplicate and mutually incompatible definitions.
 
-The directory the compiler looks in for those two files is determined by starting with
-the same directory as the source file that contains the `mod foo;` declaration, and concatenating to that a
-path equivalent to the relative path of all nested `mod { ... }` declarations the `mod foo;`
-is contained in, if any.
-
-For example, given a file with this module body:
+When `rustc` resolves these module declarations, it starts by looking in the
+parent directory of the file containing the `mod foo` declaration. For example,
+given a file with the module body:
 
 ~~~ {.ignore}
 // `src/main.rs`
@@ -2753,7 +2746,7 @@ mod animals {
 }
 ~~~
 
-The compiler would then try all these files:
+The compiler will look for these files, in this order:
 
 ~~~ {.notrust}
 src/plants.rs
@@ -2766,9 +2759,9 @@ src/animals/mammals/humans.rs
 src/animals/mammals/humans/mod.rs
 ~~~
 
-Keep in mind that identical module hierachies can still lead to different path lookups
-depending on how and where you've moved a module body to its own file.
-For example, if we move the `animals` module above into its own file...
+Keep in mind that identical module hierarchies can still lead to different path
+lookups depending on how and where you've moved a module body to its own file.
+For example, if you move the `animals` module into its own file:
 
 ~~~ {.ignore}
 // `src/main.rs`
@@ -2784,21 +2777,21 @@ mod mammals {
 }
 ~~~
 
-...then the source files of `mod animals`'s submodules can
-either be placed right next to that of its parents, or in a subdirectory if `animals` source file is:
+...then the source files of `mod animals`'s submodules can either be in the same directory as the animals source file or in a subdirectory of its directory. If the animals file is `src/animals.rs`, `rustc` will look for:
 
 ~~~ {.notrust}
-src/plants.rs
-src/plants/mod.rs
-
-src/animals.rs - if file sits next to that of parent module's:
+src/animals.rs
     src/fish.rs
     src/fish/mod.rs
 
     src/mammals/humans.rs
     src/mammals/humans/mod.rs
+~~~
 
-src/animals/mod.rs - if file is in it's own subdirectory:
+If the animals file is `src/animals/mod.rs`, `rustc` will look for:
+
+~~~ {.notrust}
+src/animals/mod.rs
     src/animals/fish.rs
     src/animals/fish/mod.rs
 
@@ -2807,11 +2800,11 @@ src/animals/mod.rs - if file is in it's own subdirectory:
 
 ~~~
 
-These rules allow you to have both small modules that only need
-to consist of one source file each and can be conveniently placed right next to each other,
-and big complicated modules that group the source files of submodules in subdirectories.
+These rules allow you to write small modules consisting of single source files which can live in the same directory as well as large modules which group submodule source files in subdirectories.
 
-If you need to circumvent the defaults, you can also overwrite the path a `mod foo;` would take:
+If you need to override where `rustc` will look for the file containing a
+module's source code, use the `path` compiler directive. For example, to load a
+`classified` module from a different file:
 
 ~~~ {.ignore}
 #[path="../../area51/alien.rs"]
@@ -2836,11 +2829,11 @@ use farm::cow;
 
 The path you give to `use` is per default global, meaning relative to the crate root,
 no matter how deep the module hierarchy is, or whether the module body it's written in
-is contained in its own file (remember: files are irrelevant).
+is contained in its own file. (Remember: files are irrelevant.)
 
-This is different to other languages, where you often only find a single import construct that combines the semantic
+This is different from other languages, where you often only find a single import construct that combines the semantic
 of `mod foo;` and `use`-statements, and which tend to work relative to the source file or use an absolute file path
-- Rubys `require` or C/C++'s `#include` come to mind.
+- Ruby's `require` or C/C++'s `#include` come to mind.
 
 However, it's also possible to import things relative to the module of the `use`-statement:
 Adding a `super::` in front of the path will start in the parent module,
@@ -2967,7 +2960,7 @@ use farm::*;
 # fn main() { cow(); chicken() }
 ~~~
 
-> ***Note:*** This feature of the compiler is currently gated behind the
+> *Note:* This feature of the compiler is currently gated behind the
 > `#[feature(globs)]` directive. More about these directives can be found in
 > the manual.
 
@@ -3020,7 +3013,7 @@ The nested `barn` module is private, but the `pub use` allows users
 of the module `farm` to access a function from `barn` without needing
 to know that `barn` exists.
 
-In other words, you can use them to decouple an public api from their internal implementation.
+In other words, you can use it to decouple a public api from its internal implementation.
 
 ## Using libraries
 
@@ -3031,20 +3024,19 @@ as there really is no reason to start from scratch each time you start a new pro
 
 In Rust terminology, we need a way to refer to other crates.
 
-For that, Rust offers you the `extern mod` declaration:
+For that, Rust offers you the `extern crate` declaration:
 
 ~~~
-extern mod extra;
-// extra ships with Rust, you'll find more details further down.
+extern crate num;
+// `num` ships with Rust (much like `extra`; more details further down).
 
 fn main() {
     // The rational number '1/2':
-    let one_half = ::extra::rational::Ratio::new(1, 2);
+    let one_half = ::num::rational::Ratio::new(1, 2);
 }
 ~~~
 
-Despite its name, `extern mod` is a distinct construct from regular `mod` declarations:
-A statement of the form `extern mod foo;` will cause `rustc` to search for the crate `foo`,
+A statement of the form `extern crate foo;` will cause `rustc` to search for the crate `foo`,
 and if it finds a matching binary it lets you use it from inside your crate.
 
 The effect it has on your module hierarchy mirrors aspects of both `mod` and `use`:
@@ -3052,22 +3044,22 @@ The effect it has on your module hierarchy mirrors aspects of both `mod` and `us
 - Like `mod`, it causes `rustc` to actually emit code:
   The linkage information the binary needs to use the library `foo`.
 
-- But like `use`, all `extern mod` statements that refer to the same library are interchangeable,
+- But like `use`, all `extern crate` statements that refer to the same library are interchangeable,
   as each one really just presents an alias to an external module (the crate root of the library
   you're linking against).
 
 Remember how `use`-statements have to go before local declarations because the latter shadows the former?
-Well, `extern mod` statements also have their own rules in that regard:
-Both `use` and local declarations can shadow them, so the rule is that `extern mod` has to go in front
+Well, `extern crate` statements also have their own rules in that regard:
+Both `use` and local declarations can shadow them, so the rule is that `extern crate` has to go in front
 of both `use` and local declarations.
 
 Which can result in something like this:
 
 ~~~
-extern mod extra;
+extern crate num;
 
 use farm::dog;
-use extra::rational::Ratio;
+use num::rational::Ratio;
 
 mod farm {
     pub fn dog() { println!("woof"); }
@@ -3081,11 +3073,6 @@ fn main() {
 
 It's a bit weird, but it's the result of shadowing rules that have been set that way because
 they model most closely what people expect to shadow.
-
-## Package ids
-
-If you use `extern mod`, per default `rustc` will look for libraries in the library search path (which you can
-extend with the `-L` switch).
 
 ## Crate metadata and settings
 
@@ -3103,22 +3090,21 @@ Therefore, if you plan to compile your crate as a library, you should annotate i
 ~~~~
 // `lib.rs`
 
-# #[crate_type = "lib"];
-// Package ID
-#[crate_id = "farm#2.5"];
+# #![crate_type = "lib"]
+#![crate_id = "farm#2.5"]
 
 // ...
 # fn farm() {}
 ~~~~
 
-You can also specify package ID information in a `extern mod` statement.  For
-example, these `extern mod` statements would both accept and select the
+You can also specify crate id information in a `extern crate` statement.  For
+example, these `extern crate` statements would both accept and select the
 crate define above:
 
 ~~~~ {.ignore}
-extern mod farm;
-extern mod farm = "farm#2.5";
-extern mod my_farm = "farm";
+extern crate farm;
+extern crate farm = "farm#2.5";
+extern crate my_farm = "farm";
 ~~~~
 
 Other crate settings and metadata include things like enabling/disabling certain errors or warnings,
@@ -3129,8 +3115,8 @@ or setting the crate type (library or executable) explicitly:
 // ...
 
 // This crate is a library ("bin" is the default)
-#[crate_id = "farm#2.5"];
-#[crate_type = "lib"];
+#![crate_id = "farm#2.5"]
+#![crate_type = "lib"]
 
 // Turn on a warning
 #[warn(non_camel_case_types)]
@@ -3145,23 +3131,24 @@ We define two crates, and use one of them as a library in the other.
 
 ~~~~
 // `world.rs`
-#[crate_id = "world#0.42"];
-# extern mod extra;
+#![crate_id = "world#0.42"]
+
+# mod secret_module_to_make_this_test_run {
 pub fn explore() -> &'static str { "world" }
-# fn main() {}
+# }
 ~~~~
 
 ~~~~ {.ignore}
 // `main.rs`
-extern mod world;
+extern crate world;
 fn main() { println!("hello {}", world::explore()); }
 ~~~~
 
 Now compile and run like this (adjust to your platform if necessary):
 
 ~~~~ {.notrust}
-> rustc --lib world.rs  # compiles libworld-<HASH>-0.42.so
-> rustc main.rs -L .    # compiles main
+> rustc --crate-type=lib world.rs  # compiles libworld-<HASH>-0.42.so
+> rustc main.rs -L .               # compiles main
 > ./main
 "hello world"
 ~~~~
@@ -3169,7 +3156,7 @@ Now compile and run like this (adjust to your platform if necessary):
 Notice that the library produced contains the version in the file name
 as well as an inscrutable string of alphanumerics. As explained in the previous paragraph,
 these are both part of Rust's library versioning scheme. The alphanumerics are
-a hash representing the crates package ID.
+a hash representing the crate's id.
 
 ## The standard library and the prelude
 
@@ -3182,7 +3169,7 @@ in the `std` library, which is a crate that ships with Rust.
 The only magical thing that happens is that `rustc` automatically inserts this line into your crate root:
 
 ~~~ {.ignore}
-extern mod std;
+extern crate std;
 ~~~
 
 As well as this line into every module body:
@@ -3218,29 +3205,17 @@ Both auto-insertions can be disabled with an attribute if necessary:
 
 ~~~
 // In the crate root:
-#[no_std];
+#![no_std]
 ~~~
 
 ~~~
 // In any module:
-#[no_implicit_prelude];
+#![no_implicit_prelude]
 ~~~
 
 See the [API documentation][stddoc] for details.
 
 [stddoc]: std/index.html
-
-## The extra library
-
-Rust also ships with the [extra library], an accumulation of useful things,
-that are however not important enough to deserve a place in the standard
-library.  You can use them by linking to `extra` with an `extern mod extra;`.
-
-[extra library]: extra/index.html
-
-Right now `extra` contains those definitions directly, but in the future it will likely just
-re-export a bunch of 'officially blessed' crates that get managed with a
-package manager.
 
 # What next?
 
@@ -3253,7 +3228,6 @@ guides on individual topics.
 * [Macros][macros]
 * [The foreign function interface][ffi]
 * [Containers and iterators][container]
-* [Error-handling and Conditions][conditions]
 * [Documenting Rust code][rustdoc]
 * [Testing Rust code][testing]
 * [The Rust Runtime][runtime]
@@ -3266,7 +3240,6 @@ There is further documentation on the [wiki], however those tend to be even more
 [macros]: guide-macros.html
 [ffi]: guide-ffi.html
 [container]: guide-container.html
-[conditions]: guide-conditions.html
 [testing]: guide-testing.html
 [runtime]: guide-runtime.html
 [rustdoc]: rustdoc.html

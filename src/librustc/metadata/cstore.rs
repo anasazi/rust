@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,34 +8,41 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![allow(non_camel_case_types)]
 
 // The crate store - a central repo for information collected about external
 // crates and libraries
 
+use back::svh::Svh;
 use metadata::decoder;
 use metadata::loader;
 
 use std::cell::RefCell;
-use std::hashmap::HashMap;
+use std::c_vec::CVec;
+use std::rc::Rc;
+use collections::HashMap;
 use syntax::ast;
+use syntax::crateid::CrateId;
+use syntax::codemap::Span;
 use syntax::parse::token::IdentInterner;
 
 // A map from external crate numbers (as decoded from some crate file) to
 // local crate numbers (as generated during this session). Each external
 // crate may refer to types in other external crates, and each has their
 // own crate numbers.
-pub type cnum_map = @RefCell<HashMap<ast::CrateNum, ast::CrateNum>>;
+pub type cnum_map = HashMap<ast::CrateNum, ast::CrateNum>;
 
 pub enum MetadataBlob {
-    MetadataVec(~[u8]),
+    MetadataVec(CVec<u8>),
     MetadataArchive(loader::ArchiveMetadata),
 }
 
 pub struct crate_metadata {
-    name: ~str,
-    data: MetadataBlob,
-    cnum_map: cnum_map,
-    cnum: ast::CrateNum
+    pub name: ~str,
+    pub data: MetadataBlob,
+    pub cnum_map: cnum_map,
+    pub cnum: ast::CrateNum,
+    pub span: Span,
 }
 
 #[deriving(Eq)]
@@ -55,179 +62,158 @@ pub enum NativeLibaryKind {
 // must be non-None.
 #[deriving(Eq, Clone)]
 pub struct CrateSource {
-    dylib: Option<Path>,
-    rlib: Option<Path>,
-    cnum: ast::CrateNum,
+    pub dylib: Option<Path>,
+    pub rlib: Option<Path>,
+    pub cnum: ast::CrateNum,
 }
 
 pub struct CStore {
-    priv metas: RefCell<HashMap<ast::CrateNum, @crate_metadata>>,
-    priv extern_mod_crate_map: RefCell<extern_mod_crate_map>,
-    priv used_crate_sources: RefCell<~[CrateSource]>,
-    priv used_libraries: RefCell<~[(~str, NativeLibaryKind)]>,
-    priv used_link_args: RefCell<~[~str]>,
-    intr: @IdentInterner
+    metas: RefCell<HashMap<ast::CrateNum, Rc<crate_metadata>>>,
+    extern_mod_crate_map: RefCell<extern_mod_crate_map>,
+    used_crate_sources: RefCell<Vec<CrateSource>>,
+    used_libraries: RefCell<Vec<(~str, NativeLibaryKind)>>,
+    used_link_args: RefCell<Vec<~str>>,
+    pub intr: Rc<IdentInterner>,
 }
 
-// Map from NodeId's of local extern mod statements to crate numbers
+// Map from NodeId's of local extern crate statements to crate numbers
 type extern_mod_crate_map = HashMap<ast::NodeId, ast::CrateNum>;
 
 impl CStore {
-    pub fn new(intr: @IdentInterner) -> CStore {
+    pub fn new(intr: Rc<IdentInterner>) -> CStore {
         CStore {
             metas: RefCell::new(HashMap::new()),
             extern_mod_crate_map: RefCell::new(HashMap::new()),
-            used_crate_sources: RefCell::new(~[]),
-            used_libraries: RefCell::new(~[]),
-            used_link_args: RefCell::new(~[]),
+            used_crate_sources: RefCell::new(Vec::new()),
+            used_libraries: RefCell::new(Vec::new()),
+            used_link_args: RefCell::new(Vec::new()),
             intr: intr
         }
     }
 
-    pub fn get_crate_data(&self, cnum: ast::CrateNum) -> @crate_metadata {
-        let metas = self.metas.borrow();
-        *metas.get().get(&cnum)
+    pub fn next_crate_num(&self) -> ast::CrateNum {
+        self.metas.borrow().len() as ast::CrateNum + 1
     }
 
-    pub fn get_crate_hash(&self, cnum: ast::CrateNum) -> ~str {
+    pub fn get_crate_data(&self, cnum: ast::CrateNum) -> Rc<crate_metadata> {
+        self.metas.borrow().get(&cnum).clone()
+    }
+
+    pub fn get_crate_hash(&self, cnum: ast::CrateNum) -> Svh {
         let cdata = self.get_crate_data(cnum);
         decoder::get_crate_hash(cdata.data())
     }
 
-    pub fn get_crate_vers(&self, cnum: ast::CrateNum) -> ~str {
-        let cdata = self.get_crate_data(cnum);
-        decoder::get_crate_vers(cdata.data())
+    pub fn set_crate_data(&self, cnum: ast::CrateNum, data: Rc<crate_metadata>) {
+        self.metas.borrow_mut().insert(cnum, data);
     }
 
-    pub fn set_crate_data(&self, cnum: ast::CrateNum, data: @crate_metadata) {
-        let mut metas = self.metas.borrow_mut();
-        metas.get().insert(cnum, data);
-    }
-
-    pub fn have_crate_data(&self, cnum: ast::CrateNum) -> bool {
-        let metas = self.metas.borrow();
-        metas.get().contains_key(&cnum)
-    }
-
-    pub fn iter_crate_data(&self, i: |ast::CrateNum, @crate_metadata|) {
-        let metas = self.metas.borrow();
-        for (&k, &v) in metas.get().iter() {
-            i(k, v);
+    pub fn iter_crate_data(&self, i: |ast::CrateNum, &crate_metadata|) {
+        for (&k, v) in self.metas.borrow().iter() {
+            i(k, &**v);
         }
     }
 
     pub fn add_used_crate_source(&self, src: CrateSource) {
         let mut used_crate_sources = self.used_crate_sources.borrow_mut();
-        if !used_crate_sources.get().contains(&src) {
-            used_crate_sources.get().push(src);
+        if !used_crate_sources.contains(&src) {
+            used_crate_sources.push(src);
         }
     }
 
     pub fn get_used_crate_source(&self, cnum: ast::CrateNum)
                                      -> Option<CrateSource> {
-        let mut used_crate_sources = self.used_crate_sources.borrow_mut();
-        used_crate_sources.get().iter().find(|source| source.cnum == cnum)
+        self.used_crate_sources.borrow_mut()
+            .iter().find(|source| source.cnum == cnum)
             .map(|source| source.clone())
     }
 
-    pub fn reset(&self) {
-        self.metas.with_mut(|s| s.clear());
-        self.extern_mod_crate_map.with_mut(|s| s.clear());
-        self.used_crate_sources.with_mut(|s| s.clear());
-        self.used_libraries.with_mut(|s| s.clear());
-        self.used_link_args.with_mut(|s| s.clear());
+    pub fn dump_phase_syntax_crates(&self) {
     }
 
+    pub fn reset(&self) {
+        self.metas.borrow_mut().clear();
+        self.extern_mod_crate_map.borrow_mut().clear();
+        self.used_crate_sources.borrow_mut().clear();
+        self.used_libraries.borrow_mut().clear();
+        self.used_link_args.borrow_mut().clear();
+    }
+
+    // This method is used when generating the command line to pass through to
+    // system linker. The linker expects undefined symbols on the left of the
+    // command line to be defined in libraries on the right, not the other way
+    // around. For more info, see some comments in the add_used_library function
+    // below.
+    //
+    // In order to get this left-to-right dependency ordering, we perform a
+    // topological sort of all crates putting the leaves at the right-most
+    // positions.
     pub fn get_used_crates(&self, prefer: LinkagePreference)
-                           -> ~[(ast::CrateNum, Option<Path>)] {
-        let used_crate_sources = self.used_crate_sources.borrow();
-        used_crate_sources.get()
+                           -> Vec<(ast::CrateNum, Option<Path>)> {
+        let mut ordering = Vec::new();
+        fn visit(cstore: &CStore, cnum: ast::CrateNum,
+                 ordering: &mut Vec<ast::CrateNum>) {
+            if ordering.as_slice().contains(&cnum) { return }
+            let meta = cstore.get_crate_data(cnum);
+            for (_, &dep) in meta.cnum_map.iter() {
+                visit(cstore, dep, ordering);
+            }
+            ordering.push(cnum);
+        };
+        for (&num, _) in self.metas.borrow().iter() {
+            visit(self, num, &mut ordering);
+        }
+        ordering.as_mut_slice().reverse();
+        let ordering = ordering.as_slice();
+        let mut libs = self.used_crate_sources.borrow()
             .iter()
             .map(|src| (src.cnum, match prefer {
                 RequireDynamic => src.dylib.clone(),
                 RequireStatic => src.rlib.clone(),
             }))
-            .collect()
+            .collect::<Vec<(ast::CrateNum, Option<Path>)>>();
+        libs.sort_by(|&(a, _), &(b, _)| {
+            ordering.position_elem(&a).cmp(&ordering.position_elem(&b))
+        });
+        libs
     }
 
-    pub fn add_used_library(&self, lib: ~str, kind: NativeLibaryKind)
-                            -> bool {
+    pub fn add_used_library(&self, lib: ~str, kind: NativeLibaryKind) {
         assert!(!lib.is_empty());
-        let mut used_libraries = self.used_libraries.borrow_mut();
-        if used_libraries.get().iter().any(|&(ref x, _)| x == &lib) {
-            return false;
-        }
-        used_libraries.get().push((lib, kind));
-        true
+        self.used_libraries.borrow_mut().push((lib, kind));
     }
 
     pub fn get_used_libraries<'a>(&'a self)
-                              -> &'a RefCell<~[(~str, NativeLibaryKind)]> {
+                              -> &'a RefCell<Vec<(~str, NativeLibaryKind)> > {
         &self.used_libraries
     }
 
     pub fn add_used_link_args(&self, args: &str) {
-        let mut used_link_args = self.used_link_args.borrow_mut();
         for s in args.split(' ') {
-            used_link_args.get().push(s.to_owned());
+            self.used_link_args.borrow_mut().push(s.to_owned());
         }
     }
 
-    pub fn get_used_link_args<'a>(&'a self) -> &'a RefCell<~[~str]> {
+    pub fn get_used_link_args<'a>(&'a self) -> &'a RefCell<Vec<~str> > {
         &self.used_link_args
     }
 
     pub fn add_extern_mod_stmt_cnum(&self,
                                     emod_id: ast::NodeId,
                                     cnum: ast::CrateNum) {
-        let mut extern_mod_crate_map = self.extern_mod_crate_map.borrow_mut();
-        extern_mod_crate_map.get().insert(emod_id, cnum);
+        self.extern_mod_crate_map.borrow_mut().insert(emod_id, cnum);
     }
 
     pub fn find_extern_mod_stmt_cnum(&self, emod_id: ast::NodeId)
                                      -> Option<ast::CrateNum> {
-        let extern_mod_crate_map = self.extern_mod_crate_map.borrow();
-        extern_mod_crate_map.get().find(&emod_id).map(|x| *x)
+        self.extern_mod_crate_map.borrow().find(&emod_id).map(|x| *x)
     }
-
-    // returns hashes of crates directly used by this crate. Hashes are sorted by
-    // (crate name, crate version, crate hash) in lexicographic order (not semver)
-    pub fn get_dep_hashes(&self) -> ~[~str] {
-        let mut result = ~[];
-
-        let extern_mod_crate_map = self.extern_mod_crate_map.borrow();
-        for (_, &cnum) in extern_mod_crate_map.get().iter() {
-            let cdata = self.get_crate_data(cnum);
-            let hash = decoder::get_crate_hash(cdata.data());
-            let vers = decoder::get_crate_vers(cdata.data());
-            debug!("Add hash[{}]: {} {}", cdata.name, vers, hash);
-            result.push(crate_hash {
-                name: cdata.name.clone(),
-                vers: vers,
-                hash: hash
-            });
-        }
-
-        result.sort();
-
-        debug!("sorted:");
-        for x in result.iter() {
-            debug!("  hash[{}]: {}", x.name, x.hash);
-        }
-
-        result.move_iter().map(|crate_hash { hash, ..}| hash).collect()
-    }
-}
-
-#[deriving(Clone, TotalEq, TotalOrd)]
-struct crate_hash {
-    name: ~str,
-    vers: ~str,
-    hash: ~str,
 }
 
 impl crate_metadata {
     pub fn data<'a>(&'a self) -> &'a [u8] { self.data.as_slice() }
+    pub fn crate_id(&self) -> CrateId { decoder::get_crate_id(self.data()) }
+    pub fn hash(&self) -> Svh { decoder::get_crate_hash(self.data()) }
 }
 
 impl MetadataBlob {

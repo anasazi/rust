@@ -8,13 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[crate_type = "lib"];
+#![crate_type = "lib"]
 
-extern mod issue2378a;
+extern crate issue2378a;
 
 use issue2378a::maybe;
 
-pub struct two_maybes<T> {a: maybe<T>, b: maybe<T>}
+pub struct two_maybes<T> {pub a: maybe<T>, pub b: maybe<T>}
 
 impl<T:Clone> Index<uint,(T,T)> for two_maybes<T> {
     fn index(&self, idx: &uint) -> (T, T) {

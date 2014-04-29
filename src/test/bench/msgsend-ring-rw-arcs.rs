@@ -15,34 +15,32 @@
 
 // This also serves as a pipes test, because Arcs are implemented with pipes.
 
-extern mod extra;
+extern crate sync;
+extern crate time;
 
-use extra::arc;
-use extra::future::Future;
-use extra::time;
+use sync::{RWLock, Arc};
+use sync::Future;
 use std::os;
 use std::uint;
 
 // A poor man's pipe.
-type pipe = arc::RWArc<~[uint]>;
+type pipe = Arc<RWLock<Vec<uint>>>;
 
 fn send(p: &pipe, msg: uint) {
-    p.write_cond(|state, cond| {
-        state.push(msg);
-        cond.signal();
-    })
+    let mut arr = p.write();
+    arr.push(msg);
+    arr.cond.signal();
 }
 fn recv(p: &pipe) -> uint {
-    p.write_cond(|state, cond| {
-        while state.is_empty() {
-            cond.wait();
-        }
-        state.pop().unwrap()
-    })
+    let mut arr = p.write();
+    while arr.is_empty() {
+        arr.cond.wait();
+    }
+    arr.pop().unwrap()
 }
 
 fn init() -> (pipe,pipe) {
-    let x = arc::RWArc::new(~[]);
+    let x = Arc::new(RWLock::new(Vec::new()));
     ((&x).clone(), x)
 }
 
@@ -52,7 +50,7 @@ fn thread_ring(i: uint, count: uint, num_chan: pipe, num_port: pipe) {
     let mut num_port = Some(num_port);
     // Send/Receive lots of messages.
     for j in range(0u, count) {
-        //error!("task %?, iter %?", i, j);
+        //println!("task %?, iter %?", i, j);
         let num_chan2 = num_chan.take_unwrap();
         let num_port2 = num_port.take_unwrap();
         send(&num_chan2, i * j);
@@ -66,25 +64,25 @@ fn thread_ring(i: uint, count: uint, num_chan: pipe, num_port: pipe) {
 fn main() {
     let args = os::args();
     let args = if os::getenv("RUST_BENCH").is_some() {
-        ~[~"", ~"100", ~"10000"]
+        vec!("".to_owned(), "100".to_owned(), "10000".to_owned())
     } else if args.len() <= 1u {
-        ~[~"", ~"10", ~"100"]
+        vec!("".to_owned(), "10".to_owned(), "100".to_owned())
     } else {
-        args.clone()
+        args.clone().move_iter().collect()
     };
 
-    let num_tasks = from_str::<uint>(args[1]).unwrap();
-    let msg_per_task = from_str::<uint>(args[2]).unwrap();
+    let num_tasks = from_str::<uint>(*args.get(1)).unwrap();
+    let msg_per_task = from_str::<uint>(*args.get(2)).unwrap();
 
     let (mut num_chan, num_port) = init();
 
     let start = time::precise_time_s();
 
     // create the ring
-    let mut futures = ~[];
+    let mut futures = Vec::new();
 
     for i in range(1u, num_tasks) {
-        //error!("spawning %?", i);
+        //println!("spawning %?", i);
         let (new_chan, num_port) = init();
         let num_chan_2 = num_chan.clone();
         let new_future = Future::spawn(proc() {

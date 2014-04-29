@@ -25,7 +25,7 @@
  * policies, either expressed or implied, of Dmitry Vyukov.
  */
 
-#[allow(missing_doc, dead_code)];
+#![allow(missing_doc, dead_code)]
 
 // http://www.1024cores.net/home/lock-free-algorithms/queues/bounded-mpmc-queue
 
@@ -35,7 +35,7 @@ use num::next_power_of_two;
 use option::{Option, Some, None};
 use sync::arc::UnsafeArc;
 use sync::atomics::{AtomicUint,Relaxed,Release,Acquire};
-use vec;
+use vec::Vec;
 
 struct Node<T> {
     sequence: AtomicUint,
@@ -44,7 +44,7 @@ struct Node<T> {
 
 struct State<T> {
     pad0: [u8, ..64],
-    buffer: ~[Node<T>],
+    buffer: Vec<Node<T>>,
     mask: uint,
     pad1: [u8, ..64],
     enqueue_pos: AtomicUint,
@@ -54,7 +54,7 @@ struct State<T> {
 }
 
 pub struct Queue<T> {
-    priv state: UnsafeArc<State<T>>,
+    state: UnsafeArc<State<T>>,
 }
 
 impl<T: Send> State<T> {
@@ -69,8 +69,8 @@ impl<T: Send> State<T> {
         } else {
             capacity
         };
-        let buffer = vec::from_fn(capacity, |i:uint| {
-            Node{sequence:AtomicUint::new(i),value:None}
+        let buffer = Vec::from_fn(capacity, |i| {
+            Node { sequence:AtomicUint::new(i), value: None }
         });
         State{
             pad0: [0, ..64],
@@ -88,7 +88,7 @@ impl<T: Send> State<T> {
         let mask = self.mask;
         let mut pos = self.enqueue_pos.load(Relaxed);
         loop {
-            let node = &mut self.buffer[pos & mask];
+            let node = self.buffer.get_mut(pos & mask);
             let seq = node.sequence.load(Acquire);
             let diff: int = seq as int - pos as int;
 
@@ -114,7 +114,7 @@ impl<T: Send> State<T> {
         let mask = self.mask;
         let mut pos = self.dequeue_pos.load(Relaxed);
         loop {
-            let node = &mut self.buffer[pos & mask];
+            let node = self.buffer.get_mut(pos & mask);
             let seq = node.sequence.load(Acquire);
             let diff: int = seq as int - (pos + 1) as int;
             if diff == 0 {
@@ -172,24 +172,24 @@ mod tests {
         let nmsgs = 1000u;
         let mut q = Queue::with_capacity(nthreads*nmsgs);
         assert_eq!(None, q.pop());
-        let (port, chan) = SharedChan::new();
+        let (tx, rx) = channel();
 
         for _ in range(0, nthreads) {
             let q = q.clone();
-            let chan = chan.clone();
+            let tx = tx.clone();
             native::task::spawn(proc() {
                 let mut q = q;
                 for i in range(0, nmsgs) {
                     assert!(q.push(i));
                 }
-                chan.send(());
+                tx.send(());
             });
         }
 
-        let mut completion_ports = ~[];
+        let mut completion_rxs = vec![];
         for _ in range(0, nthreads) {
-            let (completion_port, completion_chan) = Chan::new();
-            completion_ports.push(completion_port);
+            let (tx, rx) = channel();
+            completion_rxs.push(rx);
             let q = q.clone();
             native::task::spawn(proc() {
                 let mut q = q;
@@ -203,15 +203,15 @@ mod tests {
                         }
                     }
                 }
-                completion_chan.send(i);
+                tx.send(i);
             });
         }
 
-        for completion_port in completion_ports.mut_iter() {
-            assert_eq!(nmsgs, completion_port.recv());
+        for rx in completion_rxs.mut_iter() {
+            assert_eq!(nmsgs, rx.recv());
         }
         for _ in range(0, nthreads) {
-            port.recv();
+            rx.recv();
         }
     }
 }

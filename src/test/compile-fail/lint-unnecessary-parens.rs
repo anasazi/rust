@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[deny(unnecessary_parens)];
+#![deny(unnecessary_parens)]
 
 fn foo() -> int {
     return (1); //~ ERROR unnecessary parentheses around `return` value
@@ -22,4 +22,7 @@ fn main() {
     match (true) { //~ ERROR unnecessary parentheses around `match` head expression
         _ => {}
     }
+    let mut _a = (0); //~ ERROR unnecessary parentheses around assigned value
+    _a = (0); //~ ERROR unnecessary parentheses around assigned value
+    _a += (1); //~ ERROR unnecessary parentheses around assigned value
 }

@@ -11,8 +11,8 @@
 
 
 pub fn main() {
-    let s = ~"hello";
+    let s = "hello".to_owned();
     let c: u8 = s[4];
-    info!("{:?}", c);
+    println!("{:?}", c);
     assert_eq!(c, 0x6f as u8);
 }

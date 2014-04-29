@@ -36,8 +36,8 @@ pub unsafe fn init(argc: int, argv: **u8) { realargs::init(argc, argv) }
 #[cfg(test)]      pub unsafe fn cleanup() { realargs::cleanup() }
 
 /// Take the global arguments from global storage.
-#[cfg(not(test))] pub fn take() -> Option<~[~str]> { imp::take() }
-#[cfg(test)]      pub fn take() -> Option<~[~str]> {
+#[cfg(not(test))] pub fn take() -> Option<~[~[u8]]> { imp::take() }
+#[cfg(test)]      pub fn take() -> Option<~[~[u8]]> {
     match realargs::take() {
         realstd::option::Some(a) => Some(a),
         realstd::option::None => None,
@@ -47,12 +47,12 @@ pub unsafe fn init(argc: int, argv: **u8) { realargs::init(argc, argv) }
 /// Give the global arguments to global storage.
 ///
 /// It is an error if the arguments already exist.
-#[cfg(not(test))] pub fn put(args: ~[~str]) { imp::put(args) }
-#[cfg(test)]      pub fn put(args: ~[~str]) { realargs::put(args) }
+#[cfg(not(test))] pub fn put(args: ~[~[u8]]) { imp::put(args) }
+#[cfg(test)]      pub fn put(args: ~[~[u8]]) { realargs::put(args) }
 
 /// Make a clone of the global arguments.
-#[cfg(not(test))] pub fn clone() -> Option<~[~str]> { imp::clone() }
-#[cfg(test)]      pub fn clone() -> Option<~[~str]> {
+#[cfg(not(test))] pub fn clone() -> Option<~[~[u8]]> { imp::clone() }
+#[cfg(test)]      pub fn clone() -> Option<~[~[u8]]> {
     match realargs::clone() {
         realstd::option::Some(a) => Some(a),
         realstd::option::None => None,
@@ -65,18 +65,15 @@ pub unsafe fn init(argc: int, argv: **u8) { realargs::init(argc, argv) }
 mod imp {
     use cast;
     use clone::Clone;
-    #[cfg(not(test))] use libc;
     use option::{Option, Some, None};
-    use ptr::RawPtr;
     use iter::Iterator;
-    #[cfg(not(test))] use str;
-    use unstable::finally::Finally;
-    use unstable::mutex::{Mutex, MUTEX_INIT};
-    use util;
-    #[cfg(not(test))] use vec;
+    use unstable::mutex::{StaticNativeMutex, NATIVE_MUTEX_INIT};
+    use mem;
+    #[cfg(not(test))] use str::StrSlice;
+    #[cfg(not(test))] use ptr::RawPtr;
 
     static mut global_args_ptr: uint = 0;
-    static mut lock: Mutex = MUTEX_INIT;
+    static mut lock: StaticNativeMutex = NATIVE_MUTEX_INIT;
 
     #[cfg(not(test))]
     pub unsafe fn init(argc: int, argv: **u8) {
@@ -90,15 +87,15 @@ mod imp {
         lock.destroy();
     }
 
-    pub fn take() -> Option<~[~str]> {
+    pub fn take() -> Option<~[~[u8]]> {
         with_lock(|| unsafe {
             let ptr = get_global_ptr();
-            let val = util::replace(&mut *ptr, None);
-            val.as_ref().map(|s: &~~[~str]| (**s).clone())
+            let val = mem::replace(&mut *ptr, None);
+            val.as_ref().map(|s: &~~[~[u8]]| (**s).clone())
         })
     }
 
-    pub fn put(args: ~[~str]) {
+    pub fn put(args: ~[~[u8]]) {
         with_lock(|| unsafe {
             let ptr = get_global_ptr();
             rtassert!((*ptr).is_none());
@@ -106,36 +103,37 @@ mod imp {
         })
     }
 
-    pub fn clone() -> Option<~[~str]> {
+    pub fn clone() -> Option<~[~[u8]]> {
         with_lock(|| unsafe {
             let ptr = get_global_ptr();
-            (*ptr).as_ref().map(|s: &~~[~str]| (**s).clone())
+            (*ptr).as_ref().map(|s: &~~[~[u8]]| (**s).clone())
         })
     }
 
     fn with_lock<T>(f: || -> T) -> T {
-        (|| {
-            unsafe {
-                lock.lock();
-                f()
-            }
-        }).finally(|| {
-            unsafe {
-                lock.unlock();
-            }
-        })
+        unsafe {
+            let _guard = lock.lock();
+            f()
+        }
     }
 
-    fn get_global_ptr() -> *mut Option<~~[~str]> {
+    fn get_global_ptr() -> *mut Option<~~[~[u8]]> {
         unsafe { cast::transmute(&global_args_ptr) }
     }
 
     // Copied from `os`.
     #[cfg(not(test))]
-    unsafe fn load_argc_and_argv(argc: int, argv: **u8) -> ~[~str] {
-        vec::from_fn(argc as uint, |i| {
-            str::raw::from_c_str(*(argv as **libc::c_char).offset(i as int))
-        })
+    unsafe fn load_argc_and_argv(argc: int, argv: **u8) -> ~[~[u8]] {
+        use c_str::CString;
+        use ptr::RawPtr;
+        use libc;
+        use slice::CloneableVector;
+        use vec::Vec;
+
+        Vec::from_fn(argc as uint, |i| {
+            let cs = CString::new(*(argv as **libc::c_char).offset(i as int), false);
+            cs.as_bytes_no_nul().to_owned()
+        }).move_iter().collect()
     }
 
     #[cfg(test)]
@@ -149,7 +147,7 @@ mod imp {
             // Preserve the actual global state.
             let saved_value = take();
 
-            let expected = ~[~"happy", ~"today?"];
+            let expected = ~[bytes!("happy").to_owned(), bytes!("today?").to_owned()];
 
             put(expected.clone());
             assert!(clone() == Some(expected.clone()));
@@ -179,15 +177,15 @@ mod imp {
     pub fn cleanup() {
     }
 
-    pub fn take() -> Option<~[~str]> {
+    pub fn take() -> Option<~[~[u8]]> {
         fail!()
     }
 
-    pub fn put(_args: ~[~str]) {
+    pub fn put(_args: ~[~[u8]]) {
         fail!()
     }
 
-    pub fn clone() -> Option<~[~str]> {
+    pub fn clone() -> Option<~[~[u8]]> {
         fail!()
     }
 }

@@ -12,8 +12,8 @@ use std::c_str::CString;
 use std::c_str;
 use std::cast::transmute;
 use std::cast;
-use std::libc::{c_int, c_char, c_void, size_t};
-use std::libc;
+use libc::{c_int, c_char, c_void, ssize_t};
+use libc;
 use std::rt::task::BlockedTask;
 use std::io::{FileStat, IoError};
 use std::io;
@@ -26,14 +26,14 @@ use uvll;
 
 pub struct FsRequest {
     req: *uvll::uv_fs_t,
-    priv fired: bool,
+    fired: bool,
 }
 
 pub struct FileWatcher {
-    priv loop_: Loop,
-    priv fd: c_int,
-    priv close: rtio::CloseBehavior,
-    priv home: HomeHandle,
+    loop_: Loop,
+    fd: c_int,
+    close: rtio::CloseBehavior,
+    home: HomeHandle,
 }
 
 impl FsRequest {
@@ -74,20 +74,41 @@ impl FsRequest {
     pub fn write(loop_: &Loop, fd: c_int, buf: &[u8], offset: i64)
         -> Result<(), UvError>
     {
-        execute_nop(|req, cb| unsafe {
-            uvll::uv_fs_write(loop_.handle, req,
-                              fd, buf.as_ptr() as *c_void,
-                              buf.len() as size_t, offset, cb)
-        })
+        // In libuv, uv_fs_write is basically just shelling out to a write()
+        // syscall at some point, with very little fluff around it. This means
+        // that write() could actually be a short write, so we need to be sure
+        // to call it continuously if we get a short write back. This method is
+        // expected to write the full data if it returns success.
+        let mut written = 0;
+        while written < buf.len() {
+            let offset = if offset == -1 {
+                offset
+            } else {
+                offset + written as i64
+            };
+            let uvbuf = uvll::uv_buf_t {
+                base: buf.slice_from(written as uint).as_ptr(),
+                len: (buf.len() - written) as uvll::uv_buf_len_t,
+            };
+            match execute(|req, cb| unsafe {
+                uvll::uv_fs_write(loop_.handle, req, fd, &uvbuf, 1, offset, cb)
+            }).map(|req| req.get_result()) {
+                Err(e) => return Err(e),
+                Ok(n) => { written += n as uint; }
+            }
+        }
+        Ok(())
     }
 
     pub fn read(loop_: &Loop, fd: c_int, buf: &mut [u8], offset: i64)
         -> Result<int, UvError>
     {
         execute(|req, cb| unsafe {
-            uvll::uv_fs_read(loop_.handle, req,
-                             fd, buf.as_ptr() as *c_void,
-                             buf.len() as size_t, offset, cb)
+            let uvbuf = uvll::uv_buf_t {
+                base: buf.as_ptr(),
+                len: buf.len() as uvll::uv_buf_len_t,
+            };
+            uvll::uv_fs_read(loop_.handle, req, fd, &uvbuf, 1, offset, cb)
         }).map(|req| {
             req.get_result() as int
         })
@@ -131,13 +152,13 @@ impl FsRequest {
     }
 
     pub fn readdir(loop_: &Loop, path: &CString, flags: c_int)
-        -> Result<~[Path], UvError>
+        -> Result<Vec<Path>, UvError>
     {
         execute(|req, cb| unsafe {
             uvll::uv_fs_readdir(loop_.handle,
                                 req, path.with_ref(|p| p), flags, cb)
         }).map(|req| unsafe {
-            let mut paths = ~[];
+            let mut paths = vec!();
             let path = CString::new(path.with_ref(|p| p), false);
             let parent = Path::new(path);
             let _ = c_str::from_c_multistring(req.get_ptr() as *libc::c_char,
@@ -227,7 +248,7 @@ impl FsRequest {
         })
     }
 
-    pub fn get_result(&self) -> c_int {
+    pub fn get_result(&self) -> ssize_t {
         unsafe { uvll::get_result_from_fs_req(self.req) }
     }
 
@@ -304,11 +325,12 @@ fn execute(f: |*uvll::uv_fs_t, uvll::uv_fs_cb| -> c_int)
         0 => {
             req.fired = true;
             let mut slot = None;
-            wait_until_woken_after(&mut slot, || {
+            let loop_ = unsafe { uvll::get_loop_from_fs_req(req.req) };
+            wait_until_woken_after(&mut slot, &Loop::wrap(loop_), || {
                 unsafe { uvll::set_data_for_req(req.req, &slot) }
             });
             match req.get_result() {
-                n if n < 0 => Err(UvError(n)),
+                n if n < 0 => Err(UvError(n as i32)),
                 _ => Ok(req),
             }
         }
@@ -412,7 +434,7 @@ impl rtio::RtioFileStream for FileWatcher {
         self.base_write(buf, offset as i64)
     }
     fn seek(&mut self, pos: i64, whence: io::SeekStyle) -> Result<u64, IoError> {
-        use std::libc::{SEEK_SET, SEEK_CUR, SEEK_END};
+        use libc::{SEEK_SET, SEEK_CUR, SEEK_END};
         let whence = match whence {
             io::SeekSet => SEEK_SET,
             io::SeekCur => SEEK_CUR,
@@ -421,7 +443,7 @@ impl rtio::RtioFileStream for FileWatcher {
         self.seek_common(pos, whence)
     }
     fn tell(&self) -> Result<u64, IoError> {
-        use std::libc::SEEK_CUR;
+        use libc::SEEK_CUR;
         // this is temporary
         let self_ = unsafe { cast::transmute_mut(self) };
         self_.seek_common(0, SEEK_CUR)
@@ -443,11 +465,10 @@ impl rtio::RtioFileStream for FileWatcher {
 
 #[cfg(test)]
 mod test {
-    use std::libc::c_int;
-    use std::libc::{O_CREAT, O_RDWR, O_RDONLY, S_IWUSR, S_IRUSR};
+    use libc::c_int;
+    use libc::{O_CREAT, O_RDWR, O_RDONLY, S_IWUSR, S_IRUSR};
     use std::io;
     use std::str;
-    use std::vec;
     use super::FsRequest;
     use super::super::Loop;
     use super::super::local_loop;
@@ -483,8 +504,8 @@ mod test {
             let fd = result.fd;
 
             // read
-            let mut read_mem = vec::from_elem(1000, 0u8);
-            let result = FsRequest::read(l(), fd, read_mem, 0);
+            let mut read_mem = Vec::from_elem(1000, 0u8);
+            let result = FsRequest::read(l(), fd, read_mem.as_mut_slice(), 0);
             assert!(result.is_ok());
 
             let nread = result.unwrap();

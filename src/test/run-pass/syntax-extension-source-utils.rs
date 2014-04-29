@@ -1,4 +1,4 @@
-// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -9,9 +9,9 @@
 // except according to those terms.
 
 // This test is brittle!
-// xfail-pretty - the pretty tests lose path information, breaking include!
+// ignore-pretty - the pretty tests lose path information, breaking include!
 
-#[feature(macro_rules)];
+#![feature(macro_rules)]
 
 pub mod m1 {
     pub mod m2 {
@@ -26,9 +26,9 @@ pub fn main() {
     //assert!((col!() == 11));
     assert_eq!(indirect_line!(), 27);
     assert!((file!().to_owned().ends_with("syntax-extension-source-utils.rs")));
-    assert_eq!(stringify!((2*3) + 5).to_owned(), ~"( 2 * 3 ) + 5");
+    assert_eq!(stringify!((2*3) + 5).to_owned(), "( 2 * 3 ) + 5".to_owned());
     assert!(include!("syntax-extension-source-utils-files/includeme.fragment").to_owned()
-           == ~"victory robot 6");
+           == "victory robot 6".to_owned());
 
     assert!(
         include_str!("syntax-extension-source-utils-files/includeme.fragment").to_owned()

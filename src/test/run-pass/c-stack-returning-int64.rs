@@ -8,10 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-mod libc {
-    use std::libc::{c_char, c_long, c_longlong};
+// ignore-fast doesn't like extern crate
 
-    #[nolink]
+extern crate libc;
+
+mod mlibc {
+    use libc::{c_char, c_long, c_longlong};
+
     extern {
         pub fn atol(x: *c_char) -> c_long;
         pub fn atoll(x: *c_char) -> c_longlong;
@@ -19,14 +22,14 @@ mod libc {
 }
 
 fn atol(s: ~str) -> int {
-    s.with_c_str(|x| unsafe { libc::atol(x) as int })
+    s.with_c_str(|x| unsafe { mlibc::atol(x) as int })
 }
 
 fn atoll(s: ~str) -> i64 {
-    s.with_c_str(|x| unsafe { libc::atoll(x) as i64 })
+    s.with_c_str(|x| unsafe { mlibc::atoll(x) as i64 })
 }
 
 pub fn main() {
-    assert_eq!(atol(~"1024") * 10, atol(~"10240"));
-    assert!((atoll(~"11111111111111111") * 10) == atoll(~"111111111111111110"));
+    assert_eq!(atol("1024".to_owned()) * 10, atol("10240".to_owned()));
+    assert!((atoll("11111111111111111".to_owned()) * 10) == atoll("111111111111111110".to_owned()));
 }

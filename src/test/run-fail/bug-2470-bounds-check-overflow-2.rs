@@ -8,13 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-test
+// ignore-test
 // error-pattern:index out of bounds
 
 use std::uint;
 
 fn main() {
-    let x = ~[1u,2u,3u];
+    let x = vec!(1u,2u,3u);
 
     // This should cause a bounds-check failure, but may not if we do our
     // bounds checking by comparing a scaled index value to the vector's
@@ -22,8 +22,8 @@ fn main() {
     // wrap around to a small number.
 
     let idx = uint::MAX & !(uint::MAX >> 1u);
-    error!("ov2 idx = 0x%x", idx);
+    println!("ov2 idx = 0x%x", idx);
 
     // This should fail.
-    error!("ov2 0x%x",  x[idx]);
+    println!("ov2 0x%x",  x[idx]);
 }

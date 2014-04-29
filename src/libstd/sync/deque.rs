@@ -61,7 +61,8 @@ use ptr::RawPtr;
 use sync::arc::UnsafeArc;
 use sync::atomics::{AtomicInt, AtomicPtr, SeqCst};
 use unstable::sync::Exclusive;
-use vec::{OwnedVector, ImmutableVector};
+use slice::ImmutableVector;
+use vec::Vec;
 
 // Once the queue is less than 1/K full, then it will be downsized. Note that
 // the deque requires that this number be less than 2.
@@ -86,18 +87,18 @@ struct Deque<T> {
 ///
 /// There may only be one worker per deque.
 pub struct Worker<T> {
-    priv deque: UnsafeArc<Deque<T>>,
+    deque: UnsafeArc<Deque<T>>,
 }
 
 /// The stealing half of the work-stealing deque. Stealers have access to the
 /// opposite end of the deque from the worker, and they only have access to the
 /// `steal` method.
 pub struct Stealer<T> {
-    priv deque: UnsafeArc<Deque<T>>,
+    deque: UnsafeArc<Deque<T>>,
 }
 
 /// When stealing some data, this is an enumeration of the possible outcomes.
-#[deriving(Eq)]
+#[deriving(Eq, Show)]
 pub enum Stolen<T> {
     /// The deque was empty at the time of stealing
     Empty,
@@ -116,14 +117,14 @@ pub enum Stolen<T> {
 /// will only use this structure when allocating a new buffer or deallocating a
 /// previous one.
 pub struct BufferPool<T> {
-    priv pool: Exclusive<~[~Buffer<T>]>,
+    pool: Exclusive<Vec<~Buffer<T>>>,
 }
 
 /// An internal buffer used by the chase-lev deque. This structure is actually
 /// implemented as a circular buffer, and is used as the intermediate storage of
 /// the data in the deque.
 ///
-/// This type is implemented with *T instead of ~[T] for two reasons:
+/// This type is implemented with *T instead of Vec<T> for two reasons:
 ///
 ///   1. There is nothing safe about using this buffer. This easily allows the
 ///      same value to be read twice in to rust, and there is nothing to
@@ -132,7 +133,7 @@ pub struct BufferPool<T> {
 ///      destructors for values in this buffer (on drop) because the bounds
 ///      are defined by the deque it's owned by.
 ///
-///   2. We can certainly avoid bounds checks using *T instead of ~[T], although
+///   2. We can certainly avoid bounds checks using *T instead of Vec<T>, although
 ///      LLVM is probably pretty good at doing this already.
 struct Buffer<T> {
     storage: *T,
@@ -143,7 +144,7 @@ impl<T: Send> BufferPool<T> {
     /// Allocates a new buffer pool which in turn can be used to allocate new
     /// deques.
     pub fn new() -> BufferPool<T> {
-        BufferPool { pool: Exclusive::new(~[]) }
+        BufferPool { pool: Exclusive::new(vec!()) }
     }
 
     /// Allocates a new work-stealing deque which will send/receiving memory to
@@ -363,7 +364,7 @@ impl<T: Send> Buffer<T> {
     // very unsafe method which the caller needs to treat specially in case a
     // race is lost.
     unsafe fn get(&self, i: int) -> T {
-        ptr::read_ptr(self.storage.offset(i & self.mask()))
+        ptr::read(self.storage.offset(i & self.mask()))
     }
 
     // Unsafe because this unsafely overwrites possibly uninitialized or
@@ -404,7 +405,7 @@ mod tests {
     use rand::Rng;
     use sync::atomics::{AtomicBool, INIT_ATOMIC_BOOL, SeqCst,
                         AtomicUint, INIT_ATOMIC_UINT};
-    use vec;
+    use slice;
 
     #[test]
     fn smoke() {
@@ -494,7 +495,7 @@ mod tests {
                     }
                 }
             })
-        }).to_owned_vec();
+        }).collect::<Vec<Thread<()>>>();
 
         while remaining.load(SeqCst) > 0 {
             match w.pop() {
@@ -525,7 +526,7 @@ mod tests {
             Thread::start(proc() {
                 stampede(w, s, 4, 10000);
             })
-        }).to_owned_vec();
+        }).collect::<Vec<Thread<()>>>();
 
         for thread in threads.move_iter() {
             thread.join();
@@ -556,7 +557,7 @@ mod tests {
                     }
                 }
             })
-        }).to_owned_vec();
+        }).collect::<Vec<Thread<()>>>();
 
         let mut rng = rand::task_rng();
         let mut expected = 0;
@@ -600,7 +601,7 @@ mod tests {
         let mut pool = BufferPool::<(int, uint)>::new();
         let (mut w, s) = pool.deque();
 
-        let (threads, hits) = vec::unzip(range(0, NTHREADS).map(|_| {
+        let (threads, hits) = slice::unzip(range(0, NTHREADS).map(|_| {
             let s = s.clone();
             let unique_box = ~AtomicUint::new(0);
             let thread_box = unsafe {
@@ -658,4 +659,3 @@ mod tests {
         }
     }
 }
-

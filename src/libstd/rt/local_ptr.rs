@@ -12,26 +12,28 @@
 //!
 //! The runtime will use this for storing ~Task.
 //!
-//! XXX: Add runtime checks for usage of inconsistent pointer types.
+//! FIXME: Add runtime checks for usage of inconsistent pointer types.
 //! and for overwriting an existing pointer.
 
-#[allow(dead_code)];
+#![allow(dead_code)]
 
 use cast;
-use ops::Drop;
+use ops::{Drop, Deref, DerefMut};
 use ptr::RawPtr;
 
 #[cfg(windows)]               // mingw-w32 doesn't like thread_local things
 #[cfg(target_os = "android")] // see #10686
-pub use self::native::*;
+pub use self::native::{init, cleanup, put, take, try_take, unsafe_take, exists,
+                       unsafe_borrow, try_unsafe_borrow};
 
 #[cfg(not(windows), not(target_os = "android"))]
-pub use self::compiled::*;
+pub use self::compiled::{init, cleanup, put, take, try_take, unsafe_take, exists,
+                         unsafe_borrow, try_unsafe_borrow};
 
 /// Encapsulates a borrowed value. When this value goes out of scope, the
 /// pointer is returned.
 pub struct Borrowed<T> {
-    priv val: *(),
+    val: *(),
 }
 
 #[unsafe_destructor]
@@ -48,13 +50,15 @@ impl<T> Drop for Borrowed<T> {
     }
 }
 
-impl<T> Borrowed<T> {
-    pub fn get<'a>(&'a mut self) -> &'a mut T {
-        unsafe {
-            let val_ptr: &mut ~T = cast::transmute(&mut self.val);
-            let val_ptr: &'a mut T = *val_ptr;
-            val_ptr
-        }
+impl<T> Deref<T> for Borrowed<T> {
+    fn deref<'a>(&'a self) -> &'a T {
+        unsafe { &*(self.val as *T) }
+    }
+}
+
+impl<T> DerefMut<T> for Borrowed<T> {
+    fn deref_mut<'a>(&'a mut self) -> &'a mut T {
+        unsafe { &mut *(self.val as *mut T) }
     }
 }
 
@@ -366,10 +370,11 @@ pub mod native {
 
     #[inline]
     #[cfg(not(test))]
+    #[allow(visible_private_types)]
     pub fn maybe_tls_key() -> Option<tls::Key> {
         unsafe {
             // NB: This is a little racy because, while the key is
-            // initalized under a mutex and it's assumed to be initalized
+            // initialized under a mutex and it's assumed to be initialized
             // in the Scheduler ctor by any thread that needs to use it,
             // we are not accessing the key under a mutex.  Threads that
             // are not using the new Scheduler but still *want to check*

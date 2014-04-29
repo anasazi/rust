@@ -44,7 +44,6 @@ Several modules in `core` are clients of `rt`:
 * `std::local_data` - The interface to local data.
 * `std::gc` - The garbage collector.
 * `std::unstable::lang` - Miscellaneous lang items, some of which rely on `std::rt`.
-* `std::condition` - Uses local data.
 * `std::cleanup` - Local heap destruction.
 * `std::io` - In the future `std::io` will use an `rt` implementation.
 * `std::logging`
@@ -53,9 +52,10 @@ Several modules in `core` are clients of `rt`:
 */
 
 // FIXME: this should not be here.
-#[allow(missing_doc)];
+#![allow(missing_doc)]
 
 use any::Any;
+use kinds::Send;
 use option::Option;
 use result::Result;
 use task::TaskOpts;
@@ -71,9 +71,12 @@ pub use self::util::default_sched_threads;
 // Export unwinding facilities used by the failure macros
 pub use self::unwind::{begin_unwind, begin_unwind_raw, begin_unwind_fmt};
 
+pub use self::util::{Stdio, Stdout, Stderr};
+
 // FIXME: these probably shouldn't be public...
 #[doc(hidden)]
 pub mod shouldnt_be_public {
+    #[cfg(not(test))]
     pub use super::local_ptr::native::maybe_tls_key;
     #[cfg(not(windows), not(target_os = "android"))]
     pub use super::local_ptr::compiled::RT_TLS_PTR;
@@ -82,44 +85,44 @@ pub mod shouldnt_be_public {
 // Internal macros used by the runtime.
 mod macros;
 
-/// The global (exchange) heap.
+// The global (exchange) heap.
 pub mod global_heap;
 
-/// Implementations of language-critical runtime features like @.
+// Implementations of language-critical runtime features like @.
 pub mod task;
 
-/// The EventLoop and internal synchronous I/O interface.
+// The EventLoop and internal synchronous I/O interface.
 pub mod rtio;
 
-/// The Local trait for types that are accessible via thread-local
-/// or task-local storage.
+// The Local trait for types that are accessible via thread-local
+// or task-local storage.
 pub mod local;
 
-/// Bindings to system threading libraries.
+// Bindings to system threading libraries.
 pub mod thread;
 
-/// The runtime configuration, read from environment variables.
+// The runtime configuration, read from environment variables.
 pub mod env;
 
-/// The local, managed heap
+// The local, managed heap
 pub mod local_heap;
 
-/// The Logger trait and implementations
-pub mod logging;
-
-/// Crate map
-pub mod crate_map;
-
-/// The runtime needs to be able to put a pointer into thread-local storage.
+// The runtime needs to be able to put a pointer into thread-local storage.
 mod local_ptr;
 
-/// Bindings to pthread/windows thread-local storage.
+// Bindings to pthread/windows thread-local storage.
 mod thread_local_storage;
 
-/// Stack unwinding
+// Stack unwinding
 pub mod unwind;
 
-/// Just stuff
+// The interface to libunwind that rust is using.
+mod libunwind;
+
+// Simple backtrace functionality (to print on failure)
+pub mod backtrace;
+
+// Just stuff
 mod util;
 
 // Global command line argument storage
@@ -127,6 +130,12 @@ pub mod args;
 
 // Support for running procedures when a program has exited.
 mod at_exit_imp;
+
+// Bookkeeping for task counts
+pub mod bookkeeping;
+
+// Stack overflow protection
+pub mod stack;
 
 /// The default error code of the rust runtime if the main task fails instead
 /// of exiting cleanly.
@@ -150,7 +159,7 @@ pub trait Runtime {
 
     // Miscellaneous calls which are very different depending on what context
     // you're in.
-    fn spawn_sibling(~self, cur_task: ~Task, opts: TaskOpts, f: proc());
+    fn spawn_sibling(~self, cur_task: ~Task, opts: TaskOpts, f: proc():Send);
     fn local_io<'a>(&'a mut self) -> Option<rtio::LocalIo<'a>>;
     /// The (low, high) edges of the current stack.
     fn stack_bounds(&self) -> (uint, uint); // (lo, hi)
@@ -171,7 +180,6 @@ pub fn init(argc: int, argv: **u8) {
     unsafe {
         args::init(argc, argv);
         env::init();
-        logging::init();
         local_ptr::init();
         at_exit_imp::init();
     }
@@ -190,7 +198,7 @@ pub fn init(argc: int, argv: **u8) {
 ///
 /// It is forbidden for procedures to register more `at_exit` handlers when they
 /// are running, and doing so will lead to a process abort.
-pub fn at_exit(f: proc()) {
+pub fn at_exit(f: proc():Send) {
     at_exit_imp::push(f);
 }
 
@@ -204,6 +212,7 @@ pub fn at_exit(f: proc()) {
 /// Invoking cleanup while portions of the runtime are still in use may cause
 /// undefined behavior.
 pub unsafe fn cleanup() {
+    bookkeeping::wait_for_other_tasks();
     at_exit_imp::run();
     args::cleanup();
     local_ptr::cleanup();

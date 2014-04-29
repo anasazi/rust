@@ -8,10 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+
+//! The global (exchange) heap.
+
 use libc::{c_void, size_t, free, malloc, realloc};
 use ptr::{RawPtr, mut_null};
-use unstable::intrinsics::{TyDesc, abort};
-use unstable::raw;
+use intrinsics::abort;
+use raw;
 use mem::size_of;
 
 #[inline]
@@ -68,30 +71,34 @@ pub unsafe fn realloc_raw(ptr: *mut u8, size: uint) -> *mut u8 {
 #[cfg(not(test))]
 #[lang="exchange_malloc"]
 #[inline]
-pub unsafe fn exchange_malloc(size: uint) -> *u8 {
-    malloc_raw(size) as *u8
+pub unsafe fn exchange_malloc(size: uint) -> *mut u8 {
+    // The compiler never calls `exchange_free` on ~ZeroSizeType, so zero-size
+    // allocations can point to this `static`. It would be incorrect to use a null
+    // pointer, due to enums assuming types like unique pointers are never null.
+    static EMPTY: () = ();
+
+    if size == 0 {
+        &EMPTY as *() as *mut u8
+    } else {
+        malloc_raw(size)
+    }
 }
 
 // FIXME: #7496
 #[cfg(not(test))]
 #[lang="closure_exchange_malloc"]
 #[inline]
-pub unsafe fn closure_exchange_malloc_(td: *u8, size: uint) -> *u8 {
-    closure_exchange_malloc(td, size)
+pub unsafe fn closure_exchange_malloc_(drop_glue: fn(*mut u8), size: uint, align: uint) -> *u8 {
+    closure_exchange_malloc(drop_glue, size, align)
 }
 
 #[inline]
-pub unsafe fn closure_exchange_malloc(td: *u8, size: uint) -> *u8 {
-    let td = td as *TyDesc;
-    let size = size;
-
-    assert!(td.is_not_null());
-
-    let total_size = get_box_size(size, (*td).align);
+pub unsafe fn closure_exchange_malloc(drop_glue: fn(*mut u8), size: uint, align: uint) -> *u8 {
+    let total_size = get_box_size(size, align);
     let p = malloc_raw(total_size);
 
     let alloc = p as *mut raw::Box<()>;
-    (*alloc).type_desc = td;
+    (*alloc).drop_glue = drop_glue;
 
     alloc as *u8
 }
@@ -112,19 +119,20 @@ pub unsafe fn exchange_free(ptr: *u8) {
 
 #[cfg(test)]
 mod bench {
-    use extra::test::BenchHarness;
+    extern crate test;
+    use self::test::Bencher;
 
     #[bench]
-    fn alloc_owned_small(bh: &mut BenchHarness) {
-        bh.iter(|| {
-            ~10;
+    fn alloc_owned_small(b: &mut Bencher) {
+        b.iter(|| {
+            ~10
         })
     }
 
     #[bench]
-    fn alloc_owned_big(bh: &mut BenchHarness) {
-        bh.iter(|| {
-            ~[10, ..1000];
+    fn alloc_owned_big(b: &mut Bencher) {
+        b.iter(|| {
+            ~[10, ..1000]
         })
     }
 }

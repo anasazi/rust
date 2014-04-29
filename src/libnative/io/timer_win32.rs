@@ -20,8 +20,7 @@
 //! Other than that, the implementation is pretty straightforward in terms of
 //! the other two implementations of timers with nothing *that* new showing up.
 
-use std::comm::Data;
-use std::libc;
+use libc;
 use std::ptr;
 use std::rt::rtio;
 
@@ -29,19 +28,19 @@ use io::timer_helper;
 use io::IoResult;
 
 pub struct Timer {
-    priv obj: libc::HANDLE,
-    priv on_worker: bool,
+    obj: libc::HANDLE,
+    on_worker: bool,
 }
 
 pub enum Req {
-    NewTimer(libc::HANDLE, Chan<()>, bool),
-    RemoveTimer(libc::HANDLE, Chan<()>),
+    NewTimer(libc::HANDLE, Sender<()>, bool),
+    RemoveTimer(libc::HANDLE, Sender<()>),
     Shutdown,
 }
 
-fn helper(input: libc::HANDLE, messages: Port<Req>) {
-    let mut objs = ~[input];
-    let mut chans = ~[];
+fn helper(input: libc::HANDLE, messages: Receiver<Req>) {
+    let mut objs = vec![input];
+    let mut chans = vec![];
 
     'outer: loop {
         let idx = unsafe {
@@ -54,11 +53,11 @@ fn helper(input: libc::HANDLE, messages: Port<Req>) {
         if idx == 0 {
             loop {
                 match messages.try_recv() {
-                    Data(NewTimer(obj, c, one)) => {
+                    Ok(NewTimer(obj, c, one)) => {
                         objs.push(obj);
                         chans.push((c, one));
                     }
-                    Data(RemoveTimer(obj, c)) => {
+                    Ok(RemoveTimer(obj, c)) => {
                         c.send(());
                         match objs.iter().position(|&o| o == obj) {
                             Some(i) => {
@@ -68,7 +67,7 @@ fn helper(input: libc::HANDLE, messages: Port<Req>) {
                             None => {}
                         }
                     }
-                    Data(Shutdown) => {
+                    Ok(Shutdown) => {
                         assert_eq!(objs.len(), 1);
                         assert_eq!(chans.len(), 0);
                         break 'outer;
@@ -78,8 +77,8 @@ fn helper(input: libc::HANDLE, messages: Port<Req>) {
             }
         } else {
             let remove = {
-                match &chans[idx - 1] {
-                    &(ref c, oneshot) => !c.try_send(()) || oneshot
+                match chans.get(idx as uint - 1) {
+                    &(ref c, oneshot) => c.send_opt(()).is_err() || oneshot
                 }
             };
             if remove {
@@ -88,6 +87,17 @@ fn helper(input: libc::HANDLE, messages: Port<Req>) {
             }
         }
     }
+}
+
+// returns the current time (in milliseconds)
+pub fn now() -> u64 {
+    let mut ticks_per_s = 0;
+    assert_eq!(unsafe { libc::QueryPerformanceFrequency(&mut ticks_per_s) }, 1);
+    let ticks_per_s = if ticks_per_s == 0 {1} else {ticks_per_s};
+    let mut ticks = 0;
+    assert_eq!(unsafe { libc::QueryPerformanceCounter(&mut ticks) }, 1);
+
+    return (ticks as u64 * 1000) / (ticks_per_s as u64);
 }
 
 impl Timer {
@@ -113,9 +123,9 @@ impl Timer {
     fn remove(&mut self) {
         if !self.on_worker { return }
 
-        let (p, c) = Chan::new();
-        timer_helper::send(RemoveTimer(self.obj, c));
-        p.recv();
+        let (tx, rx) = channel();
+        timer_helper::send(RemoveTimer(self.obj, tx));
+        rx.recv();
 
         self.on_worker = false;
     }
@@ -136,9 +146,9 @@ impl rtio::RtioTimer for Timer {
         let _ = unsafe { imp::WaitForSingleObject(self.obj, libc::INFINITE) };
     }
 
-    fn oneshot(&mut self, msecs: u64) -> Port<()> {
+    fn oneshot(&mut self, msecs: u64) -> Receiver<()> {
         self.remove();
-        let (p, c) = Chan::new();
+        let (tx, rx) = channel();
 
         // see above for the calculation
         let due = -(msecs * 10000) as libc::LARGE_INTEGER;
@@ -147,14 +157,14 @@ impl rtio::RtioTimer for Timer {
                                   ptr::mut_null(), 0)
         }, 1);
 
-        timer_helper::send(NewTimer(self.obj, c, true));
+        timer_helper::send(NewTimer(self.obj, tx, true));
         self.on_worker = true;
-        return p;
+        return rx;
     }
 
-    fn period(&mut self, msecs: u64) -> Port<()> {
+    fn period(&mut self, msecs: u64) -> Receiver<()> {
         self.remove();
-        let (p, c) = Chan::new();
+        let (tx, rx) = channel();
 
         // see above for the calculation
         let due = -(msecs * 10000) as libc::LARGE_INTEGER;
@@ -163,10 +173,10 @@ impl rtio::RtioTimer for Timer {
                                   ptr::null(), ptr::mut_null(), 0)
         }, 1);
 
-        timer_helper::send(NewTimer(self.obj, c, false));
+        timer_helper::send(NewTimer(self.obj, tx, false));
         self.on_worker = true;
 
-        return p;
+        return rx;
     }
 }
 
@@ -178,7 +188,7 @@ impl Drop for Timer {
 }
 
 mod imp {
-    use std::libc::{LPSECURITY_ATTRIBUTES, BOOL, LPCSTR, HANDLE, LARGE_INTEGER,
+    use libc::{LPSECURITY_ATTRIBUTES, BOOL, LPCSTR, HANDLE, LARGE_INTEGER,
                     LONG, LPVOID, DWORD, c_void};
 
     pub type PTIMERAPCROUTINE = *c_void;

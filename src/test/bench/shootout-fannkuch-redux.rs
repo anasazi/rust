@@ -1,97 +1,72 @@
-// xfail-test reading from os::args()[1] - bogus!
+// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// file at the top-level directory of this distribution and at
+// http://rust-lang.org/COPYRIGHT.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
 
-use std::from_str::FromStr;
-use std::os;
-use std::vec::MutableVector;
-use std::vec;
+use std::cmp::max;
 
-fn max(a: i32, b: i32) -> i32 {
-    if a > b {
-        a
-    } else {
-        b
-    }
+fn fact(n: uint) -> uint {
+    range(1, n + 1).fold(1, |accu, i| accu * i)
 }
 
-#[inline(never)]
-fn fannkuch_redux(n: i32) -> i32 {
-    let mut perm = vec::from_elem(n as uint, 0i32);
-    let mut perm1 = vec::from_fn(n as uint, |i| i as i32);
-    let mut count = vec::from_elem(n as uint, 0i32);
-    let mut max_flips_count = 0i32;
-    let mut perm_count = 0i32;
-    let mut checksum = 0i32;
+fn fannkuch(n: uint, i: uint) -> (int, int) {
+    let mut perm = Vec::from_fn(n, |e| ((n + e - i) % n + 1) as i32);
+    let mut tperm = perm.clone();
+    let mut count = Vec::from_elem(n, 0u);
+    let mut perm_count = 0;
+    let mut checksum = 0;
 
-    let mut r = n;
-    loop {
-        unsafe {
-            while r != 1 {
-                count.unsafe_set((r-1) as uint, r);
-                r -= 1;
+    for countdown in range(1, fact(n - 1) + 1).rev() {
+        for i in range(1, n) {
+            let perm0 = *perm.get(0);
+            for j in range(0, i) {
+                *perm.get_mut(j) = *perm.get(j + 1);
             }
+            *perm.get_mut(i) = perm0;
 
-            for (perm_i, perm1_i) in perm.mut_iter().zip(perm1.iter()) {
-                *perm_i = *perm1_i;
-            }
-
-            let mut flips_count: i32 = 0;
-            let mut k: i32;
-            loop {
-                k = *perm.unsafe_ref(0);
-                if k == 0 {
-                    break;
-                }
-
-                let k2 = (k+1) >> 1;
-                for i in range(0i32, k2) {
-                    let (perm_i, perm_k_i) = {
-                        (*perm.unsafe_ref(i as uint),
-                            *perm.unsafe_ref((k-i) as uint))
-                    };
-                    perm.unsafe_set(i as uint, perm_k_i);
-                    perm.unsafe_set((k-i) as uint, perm_i);
-                }
-                flips_count += 1;
-            }
-
-            max_flips_count = max(max_flips_count, flips_count);
-            checksum += if perm_count % 2 == 0 {
-                flips_count
+            let count_i = count.get_mut(i);
+            if *count_i >= i {
+                *count_i = 0;
             } else {
-                -flips_count
-            };
-
-            // Use incremental change to generate another permutation.
-            loop {
-                if r == n {
-                    println!("{}", checksum);
-                    return max_flips_count;
-                }
-
-                let perm0 = perm1[0];
-                let mut i: i32 = 0;
-                while i < r {
-                    let j = i + 1;
-                    let perm1_j = { *perm1.unsafe_ref(j as uint) };
-                    perm1.unsafe_set(i as uint, perm1_j);
-                    i = j;
-                }
-                perm1.unsafe_set(r as uint, perm0);
-
-                let count_r = { *count.unsafe_ref(r as uint) };
-                count.unsafe_set(r as uint, count_r - 1);
-                if *count.unsafe_ref(r as uint) > 0 {
-                    break;
-                }
-                r += 1;
+                *count_i += 1;
+                break;
             }
-
-            perm_count += 1;
         }
+
+        tperm.clone_from(&perm);
+        let mut flips_count = 0;
+        loop {
+            let k = *tperm.get(0);
+            if k == 1 { break; }
+            tperm.mut_slice_to(k as uint).reverse();
+            flips_count += 1;
+        }
+        perm_count = max(perm_count, flips_count);
+        checksum += if countdown & 1 == 1 {flips_count} else {-flips_count}
     }
+    (checksum, perm_count)
 }
 
 fn main() {
-    let n: i32 = FromStr::from_str(os::args()[1]).unwrap();
-    println!("Pfannkuchen({}) = {}", n as int, fannkuch_redux(n) as int);
+    let n = std::os::args().get(1).and_then(|arg| from_str(*arg)).unwrap_or(2u);
+
+    let (tx, rx) = channel();
+    for i in range(0, n) {
+        let tx = tx.clone();
+        spawn(proc() tx.send(fannkuch(n, i)));
+    }
+    drop(tx);
+
+    let mut checksum = 0;
+    let mut perm = 0;
+    for (cur_cks, cur_perm) in rx.iter() {
+        checksum += cur_cks;
+        perm = max(perm, cur_perm);
+    }
+    println!("{}\nPfannkuchen({}) = {}", checksum, n, perm);
 }

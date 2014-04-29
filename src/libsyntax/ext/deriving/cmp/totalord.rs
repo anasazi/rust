@@ -14,49 +14,56 @@ use codemap::Span;
 use ext::base::ExtCtxt;
 use ext::build::AstBuilder;
 use ext::deriving::generic::*;
+use parse::token::InternedString;
+
 use std::cmp::{Ordering, Equal, Less, Greater};
 
-pub fn expand_deriving_totalord(cx: &ExtCtxt,
+pub fn expand_deriving_totalord(cx: &mut ExtCtxt,
                                 span: Span,
                                 mitem: @MetaItem,
-                                in_items: ~[@Item]) -> ~[@Item] {
+                                item: @Item,
+                                push: |@Item|) {
+    let inline = cx.meta_word(span, InternedString::new("inline"));
+    let attrs = vec!(cx.attribute(span, inline));
     let trait_def = TraitDef {
-        cx: cx, span: span,
-
-        path: Path::new(~["std", "cmp", "TotalOrd"]),
-        additional_bounds: ~[],
+        span: span,
+        attributes: Vec::new(),
+        path: Path::new(vec!("std", "cmp", "TotalOrd")),
+        additional_bounds: Vec::new(),
         generics: LifetimeBounds::empty(),
-        methods: ~[
+        methods: vec!(
             MethodDef {
                 name: "cmp",
                 generics: LifetimeBounds::empty(),
                 explicit_self: borrowed_explicit_self(),
-                args: ~[borrowed_self()],
-                ret_ty: Literal(Path::new(~["std", "cmp", "Ordering"])),
-                inline: true,
+                args: vec!(borrowed_self()),
+                ret_ty: Literal(Path::new(vec!("std", "cmp", "Ordering"))),
+                attributes: attrs,
                 const_nonmatching: false,
-                combine_substructure: cs_cmp
+                combine_substructure: combine_substructure(|a, b, c| {
+                    cs_cmp(a, b, c)
+                }),
             }
-        ]
+        )
     };
 
-    trait_def.expand(mitem, in_items)
+    trait_def.expand(cx, mitem, item, push)
 }
 
 
-pub fn ordering_const(cx: &ExtCtxt, span: Span, cnst: Ordering) -> ast::Path {
+pub fn ordering_const(cx: &mut ExtCtxt, span: Span, cnst: Ordering) -> ast::Path {
     let cnst = match cnst {
         Less => "Less",
         Equal => "Equal",
         Greater => "Greater"
     };
     cx.path_global(span,
-                   ~[cx.ident_of("std"),
+                   vec!(cx.ident_of("std"),
                      cx.ident_of("cmp"),
-                     cx.ident_of(cnst)])
+                     cx.ident_of(cnst)))
 }
 
-pub fn cs_cmp(cx: &ExtCtxt, span: Span,
+pub fn cs_cmp(cx: &mut ExtCtxt, span: Span,
               substr: &Substructure) -> @Expr {
     let test_id = cx.ident_of("__test");
     let equals_path = ordering_const(cx, span, Equal);
@@ -98,7 +105,7 @@ pub fn cs_cmp(cx: &ExtCtxt, span: Span,
             let if_ = cx.expr_if(span,
                                  cond,
                                  old, Some(cx.expr_ident(span, test_id)));
-            cx.expr_block(cx.block(span, ~[assign], Some(if_)))
+            cx.expr_block(cx.block(span, vec!(assign), Some(if_)))
         },
         cx.expr_path(equals_path.clone()),
         |cx, span, list, _| {
@@ -106,9 +113,11 @@ pub fn cs_cmp(cx: &ExtCtxt, span: Span,
                 // an earlier nonmatching variant is Less than a
                 // later one.
                 [(self_var, _, _),
-                 (other_var, _, _)] => cx.expr_path(ordering_const(cx, span,
-                                                                   self_var.cmp(&other_var))),
-                _ => cx.span_bug(span, "Not exactly 2 arguments in `deriving(TotalOrd)`")
+                 (other_var, _, _)] => {
+                    let order = ordering_const(cx, span, self_var.cmp(&other_var));
+                    cx.expr_path(order)
+                }
+                _ => cx.span_bug(span, "not exactly 2 arguments in `deriving(TotalOrd)`")
             }
         },
         cx, span, substr)

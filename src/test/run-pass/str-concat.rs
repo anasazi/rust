@@ -12,9 +12,9 @@
 
 
 pub fn main() {
-    let a: ~str = ~"hello";
-    let b: ~str = ~"world";
+    let a: ~str = "hello".to_owned();
+    let b: ~str = "world".to_owned();
     let s: ~str = a + b;
-    info!("{}", s.clone());
+    println!("{}", s.clone());
     assert_eq!(s[9], 'd' as u8);
 }

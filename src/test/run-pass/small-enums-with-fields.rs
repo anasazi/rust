@@ -8,11 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(macro_rules)];
+#![feature(macro_rules)]
 
 use std::mem::size_of;
 
-#[deriving(Eq)]
+#[deriving(Eq, Show)]
 enum Either<T, U> { Left(T), Right(U) }
 
 macro_rules! check {

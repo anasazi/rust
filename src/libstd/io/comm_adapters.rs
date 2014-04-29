@@ -8,47 +8,54 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use prelude::*;
-
-use comm::{Port, Chan};
+use clone::Clone;
 use cmp;
+use container::Container;
+use comm::{Sender, Receiver};
 use io;
 use option::{None, Option, Some};
+use result::{Ok, Err};
 use super::{Reader, Writer, IoResult};
-use vec::{bytes, CloneableVector, MutableVector, ImmutableVector};
+use str::StrSlice;
+use slice::{bytes, CloneableVector, MutableVector, ImmutableVector};
 
-/// Allows reading from a port.
+/// Allows reading from a rx.
 ///
 /// # Example
 ///
 /// ```
-/// let reader = PortReader::new(port);
+/// use std::io::ChanReader;
+///
+/// let (tx, rx) = channel();
+/// # drop(tx);
+/// let mut reader = ChanReader::new(rx);
 ///
 /// let mut buf = ~[0u8, ..100];
 /// match reader.read(buf) {
-///     Some(nread) => println!("Read {} bytes", nread),
-///     None => println!("At the end of the stream!")
+///     Ok(nread) => println!("Read {} bytes", nread),
+///     Err(e) => println!("read error: {}", e),
 /// }
 /// ```
-pub struct PortReader {
-    priv buf: Option<~[u8]>,  // A buffer of bytes received but not consumed.
-    priv pos: uint,           // How many of the buffered bytes have already be consumed.
-    priv port: Port<~[u8]>,   // The port to pull data from.
-    priv closed: bool,        // Whether the pipe this port connects to has been closed.
+pub struct ChanReader {
+    buf: Option<~[u8]>,  // A buffer of bytes received but not consumed.
+    pos: uint,           // How many of the buffered bytes have already be consumed.
+    rx: Receiver<~[u8]>,   // The rx to pull data from.
+    closed: bool,        // Whether the pipe this rx connects to has been closed.
 }
 
-impl PortReader {
-    pub fn new(port: Port<~[u8]>) -> PortReader {
-        PortReader {
+impl ChanReader {
+    /// Wraps a `Port` in a `ChanReader` structure
+    pub fn new(rx: Receiver<~[u8]>) -> ChanReader {
+        ChanReader {
             buf: None,
             pos: 0,
-            port: port,
+            rx: rx,
             closed: false,
         }
     }
 }
 
-impl Reader for PortReader {
+impl Reader for ChanReader {
     fn read(&mut self, buf: &mut [u8]) -> IoResult<uint> {
         let mut num_read = 0;
         loop {
@@ -67,7 +74,7 @@ impl Reader for PortReader {
                 break;
             }
             self.pos = 0;
-            self.buf = self.port.recv_opt();
+            self.buf = self.rx.recv_opt().ok();
             self.closed = self.buf.is_none();
         }
         if self.closed && num_read == 0 {
@@ -78,35 +85,45 @@ impl Reader for PortReader {
     }
 }
 
-/// Allows writing to a chan.
+/// Allows writing to a tx.
 ///
 /// # Example
 ///
 /// ```
-/// let writer = ChanWriter::new(chan);
+/// # #![allow(unused_must_use)]
+/// use std::io::ChanWriter;
+///
+/// let (tx, rx) = channel();
+/// # drop(rx);
+/// let mut writer = ChanWriter::new(tx);
 /// writer.write("hello, world".as_bytes());
 /// ```
 pub struct ChanWriter {
-    chan: Chan<~[u8]>,
+    tx: Sender<~[u8]>,
 }
 
 impl ChanWriter {
-    pub fn new(chan: Chan<~[u8]>) -> ChanWriter {
-        ChanWriter { chan: chan }
+    /// Wraps a channel in a `ChanWriter` structure
+    pub fn new(tx: Sender<~[u8]>) -> ChanWriter {
+        ChanWriter { tx: tx }
+    }
+}
+
+impl Clone for ChanWriter {
+    fn clone(&self) -> ChanWriter {
+        ChanWriter { tx: self.tx.clone() }
     }
 }
 
 impl Writer for ChanWriter {
     fn write(&mut self, buf: &[u8]) -> IoResult<()> {
-        if !self.chan.try_send(buf.to_owned()) {
-            Err(io::IoError {
+        self.tx.send_opt(buf.to_owned()).map_err(|_| {
+            io::IoError {
                 kind: io::BrokenPipe,
                 desc: "Pipe closed",
                 detail: None
-            })
-        } else {
-            Ok(())
-        }
+            }
+        })
     }
 }
 
@@ -119,17 +136,17 @@ mod test {
     use task;
 
     #[test]
-    fn test_port_reader() {
-        let (port, chan) = Chan::new();
+    fn test_rx_reader() {
+        let (tx, rx) = channel();
         task::spawn(proc() {
-          chan.send(~[1u8, 2u8]);
-          chan.send(~[]);
-          chan.send(~[3u8, 4u8]);
-          chan.send(~[5u8, 6u8]);
-          chan.send(~[7u8, 8u8]);
+          tx.send(~[1u8, 2u8]);
+          tx.send(~[]);
+          tx.send(~[3u8, 4u8]);
+          tx.send(~[5u8, 6u8]);
+          tx.send(~[7u8, 8u8]);
         });
 
-        let mut reader = PortReader::new(port);
+        let mut reader = ChanReader::new(rx);
         let mut buf = ~[0u8, ..3];
 
 
@@ -160,12 +177,12 @@ mod test {
 
     #[test]
     fn test_chan_writer() {
-        let (port, chan) = Chan::new();
-        let mut writer = ChanWriter::new(chan);
+        let (tx, rx) = channel();
+        let mut writer = ChanWriter::new(tx);
         writer.write_be_u32(42).unwrap();
 
         let wanted = ~[0u8, 0u8, 0u8, 42u8];
-        let got = task::try(proc() { port.recv() }).unwrap();
+        let got = task::try(proc() { rx.recv() }).unwrap();
         assert_eq!(wanted, got);
 
         match writer.write_u8(1) {

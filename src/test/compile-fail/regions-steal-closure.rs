@@ -9,17 +9,17 @@
 // except according to those terms.
 
 struct closure_box<'a> {
-    cl: 'a ||
+    cl: ||: 'a
 }
 
-fn box_it<'r>(x: 'r ||) -> closure_box<'r> {
+fn box_it<'r>(x: ||: 'r) -> closure_box<'r> {
     closure_box {cl: x}
 }
 
 fn main() {
     let cl_box = {
         let mut i = 3;
-        box_it(|| i += 1) //~ ERROR cannot infer an appropriate lifetime
+        box_it(|| i += 1) //~ ERROR cannot infer
     };
     (cl_box.cl)();
 }

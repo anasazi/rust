@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,7 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-fast
 
 // Make sure that if a process doesn't have its stdio/stderr descriptors set up
 // that we don't die in a large ball of fire
@@ -18,9 +17,9 @@ use std::io::process;
 
 pub fn main () {
     let args = os::args();
-    if args.len() > 1 && args[1] == ~"child" {
+    if args.len() > 1 && args[1] == "child".to_owned() {
         for _ in range(0, 1000) {
-            error!("hello?");
+            println!("hello?");
         }
         for _ in range(0, 1000) {
             println!("hello?");
@@ -30,12 +29,12 @@ pub fn main () {
 
     let config = process::ProcessConfig {
         program : args[0].as_slice(),
-        args : &[~"child"],
-        env : None,
-        cwd : None,
-        io : &[]
+        args : &["child".to_owned()],
+        stdout: process::Ignored,
+        stderr: process::Ignored,
+        .. process::ProcessConfig::new()
     };
 
-    let mut p = process::Process::new(config).unwrap();
+    let mut p = process::Process::configure(config).unwrap();
     println!("{}", p.wait());
 }

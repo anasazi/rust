@@ -1,7 +1,4 @@
-// xfail-test
-// xfail'd because lint is messed up with the new visitor transition
-
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -11,8 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[deny(unused_variable)];
-#[deny(dead_assignment)];
+#![deny(unused_variable)]
+#![deny(dead_assignment)]
+#![allow(dead_code, non_camel_case_types)]
 
 fn f1(x: int) {
     //~^ ERROR unused variable: `x`
@@ -24,6 +22,11 @@ fn f1b(x: &mut int) {
 
 #[allow(unused_variable)]
 fn f1c(x: int) {}
+
+fn f1d() {
+    let x: int;
+    //~^ ERROR unused variable: `x`
+}
 
 fn f2() {
     let x = 3;

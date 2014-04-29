@@ -8,9 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+//! The implementation of `rtio` for libuv
+
 use std::c_str::CString;
 use std::cast;
-use std::comm::SharedChan;
 use std::io::IoError;
 use std::io::net::ip::SocketAddr;
 use std::io::process::ProcessConfig;
@@ -18,13 +19,13 @@ use std::io::signal::Signum;
 use std::io::{FileMode, FileAccess, Open, Append, Truncate, Read, Write,
               ReadWrite, FileStat};
 use std::io;
-use std::libc::c_int;
-use std::libc::{O_CREAT, O_APPEND, O_TRUNC, O_RDWR, O_RDONLY, O_WRONLY, S_IRUSR,
+use libc::c_int;
+use libc::{O_CREAT, O_APPEND, O_TRUNC, O_RDWR, O_RDONLY, O_WRONLY, S_IRUSR,
                 S_IWUSR};
-use std::libc;
+use libc;
 use std::path::Path;
 use std::rt::rtio;
-use std::rt::rtio::IoFactory;
+use std::rt::rtio::{IoFactory, EventLoop};
 use ai = std::io::net::addrinfo;
 
 #[cfg(test)] use std::unstable::run_in_bare_thread;
@@ -47,7 +48,7 @@ use uvll;
 
 // Obviously an Event Loop is always home.
 pub struct UvEventLoop {
-    priv uvio: UvIoFactory
+    uvio: UvIoFactory
 }
 
 impl UvEventLoop {
@@ -70,14 +71,20 @@ impl Drop for UvEventLoop {
         // the loop is free'd (use-after-free). We also must free the uv handle
         // after the loop has been closed because during the closing of the loop
         // the handle is required to be used apparently.
+        //
+        // Lastly, after we've closed the pool of handles we pump the event loop
+        // one last time to run any closing callbacks to make sure the loop
+        // shuts down cleanly.
         let handle = self.uvio.handle_pool.get_ref().handle();
         drop(self.uvio.handle_pool.take());
+        self.run();
+
         self.uvio.loop_.close();
         unsafe { uvll::free_handle(handle) }
     }
 }
 
-impl rtio::EventLoop for UvEventLoop {
+impl EventLoop for UvEventLoop {
     fn run(&mut self) {
         self.uvio.loop_.run();
     }
@@ -86,31 +93,31 @@ impl rtio::EventLoop for UvEventLoop {
         IdleWatcher::onetime(&mut self.uvio.loop_, f);
     }
 
-    fn pausable_idle_callback(&mut self, cb: ~rtio::Callback)
-        -> ~rtio::PausableIdleCallback
+    fn pausable_idle_callback(&mut self, cb: ~rtio::Callback:Send)
+        -> ~rtio::PausableIdleCallback:Send
     {
-        IdleWatcher::new(&mut self.uvio.loop_, cb) as ~rtio::PausableIdleCallback
+        IdleWatcher::new(&mut self.uvio.loop_,
+                         cb) as ~rtio::PausableIdleCallback:Send
     }
 
-    fn remote_callback(&mut self, f: ~rtio::Callback) -> ~rtio::RemoteCallback {
-        ~AsyncWatcher::new(&mut self.uvio.loop_, f) as ~rtio::RemoteCallback
+    fn remote_callback(&mut self, f: ~rtio::Callback:Send)
+        -> ~rtio::RemoteCallback:Send
+    {
+        ~AsyncWatcher::new(&mut self.uvio.loop_, f) as ~rtio::RemoteCallback:Send
     }
 
     fn io<'a>(&'a mut self) -> Option<&'a mut rtio::IoFactory> {
         let factory = &mut self.uvio as &mut rtio::IoFactory;
         Some(factory)
     }
-}
 
-#[cfg(not(test))]
-#[lang = "event_loop_factory"]
-pub fn new_loop() -> ~rtio::EventLoop {
-    ~UvEventLoop::new() as ~rtio::EventLoop
+    fn has_active_io(&self) -> bool {
+        self.uvio.loop_.get_blockers() > 0
+    }
 }
 
 #[test]
 fn test_callback_run_once() {
-    use std::rt::rtio::EventLoop;
     run_in_bare_thread(proc() {
         let mut event_loop = UvEventLoop::new();
         let mut count = 0;
@@ -124,8 +131,8 @@ fn test_callback_run_once() {
 }
 
 pub struct UvIoFactory {
-    loop_: Loop,
-    priv handle_pool: Option<~QueuePool>,
+    pub loop_: Loop,
+    handle_pool: Option<~QueuePool>,
 }
 
 impl UvIoFactory {
@@ -143,31 +150,31 @@ impl IoFactory for UvIoFactory {
     // Connect to an address and return a new stream
     // NB: This blocks the task waiting on the connection.
     // It would probably be better to return a future
-    fn tcp_connect(&mut self, addr: SocketAddr)
-        -> Result<~rtio::RtioTcpStream, IoError>
+    fn tcp_connect(&mut self, addr: SocketAddr, timeout: Option<u64>)
+        -> Result<~rtio::RtioTcpStream:Send, IoError>
     {
-        match TcpWatcher::connect(self, addr) {
-            Ok(t) => Ok(~t as ~rtio::RtioTcpStream),
+        match TcpWatcher::connect(self, addr, timeout) {
+            Ok(t) => Ok(~t as ~rtio::RtioTcpStream:Send),
             Err(e) => Err(uv_error_to_io_error(e)),
         }
     }
 
-    fn tcp_bind(&mut self, addr: SocketAddr) -> Result<~rtio::RtioTcpListener, IoError> {
+    fn tcp_bind(&mut self, addr: SocketAddr) -> Result<~rtio::RtioTcpListener:Send, IoError> {
         match TcpListener::bind(self, addr) {
-            Ok(t) => Ok(t as ~rtio::RtioTcpListener),
+            Ok(t) => Ok(t as ~rtio::RtioTcpListener:Send),
             Err(e) => Err(uv_error_to_io_error(e)),
         }
     }
 
-    fn udp_bind(&mut self, addr: SocketAddr) -> Result<~rtio::RtioUdpSocket, IoError> {
+    fn udp_bind(&mut self, addr: SocketAddr) -> Result<~rtio::RtioUdpSocket:Send, IoError> {
         match UdpWatcher::bind(self, addr) {
-            Ok(u) => Ok(~u as ~rtio::RtioUdpSocket),
+            Ok(u) => Ok(~u as ~rtio::RtioUdpSocket:Send),
             Err(e) => Err(uv_error_to_io_error(e)),
         }
     }
 
-    fn timer_init(&mut self) -> Result<~rtio::RtioTimer, IoError> {
-        Ok(TimerWatcher::new(self) as ~rtio::RtioTimer)
+    fn timer_init(&mut self) -> Result<~rtio::RtioTimer:Send, IoError> {
+        Ok(TimerWatcher::new(self) as ~rtio::RtioTimer:Send)
     }
 
     fn get_host_addresses(&mut self, host: Option<&str>, servname: Option<&str>,
@@ -177,12 +184,12 @@ impl IoFactory for UvIoFactory {
     }
 
     fn fs_from_raw_fd(&mut self, fd: c_int,
-                      close: rtio::CloseBehavior) -> ~rtio::RtioFileStream {
-        ~FileWatcher::new(self, fd, close) as ~rtio::RtioFileStream
+                      close: rtio::CloseBehavior) -> ~rtio::RtioFileStream:Send {
+        ~FileWatcher::new(self, fd, close) as ~rtio::RtioFileStream:Send
     }
 
     fn fs_open(&mut self, path: &CString, fm: FileMode, fa: FileAccess)
-        -> Result<~rtio::RtioFileStream, IoError> {
+        -> Result<~rtio::RtioFileStream:Send, IoError> {
         let flags = match fm {
             io::Open => 0,
             io::Append => libc::O_APPEND,
@@ -198,7 +205,7 @@ impl IoFactory for UvIoFactory {
         };
 
         match FsRequest::open(self, path, flags as int, mode as int) {
-            Ok(fs) => Ok(~fs as ~rtio::RtioFileStream),
+            Ok(fs) => Ok(~fs as ~rtio::RtioFileStream:Send),
             Err(e) => Err(uv_error_to_io_error(e))
         }
     }
@@ -234,7 +241,7 @@ impl IoFactory for UvIoFactory {
         r.map_err(uv_error_to_io_error)
     }
     fn fs_readdir(&mut self, path: &CString, flags: c_int)
-        -> Result<~[Path], IoError>
+        -> Result<Vec<Path>, IoError>
     {
         let r = FsRequest::readdir(&self.loop_, path, flags);
         r.map_err(uv_error_to_io_error)
@@ -263,51 +270,56 @@ impl IoFactory for UvIoFactory {
     }
 
     fn spawn(&mut self, config: ProcessConfig)
-            -> Result<(~rtio::RtioProcess, ~[Option<~rtio::RtioPipe>]), IoError>
+            -> Result<(~rtio::RtioProcess:Send, ~[Option<~rtio::RtioPipe:Send>]), IoError>
     {
         match Process::spawn(self, config) {
             Ok((p, io)) => {
-                Ok((p as ~rtio::RtioProcess,
-                    io.move_iter().map(|i| i.map(|p| ~p as ~rtio::RtioPipe)).collect()))
+                Ok((p as ~rtio::RtioProcess:Send,
+                    io.move_iter().map(|i| i.map(|p| ~p as ~rtio::RtioPipe:Send)).collect()))
             }
             Err(e) => Err(uv_error_to_io_error(e)),
         }
     }
 
-    fn unix_bind(&mut self, path: &CString) -> Result<~rtio::RtioUnixListener, IoError>
+    fn kill(&mut self, pid: libc::pid_t, signum: int) -> Result<(), IoError> {
+        Process::kill(pid, signum).map_err(uv_error_to_io_error)
+    }
+
+    fn unix_bind(&mut self, path: &CString) -> Result<~rtio::RtioUnixListener:Send, IoError>
     {
         match PipeListener::bind(self, path) {
-            Ok(p) => Ok(p as ~rtio::RtioUnixListener),
+            Ok(p) => Ok(p as ~rtio::RtioUnixListener:Send),
             Err(e) => Err(uv_error_to_io_error(e)),
         }
     }
 
-    fn unix_connect(&mut self, path: &CString) -> Result<~rtio::RtioPipe, IoError> {
-        match PipeWatcher::connect(self, path) {
-            Ok(p) => Ok(~p as ~rtio::RtioPipe),
+    fn unix_connect(&mut self, path: &CString,
+                    timeout: Option<u64>) -> Result<~rtio::RtioPipe:Send, IoError> {
+        match PipeWatcher::connect(self, path, timeout) {
+            Ok(p) => Ok(~p as ~rtio::RtioPipe:Send),
             Err(e) => Err(uv_error_to_io_error(e)),
         }
     }
 
     fn tty_open(&mut self, fd: c_int, readable: bool)
-            -> Result<~rtio::RtioTTY, IoError> {
+            -> Result<~rtio::RtioTTY:Send, IoError> {
         match TtyWatcher::new(self, fd, readable) {
-            Ok(tty) => Ok(~tty as ~rtio::RtioTTY),
+            Ok(tty) => Ok(~tty as ~rtio::RtioTTY:Send),
             Err(e) => Err(uv_error_to_io_error(e))
         }
     }
 
-    fn pipe_open(&mut self, fd: c_int) -> Result<~rtio::RtioPipe, IoError> {
+    fn pipe_open(&mut self, fd: c_int) -> Result<~rtio::RtioPipe:Send, IoError> {
         match PipeWatcher::open(self, fd) {
-            Ok(s) => Ok(~s as ~rtio::RtioPipe),
+            Ok(s) => Ok(~s as ~rtio::RtioPipe:Send),
             Err(e) => Err(uv_error_to_io_error(e))
         }
     }
 
-    fn signal(&mut self, signum: Signum, channel: SharedChan<Signum>)
-        -> Result<~rtio::RtioSignal, IoError> {
+    fn signal(&mut self, signum: Signum, channel: Sender<Signum>)
+        -> Result<~rtio::RtioSignal:Send, IoError> {
         match SignalWatcher::new(self, signum, channel) {
-            Ok(s) => Ok(s as ~rtio::RtioSignal),
+            Ok(s) => Ok(s as ~rtio::RtioSignal:Send),
             Err(e) => Err(uv_error_to_io_error(e)),
         }
     }

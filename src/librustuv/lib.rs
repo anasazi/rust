@@ -34,23 +34,28 @@ via `close` and `delete` methods.
 
 */
 
-#[crate_id = "rustuv#0.10-pre"];
-#[license = "MIT/ASL2"];
-#[crate_type = "rlib"];
-#[crate_type = "dylib"];
+#![crate_id = "rustuv#0.11-pre"]
+#![license = "MIT/ASL2"]
+#![crate_type = "rlib"]
+#![crate_type = "dylib"]
 
-#[feature(macro_rules)];
-#[deny(unused_result, unused_must_use)];
+#![feature(macro_rules)]
+#![deny(unused_result, unused_must_use)]
+#![allow(visible_private_types)]
 
-#[cfg(test)] extern mod green;
+#[cfg(test)] extern crate green;
+#[cfg(test)] extern crate realrustuv = "rustuv";
+extern crate libc;
 
 use std::cast;
-use std::io;
+use std::fmt;
 use std::io::IoError;
-use std::libc::c_int;
+use std::io;
+use libc::{c_int, c_void};
 use std::ptr::null;
 use std::ptr;
 use std::rt::local::Local;
+use std::rt::rtio;
 use std::rt::task::{BlockedTask, Task};
 use std::str::raw::from_c_str;
 use std::str;
@@ -66,15 +71,24 @@ pub use self::signal::SignalWatcher;
 pub use self::timer::TimerWatcher;
 pub use self::tty::TtyWatcher;
 
+// Run tests with libgreen instead of libnative.
+//
+// FIXME: This egregiously hacks around starting the test runner in a different
+//        threading mode than the default by reaching into the auto-generated
+//        '__test' module.
+#[cfg(test)] #[start]
+fn start(argc: int, argv: **u8) -> int {
+    green::start(argc, argv, event_loop, __test::main)
+}
+
 mod macros;
 
-mod queue;
+mod access;
 mod homing;
+mod queue;
+mod rc;
 
-/// The implementation of `rtio` for libuv
 pub mod uvio;
-
-/// C bindings to libuv
 pub mod uvll;
 
 pub mod file;
@@ -89,9 +103,38 @@ pub mod tty;
 pub mod signal;
 pub mod stream;
 
+/// Creates a new event loop which is powered by libuv
+///
+/// This function is used in tandem with libgreen's `PoolConfig` type as a value
+/// for the `event_loop_factory` field. Using this function as the event loop
+/// factory will power programs with libuv and enable green threading.
+///
+/// # Example
+///
+/// ```
+/// extern crate rustuv;
+/// extern crate green;
+///
+/// #[start]
+/// fn start(argc: int, argv: **u8) -> int {
+///     green::start(argc, argv, rustuv::event_loop, main)
+/// }
+///
+/// fn main() {
+///     // this code is running inside of a green task powered by libuv
+/// }
+/// ```
+pub fn event_loop() -> ~rtio::EventLoop:Send {
+    ~uvio::UvEventLoop::new() as ~rtio::EventLoop:Send
+}
+
 /// A type that wraps a uv handle
 pub trait UvHandle<T> {
     fn uv_handle(&self) -> *T;
+
+    fn uv_loop(&self) -> Loop {
+        Loop::wrap(unsafe { uvll::get_loop_for_uv_handle(self.uv_handle()) })
+    }
 
     // FIXME(#8888) dummy self
     fn alloc(_: Option<Self>, ty: uvll::uv_handle_type) -> *T {
@@ -134,7 +177,7 @@ pub trait UvHandle<T> {
             uvll::uv_close(self.uv_handle() as *uvll::uv_handle_t, close_cb);
             uvll::set_data_for_uv_handle(self.uv_handle(), ptr::null::<()>());
 
-            wait_until_woken_after(&mut slot, || {
+            wait_until_woken_after(&mut slot, &self.uv_loop(), || {
                 uvll::set_data_for_uv_handle(self.uv_handle(), &slot);
             })
         }
@@ -152,8 +195,8 @@ pub trait UvHandle<T> {
 }
 
 pub struct ForbidSwitch {
-    priv msg: &'static str,
-    priv io: uint,
+    msg: &'static str,
+    io: uint,
 }
 
 impl ForbidSwitch {
@@ -193,16 +236,20 @@ impl Drop for ForbidUnwind {
     }
 }
 
-fn wait_until_woken_after(slot: *mut Option<BlockedTask>, f: ||) {
+fn wait_until_woken_after(slot: *mut Option<BlockedTask>,
+                          loop_: &Loop,
+                          f: ||) {
     let _f = ForbidUnwind::new("wait_until_woken_after");
     unsafe {
         assert!((*slot).is_none());
         let task: ~Task = Local::take();
+        loop_.modify_blockers(1);
         task.deschedule(1, |task| {
             *slot = Some(task);
             f();
             Ok(())
         });
+        loop_.modify_blockers(-1);
     }
 }
 
@@ -212,8 +259,8 @@ fn wakeup(slot: &mut Option<BlockedTask>) {
 }
 
 pub struct Request {
-    handle: *uvll::uv_req_t,
-    priv defused: bool,
+    pub handle: *uvll::uv_req_t,
+    defused: bool,
 }
 
 impl Request {
@@ -264,13 +311,14 @@ impl Drop for Request {
 /// with dtors may not be destructured, but tuple structs can,
 /// but the results are not correct.
 pub struct Loop {
-    priv handle: *uvll::uv_loop_t
+    handle: *uvll::uv_loop_t
 }
 
 impl Loop {
     pub fn new() -> Loop {
         let handle = unsafe { uvll::loop_new() };
         assert!(handle.is_not_null());
+        unsafe { uvll::set_data_for_uv_loop(handle, 0 as *c_void) }
         Loop::wrap(handle)
     }
 
@@ -282,6 +330,19 @@ impl Loop {
 
     pub fn close(&mut self) {
         unsafe { uvll::uv_loop_delete(self.handle) };
+    }
+
+    // The 'data' field of the uv_loop_t is used to count the number of tasks
+    // that are currently blocked waiting for I/O to complete.
+    fn modify_blockers(&self, amt: uint) {
+        unsafe {
+            let cur = uvll::get_data_for_uv_loop(self.handle) as uint;
+            uvll::set_data_for_uv_loop(self.handle, (cur + amt) as *c_void)
+        }
+    }
+
+    fn get_blockers(&self) -> uint {
+        unsafe { uvll::get_data_for_uv_loop(self.handle) as uint }
     }
 }
 
@@ -315,16 +376,16 @@ impl UvError {
     }
 }
 
-impl ToStr for UvError {
-    fn to_str(&self) -> ~str {
-        format!("{}: {}", self.name(), self.desc())
+impl fmt::Show for UvError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f.buf, "{}: {}", self.name(), self.desc())
     }
 }
 
 #[test]
 fn error_smoke_test() {
     let err: UvError = UvError(uvll::EOF);
-    assert_eq!(err.to_str(), ~"EOF: end of file");
+    assert_eq!(err.to_str(), "EOF: end of file".to_owned());
 }
 
 pub fn uv_error_to_io_error(uverr: UvError) -> IoError {
@@ -348,6 +409,7 @@ pub fn uv_error_to_io_error(uverr: UvError) -> IoError {
             uvll::EPIPE => io::BrokenPipe,
             uvll::ECONNABORTED => io::ConnectionAborted,
             uvll::EADDRNOTAVAIL => io::ConnectionRefused,
+            uvll::ECANCELED => io::TimedOut,
             err => {
                 uvdebug!("uverr.code {}", err as int);
                 // FIXME: Need to map remaining uv error types
@@ -398,7 +460,7 @@ fn local_loop() -> &'static mut uvio::UvIoFactory {
     unsafe {
         cast::transmute({
             let mut task = Local::borrow(None::<Task>);
-            let mut io = task.get().local_io().unwrap();
+            let mut io = task.local_io().unwrap();
             let (_vtable, uvio): (uint, &'static mut uvio::UvIoFactory) =
                 cast::transmute(io.get());
             uvio
@@ -409,7 +471,6 @@ fn local_loop() -> &'static mut uvio::UvIoFactory {
 #[cfg(test)]
 mod test {
     use std::cast::transmute;
-    use std::ptr;
     use std::unstable::run_in_bare_thread;
 
     use super::{slice_to_uv_buf, Loop};
@@ -424,7 +485,7 @@ mod test {
         unsafe {
             let base = transmute::<*u8, *mut u8>(buf.base);
             (*base) = 1;
-            (*ptr::mut_offset(base, 1)) = 2;
+            (*base.offset(1)) = 2;
         }
 
         assert!(slice[0] == 1);

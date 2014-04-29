@@ -8,7 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern mod extra;
+#![no_start]
+
+extern crate green;
+extern crate rustuv;
 
 use std::task::spawn;
 use std::os;
@@ -16,6 +19,11 @@ use std::uint;
 
 // Very simple spawn rate test. Spawn N tasks that do nothing and
 // return.
+
+#[start]
+fn start(argc: int, argv: **u8) -> int {
+    green::start(argc, argv, rustuv::event_loop, main)
+}
 
 fn main() {
 

@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -23,31 +23,39 @@
  * `glob`/`fnmatch` functions.
  */
 
-#[crate_id = "glob#0.10-pre"];
-#[crate_type = "rlib"];
-#[crate_type = "dylib"];
-#[license = "MIT/ASL2"];
+#![crate_id = "glob#0.11-pre"]
+#![crate_type = "rlib"]
+#![crate_type = "dylib"]
+#![license = "MIT/ASL2"]
+#![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
+       html_favicon_url = "http://www.rust-lang.org/favicon.ico",
+       html_root_url = "http://static.rust-lang.org/doc/master")]
 
-use std::{os, path};
+#![deny(deprecated_owned_vector)]
+
+use std::cell::Cell;
+use std::{cmp, os, path};
 use std::io::fs;
 use std::path::is_sep;
+use std::strbuf::StrBuf;
 
 /**
  * An iterator that yields Paths from the filesystem that match a particular
  * pattern - see the `glob` function for more details.
  */
 pub struct Paths {
-    priv root: Path,
-    priv dir_patterns: ~[Pattern],
-    priv options: MatchOptions,
-    priv todo: ~[(Path,uint)]
+    root: Path,
+    dir_patterns: Vec<Pattern>,
+    require_dir: bool,
+    options: MatchOptions,
+    todo: Vec<(Path,uint)>,
 }
 
 ///
 /// Return an iterator that produces all the Paths that match the given pattern,
 /// which may be absolute or relative to the current working directory.
 ///
-/// is method uses the default match options and is equivalent to calling
+/// This method uses the default match options and is equivalent to calling
 /// `glob_with(pattern, MatchOptions::new())`. Use `glob_with` directly if you
 /// want to use non-default match options.
 ///
@@ -66,7 +74,7 @@ pub struct Paths {
 ///
 /// The above code will print:
 ///
-/// ```
+/// ```ignore
 /// /media/pictures/kittens.jpg
 /// /media/pictures/puppies.jpg
 /// ```
@@ -99,20 +107,36 @@ pub fn glob_with(pattern: &str, options: MatchOptions) -> Paths {
         if check_windows_verbatim(pat_root.get_ref()) {
             // FIXME: How do we want to handle verbatim paths? I'm inclined to return nothing,
             // since we can't very well find all UNC shares with a 1-letter server name.
-            return Paths { root: root, dir_patterns: ~[], options: options, todo: ~[] };
+            return Paths {
+                root: root,
+                dir_patterns: Vec::new(),
+                require_dir: false,
+                options: options,
+                todo: Vec::new(),
+            };
         }
         root.push(pat_root.get_ref());
     }
 
     let root_len = pat_root.map_or(0u, |p| p.as_vec().len());
-    let dir_patterns = pattern.slice_from(root_len.min(&pattern.len()))
-                       .split_terminator(is_sep).map(|s| Pattern::new(s)).to_owned_vec();
+    let dir_patterns = pattern.slice_from(cmp::min(root_len, pattern.len()))
+                       .split_terminator(is_sep)
+                       .map(|s| Pattern::new(s))
+                       .collect::<Vec<Pattern>>();
+    let require_dir = pattern.chars().next_back().map(is_sep) == Some(true);
 
-    let todo = list_dir_sorted(&root).move_iter().map(|x|(x,0u)).to_owned_vec();
+    let mut todo = Vec::new();
+    if dir_patterns.len() > 0 {
+        // Shouldn't happen, but we're using -1 as a special index.
+        assert!(dir_patterns.len() < -1 as uint);
+
+        fill_todo(&mut todo, dir_patterns.as_slice(), 0, &root, options);
+    }
 
     Paths {
         root: root,
         dir_patterns: dir_patterns,
+        require_dir: require_dir,
         options: options,
         todo: todo,
     }
@@ -127,7 +151,13 @@ impl Iterator<Path> for Paths {
             }
 
             let (path,idx) = self.todo.pop().unwrap();
-            let ref pattern = self.dir_patterns[idx];
+            // idx -1: was already checked by fill_todo, maybe path was '.' or
+            // '..' that we can't match here because of normalization.
+            if idx == -1 as uint {
+                if self.require_dir && !path.is_dir() { continue; }
+                return Some(path);
+            }
+            let ref pattern = *self.dir_patterns.get(idx);
 
             if pattern.matches_with(match path.filename_str() {
                 // this ugly match needs to go here to avoid a borrowck error
@@ -141,9 +171,13 @@ impl Iterator<Path> for Paths {
                 if idx == self.dir_patterns.len() - 1 {
                     // it is not possible for a pattern to match a directory *AND* its children
                     // so we don't need to check the children
-                    return Some(path);
+
+                    if !self.require_dir || path.is_dir() {
+                        return Some(path);
+                    }
                 } else {
-                    self.todo.extend(&mut list_dir_sorted(&path).move_iter().map(|x|(x,idx+1)));
+                    fill_todo(&mut self.todo, self.dir_patterns.as_slice(),
+                              idx + 1, &path, self.options);
                 }
             }
         }
@@ -151,34 +185,34 @@ impl Iterator<Path> for Paths {
 
 }
 
-fn list_dir_sorted(path: &Path) -> ~[Path] {
+fn list_dir_sorted(path: &Path) -> Option<Vec<Path>> {
     match fs::readdir(path) {
         Ok(mut children) => {
             children.sort_by(|p1, p2| p2.filename().cmp(&p1.filename()));
-            children
+            Some(children.move_iter().collect())
         }
-        Err(..) => ~[]
+        Err(..) => None
     }
 }
 
 /**
  * A compiled Unix shell style pattern.
  */
-#[deriving(Clone, Eq, TotalEq, Ord, TotalOrd, IterBytes, Default)]
+#[deriving(Clone, Eq, TotalEq, Ord, TotalOrd, Hash, Default)]
 pub struct Pattern {
-    priv tokens: ~[PatternToken]
+    tokens: Vec<PatternToken>,
 }
 
-#[deriving(Clone, Eq, TotalEq, Ord, TotalOrd, IterBytes)]
+#[deriving(Clone, Eq, TotalEq, Ord, TotalOrd, Hash)]
 enum PatternToken {
     Char(char),
     AnyChar,
     AnySequence,
-    AnyWithin(~[CharSpecifier]),
-    AnyExcept(~[CharSpecifier])
+    AnyWithin(Vec<CharSpecifier> ),
+    AnyExcept(Vec<CharSpecifier> )
 }
 
-#[deriving(Clone, Eq, TotalEq, Ord, TotalOrd, IterBytes)]
+#[deriving(Clone, Eq, TotalEq, Ord, TotalOrd, Hash)]
 enum CharSpecifier {
     SingleChar(char),
     CharRange(char, char)
@@ -214,26 +248,26 @@ impl Pattern {
      */
     pub fn new(pattern: &str) -> Pattern {
 
-        let chars = pattern.chars().to_owned_vec();
-        let mut tokens = ~[];
+        let chars = pattern.chars().collect::<Vec<_>>();
+        let mut tokens = Vec::new();
         let mut i = 0;
 
         while i < chars.len() {
-            match chars[i] {
+            match *chars.get(i) {
                 '?' => {
                     tokens.push(AnyChar);
                     i += 1;
                 }
                 '*' => {
                     // *, **, ***, ****, ... are all equivalent
-                    while i < chars.len() && chars[i] == '*' {
+                    while i < chars.len() && *chars.get(i) == '*' {
                         i += 1;
                     }
                     tokens.push(AnySequence);
                 }
                 '[' => {
 
-                    if i <= chars.len() - 4 && chars[i + 1] == '!' {
+                    if i <= chars.len() - 4 && *chars.get(i + 1) == '!' {
                         match chars.slice_from(i + 3).position_elem(&']') {
                             None => (),
                             Some(j) => {
@@ -245,7 +279,7 @@ impl Pattern {
                             }
                         }
                     }
-                    else if i <= chars.len() - 3 && chars[i + 1] != '!' {
+                    else if i <= chars.len() - 3 && *chars.get(i + 1) != '!' {
                         match chars.slice_from(i + 2).position_elem(&']') {
                             None => (),
                             Some(j) => {
@@ -277,7 +311,7 @@ impl Pattern {
      * match the input string and nothing else.
      */
     pub fn escape(s: &str) -> ~str {
-        let mut escaped = ~"";
+        let mut escaped = StrBuf::new();
         for c in s.chars() {
             match c {
                 // note that ! does not need escaping because it is only special inside brackets
@@ -291,7 +325,7 @@ impl Pattern {
                 }
             }
         }
-        escaped
+        escaped.into_owned()
     }
 
     /**
@@ -342,22 +376,24 @@ impl Pattern {
     }
 
     fn matches_from(&self,
-                    mut prev_char: Option<char>,
+                    prev_char: Option<char>,
                     mut file: &str,
                     i: uint,
                     options: MatchOptions) -> MatchResult {
 
+        let prev_char = Cell::new(prev_char);
+
         let require_literal = |c| {
             (options.require_literal_separator && is_sep(c)) ||
             (options.require_literal_leading_dot && c == '.'
-             && is_sep(prev_char.unwrap_or('/')))
+             && is_sep(prev_char.get().unwrap_or('/')))
         };
 
         for (ti, token) in self.tokens.slice_from(i).iter().enumerate() {
             match *token {
                 AnySequence => {
                     loop {
-                        match self.matches_from(prev_char, file, i + ti + 1, options) {
+                        match self.matches_from(prev_char.get(), file, i + ti + 1, options) {
                             SubPatternDoesntMatch => (), // keep trying
                             m => return m,
                         }
@@ -366,11 +402,11 @@ impl Pattern {
                             return EntirePatternDoesntMatch;
                         }
 
-                        let (c, next) = file.slice_shift_char();
-                        if require_literal(c) {
+                        let (some_c, next) = file.slice_shift_char();
+                        if require_literal(some_c.unwrap()) {
                             return SubPatternDoesntMatch;
                         }
-                        prev_char = Some(c);
+                        prev_char.set(some_c);
                         file = next;
                     }
                 }
@@ -379,16 +415,23 @@ impl Pattern {
                         return EntirePatternDoesntMatch;
                     }
 
-                    let (c, next) = file.slice_shift_char();
+                    let (some_c, next) = file.slice_shift_char();
+                    let c = some_c.unwrap();
                     let matches = match *token {
                         AnyChar => {
                             !require_literal(c)
                         }
                         AnyWithin(ref specifiers) => {
-                            !require_literal(c) && in_char_specifiers(*specifiers, c, options)
+                            !require_literal(c) &&
+                                in_char_specifiers(specifiers.as_slice(),
+                                                   c,
+                                                   options)
                         }
                         AnyExcept(ref specifiers) => {
-                            !require_literal(c) && !in_char_specifiers(*specifiers, c, options)
+                            !require_literal(c) &&
+                                !in_char_specifiers(specifiers.as_slice(),
+                                                    c,
+                                                    options)
                         }
                         Char(c2) => {
                             chars_eq(c, c2, options.case_sensitive)
@@ -400,7 +443,7 @@ impl Pattern {
                     if !matches {
                         return SubPatternDoesntMatch;
                     }
-                    prev_char = Some(c);
+                    prev_char.set(some_c);
                     file = next;
                 }
             }
@@ -415,8 +458,74 @@ impl Pattern {
 
 }
 
-fn parse_char_specifiers(s: &[char]) -> ~[CharSpecifier] {
-    let mut cs = ~[];
+// Fills `todo` with paths under `path` to be matched by `patterns[idx]`,
+// special-casing patterns to match `.` and `..`, and avoiding `readdir()`
+// calls when there are no metacharacters in the pattern.
+fn fill_todo(todo: &mut Vec<(Path, uint)>, patterns: &[Pattern], idx: uint, path: &Path,
+             options: MatchOptions) {
+    // convert a pattern that's just many Char(_) to a string
+    fn pattern_as_str(pattern: &Pattern) -> Option<StrBuf> {
+        let mut s = StrBuf::new();
+        for token in pattern.tokens.iter() {
+            match *token {
+                Char(c) => s.push_char(c),
+                _ => return None
+            }
+        }
+        return Some(s);
+    }
+
+    let add = |todo: &mut Vec<_>, next_path: Path| {
+        if idx + 1 == patterns.len() {
+            // We know it's good, so don't make the iterator match this path
+            // against the pattern again. In particular, it can't match
+            // . or .. globs since these never show up as path components.
+            todo.push((next_path, -1 as uint));
+        } else {
+            fill_todo(todo, patterns, idx + 1, &next_path, options);
+        }
+    };
+
+    let pattern = &patterns[idx];
+
+    match pattern_as_str(pattern) {
+        Some(s) => {
+            // This pattern component doesn't have any metacharacters, so we
+            // don't need to read the current directory to know where to
+            // continue. So instead of passing control back to the iterator,
+            // we can just check for that one entry and potentially recurse
+            // right away.
+            let special = "." == s.as_slice() || ".." == s.as_slice();
+            let next_path = path.join(s.as_slice());
+            if (special && path.is_dir()) || (!special && next_path.exists()) {
+                add(todo, next_path);
+            }
+        },
+        None => {
+            match list_dir_sorted(path) {
+                Some(entries) => {
+                    todo.extend(entries.move_iter().map(|x|(x, idx)));
+
+                    // Matching the special directory entries . and .. that refer to
+                    // the current and parent directory respectively requires that
+                    // the pattern has a leading dot, even if the `MatchOptions` field
+                    // `require_literal_leading_dot` is not set.
+                    if pattern.tokens.len() > 0 && pattern.tokens.get(0) == &Char('.') {
+                        for &special in [".", ".."].iter() {
+                            if pattern.matches_with(special, options) {
+                                add(todo, path.join(special));
+                            }
+                        }
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+}
+
+fn parse_char_specifiers(s: &[char]) -> Vec<CharSpecifier> {
+    let mut cs = Vec::new();
     let mut i = 0;
     while i < s.len() {
         if i + 3 <= s.len() && s[i + 1] == '-' {
@@ -487,7 +596,7 @@ fn chars_eq(a: char, b: char, case_sensitive: bool) -> bool {
 /**
  * Configuration options to modify the behaviour of `Pattern::matches_with(..)`
  */
-#[deriving(Clone, Eq, TotalEq, Ord, TotalOrd, IterBytes, Default)]
+#[deriving(Clone, Eq, TotalEq, Ord, TotalOrd, Hash, Default)]
 pub struct MatchOptions {
 
     /**
@@ -495,13 +604,13 @@ pub struct MatchOptions {
      * currently only considers upper/lower case relationships between ASCII characters,
      * but in future this might be extended to work with Unicode.
      */
-    priv case_sensitive: bool,
+    case_sensitive: bool,
 
     /**
      * If this is true then path-component separator characters (e.g. `/` on Posix)
      * must be matched by a literal `/`, rather than by `*` or `?` or `[...]`
      */
-    priv require_literal_separator: bool,
+    require_literal_separator: bool,
 
     /**
      * If this is true then paths that contain components that start with a `.` will
@@ -509,7 +618,7 @@ pub struct MatchOptions {
      * will not match. This is useful because such files are conventionally considered
      * hidden on Unix systems and it might be desirable to skip them when listing files.
      */
-    priv require_literal_leading_dot: bool
+    require_literal_leading_dot: bool
 }
 
 impl MatchOptions {
@@ -547,7 +656,7 @@ mod test {
     fn test_absolute_pattern() {
         // assume that the filesystem is not empty!
         assert!(glob("/*").next().is_some());
-        assert!(glob("//").next().is_none());
+        assert!(glob("//").next().is_some());
 
         // check windows absolute paths with host/device components
         let root_with_device = os::getcwd().root_path().unwrap().join("*");
@@ -658,7 +767,7 @@ mod test {
     #[test]
     fn test_pattern_escape() {
         let s = "_[_]_?_*_!_";
-        assert_eq!(Pattern::escape(s), ~"_[[]_[]]_[?]_[*]_!_");
+        assert_eq!(Pattern::escape(s), "_[[]_[]]_[?]_[*]_!_".to_owned());
         assert!(Pattern::new(Pattern::escape(s)).matches(s));
     }
 

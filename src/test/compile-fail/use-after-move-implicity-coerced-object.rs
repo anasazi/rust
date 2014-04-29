@@ -8,19 +8,22 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// ignore-tidy-linelength
+
+use std::fmt;
+
 struct Number {
     n: i64
 }
 
-impl ToStr for Number {
-    fn to_str(&self) -> ~str {
-        self.n.to_str()
+impl fmt::Show for Number {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f.buf, "{}", self.n)
     }
 }
 
 struct List {
-    list: ~[~ToStr]
-}
+    list: Vec<~ToStr> }
 
 impl List {
     fn push(&mut self, n: ~ToStr) {
@@ -30,8 +33,8 @@ impl List {
 
 fn main() {
     let n = ~Number { n: 42 };
-    let mut l = ~List { list: ~[] };
+    let mut l = ~List { list: Vec::new() };
     l.push(n);
-    //^~ NOTE: `n` moved here because it has type `~Number`, which is non-copyable (perhaps you meant to use clone()?)
-    let x = n.to_str(); //~ ERROR: use of moved value: `n`
+    let x = n.to_str();
+    //~^ ERROR: use of moved value: `n`
 }

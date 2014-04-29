@@ -8,8 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(managed_boxes)];
-
 struct Struct {
     person: &'static str
 }
@@ -25,8 +23,8 @@ impl Trait<&'static str> for Struct {
 }
 
 fn main() {
-    let person = ~"Fred";
-    let person: &str = person;  //~ ERROR borrowed value does not live long enough
-    let s: @Trait<&'static str> = @Struct { person: person };
+    let person = "Fred".to_owned();
+    let person: &str = person;  //~ ERROR `person[..]` does not live long enough
+    let s: ~Trait<&'static str> = ~Struct { person: person };
 }
 

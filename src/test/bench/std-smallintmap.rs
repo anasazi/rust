@@ -10,9 +10,10 @@
 
 // Microbenchmark for the smallintmap library
 
-extern mod extra;
+extern crate collections;
+extern crate time;
 
-use extra::smallintmap::SmallIntMap;
+use collections::SmallIntMap;
 use std::os;
 use std::uint;
 
@@ -31,25 +32,25 @@ fn check_sequential(min: uint, max: uint, map: &SmallIntMap<uint>) {
 fn main() {
     let args = os::args();
     let args = if os::getenv("RUST_BENCH").is_some() {
-        ~[~"", ~"100000", ~"100"]
+        vec!("".to_owned(), "100000".to_owned(), "100".to_owned())
     } else if args.len() <= 1u {
-        ~[~"", ~"10000", ~"50"]
+        vec!("".to_owned(), "10000".to_owned(), "50".to_owned())
     } else {
-        args
+        args.move_iter().collect()
     };
-    let max = from_str::<uint>(args[1]).unwrap();
-    let rep = from_str::<uint>(args[2]).unwrap();
+    let max = from_str::<uint>(*args.get(1)).unwrap();
+    let rep = from_str::<uint>(*args.get(2)).unwrap();
 
     let mut checkf = 0.0;
     let mut appendf = 0.0;
 
     for _ in range(0u, rep) {
         let mut map = SmallIntMap::new();
-        let start = extra::time::precise_time_s();
+        let start = time::precise_time_s();
         append_sequential(0u, max, &mut map);
-        let mid = extra::time::precise_time_s();
+        let mid = time::precise_time_s();
         check_sequential(0u, max, &map);
-        let end = extra::time::precise_time_s();
+        let end = time::precise_time_s();
 
         checkf += (end - mid) as f64;
         appendf += (mid - start) as f64;

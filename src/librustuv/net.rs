@@ -9,21 +9,23 @@
 // except according to those terms.
 
 use std::cast;
-use std::io::IoError;
+use std::io::{IoError, IoResult};
 use std::io::net::ip;
-use std::libc::{size_t, ssize_t, c_int, c_void, c_uint};
-use std::libc;
+use libc::{size_t, ssize_t, c_int, c_void, c_uint};
+use libc;
 use std::mem;
 use std::ptr;
 use std::rt::rtio;
 use std::rt::task::BlockedTask;
-use std::unstable::intrinsics;
 
+use access::Access;
 use homing::{HomingIO, HomeHandle};
+use rc::Refcount;
 use stream::StreamWatcher;
 use super::{Loop, Request, UvError, Buf, status_to_io_result,
             uv_error_to_io_error, UvHandle, slice_to_uv_buf,
             wait_until_woken_after, wakeup};
+use timer::TimerWatcher;
 use uvio::UvIoFactory;
 use uvll;
 
@@ -31,8 +33,8 @@ use uvll;
 /// Generic functions related to dealing with sockaddr things
 ////////////////////////////////////////////////////////////////////////////////
 
-pub fn htons(u: u16) -> u16 { intrinsics::to_be16(u as i16) as u16 }
-pub fn ntohs(u: u16) -> u16 { intrinsics::from_be16(u as i16) as u16 }
+pub fn htons(u: u16) -> u16 { mem::to_be16(u) }
+pub fn ntohs(u: u16) -> u16 { mem::from_be16(u) }
 
 pub fn sockaddr_to_addr(storage: &libc::sockaddr_storage,
                         len: uint) -> ip::SocketAddr {
@@ -78,7 +80,7 @@ pub fn sockaddr_to_addr(storage: &libc::sockaddr_storage,
 
 fn addr_to_sockaddr(addr: ip::SocketAddr) -> (libc::sockaddr_storage, uint) {
     unsafe {
-        let mut storage: libc::sockaddr_storage = intrinsics::init();
+        let mut storage: libc::sockaddr_storage = mem::init();
         let len = match addr.ip {
             ip::Ipv4Addr(a, b, c, d) => {
                 let storage: &mut libc::sockaddr_in =
@@ -132,7 +134,7 @@ fn socket_name(sk: SocketNameKind,
     };
 
     // Allocate a sockaddr_storage since we don't know if it's ipv4 or ipv6
-    let mut sockaddr: libc::sockaddr_storage = unsafe { intrinsics::init() };
+    let mut sockaddr: libc::sockaddr_storage = unsafe { mem::init() };
     let mut namelen = mem::size_of::<libc::sockaddr_storage>() as c_int;
 
     let sockaddr_p = &mut sockaddr as *mut libc::sockaddr_storage;
@@ -141,6 +143,190 @@ fn socket_name(sk: SocketNameKind,
     } {
         0 => Ok(sockaddr_to_addr(&sockaddr, namelen as uint)),
         n => Err(uv_error_to_io_error(UvError(n)))
+    }
+}
+////////////////////////////////////////////////////////////////////////////////
+// Helpers for handling timeouts, shared for pipes/tcp
+////////////////////////////////////////////////////////////////////////////////
+
+pub struct ConnectCtx {
+    pub status: c_int,
+    pub task: Option<BlockedTask>,
+    pub timer: Option<~TimerWatcher>,
+}
+
+pub struct AcceptTimeout {
+    timer: Option<TimerWatcher>,
+    timeout_tx: Option<Sender<()>>,
+    timeout_rx: Option<Receiver<()>>,
+}
+
+impl ConnectCtx {
+    pub fn connect<T>(
+        mut self, obj: T, timeout: Option<u64>, io: &mut UvIoFactory,
+        f: |&Request, &T, uvll::uv_connect_cb| -> libc::c_int
+    ) -> Result<T, UvError> {
+        let mut req = Request::new(uvll::UV_CONNECT);
+        let r = f(&req, &obj, connect_cb);
+        return match r {
+            0 => {
+                req.defuse(); // uv callback now owns this request
+                match timeout {
+                    Some(t) => {
+                        let mut timer = TimerWatcher::new(io);
+                        timer.start(timer_cb, t, 0);
+                        self.timer = Some(timer);
+                    }
+                    None => {}
+                }
+                wait_until_woken_after(&mut self.task, &io.loop_, || {
+                    let data = &self as *_;
+                    match self.timer {
+                        Some(ref mut timer) => unsafe { timer.set_data(data) },
+                        None => {}
+                    }
+                    req.set_data(data);
+                });
+                // Make sure an erroneously fired callback doesn't have access
+                // to the context any more.
+                req.set_data(0 as *int);
+
+                // If we failed because of a timeout, drop the TcpWatcher as
+                // soon as possible because it's data is now set to null and we
+                // want to cancel the callback ASAP.
+                match self.status {
+                    0 => Ok(obj),
+                    n => { drop(obj); Err(UvError(n)) }
+                }
+            }
+            n => Err(UvError(n))
+        };
+
+        extern fn timer_cb(handle: *uvll::uv_timer_t) {
+            // Don't close the corresponding tcp request, just wake up the task
+            // and let RAII take care of the pending watcher.
+            let cx: &mut ConnectCtx = unsafe {
+                &mut *(uvll::get_data_for_uv_handle(handle) as *mut ConnectCtx)
+            };
+            cx.status = uvll::ECANCELED;
+            wakeup(&mut cx.task);
+        }
+
+        extern fn connect_cb(req: *uvll::uv_connect_t, status: c_int) {
+            // This callback can be invoked with ECANCELED if the watcher is
+            // closed by the timeout callback. In that case we just want to free
+            // the request and be along our merry way.
+            let req = Request::wrap(req);
+            if status == uvll::ECANCELED { return }
+
+            // Apparently on windows when the handle is closed this callback may
+            // not be invoked with ECANCELED but rather another error code.
+            // Either ways, if the data is null, then our timeout has expired
+            // and there's nothing we can do.
+            let data = unsafe { uvll::get_data_for_req(req.handle) };
+            if data.is_null() { return }
+
+            let cx: &mut ConnectCtx = unsafe { &mut *(data as *mut ConnectCtx) };
+            cx.status = status;
+            match cx.timer {
+                Some(ref mut t) => t.stop(),
+                None => {}
+            }
+            // Note that the timer callback doesn't cancel the connect request
+            // (that's the job of uv_close()), so it's possible for this
+            // callback to get triggered after the timeout callback fires, but
+            // before the task wakes up. In that case, we did indeed
+            // successfully connect, but we don't need to wake someone up. We
+            // updated the status above (correctly so), and the task will pick
+            // up on this when it wakes up.
+            if cx.task.is_some() {
+                wakeup(&mut cx.task);
+            }
+        }
+    }
+}
+
+impl AcceptTimeout {
+    pub fn new() -> AcceptTimeout {
+        AcceptTimeout { timer: None, timeout_tx: None, timeout_rx: None }
+    }
+
+    pub fn accept<T: Send>(&mut self, c: &Receiver<IoResult<T>>) -> IoResult<T> {
+        match self.timeout_rx {
+            None => c.recv(),
+            Some(ref rx) => {
+                use std::comm::Select;
+
+                // Poll the incoming channel first (don't rely on the order of
+                // select just yet). If someone's pending then we should return
+                // them immediately.
+                match c.try_recv() {
+                    Ok(data) => return data,
+                    Err(..) => {}
+                }
+
+                // Use select to figure out which channel gets ready first. We
+                // do some custom handling of select to ensure that we never
+                // actually drain the timeout channel (we'll keep seeing the
+                // timeout message in the future).
+                let s = Select::new();
+                let mut timeout = s.handle(rx);
+                let mut data = s.handle(c);
+                unsafe {
+                    timeout.add();
+                    data.add();
+                }
+                if s.wait() == timeout.id() {
+                    Err(uv_error_to_io_error(UvError(uvll::ECANCELED)))
+                } else {
+                    c.recv()
+                }
+            }
+        }
+    }
+
+    pub fn clear(&mut self) {
+        // Clear any previous timeout by dropping the timer and transmission
+        // channels
+        drop((self.timer.take(),
+              self.timeout_tx.take(),
+              self.timeout_rx.take()))
+    }
+
+    pub fn set_timeout<U, T: UvHandle<U> + HomingIO>(
+        &mut self, ms: u64, t: &mut T
+    ) {
+        // If we have a timeout, lazily initialize the timer which will be used
+        // to fire when the timeout runs out.
+        if self.timer.is_none() {
+            let _m = t.fire_homing_missile();
+            let loop_ = Loop::wrap(unsafe {
+                uvll::get_loop_for_uv_handle(t.uv_handle())
+            });
+            let mut timer = TimerWatcher::new_home(&loop_, t.home().clone());
+            unsafe {
+                timer.set_data(self as *mut _ as *AcceptTimeout);
+            }
+            self.timer = Some(timer);
+        }
+
+        // Once we've got a timer, stop any previous timeout, reset it for the
+        // current one, and install some new channels to send/receive data on
+        let timer = self.timer.get_mut_ref();
+        timer.stop();
+        timer.start(timer_cb, ms, 0);
+        let (tx, rx) = channel();
+        self.timeout_tx = Some(tx);
+        self.timeout_rx = Some(rx);
+
+        extern fn timer_cb(timer: *uvll::uv_timer_t) {
+            let acceptor: &mut AcceptTimeout = unsafe {
+                &mut *(uvll::get_data_for_uv_handle(timer) as *mut AcceptTimeout)
+            };
+            // This send can never fail because if this timer is active then the
+            // receiving channel is guaranteed to be alive
+            acceptor.timeout_tx.get_ref().send(());
+        }
     }
 }
 
@@ -152,18 +338,27 @@ pub struct TcpWatcher {
     handle: *uvll::uv_tcp_t,
     stream: StreamWatcher,
     home: HomeHandle,
+    refcount: Refcount,
+
+    // libuv can't support concurrent reads and concurrent writes of the same
+    // stream object, so we use these access guards in order to arbitrate among
+    // multiple concurrent reads and writes. Note that libuv *can* read and
+    // write simultaneously, it just can't read and read simultaneously.
+    read_access: Access,
+    write_access: Access,
 }
 
 pub struct TcpListener {
     home: HomeHandle,
     handle: *uvll::uv_pipe_t,
-    priv closing_task: Option<BlockedTask>,
-    priv outgoing: Chan<Result<~rtio::RtioTcpStream, IoError>>,
-    priv incoming: Port<Result<~rtio::RtioTcpStream, IoError>>,
+    closing_task: Option<BlockedTask>,
+    outgoing: Sender<Result<~rtio::RtioTcpStream:Send, IoError>>,
+    incoming: Receiver<Result<~rtio::RtioTcpStream:Send, IoError>>,
 }
 
 pub struct TcpAcceptor {
     listener: ~TcpListener,
+    timeout: AcceptTimeout,
 }
 
 // TCP watchers (clients/streams)
@@ -183,45 +378,22 @@ impl TcpWatcher {
             home: home,
             handle: handle,
             stream: StreamWatcher::new(handle),
+            refcount: Refcount::new(),
+            read_access: Access::new(),
+            write_access: Access::new(),
         }
     }
 
-    pub fn connect(io: &mut UvIoFactory, address: ip::SocketAddr)
-        -> Result<TcpWatcher, UvError>
-    {
-        struct Ctx { status: c_int, task: Option<BlockedTask> }
-
+    pub fn connect(io: &mut UvIoFactory,
+                   address: ip::SocketAddr,
+                   timeout: Option<u64>) -> Result<TcpWatcher, UvError> {
         let tcp = TcpWatcher::new(io);
+        let cx = ConnectCtx { status: -1, task: None, timer: None };
         let (addr, _len) = addr_to_sockaddr(address);
-        let mut req = Request::new(uvll::UV_CONNECT);
-        let result = unsafe {
-            let addr_p = &addr as *libc::sockaddr_storage;
-            uvll::uv_tcp_connect(req.handle, tcp.handle,
-                                 addr_p as *libc::sockaddr,
-                                 connect_cb)
-        };
-        return match result {
-            0 => {
-                req.defuse(); // uv callback now owns this request
-                let mut cx = Ctx { status: 0, task: None };
-                wait_until_woken_after(&mut cx.task, || {
-                    req.set_data(&cx);
-                });
-                match cx.status {
-                    0 => Ok(tcp),
-                    n => Err(UvError(n)),
-                }
-            }
-            n => Err(UvError(n))
-        };
-
-        extern fn connect_cb(req: *uvll::uv_connect_t, status: c_int) {
-            let req = Request::wrap(req);
-            assert!(status != uvll::ECANCELED);
-            let cx: &mut Ctx = unsafe { req.get_data() };
-            cx.status = status;
-            wakeup(&mut cx.task);
-        }
+        let addr_p = &addr as *_ as *libc::sockaddr;
+        cx.connect(tcp, timeout, io, |req, tcp, cb| {
+            unsafe { uvll::uv_tcp_connect(req.handle, tcp.handle, addr_p, cb) }
+        })
     }
 }
 
@@ -238,12 +410,14 @@ impl rtio::RtioSocket for TcpWatcher {
 
 impl rtio::RtioTcpStream for TcpWatcher {
     fn read(&mut self, buf: &mut [u8]) -> Result<uint, IoError> {
-        let _m = self.fire_homing_missile();
+        let m = self.fire_homing_missile();
+        let _g = self.read_access.grant(m);
         self.stream.read(buf).map_err(uv_error_to_io_error)
     }
 
     fn write(&mut self, buf: &[u8]) -> Result<(), IoError> {
-        let _m = self.fire_homing_missile();
+        let m = self.fire_homing_missile();
+        let _g = self.write_access.grant(m);
         self.stream.write(buf).map_err(uv_error_to_io_error)
     }
 
@@ -280,6 +454,49 @@ impl rtio::RtioTcpStream for TcpWatcher {
             uvll::uv_tcp_keepalive(self.handle, 0 as c_int, 0 as c_uint)
         })
     }
+
+    fn clone(&self) -> ~rtio::RtioTcpStream:Send {
+        ~TcpWatcher {
+            handle: self.handle,
+            stream: StreamWatcher::new(self.handle),
+            home: self.home.clone(),
+            refcount: self.refcount.clone(),
+            write_access: self.write_access.clone(),
+            read_access: self.read_access.clone(),
+        } as ~rtio::RtioTcpStream:Send
+    }
+
+    fn close_write(&mut self) -> Result<(), IoError> {
+        struct Ctx {
+            slot: Option<BlockedTask>,
+            status: c_int,
+        }
+        let mut req = Request::new(uvll::UV_SHUTDOWN);
+
+        return match unsafe {
+            uvll::uv_shutdown(req.handle, self.handle, shutdown_cb)
+        } {
+            0 => {
+                req.defuse(); // uv callback now owns this request
+                let mut cx = Ctx { slot: None, status: 0 };
+
+                wait_until_woken_after(&mut cx.slot, &self.uv_loop(), || {
+                    req.set_data(&cx);
+                });
+
+                status_to_io_result(cx.status)
+            }
+            n => Err(uv_error_to_io_error(UvError(n)))
+        };
+
+        extern fn shutdown_cb(req: *uvll::uv_shutdown_t, status: libc::c_int) {
+            let req = Request::wrap(req);
+            assert!(status != uvll::ECANCELED);
+            let cx: &mut Ctx = unsafe { req.get_data() };
+            cx.status = status;
+            wakeup(&mut cx.slot);
+        }
+    }
 }
 
 impl UvHandle<uvll::uv_tcp_t> for TcpWatcher {
@@ -289,7 +506,9 @@ impl UvHandle<uvll::uv_tcp_t> for TcpWatcher {
 impl Drop for TcpWatcher {
     fn drop(&mut self) {
         let _m = self.fire_homing_missile();
-        self.close();
+        if self.refcount.decrement() {
+            self.close();
+        }
     }
 }
 
@@ -302,13 +521,13 @@ impl TcpListener {
         assert_eq!(unsafe {
             uvll::uv_tcp_init(io.uv_loop(), handle)
         }, 0);
-        let (port, chan) = Chan::new();
+        let (tx, rx) = channel();
         let l = ~TcpListener {
             home: io.make_handle(),
             handle: handle,
             closing_task: None,
-            outgoing: chan,
-            incoming: port,
+            outgoing: tx,
+            incoming: rx,
         };
         let (addr, _len) = addr_to_sockaddr(address);
         let res = unsafe {
@@ -338,14 +557,17 @@ impl rtio::RtioSocket for TcpListener {
 }
 
 impl rtio::RtioTcpListener for TcpListener {
-    fn listen(~self) -> Result<~rtio::RtioTcpAcceptor, IoError> {
+    fn listen(~self) -> Result<~rtio::RtioTcpAcceptor:Send, IoError> {
         // create the acceptor object from ourselves
-        let mut acceptor = ~TcpAcceptor { listener: self };
+        let mut acceptor = ~TcpAcceptor {
+            listener: self,
+            timeout: AcceptTimeout::new(),
+        };
 
         let _m = acceptor.fire_homing_missile();
         // FIXME: the 128 backlog should be configurable
         match unsafe { uvll::uv_listen(acceptor.listener.handle, 128, listen_cb) } {
-            0 => Ok(acceptor as ~rtio::RtioTcpAcceptor),
+            0 => Ok(acceptor as ~rtio::RtioTcpAcceptor:Send),
             n => Err(uv_error_to_io_error(UvError(n))),
         }
     }
@@ -361,7 +583,7 @@ extern fn listen_cb(server: *uvll::uv_stream_t, status: c_int) {
             });
             let client = TcpWatcher::new_home(&loop_, tcp.home().clone());
             assert_eq!(unsafe { uvll::uv_accept(server, client.handle) }, 0);
-            Ok(~client as ~rtio::RtioTcpStream)
+            Ok(~client as ~rtio::RtioTcpStream:Send)
         }
         n => Err(uv_error_to_io_error(UvError(n)))
     };
@@ -389,8 +611,8 @@ impl rtio::RtioSocket for TcpAcceptor {
 }
 
 impl rtio::RtioTcpAcceptor for TcpAcceptor {
-    fn accept(&mut self) -> Result<~rtio::RtioTcpStream, IoError> {
-        self.listener.incoming.recv()
+    fn accept(&mut self) -> Result<~rtio::RtioTcpStream:Send, IoError> {
+        self.timeout.accept(&self.listener.incoming)
     }
 
     fn accept_simultaneously(&mut self) -> Result<(), IoError> {
@@ -406,6 +628,13 @@ impl rtio::RtioTcpAcceptor for TcpAcceptor {
             uvll::uv_tcp_simultaneous_accepts(self.listener.handle, 0)
         })
     }
+
+    fn set_timeout(&mut self, ms: Option<u64>) {
+        match ms {
+            None => self.timeout.clear(),
+            Some(ms) => self.timeout.set_timeout(ms, &mut *self.listener),
+        }
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -415,6 +644,11 @@ impl rtio::RtioTcpAcceptor for TcpAcceptor {
 pub struct UdpWatcher {
     handle: *uvll::uv_udp_t,
     home: HomeHandle,
+
+    // See above for what these fields are
+    refcount: Refcount,
+    read_access: Access,
+    write_access: Access,
 }
 
 impl UdpWatcher {
@@ -423,6 +657,9 @@ impl UdpWatcher {
         let udp = UdpWatcher {
             handle: unsafe { uvll::malloc_handle(uvll::UV_UDP) },
             home: io.make_handle(),
+            refcount: Refcount::new(),
+            read_access: Access::new(),
+            write_access: Access::new(),
         };
         assert_eq!(unsafe {
             uvll::uv_udp_init(io.uv_loop(), udp.handle)
@@ -463,7 +700,9 @@ impl rtio::RtioUdpSocket for UdpWatcher {
             buf: Option<Buf>,
             result: Option<(ssize_t, Option<ip::SocketAddr>)>,
         }
-        let _m = self.fire_homing_missile();
+        let loop_ = self.uv_loop();
+        let m = self.fire_homing_missile();
+        let _g = self.read_access.grant(m);
 
         let a = match unsafe {
             uvll::uv_udp_recv_start(self.handle, alloc_cb, recv_cb)
@@ -474,8 +713,9 @@ impl rtio::RtioUdpSocket for UdpWatcher {
                     buf: Some(slice_to_uv_buf(buf)),
                     result: None,
                 };
-                wait_until_woken_after(&mut cx.task, || {
-                    unsafe { uvll::set_data_for_uv_handle(self.handle, &cx) }
+                let handle = self.handle;
+                wait_until_woken_after(&mut cx.task, &loop_, || {
+                    unsafe { uvll::set_data_for_uv_handle(handle, &cx) }
                 });
                 match cx.result.take_unwrap() {
                     (n, _) if n < 0 =>
@@ -533,7 +773,9 @@ impl rtio::RtioUdpSocket for UdpWatcher {
     fn sendto(&mut self, buf: &[u8], dst: ip::SocketAddr) -> Result<(), IoError> {
         struct Ctx { task: Option<BlockedTask>, result: c_int }
 
-        let _m = self.fire_homing_missile();
+        let m = self.fire_homing_missile();
+        let loop_ = self.uv_loop();
+        let _g = self.write_access.grant(m);
 
         let mut req = Request::new(uvll::UV_UDP_SEND);
         let buf = slice_to_uv_buf(buf);
@@ -548,7 +790,7 @@ impl rtio::RtioUdpSocket for UdpWatcher {
             0 => {
                 req.defuse(); // uv callback now owns this request
                 let mut cx = Ctx { task: None, result: 0 };
-                wait_until_woken_after(&mut cx.task, || {
+                wait_until_woken_after(&mut cx.task, &loop_, || {
                     req.set_data(&cx);
                 });
                 match cx.result {
@@ -636,13 +878,25 @@ impl rtio::RtioUdpSocket for UdpWatcher {
                                        0 as c_int)
         })
     }
+
+    fn clone(&self) -> ~rtio::RtioUdpSocket:Send {
+        ~UdpWatcher {
+            handle: self.handle,
+            home: self.home.clone(),
+            refcount: self.refcount.clone(),
+            write_access: self.write_access.clone(),
+            read_access: self.read_access.clone(),
+        } as ~rtio::RtioUdpSocket:Send
+    }
 }
 
 impl Drop for UdpWatcher {
     fn drop(&mut self) {
         // Send ourselves home to close this handle (blocking while doing so).
         let _m = self.fire_homing_missile();
-        self.close();
+        if self.refcount.decrement() {
+            self.close();
+        }
     }
 }
 
@@ -657,17 +911,17 @@ mod test {
 
     #[test]
     fn connect_close_ip4() {
-        match TcpWatcher::connect(local_loop(), next_test_ip4()) {
+        match TcpWatcher::connect(local_loop(), next_test_ip4(), None) {
             Ok(..) => fail!(),
-            Err(e) => assert_eq!(e.name(), ~"ECONNREFUSED"),
+            Err(e) => assert_eq!(e.name(), "ECONNREFUSED".to_owned()),
         }
     }
 
     #[test]
     fn connect_close_ip6() {
-        match TcpWatcher::connect(local_loop(), next_test_ip6()) {
+        match TcpWatcher::connect(local_loop(), next_test_ip6(), None) {
             Ok(..) => fail!(),
-            Err(e) => assert_eq!(e.name(), ~"ECONNREFUSED"),
+            Err(e) => assert_eq!(e.name(), "ECONNREFUSED".to_owned()),
         }
     }
 
@@ -689,7 +943,7 @@ mod test {
 
     #[test]
     fn listen_ip4() {
-        let (port, chan) = Chan::new();
+        let (tx, rx) = channel();
         let addr = next_test_ip4();
 
         spawn(proc() {
@@ -699,7 +953,7 @@ mod test {
             let mut w = match w.listen() {
                 Ok(w) => w, Err(e) => fail!("{:?}", e),
             };
-            chan.send(());
+            tx.send(());
             match w.accept() {
                 Ok(mut stream) => {
                     let mut buf = [0u8, ..10];
@@ -707,15 +961,15 @@ mod test {
                         Ok(10) => {} e => fail!("{:?}", e),
                     }
                     for i in range(0, 10u8) {
-                        assert_eq!(buf[i], i + 1);
+                        assert_eq!(buf[i as uint], i + 1);
                     }
                 }
                 Err(e) => fail!("{:?}", e)
             }
         });
 
-        port.recv();
-        let mut w = match TcpWatcher::connect(local_loop(), addr) {
+        rx.recv();
+        let mut w = match TcpWatcher::connect(local_loop(), addr, None) {
             Ok(w) => w, Err(e) => fail!("{:?}", e)
         };
         match w.write([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
@@ -725,7 +979,7 @@ mod test {
 
     #[test]
     fn listen_ip6() {
-        let (port, chan) = Chan::new();
+        let (tx, rx) = channel();
         let addr = next_test_ip6();
 
         spawn(proc() {
@@ -735,7 +989,7 @@ mod test {
             let mut w = match w.listen() {
                 Ok(w) => w, Err(e) => fail!("{:?}", e),
             };
-            chan.send(());
+            tx.send(());
             match w.accept() {
                 Ok(mut stream) => {
                     let mut buf = [0u8, ..10];
@@ -743,15 +997,15 @@ mod test {
                         Ok(10) => {} e => fail!("{:?}", e),
                     }
                     for i in range(0, 10u8) {
-                        assert_eq!(buf[i], i + 1);
+                        assert_eq!(buf[i as uint], i + 1);
                     }
                 }
                 Err(e) => fail!("{:?}", e)
             }
         });
 
-        port.recv();
-        let mut w = match TcpWatcher::connect(local_loop(), addr) {
+        rx.recv();
+        let mut w = match TcpWatcher::connect(local_loop(), addr, None) {
             Ok(w) => w, Err(e) => fail!("{:?}", e)
         };
         match w.write([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
@@ -761,28 +1015,28 @@ mod test {
 
     #[test]
     fn udp_recv_ip4() {
-        let (port, chan) = Chan::new();
+        let (tx, rx) = channel();
         let client = next_test_ip4();
         let server = next_test_ip4();
 
         spawn(proc() {
             match UdpWatcher::bind(local_loop(), server) {
                 Ok(mut w) => {
-                    chan.send(());
+                    tx.send(());
                     let mut buf = [0u8, ..10];
                     match w.recvfrom(buf) {
                         Ok((10, addr)) => assert_eq!(addr, client),
                         e => fail!("{:?}", e),
                     }
                     for i in range(0, 10u8) {
-                        assert_eq!(buf[i], i + 1);
+                        assert_eq!(buf[i as uint], i + 1);
                     }
                 }
                 Err(e) => fail!("{:?}", e)
             }
         });
 
-        port.recv();
+        rx.recv();
         let mut w = match UdpWatcher::bind(local_loop(), client) {
             Ok(w) => w, Err(e) => fail!("{:?}", e)
         };
@@ -793,28 +1047,28 @@ mod test {
 
     #[test]
     fn udp_recv_ip6() {
-        let (port, chan) = Chan::new();
+        let (tx, rx) = channel();
         let client = next_test_ip6();
         let server = next_test_ip6();
 
         spawn(proc() {
             match UdpWatcher::bind(local_loop(), server) {
                 Ok(mut w) => {
-                    chan.send(());
+                    tx.send(());
                     let mut buf = [0u8, ..10];
                     match w.recvfrom(buf) {
                         Ok((10, addr)) => assert_eq!(addr, client),
                         e => fail!("{:?}", e),
                     }
                     for i in range(0, 10u8) {
-                        assert_eq!(buf[i], i + 1);
+                        assert_eq!(buf[i as uint], i + 1);
                     }
                 }
                 Err(e) => fail!("{:?}", e)
             }
         });
 
-        port.recv();
+        rx.recv();
         let mut w = match UdpWatcher::bind(local_loop(), client) {
             Ok(w) => w, Err(e) => fail!("{:?}", e)
         };
@@ -827,12 +1081,12 @@ mod test {
     fn test_read_read_read() {
         let addr = next_test_ip4();
         static MAX: uint = 5000;
-        let (port, chan) = Chan::new();
+        let (tx, rx) = channel();
 
         spawn(proc() {
             let listener = TcpListener::bind(local_loop(), addr).unwrap();
             let mut acceptor = listener.listen().unwrap();
-            chan.send(());
+            tx.send(());
             let mut stream = acceptor.accept().unwrap();
             let buf = [1, .. 2048];
             let mut total_bytes_written = 0;
@@ -843,8 +1097,8 @@ mod test {
             }
         });
 
-        port.recv();
-        let mut stream = TcpWatcher::connect(local_loop(), addr).unwrap();
+        rx.recv();
+        let mut stream = TcpWatcher::connect(local_loop(), addr, None).unwrap();
         let mut buf = [0, .. 2048];
         let mut total_bytes_read = 0;
         while total_bytes_read < MAX {
@@ -862,17 +1116,17 @@ mod test {
     fn test_udp_twice() {
         let server_addr = next_test_ip4();
         let client_addr = next_test_ip4();
-        let (port, chan) = Chan::new();
+        let (tx, rx) = channel();
 
         spawn(proc() {
             let mut client = UdpWatcher::bind(local_loop(), client_addr).unwrap();
-            port.recv();
+            rx.recv();
             assert!(client.sendto([1], server_addr).is_ok());
             assert!(client.sendto([2], server_addr).is_ok());
         });
 
         let mut server = UdpWatcher::bind(local_loop(), server_addr).unwrap();
-        chan.send(());
+        tx.send(());
         let mut buf1 = [0];
         let mut buf2 = [0];
         let (nread1, src1) = server.recvfrom(buf1).unwrap();
@@ -893,16 +1147,16 @@ mod test {
         let client_in_addr = next_test_ip4();
         static MAX: uint = 500_000;
 
-        let (p1, c1) = Chan::new();
-        let (p2, c2) = Chan::new();
+        let (tx1, rx1) = channel::<()>();
+        let (tx2, rx2) = channel::<()>();
 
         spawn(proc() {
             let l = local_loop();
             let mut server_out = UdpWatcher::bind(l, server_out_addr).unwrap();
             let mut server_in = UdpWatcher::bind(l, server_in_addr).unwrap();
-            let (port, chan) = (p1, c2);
-            chan.send(());
-            port.recv();
+            let (tx, rx) = (tx2, rx1);
+            tx.send(());
+            rx.recv();
             let msg = [1, .. 2048];
             let mut total_bytes_sent = 0;
             let mut buf = [1];
@@ -923,9 +1177,9 @@ mod test {
         let l = local_loop();
         let mut client_out = UdpWatcher::bind(l, client_out_addr).unwrap();
         let mut client_in = UdpWatcher::bind(l, client_in_addr).unwrap();
-        let (port, chan) = (p2, c1);
-        port.recv();
-        chan.send(());
+        let (tx, rx) = (tx1, rx2);
+        rx.recv();
+        tx.send(());
         let mut total_bytes_recv = 0;
         let mut buf = [0, .. 2048];
         while total_bytes_recv < MAX {
@@ -948,23 +1202,23 @@ mod test {
     #[test]
     fn test_read_and_block() {
         let addr = next_test_ip4();
-        let (port, chan) = Chan::<Port<()>>::new();
+        let (tx, rx) = channel::<Receiver<()>>();
 
         spawn(proc() {
-            let port2 = port.recv();
-            let mut stream = TcpWatcher::connect(local_loop(), addr).unwrap();
+            let rx = rx.recv();
+            let mut stream = TcpWatcher::connect(local_loop(), addr, None).unwrap();
             stream.write([0, 1, 2, 3, 4, 5, 6, 7]).unwrap();
             stream.write([0, 1, 2, 3, 4, 5, 6, 7]).unwrap();
-            port2.recv();
+            rx.recv();
             stream.write([0, 1, 2, 3, 4, 5, 6, 7]).unwrap();
             stream.write([0, 1, 2, 3, 4, 5, 6, 7]).unwrap();
-            port2.recv();
+            rx.recv();
         });
 
         let listener = TcpListener::bind(local_loop(), addr).unwrap();
         let mut acceptor = listener.listen().unwrap();
-        let (port2, chan2) = Chan::new();
-        chan.send(port2);
+        let (tx2, rx2) = channel();
+        tx.send(rx2);
         let mut stream = acceptor.accept().unwrap();
         let mut buf = [0, .. 2048];
 
@@ -981,7 +1235,7 @@ mod test {
             }
             reads += 1;
 
-            chan2.try_send(());
+            let _ = tx2.send_opt(());
         }
 
         // Make sure we had multiple reads
@@ -1004,9 +1258,9 @@ mod test {
             }
         });
 
-        let mut stream = TcpWatcher::connect(local_loop(), addr);
+        let mut stream = TcpWatcher::connect(local_loop(), addr, None);
         while stream.is_err() {
-            stream = TcpWatcher::connect(local_loop(), addr);
+            stream = TcpWatcher::connect(local_loop(), addr, None);
         }
         stream.unwrap().write([0, 1, 2, 3, 4, 5, 6, 7]).unwrap();
     }
@@ -1021,17 +1275,17 @@ mod test {
 
     #[should_fail] #[test]
     fn tcp_stream_fail_cleanup() {
-        let (port, chan) = Chan::new();
+        let (tx, rx) = channel();
         let addr = next_test_ip4();
 
         spawn(proc() {
             let w = TcpListener::bind(local_loop(), addr).unwrap();
             let mut w = w.listen().unwrap();
-            chan.send(());
+            tx.send(());
             drop(w.accept().unwrap());
         });
-        port.recv();
-        let _w = TcpWatcher::connect(local_loop(), addr).unwrap();
+        rx.recv();
+        let _w = TcpWatcher::connect(local_loop(), addr, None).unwrap();
         fail!();
     }
 
@@ -1045,17 +1299,17 @@ mod test {
     #[should_fail] #[test]
     fn udp_fail_other_task() {
         let addr = next_test_ip4();
-        let (port, chan) = Chan::new();
+        let (tx, rx) = channel();
 
         // force the handle to be created on a different scheduler, failure in
         // the original task will force a homing operation back to this
         // scheduler.
         spawn(proc() {
             let w = UdpWatcher::bind(local_loop(), addr).unwrap();
-            chan.send(w);
+            tx.send(w);
         });
 
-        let _w = port.recv();
+        let _w = rx.recv();
         fail!();
     }
 }

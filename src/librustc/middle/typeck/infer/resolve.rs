@@ -36,7 +36,7 @@
 // therefore cannot sensibly be mapped to any particular result.  By
 // default, we will leave such variables as is (so you will get back a
 // variable in your result).  The options force_* will cause the
-// resolution to fail in this case intead, except for the case of
+// resolution to fail in this case instead, except for the case of
 // integral variables, which resolve to `int` if forced.
 //
 // # resolve_all and force_all
@@ -52,7 +52,7 @@ use middle::ty::{type_is_bot, IntType, UintType};
 use middle::ty;
 use middle::ty_fold;
 use middle::typeck::infer::{Bounds, cyclic_ty, fixup_err, fres, InferCtxt};
-use middle::typeck::infer::{region_var_bound_by_region_var, unresolved_ty};
+use middle::typeck::infer::unresolved_ty;
 use middle::typeck::infer::to_str::InferStr;
 use middle::typeck::infer::unify::{Root, UnifyInferCtxtMethods};
 use util::common::{indent, indenter};
@@ -64,14 +64,12 @@ pub static resolve_nested_tvar: uint = 0b0000000001;
 pub static resolve_rvar: uint        = 0b0000000010;
 pub static resolve_ivar: uint        = 0b0000000100;
 pub static resolve_fvar: uint        = 0b0000001000;
-pub static resolve_fnvar: uint       = 0b0000010000;
-pub static resolve_all: uint         = 0b0000011111;
+pub static resolve_all: uint         = 0b0000001111;
 pub static force_tvar: uint          = 0b0000100000;
 pub static force_rvar: uint          = 0b0001000000;
 pub static force_ivar: uint          = 0b0010000000;
 pub static force_fvar: uint          = 0b0100000000;
-pub static force_fnvar: uint         = 0b1000000000;
-pub static force_all: uint           = 0b1111100000;
+pub static force_all: uint           = 0b0111100000;
 
 pub static not_regions: uint         = !(force_rvar | resolve_rvar);
 
@@ -79,26 +77,26 @@ pub static try_resolve_tvar_shallow: uint = 0;
 pub static resolve_and_force_all_but_regions: uint =
     (resolve_all | force_all) & not_regions;
 
-pub struct ResolveState {
-    infcx: @InferCtxt,
+pub struct ResolveState<'a> {
+    infcx: &'a InferCtxt<'a>,
     modes: uint,
     err: Option<fixup_err>,
-    v_seen: ~[TyVid],
+    v_seen: Vec<TyVid> ,
     type_depth: uint
 }
 
-pub fn resolver(infcx: @InferCtxt, modes: uint) -> ResolveState {
+pub fn resolver<'a>(infcx: &'a InferCtxt, modes: uint) -> ResolveState<'a> {
     ResolveState {
         infcx: infcx,
         modes: modes,
         err: None,
-        v_seen: ~[],
+        v_seen: Vec::new(),
         type_depth: 0
     }
 }
 
-impl ty_fold::TypeFolder for ResolveState {
-    fn tcx(&self) -> ty::ctxt {
+impl<'a> ty_fold::TypeFolder for ResolveState<'a> {
+    fn tcx<'a>(&'a self) -> &'a ty::ctxt {
         self.infcx.tcx
     }
 
@@ -111,7 +109,7 @@ impl ty_fold::TypeFolder for ResolveState {
     }
 }
 
-impl ResolveState {
+impl<'a> ResolveState<'a> {
     pub fn should(&mut self, mode: uint) -> bool {
         (self.modes & mode) == mode
     }
@@ -202,15 +200,6 @@ impl ResolveState {
             return ty::ReInfer(ty::ReVar(rid));
         }
         self.infcx.region_vars.resolve_var(rid)
-    }
-
-    pub fn assert_not_rvar(&mut self, rid: RegionVid, r: ty::Region) {
-        match r {
-          ty::ReInfer(ty::ReVar(rid2)) => {
-            self.err = Some(region_var_bound_by_region_var(rid, rid2));
-          }
-          _ => { }
-        }
     }
 
     pub fn resolve_ty_var(&mut self, vid: TyVid) -> ty::t {

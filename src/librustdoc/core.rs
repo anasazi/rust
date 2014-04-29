@@ -14,93 +14,104 @@ use rustc::metadata::creader::Loader;
 use rustc::middle::privacy;
 
 use syntax::ast;
-use syntax::diagnostic;
 use syntax::parse::token;
-use syntax::parse;
 use syntax;
 
 use std::cell::RefCell;
 use std::os;
 use std::local_data;
-use std::hashmap::{HashSet};
+use collections::HashSet;
 
 use visit_ast::RustdocVisitor;
 use clean;
 use clean::Clean;
 
+pub enum MaybeTyped {
+    Typed(middle::ty::ctxt),
+    NotTyped(driver::session::Session)
+}
+
 pub struct DocContext {
-    crate: ast::Crate,
-    tycx: Option<middle::ty::ctxt>,
-    sess: driver::session::Session
+    pub krate: ast::Crate,
+    pub maybe_typed: MaybeTyped
+}
+
+impl DocContext {
+    pub fn sess<'a>(&'a self) -> &'a driver::session::Session {
+        match self.maybe_typed {
+            Typed(ref tcx) => &tcx.sess,
+            NotTyped(ref sess) => sess
+        }
+    }
 }
 
 pub struct CrateAnalysis {
-    exported_items: privacy::ExportedItems,
-    public_items: privacy::PublicItems,
+    pub exported_items: privacy::ExportedItems,
+    pub public_items: privacy::PublicItems,
 }
 
 /// Parses, resolves, and typechecks the given crate
-fn get_ast_and_resolve(cpath: &Path,
-                       libs: HashSet<Path>, cfgs: ~[~str]) -> (DocContext, CrateAnalysis) {
+fn get_ast_and_resolve(cpath: &Path, libs: HashSet<Path>, cfgs: Vec<~str>)
+                       -> (DocContext, CrateAnalysis) {
     use syntax::codemap::dummy_spanned;
     use rustc::driver::driver::{FileInput, build_configuration,
                                 phase_1_parse_input,
                                 phase_2_configure_and_expand,
                                 phase_3_run_analysis_passes};
 
-    let parsesess = parse::new_parse_sess(None);
     let input = FileInput(cpath.clone());
 
-    let sessopts = @driver::session::Options {
-        binary: ~"rustdoc",
-        maybe_sysroot: Some(@os::self_exe_path().unwrap().dir_path()),
-        addl_lib_search_paths: @RefCell::new(libs),
-        outputs: ~[driver::session::OutputDylib],
-        .. (*rustc::driver::session::basic_options()).clone()
+    let sessopts = driver::session::Options {
+        maybe_sysroot: Some(os::self_exe_path().unwrap().dir_path()),
+        addl_lib_search_paths: RefCell::new(libs),
+        crate_types: vec!(driver::session::CrateTypeDylib),
+        ..rustc::driver::session::basic_options().clone()
     };
 
 
-    let diagnostic_handler = syntax::diagnostic::mk_handler(None);
+    let codemap = syntax::codemap::CodeMap::new();
+    let diagnostic_handler = syntax::diagnostic::default_handler();
     let span_diagnostic_handler =
-        syntax::diagnostic::mk_span_handler(diagnostic_handler, parsesess.cm);
+        syntax::diagnostic::mk_span_handler(diagnostic_handler, codemap);
 
     let sess = driver::driver::build_session_(sessopts,
                                               Some(cpath.clone()),
-                                              parsesess.cm,
-                                              @diagnostic::DefaultEmitter,
                                               span_diagnostic_handler);
 
-    let mut cfg = build_configuration(sess);
+    let mut cfg = build_configuration(&sess);
     for cfg_ in cfgs.move_iter() {
         let cfg_ = token::intern_and_get_ident(cfg_);
         cfg.push(@dummy_spanned(ast::MetaWord(cfg_)));
     }
 
-    let crate = phase_1_parse_input(sess, cfg.clone(), &input);
-    let loader = &mut Loader::new(sess);
-    let (crate, ast_map) = phase_2_configure_and_expand(sess, cfg, loader, crate);
+    let krate = phase_1_parse_input(&sess, cfg, &input);
+    let (krate, ast_map) = phase_2_configure_and_expand(&sess, &mut Loader::new(&sess),
+                                                        krate, &from_str("rustdoc").unwrap());
     let driver::driver::CrateAnalysis {
         exported_items, public_items, ty_cx, ..
-    } = phase_3_run_analysis_passes(sess, &crate, ast_map);
+    } = phase_3_run_analysis_passes(sess, &krate, ast_map);
 
-    debug!("crate: {:?}", crate);
-    return (DocContext { crate: crate, tycx: Some(ty_cx), sess: sess },
-            CrateAnalysis {
-                exported_items: exported_items,
-                public_items: public_items,
-            });
+    debug!("crate: {:?}", krate);
+    (DocContext {
+        krate: krate,
+        maybe_typed: Typed(ty_cx)
+    }, CrateAnalysis {
+        exported_items: exported_items,
+        public_items: public_items,
+    })
 }
 
-pub fn run_core (libs: HashSet<Path>, cfgs: ~[~str], path: &Path) -> (clean::Crate, CrateAnalysis) {
+pub fn run_core(libs: HashSet<Path>, cfgs: Vec<~str>, path: &Path)
+                -> (clean::Crate, CrateAnalysis) {
     let (ctxt, analysis) = get_ast_and_resolve(path, libs, cfgs);
     let ctxt = @ctxt;
     local_data::set(super::ctxtkey, ctxt);
 
-    let crate = {
+    let krate = {
         let mut v = RustdocVisitor::new(ctxt, Some(&analysis));
-        v.visit(&ctxt.crate);
+        v.visit(&ctxt.krate);
         v.clean()
     };
 
-    (crate, analysis)
+    (krate, analysis)
 }

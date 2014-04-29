@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -10,6 +10,8 @@
 
 // error-pattern:whatever
 
+#![feature(phase)]
+#[phase(syntax, link)] extern crate log;
 use std::os;
 
 fn main() {

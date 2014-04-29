@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,11 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(managed_boxes)];
+#![feature(managed_boxes)]
 
-// xfail-fast
 
-type compare<T> = 'static |T, T| -> bool;
+type compare<T> = |T, T|: 'static -> bool;
 
 fn test_generic<T:Clone>(expected: T, not_expected: T, eq: compare<T>) {
     let actual: T = if true { expected.clone() } else { not_expected };

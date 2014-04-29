@@ -39,7 +39,7 @@ data through the global _exchange heap_.
 
 While Rust's type system provides the building blocks needed for safe
 and efficient tasks, all of the task functionality itself is implemented
-in the standard and extra libraries, which are still under development
+in the standard and sync libraries, which are still under development
 and do not always present a consistent or complete interface.
 
 For your reference, these are the standard modules involved in Rust
@@ -47,18 +47,43 @@ concurrency at this writing:
 
 * [`std::task`] - All code relating to tasks and task scheduling,
 * [`std::comm`] - The message passing interface,
-* [`extra::comm`] - Additional messaging types based on `std::comm`,
-* [`extra::sync`] - More exotic synchronization tools, including locks,
-* [`extra::arc`] - The Arc (atomically reference counted) type,
-  for safely sharing immutable data,
-* [`extra::future`] - A type representing values that may be computed concurrently and retrieved at a later time.
+* [`sync::DuplexStream`] - An extension of `pipes::stream` that allows both sending and receiving,
+* [`sync::SyncSender`] - An extension of `pipes::stream` that provides synchronous message sending,
+* [`sync::SyncReceiver`] - An extension of `pipes::stream` that acknowledges each message received,
+* [`sync::rendezvous`] - Creates a stream whose channel, upon sending a message, blocks until the
+    message is received.
+* [`sync::Arc`] - The Arc (atomically reference counted) type, for safely sharing immutable data,
+* [`sync::RWArc`] - A dual-mode Arc protected by a reader-writer lock,
+* [`sync::MutexArc`] - An Arc with mutable data protected by a blocking mutex,
+* [`sync::Semaphore`] - A counting, blocking, bounded-waiting semaphore,
+* [`sync::Mutex`] - A blocking, bounded-waiting, mutual exclusion lock with an associated
+    FIFO condition variable,
+* [`sync::RWLock`] - A blocking, no-starvation, reader-writer lock with an associated condvar,
+* [`sync::Barrier`] - A barrier enables multiple tasks to synchronize the beginning
+    of some computation,
+* [`sync::TaskPool`] - A task pool abstraction,
+* [`sync::Future`] - A type encapsulating the result of a computation which may not be complete,
+* [`sync::one`] - A "once initialization" primitive
+* [`sync::mutex`] - A proper mutex implementation regardless of the "flavor of task" which is
+    acquiring the lock.
 
 [`std::task`]: std/task/index.html
 [`std::comm`]: std/comm/index.html
-[`extra::comm`]: extra/comm/index.html
-[`extra::sync`]: extra/sync/index.html
-[`extra::arc`]: extra/arc/index.html
-[`extra::future`]: extra/future/index.html
+[`sync::DuplexStream`]: sync/struct.DuplexStream.html
+[`sync::SyncSender`]: sync/struct.SyncSender.html
+[`sync::SyncReceiver`]: sync/struct.SyncReceiver.html
+[`sync::rendezvous`]: sync/fn.rendezvous.html
+[`sync::Arc`]: sync/struct.Arc.html
+[`sync::RWArc`]: sync/struct.RWArc.html
+[`sync::MutexArc`]: sync/struct.MutexArc.html
+[`sync::Semaphore`]: sync/struct.Semaphore.html
+[`sync::Mutex`]: sync/struct.Mutex.html
+[`sync::RWLock`]: sync/struct.RWLock.html
+[`sync::Barrier`]: sync/struct.Barrier.html
+[`sync::TaskPool`]: sync/struct.TaskPool.html
+[`sync::Future`]: sync/struct.Future.html
+[`sync::one`]: sync/one/index.html
+[`sync::mutex`]: sync/mutex/index.html
 
 # Basics
 
@@ -116,159 +141,155 @@ receiving messages. Pipes are low-level communication building-blocks and so
 come in a variety of forms, each one appropriate for a different use case. In
 what follows, we cover the most commonly used varieties.
 
-The simplest way to create a pipe is to use `Chan::new`
-function to create a `(Port, Chan)` pair. In Rust parlance, a *channel*
-is a sending endpoint of a pipe, and a *port* is the receiving
+The simplest way to create a pipe is to use the `channel`
+function to create a `(Sender, Receiver)` pair. In Rust parlance, a *sender*
+is a sending endpoint of a pipe, and a *receiver* is the receiving
 endpoint. Consider the following example of calculating two results
 concurrently:
 
 ~~~~
 # use std::task::spawn;
 
-let (port, chan): (Port<int>, Chan<int>) = Chan::new();
+let (tx, rx): (Sender<int>, Receiver<int>) = channel();
 
 spawn(proc() {
     let result = some_expensive_computation();
-    chan.send(result);
+    tx.send(result);
 });
 
 some_other_expensive_computation();
-let result = port.recv();
+let result = rx.recv();
 # fn some_expensive_computation() -> int { 42 }
 # fn some_other_expensive_computation() {}
 ~~~~
 
 Let's examine this example in detail. First, the `let` statement creates a
 stream for sending and receiving integers (the left-hand side of the `let`,
-`(chan, port)`, is an example of a *destructuring let*: the pattern separates
+`(tx, rx)`, is an example of a *destructuring let*: the pattern separates
 a tuple into its component parts).
 
 ~~~~
-let (port, chan): (Port<int>, Chan<int>) = Chan::new();
+let (tx, rx): (Sender<int>, Receiver<int>) = channel();
 ~~~~
 
-The child task will use the channel to send data to the parent task,
-which will wait to receive the data on the port. The next statement
+The child task will use the sender to send data to the parent task,
+which will wait to receive the data on the receiver. The next statement
 spawns the child task.
 
 ~~~~
 # use std::task::spawn;
 # fn some_expensive_computation() -> int { 42 }
-# let (port, chan) = Chan::new();
+# let (tx, rx) = channel();
 spawn(proc() {
     let result = some_expensive_computation();
-    chan.send(result);
+    tx.send(result);
 });
 ~~~~
 
-Notice that the creation of the task closure transfers `chan` to the child
-task implicitly: the closure captures `chan` in its environment. Both `Chan`
-and `Port` are sendable types and may be captured into tasks or otherwise
+Notice that the creation of the task closure transfers `tx` to the child
+task implicitly: the closure captures `tx` in its environment. Both `Sender`
+and `Receiver` are sendable types and may be captured into tasks or otherwise
 transferred between them. In the example, the child task runs an expensive
 computation, then sends the result over the captured channel.
 
 Finally, the parent continues with some other expensive
 computation, then waits for the child's result to arrive on the
-port:
+receiver:
 
 ~~~~
 # fn some_other_expensive_computation() {}
-# let (port, chan) = Chan::<int>::new();
-# chan.send(0);
+# let (tx, rx) = channel::<int>();
+# tx.send(0);
 some_other_expensive_computation();
-let result = port.recv();
+let result = rx.recv();
 ~~~~
 
-The `Port` and `Chan` pair created by `Chan::new` enables efficient
+The `Sender` and `Receiver` pair created by `channel` enables efficient
 communication between a single sender and a single receiver, but multiple
-senders cannot use a single `Chan`, and multiple receivers cannot use a single
-`Port`.  What if our example needed to compute multiple results across a number
-of tasks? The following program is ill-typed:
+senders cannot use a single `Sender` value, and multiple receivers cannot use a
+single `Receiver` value.  What if our example needed to compute multiple
+results across a number of tasks? The following program is ill-typed:
 
 ~~~ {.ignore}
-# use std::task::{spawn};
 # fn some_expensive_computation() -> int { 42 }
-let (port, chan) = Chan::new();
+let (tx, rx) = channel();
 
 spawn(proc() {
-    chan.send(some_expensive_computation());
+    tx.send(some_expensive_computation());
 });
 
-// ERROR! The previous spawn statement already owns the channel,
+// ERROR! The previous spawn statement already owns the sender,
 // so the compiler will not allow it to be captured again
 spawn(proc() {
-    chan.send(some_expensive_computation());
+    tx.send(some_expensive_computation());
 });
 ~~~
 
-Instead we can use a `SharedChan`, a type that allows a single
-`Chan` to be shared by multiple senders.
+Instead we can clone the `tx`, which allows for multiple senders.
 
 ~~~
-# use std::task::spawn;
-
-let (port, chan) = SharedChan::new();
+let (tx, rx) = channel();
 
 for init_val in range(0u, 3) {
     // Create a new channel handle to distribute to the child task
-    let child_chan = chan.clone();
+    let child_tx = tx.clone();
     spawn(proc() {
-        child_chan.send(some_expensive_computation(init_val));
+        child_tx.send(some_expensive_computation(init_val));
     });
 }
 
-let result = port.recv() + port.recv() + port.recv();
+let result = rx.recv() + rx.recv() + rx.recv();
 # fn some_expensive_computation(_i: uint) -> int { 42 }
 ~~~
 
-Here we transfer ownership of the channel into a new `SharedChan` value.  Like
-`Chan`, `SharedChan` is a non-copyable, owned type (sometimes also referred to
-as an *affine* or *linear* type). Unlike with `Chan`, though, the programmer
-may duplicate a `SharedChan`, with the `clone()` method.  A cloned
-`SharedChan` produces a new handle to the same channel, allowing multiple
-tasks to send data to a single port.  Between `spawn`, `Chan` and
-`SharedChan`, we have enough tools to implement many useful concurrency
-patterns.
+Cloning a `Sender` produces a new handle to the same channel, allowing multiple
+tasks to send data to a single receiver. It upgrades the channel internally in
+order to allow this functionality, which means that channels that are not
+cloned can avoid the overhead required to handle multiple senders. But this
+fact has no bearing on the channel's usage: the upgrade is transparent.
 
-Note that the above `SharedChan` example is somewhat contrived since
-you could also simply use three `Chan` pairs, but it serves to
+Note that the above cloning example is somewhat contrived since
+you could also simply use three `Sender` pairs, but it serves to
 illustrate the point. For reference, written with multiple streams, it
 might look like the example below.
 
 ~~~
 # use std::task::spawn;
-# use std::vec;
 
 // Create a vector of ports, one for each child task
-let ports = vec::from_fn(3, |init_val| {
-    let (port, chan) = Chan::new();
+let rxs = Vec::from_fn(3, |init_val| {
+    let (tx, rx) = channel();
     spawn(proc() {
-        chan.send(some_expensive_computation(init_val));
+        tx.send(some_expensive_computation(init_val));
     });
-    port
+    rx
 });
 
 // Wait on each port, accumulating the results
-let result = ports.iter().fold(0, |accum, port| accum + port.recv() );
+let result = rxs.iter().fold(0, |accum, rx| accum + rx.recv() );
 # fn some_expensive_computation(_i: uint) -> int { 42 }
 ~~~
 
 ## Backgrounding computations: Futures
-With `extra::future`, rust has a mechanism for requesting a computation and getting the result
+With `sync::Future`, rust has a mechanism for requesting a computation and getting the result
 later.
 
 The basic example below illustrates this.
 
 ~~~
+extern crate sync;
+
+# fn main() {
 # fn make_a_sandwich() {};
 fn fib(n: u64) -> u64 {
     // lengthy computation returning an uint
     12586269025
 }
 
-let mut delayed_fib = extra::future::Future::spawn(proc() fib(50));
+let mut delayed_fib = sync::Future::spawn(proc() fib(50));
 make_a_sandwich();
 println!("fib(50) = {:?}", delayed_fib.get())
+# }
 ~~~
 
 The call to `future::spawn` returns immediately a `future` object regardless of how long it
@@ -281,17 +302,17 @@ Here is another example showing how futures allow you to background computations
 be distributed on the available cores.
 
 ~~~
-# use std::vec;
+# extern crate sync;
 fn partial_sum(start: uint) -> f64 {
     let mut local_sum = 0f64;
     for num in range(start*100000, (start+1)*100000) {
-        local_sum += (num as f64 + 1.0).powf(&-2.0);
+        local_sum += (num as f64 + 1.0).powf(-2.0);
     }
     local_sum
 }
 
 fn main() {
-    let mut futures = vec::from_fn(1000, |ind| extra::future::Future::spawn( proc() { partial_sum(ind) }));
+    let mut futures = Vec::from_fn(1000, |ind| sync::Future::spawn( proc() { partial_sum(ind) }));
 
     let mut final_res = 0f64;
     for ft in futures.mut_iter()  {
@@ -309,35 +330,34 @@ add up to a significant amount of wasted memory and would require copying the sa
 necessary.
 
 To tackle this issue, one can use an Atomically Reference Counted wrapper (`Arc`) as implemented in
-the `extra` library of Rust. With an Arc, the data will no longer be copied for each task. The Arc
+the `sync` library of Rust. With an Arc, the data will no longer be copied for each task. The Arc
 acts as a reference to the shared data and only this reference is shared and cloned.
 
 Here is a small example showing how to use Arcs. We wish to run concurrently several computations on
 a single large vector of floats. Each task needs the full vector to perform its duty.
 
 ~~~
-# use std::vec;
-# use std::rand;
-use extra::arc::Arc;
+extern crate rand;
+extern crate sync;
 
-fn pnorm(nums: &~[f64], p: uint) -> f64 {
-    nums.iter().fold(0.0, |a,b| a+(*b).powf(&(p as f64)) ).powf(&(1.0 / (p as f64)))
+use sync::Arc;
+
+fn pnorm(nums: &[f64], p: uint) -> f64 {
+    nums.iter().fold(0.0, |a, b| a + b.powf(p as f64)).powf(1.0 / (p as f64))
 }
 
 fn main() {
-    let numbers = vec::from_fn(1000000, |_| rand::random::<f64>());
-    println!("Inf-norm = {}",  *numbers.iter().max().unwrap());
-
+    let numbers = Vec::from_fn(1000000, |_| rand::random::<f64>());
     let numbers_arc = Arc::new(numbers);
 
     for num in range(1u, 10) {
-        let (port, chan)  = Chan::new();
-        chan.send(numbers_arc.clone());
+        let (tx, rx) = channel();
+        tx.send(numbers_arc.clone());
 
         spawn(proc() {
-            let local_arc : Arc<~[f64]> = port.recv();
-            let task_numbers = local_arc.get();
-            println!("{}-norm = {}", num, pnorm(task_numbers, num));
+            let local_arc : Arc<Vec<f64>> = rx.recv();
+            let task_numbers = &*local_arc;
+            println!("{}-norm = {}", num, pnorm(task_numbers.as_slice(), num));
         });
     }
 }
@@ -348,23 +368,27 @@ at the power given as argument and takes the inverse power of this value). The A
 created by the line
 
 ~~~
-# use extra::arc::Arc;
-# use std::vec;
-# use std::rand;
-# let numbers = vec::from_fn(1000000, |_| rand::random::<f64>());
+# extern crate sync;
+# extern crate rand;
+# use sync::Arc;
+# fn main() {
+# let numbers = Vec::from_fn(1000000, |_| rand::random::<f64>());
 let numbers_arc=Arc::new(numbers);
+# }
 ~~~
 
 and a clone of it is sent to each task
 
 ~~~
-# use extra::arc::Arc;
-# use std::vec;
-# use std::rand;
-# let numbers=vec::from_fn(1000000, |_| rand::random::<f64>());
+# extern crate sync;
+# extern crate rand;
+# use sync::Arc;
+# fn main() {
+# let numbers=Vec::from_fn(1000000, |_| rand::random::<f64>());
 # let numbers_arc = Arc::new(numbers);
-# let (port, chan)  = Chan::new();
-chan.send(numbers_arc.clone());
+# let (tx, rx) = channel();
+tx.send(numbers_arc.clone());
+# }
 ~~~
 
 copying only the wrapper and not its contents.
@@ -372,15 +396,17 @@ copying only the wrapper and not its contents.
 Each task recovers the underlying data by
 
 ~~~
-# use extra::arc::Arc;
-# use std::vec;
-# use std::rand;
-# let numbers=vec::from_fn(1000000, |_| rand::random::<f64>());
+# extern crate sync;
+# extern crate rand;
+# use sync::Arc;
+# fn main() {
+# let numbers=Vec::from_fn(1000000, |_| rand::random::<f64>());
 # let numbers_arc=Arc::new(numbers);
-# let (port, chan)  = Chan::new();
-# chan.send(numbers_arc.clone());
-# let local_arc : Arc<~[f64]> = port.recv();
-let task_numbers = local_arc.get();
+# let (tx, rx) = channel();
+# tx.send(numbers_arc.clone());
+# let local_arc : Arc<Vec<f64>> = rx.recv();
+let task_numbers = &*local_arc;
+# }
 ~~~
 
 and can use it as if it were local.
@@ -430,7 +456,7 @@ an `Error` result.
 
 [`Result`]: std/result/index.html
 
-> ***Note:*** A failed task does not currently produce a useful error
+> *Note:* A failed task does not currently produce a useful error
 > value (`try` always returns `Err(())`). In the
 > future, it may be possible for tasks to intercept the value passed to
 > `fail!()`.
@@ -450,25 +476,26 @@ proceed).
 
 A very common thing to do is to spawn a child task where the parent
 and child both need to exchange messages with each other. The
-function `extra::comm::DuplexStream()` supports this pattern.  We'll
+function `sync::comm::duplex` supports this pattern.  We'll
 look briefly at how to use it.
 
-To see how `DuplexStream()` works, we will create a child task
+To see how `duplex` works, we will create a child task
 that repeatedly receives a `uint` message, converts it to a string, and sends
 the string in response.  The child terminates when it receives `0`.
 Here is the function that implements the child task:
 
-~~~{.ignore .linked-failure}
-# use extra::comm::DuplexStream;
-# use std::uint;
-fn stringifier(channel: &DuplexStream<~str, uint>) {
+~~~
+extern crate sync;
+# fn main() {
+fn stringifier(channel: &sync::DuplexStream<~str, uint>) {
     let mut value: uint;
     loop {
         value = channel.recv();
-        channel.send(uint::to_str(value));
+        channel.send(value.to_str());
         if value == 0 { break; }
     }
 }
+# }
 ~~~~
 
 The implementation of `DuplexStream` supports both sending and
@@ -481,34 +508,34 @@ response itself is simply the stringified version of the received value,
 
 Here is the code for the parent task:
 
-~~~{.ignore .linked-failure}
+~~~
+extern crate sync;
 # use std::task::spawn;
-# use std::uint;
-# use extra::comm::DuplexStream;
-# fn stringifier(channel: &DuplexStream<~str, uint>) {
+# use sync::DuplexStream;
+# fn stringifier(channel: &sync::DuplexStream<~str, uint>) {
 #     let mut value: uint;
 #     loop {
 #         value = channel.recv();
-#         channel.send(uint::to_str(value));
+#         channel.send(value.to_str());
 #         if value == 0u { break; }
 #     }
 # }
 # fn main() {
 
-let (from_child, to_child) = DuplexStream::new();
+let (from_child, to_child) = sync::duplex();
 
 spawn(proc() {
     stringifier(&to_child);
 });
 
 from_child.send(22);
-assert!(from_child.recv() == ~"22");
+assert!(from_child.recv() == "22".to_owned());
 
 from_child.send(23);
 from_child.send(0);
 
-assert!(from_child.recv() == ~"23");
-assert!(from_child.recv() == ~"0");
+assert!(from_child.recv() == "23".to_owned());
+assert!(from_child.recv() == "0".to_owned());
 
 # }
 ~~~~

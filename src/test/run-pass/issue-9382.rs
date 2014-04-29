@@ -8,13 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(managed_boxes)];
-#[allow(unnecessary_allocation)];
+#![feature(managed_boxes)]
+#![allow(unnecessary_allocation)]
 
 // Tests for a previous bug that occured due to an interaction
 // between struct field initialization and the auto-coercion
 // from a vector to a slice. The drop glue was being invoked on
 // the temporary slice with a wrong type, triggering an LLVM assert.
+
 
 struct Thing1<'a> {
     baz: &'a [~int],
@@ -32,7 +33,7 @@ pub fn main() {
         bar: ~32,
     };
     Thing1 {
-        baz: ~[],
+        baz: Vec::new().as_slice(),
         bar: ~32,
     };
     let _t2_fixed = Thing2 {
@@ -40,7 +41,7 @@ pub fn main() {
         bar: 32,
     };
     Thing2 {
-        baz: ~[],
+        baz: Vec::new().as_slice(),
         bar: 32,
     };
 }

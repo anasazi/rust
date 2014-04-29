@@ -16,49 +16,53 @@ use metadata::filesearch;
 use lib::llvm::{ArchiveRef, llvm};
 
 use std::cast;
-use std::io::fs;
 use std::io;
-use std::libc;
+use std::io::{fs, TempDir};
+use libc;
 use std::os;
-use std::run::{ProcessOptions, Process, ProcessOutput};
+use std::io::process::{ProcessConfig, Process, ProcessOutput};
 use std::str;
-use std::unstable::raw;
-use extra::tempfile::TempDir;
+use std::raw;
 use syntax::abi;
 
 pub static METADATA_FILENAME: &'static str = "rust.metadata.bin";
 
-pub struct Archive {
-    priv sess: Session,
-    priv dst: Path,
+pub struct Archive<'a> {
+    sess: &'a Session,
+    dst: Path,
 }
 
 pub struct ArchiveRO {
-    priv ptr: ArchiveRef,
+    ptr: ArchiveRef,
 }
 
-fn run_ar(sess: Session, args: &str, cwd: Option<&Path>,
-        paths: &[&Path]) -> ProcessOutput {
+fn run_ar(sess: &Session, args: &str, cwd: Option<&Path>,
+          paths: &[&Path]) -> ProcessOutput {
     let ar = get_ar_prog(sess);
 
-    let mut args = ~[args.to_owned()];
-    let mut paths = paths.iter().map(|p| p.as_str().unwrap().to_owned());
-    args.extend(&mut paths);
-    let mut opts = ProcessOptions::new();
-    opts.dir = cwd;
+    let mut args = vec!(args.to_owned());
+    let paths = paths.iter().map(|p| p.as_str().unwrap().to_owned());
+    args.extend(paths);
     debug!("{} {}", ar, args.connect(" "));
     match cwd {
         Some(p) => { debug!("inside {}", p.display()); }
         None => {}
     }
-    match Process::new(ar, args.as_slice(), opts) {
+    match Process::configure(ProcessConfig {
+        program: ar.as_slice(),
+        args: args.as_slice(),
+        cwd: cwd.map(|a| &*a),
+        .. ProcessConfig::new()
+    }) {
         Ok(mut prog) => {
-            let o = prog.finish_with_output();
+            let o = prog.wait_with_output();
             if !o.status.success() {
                 sess.err(format!("{} {} failed with: {}", ar, args.connect(" "),
                                  o.status));
-                sess.note(format!("stdout ---\n{}", str::from_utf8(o.output).unwrap()));
-                sess.note(format!("stderr ---\n{}", str::from_utf8(o.error).unwrap()));
+                sess.note(format!("stdout ---\n{}",
+                                  str::from_utf8(o.output.as_slice()).unwrap()));
+                sess.note(format!("stderr ---\n{}",
+                                  str::from_utf8(o.error.as_slice()).unwrap()));
                 sess.abort_if_errors();
             }
             o
@@ -71,33 +75,18 @@ fn run_ar(sess: Session, args: &str, cwd: Option<&Path>,
     }
 }
 
-impl Archive {
+impl<'a> Archive<'a> {
     /// Initializes a new static archive with the given object file
-    pub fn create<'a>(sess: Session, dst: &'a Path,
-                      initial_object: &'a Path) -> Archive {
+    pub fn create<'b>(sess: &'a Session, dst: &'b Path,
+                      initial_object: &'b Path) -> Archive<'a> {
         run_ar(sess, "crus", None, [dst, initial_object]);
         Archive { sess: sess, dst: dst.clone() }
     }
 
     /// Opens an existing static archive
-    pub fn open(sess: Session, dst: Path) -> Archive {
+    pub fn open(sess: &'a Session, dst: Path) -> Archive<'a> {
         assert!(dst.exists());
         Archive { sess: sess, dst: dst }
-    }
-
-    /// Read a file in the archive
-    pub fn read(&self, file: &str) -> ~[u8] {
-        // Apparently if "ar p" is used on windows, it generates a corrupt file
-        // which has bad headers and LLVM will immediately choke on it
-        if cfg!(windows) && cfg!(windows) { // FIXME(#10734) double-and
-            let loc = TempDir::new("rsar").unwrap();
-            let archive = os::make_absolute(&self.dst);
-            run_ar(self.sess, "x", Some(loc.path()), [&archive,
-                                                      &Path::new(file)]);
-            fs::File::open(&loc.path().join(file)).read_to_end().unwrap()
-        } else {
-            run_ar(self.sess, "p", None, [&self.dst, &Path::new(file)]).output
-        }
     }
 
     /// Adds all of the contents of a native library to this archive. This will
@@ -115,12 +104,12 @@ impl Archive {
     pub fn add_rlib(&mut self, rlib: &Path, name: &str,
                     lto: bool) -> io::IoResult<()> {
         let object = format!("{}.o", name);
-        let bytecode = format!("{}.bc", name);
-        let mut ignore = ~[METADATA_FILENAME, bytecode.as_slice()];
+        let bytecode = format!("{}.bc.deflate", name);
+        let mut ignore = vec!(METADATA_FILENAME, bytecode.as_slice());
         if lto {
             ignore.push(object.as_slice());
         }
-        self.add_archive(rlib, name, ignore)
+        self.add_archive(rlib, name, ignore.as_slice())
     }
 
     /// Adds an arbitrary file to this archive
@@ -140,9 +129,12 @@ impl Archive {
     }
 
     /// Lists all files in an archive
-    pub fn files(&self) -> ~[~str] {
+    pub fn files(&self) -> Vec<~str> {
         let output = run_ar(self.sess, "t", None, [&self.dst]);
-        str::from_utf8(output.output).unwrap().lines().map(|s| s.to_owned()).collect()
+        let output = str::from_utf8(output.output.as_slice()).unwrap();
+        // use lines_any because windows delimits output with `\r\n` instead of
+        // just `\n`
+        output.lines_any().map(|s| s.to_owned()).collect()
     }
 
     fn add_archive(&mut self, archive: &Path, name: &str,
@@ -161,8 +153,8 @@ impl Archive {
         // We skip any files explicitly desired for skipping, and we also skip
         // all SYMDEF files as these are just magical placeholders which get
         // re-created when we make a new archive anyway.
-        let files = if_ok!(fs::readdir(loc.path()));
-        let mut inputs = ~[];
+        let files = try!(fs::readdir(loc.path()));
+        let mut inputs = Vec::new();
         for file in files.iter() {
             let filename = file.filename_str().unwrap();
             if skip.iter().any(|s| *s == filename) { continue }
@@ -170,13 +162,14 @@ impl Archive {
 
             let filename = format!("r-{}-{}", name, filename);
             let new_filename = file.with_filename(filename);
-            if_ok!(fs::rename(file, &new_filename));
+            try!(fs::rename(file, &new_filename));
             inputs.push(new_filename);
         }
+        if inputs.len() == 0 { return Ok(()) }
 
         // Finally, add all the renamed files to this archive
-        let mut args = ~[&self.dst];
-        args.extend(&mut inputs.iter());
+        let mut args = vec!(&self.dst);
+        args.extend(inputs.iter());
         run_ar(self.sess, "r", None, args.as_slice());
         Ok(())
     }
@@ -191,13 +184,9 @@ impl Archive {
         let unixlibname = format!("lib{}.a", name);
 
         let mut rustpath = filesearch::rust_path();
-        rustpath.push(self.sess.filesearch.get_target_lib_path());
-        let addl_lib_search_paths = self.sess
-                                        .opts
-                                        .addl_lib_search_paths
-                                        .borrow();
-        let path = addl_lib_search_paths.get().iter();
-        for path in path.chain(rustpath.iter()) {
+        rustpath.push(self.sess.target_filesearch().get_lib_path());
+        let search = self.sess.opts.addl_lib_search_paths.borrow();
+        for path in search.iter().chain(rustpath.iter()) {
             debug!("looking for {} inside {}", name, path.display());
             let test = path.join(oslibname.as_slice());
             if test.exists() { return test }

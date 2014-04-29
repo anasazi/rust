@@ -9,10 +9,11 @@
 // except according to those terms.
 
 use std::cast;
-use std::libc::{c_int, size_t, ssize_t};
+use libc::{c_int, size_t, ssize_t};
 use std::ptr;
 use std::rt::task::BlockedTask;
 
+use Loop;
 use super::{UvError, Buf, slice_to_uv_buf, Request, wait_until_woken_after,
             ForbidUnwind, wakeup};
 use uvll;
@@ -22,13 +23,13 @@ use uvll;
 // uv_stream_t instance, and all I/O operations assume that it's already located
 // on the appropriate scheduler.
 pub struct StreamWatcher {
-    handle: *uvll::uv_stream_t,
+    pub handle: *uvll::uv_stream_t,
 
     // Cache the last used uv_write_t so we don't have to allocate a new one on
     // every call to uv_write(). Ideally this would be a stack-allocated
     // structure, but currently we don't have mappings for all the structures
     // defined in libuv, so we're foced to malloc this.
-    priv last_write_req: Option<Request>,
+    last_write_req: Option<Request>,
 }
 
 struct ReadContext {
@@ -87,7 +88,8 @@ impl StreamWatcher {
             uvll::uv_read_start(self.handle, alloc_cb, read_cb)
         } {
             0 => {
-                wait_until_woken_after(&mut rcx.task, || {});
+                let loop_ = unsafe { uvll::get_loop_for_uv_handle(self.handle) };
+                wait_until_woken_after(&mut rcx.task, &Loop::wrap(loop_), || {});
                 match rcx.result {
                     n if n < 0 => Err(UvError(n as c_int)),
                     n => Ok(n as uint),
@@ -121,7 +123,8 @@ impl StreamWatcher {
                 let mut wcx = WriteContext { result: 0, task: None, };
                 req.defuse(); // uv callback now owns this request
 
-                wait_until_woken_after(&mut wcx.task, || {
+                let loop_ = unsafe { uvll::get_loop_for_uv_handle(self.handle) };
+                wait_until_woken_after(&mut wcx.task, &Loop::wrap(loop_), || {
                     req.set_data(&wcx);
                 });
                 self.last_write_req = Some(Request::wrap(req.handle));

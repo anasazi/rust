@@ -4,10 +4,6 @@
 document converter, is required to generate docs as HTML from Rust's
 source code.
 
-[Node.js](http://nodejs.org/) is also required for generating HTML from
-the Markdown docs (reference manual, tutorials, etc.) distributed with
-this git repository.
-
 [po4a](http://po4a.alioth.debian.org/) is required for generating translated
 docs from the master (English) docs.
 
@@ -30,8 +26,8 @@ rustdoc --output-dir html-doc/ --output-format html ../src/libstd/path.rs
 
 # Additional notes
 
-To generate an HTML version of a doc from Markdown without having Node.js
-installed, you can do something like:
+To generate an HTML version of a doc from Markdown manually, you can do
+something like:
 
 ~~~~
 pandoc --from=markdown --to=html5 --number-sections -o rust.html rust.md
@@ -57,12 +53,12 @@ To generate .pot and .po files, do something like:
 ~~~~
 po4a --copyright-holder="The Rust Project Developers" \
     --package-name="Rust" \
-    --package-version="0.10-pre" \
+    --package-version="0.11-pre" \
     -M UTF-8 -L UTF-8 \
     src/doc/po4a.conf
 ~~~~
 
-(the version number must be changed if it is not 0.10-pre now.)
+(the version number must be changed if it is not 0.11-pre now.)
 
 Now you can translate documents with .po files, commonly used with gettext. If
 you are not familiar with gettext-based translation, please read the online

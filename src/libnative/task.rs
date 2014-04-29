@@ -14,33 +14,34 @@
 //! by rust tasks. This implements the necessary API traits laid out by std::rt
 //! in order to spawn new tasks and deschedule the current task.
 
+use std::any::Any;
 use std::cast;
+use std::rt::bookkeeping;
 use std::rt::env;
 use std::rt::local::Local;
 use std::rt::rtio;
-use std::rt::task::{Task, BlockedTask};
+use std::rt::stack;
+use std::rt::task::{Task, BlockedTask, SendMessage};
 use std::rt::thread::Thread;
 use std::rt;
 use std::task::TaskOpts;
-use std::unstable::mutex::Mutex;
-use std::unstable::stack;
+use std::unstable::mutex::NativeMutex;
 
 use io;
 use task;
-use bookkeeping;
 
 /// Creates a new Task which is ready to execute as a 1:1 task.
 pub fn new(stack_bounds: (uint, uint)) -> ~Task {
     let mut task = ~Task::new();
     let mut ops = ops();
     ops.stack_bounds = stack_bounds;
-    task.put_runtime(ops as ~rt::Runtime);
+    task.put_runtime(ops);
     return task;
 }
 
 fn ops() -> ~Ops {
     ~Ops {
-        lock: unsafe { Mutex::new() },
+        lock: unsafe { NativeMutex::new() },
         awoken: false,
         io: io::IoFactory::new(),
         // these *should* get overwritten
@@ -49,29 +50,24 @@ fn ops() -> ~Ops {
 }
 
 /// Spawns a function with the default configuration
-pub fn spawn(f: proc()) {
+pub fn spawn(f: proc():Send) {
     spawn_opts(TaskOpts::new(), f)
 }
 
 /// Spawns a new task given the configuration options and a procedure to run
 /// inside the task.
-pub fn spawn_opts(opts: TaskOpts, f: proc()) {
+pub fn spawn_opts(opts: TaskOpts, f: proc():Send) {
     let TaskOpts {
-        watched: _watched,
         notify_chan, name, stack_size,
-        logger, stderr, stdout,
+        stderr, stdout,
     } = opts;
 
     let mut task = ~Task::new();
     task.name = name;
-    task.logger = logger;
     task.stderr = stderr;
     task.stdout = stdout;
     match notify_chan {
-        Some(chan) => {
-            let on_exit = proc(task_result) { chan.send(task_result) };
-            task.death.on_exit = Some(on_exit);
-        }
+        Some(chan) => { task.death.on_exit = Some(SendMessage(chan)); }
         None => {}
     }
 
@@ -102,7 +98,7 @@ pub fn spawn_opts(opts: TaskOpts, f: proc()) {
 
         let mut f = Some(f);
         let mut task = task;
-        task.put_runtime(ops as ~rt::Runtime);
+        task.put_runtime(ops);
         let t = task.run(|| { f.take_unwrap()() });
         drop(t);
         bookkeeping::decrement();
@@ -112,7 +108,7 @@ pub fn spawn_opts(opts: TaskOpts, f: proc()) {
 // This structure is the glue between channels and the 1:1 scheduling mode. This
 // structure is allocated once per task.
 struct Ops {
-    lock: Mutex,       // native synchronization
+    lock: NativeMutex,       // native synchronization
     awoken: bool,      // used to prevent spurious wakeups
     io: io::IoFactory, // local I/O factory
 
@@ -125,7 +121,7 @@ struct Ops {
 impl rt::Runtime for Ops {
     fn yield_now(~self, mut cur_task: ~Task) {
         // put the task back in TLS and then invoke the OS thread yield
-        cur_task.put_runtime(self as ~rt::Runtime);
+        cur_task.put_runtime(self);
         Local::put(cur_task);
         Thread::yield_now();
     }
@@ -133,7 +129,7 @@ impl rt::Runtime for Ops {
     fn maybe_yield(~self, mut cur_task: ~Task) {
         // just put the task back in TLS, on OS threads we never need to
         // opportunistically yield b/c the OS will do that for us (preemption)
-        cur_task.put_runtime(self as ~rt::Runtime);
+        cur_task.put_runtime(self);
         Local::put(cur_task);
     }
 
@@ -187,44 +183,53 @@ impl rt::Runtime for Ops {
     fn deschedule(mut ~self, times: uint, mut cur_task: ~Task,
                   f: |BlockedTask| -> Result<(), BlockedTask>) {
         let me = &mut *self as *mut Ops;
-        cur_task.put_runtime(self as ~rt::Runtime);
+        cur_task.put_runtime(self);
 
         unsafe {
-            let cur_task_dupe = *cast::transmute::<&~Task, &uint>(&cur_task);
+            let cur_task_dupe = &*cur_task as *Task;
             let task = BlockedTask::block(cur_task);
 
             if times == 1 {
-                (*me).lock.lock();
+                let guard = (*me).lock.lock();
                 (*me).awoken = false;
                 match f(task) {
                     Ok(()) => {
                         while !(*me).awoken {
-                            (*me).lock.wait();
+                            guard.wait();
                         }
                     }
                     Err(task) => { cast::forget(task.wake()); }
                 }
-                (*me).lock.unlock();
             } else {
-                let mut iter = task.make_selectable(times);
-                (*me).lock.lock();
+                let iter = task.make_selectable(times);
+                let guard = (*me).lock.lock();
                 (*me).awoken = false;
-                let success = iter.all(|task| {
-                    match f(task) {
-                        Ok(()) => true,
-                        Err(task) => {
-                            cast::forget(task.wake());
-                            false
+
+                // Apply the given closure to all of the "selectable tasks",
+                // bailing on the first one that produces an error. Note that
+                // care must be taken such that when an error is occurred, we
+                // may not own the task, so we may still have to wait for the
+                // task to become available. In other words, if task.wake()
+                // returns `None`, then someone else has ownership and we must
+                // wait for their signal.
+                match iter.map(f).filter_map(|a| a.err()).next() {
+                    None => {}
+                    Some(task) => {
+                        match task.wake() {
+                            Some(task) => {
+                                cast::forget(task);
+                                (*me).awoken = true;
+                            }
+                            None => {}
                         }
                     }
-                });
-                while success && !(*me).awoken {
-                    (*me).lock.wait();
                 }
-                (*me).lock.unlock();
+                while !(*me).awoken {
+                    guard.wait();
+                }
             }
             // re-acquire ownership of the task
-            cur_task = cast::transmute::<uint, ~Task>(cur_task_dupe);
+            cur_task = cast::transmute(cur_task_dupe);
         }
 
         // put the task back in TLS, and everything is as it once was.
@@ -236,17 +241,16 @@ impl rt::Runtime for Ops {
     fn reawaken(mut ~self, mut to_wake: ~Task) {
         unsafe {
             let me = &mut *self as *mut Ops;
-            to_wake.put_runtime(self as ~rt::Runtime);
+            to_wake.put_runtime(self);
             cast::forget(to_wake);
-            (*me).lock.lock();
+            let guard = (*me).lock.lock();
             (*me).awoken = true;
-            (*me).lock.signal();
-            (*me).lock.unlock();
+            guard.signal();
         }
     }
 
-    fn spawn_sibling(~self, mut cur_task: ~Task, opts: TaskOpts, f: proc()) {
-        cur_task.put_runtime(self as ~rt::Runtime);
+    fn spawn_sibling(~self, mut cur_task: ~Task, opts: TaskOpts, f: proc():Send) {
+        cur_task.put_runtime(self);
         Local::put(cur_task);
 
         task::spawn_opts(opts, f);
@@ -257,15 +261,8 @@ impl rt::Runtime for Ops {
     }
 }
 
-impl Drop for Ops {
-    fn drop(&mut self) {
-        unsafe { self.lock.destroy() }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::rt::Runtime;
     use std::rt::local::Local;
     use std::rt::task::Task;
     use std::task;
@@ -274,89 +271,88 @@ mod tests {
 
     #[test]
     fn smoke() {
-        let (p, c) = Chan::new();
+        let (tx, rx) = channel();
         spawn(proc() {
-            c.send(());
+            tx.send(());
         });
-        p.recv();
+        rx.recv();
     }
 
     #[test]
     fn smoke_fail() {
-        let (p, c) = Chan::<()>::new();
+        let (tx, rx) = channel::<()>();
         spawn(proc() {
-            let _c = c;
+            let _tx = tx;
             fail!()
         });
-        assert_eq!(p.recv_opt(), None);
+        assert_eq!(rx.recv_opt(), Err(()));
     }
 
     #[test]
     fn smoke_opts() {
         let mut opts = TaskOpts::new();
-        opts.name = Some(SendStrStatic("test"));
+        opts.name = Some("test".into_maybe_owned());
         opts.stack_size = Some(20 * 4096);
-        let (p, c) = Chan::new();
-        opts.notify_chan = Some(c);
+        let (tx, rx) = channel();
+        opts.notify_chan = Some(tx);
         spawn_opts(opts, proc() {});
-        assert!(p.recv().is_ok());
+        assert!(rx.recv().is_ok());
     }
 
     #[test]
     fn smoke_opts_fail() {
         let mut opts = TaskOpts::new();
-        let (p, c) = Chan::new();
-        opts.notify_chan = Some(c);
+        let (tx, rx) = channel();
+        opts.notify_chan = Some(tx);
         spawn_opts(opts, proc() { fail!() });
-        assert!(p.recv().is_err());
+        assert!(rx.recv().is_err());
     }
 
     #[test]
     fn yield_test() {
-        let (p, c) = Chan::new();
+        let (tx, rx) = channel();
         spawn(proc() {
             for _ in range(0, 10) { task::deschedule(); }
-            c.send(());
+            tx.send(());
         });
-        p.recv();
+        rx.recv();
     }
 
     #[test]
     fn spawn_children() {
-        let (p, c) = Chan::new();
+        let (tx1, rx) = channel();
         spawn(proc() {
-            let (p, c2) = Chan::new();
+            let (tx2, rx) = channel();
             spawn(proc() {
-                let (p, c3) = Chan::new();
+                let (tx3, rx) = channel();
                 spawn(proc() {
-                    c3.send(());
+                    tx3.send(());
                 });
-                p.recv();
-                c2.send(());
+                rx.recv();
+                tx2.send(());
             });
-            p.recv();
-            c.send(());
+            rx.recv();
+            tx1.send(());
         });
-        p.recv();
+        rx.recv();
     }
 
     #[test]
     fn spawn_inherits() {
-        let (p, c) = Chan::new();
+        let (tx, rx) = channel();
         spawn(proc() {
-            let c = c;
             spawn(proc() {
                 let mut task: ~Task = Local::take();
                 match task.maybe_take_runtime::<Ops>() {
                     Some(ops) => {
-                        task.put_runtime(ops as ~Runtime);
+                        task.put_runtime(ops);
                     }
                     None => fail!(),
                 }
                 Local::put(task);
-                c.send(());
+                tx.send(());
             });
         });
-        p.recv();
+        rx.recv();
     }
 }

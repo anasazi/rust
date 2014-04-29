@@ -8,10 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(managed_boxes)];
+#![feature(managed_boxes)]
 
 struct invariant<'a> {
-    f: 'static |x: &mut &'a int|
+    f: |x: &mut &'a int|: 'static
 }
 
 fn to_same_lifetime<'r>(bi: invariant<'r>) {

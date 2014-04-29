@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,9 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-android: FIXME(#10381)
+// ignore-android: FIXME(#10381)
 
-// compile-flags:-Z extra-debug-info
+// compile-flags:-g
 // debugger:set print pretty off
 // debugger:rbreak zzz
 // debugger:run
@@ -41,7 +41,7 @@
 // debugger:print mixed_padding
 // check:$10 = {x = {{40, 41, 42}, {43, 44}}, y = {45, 46, 47, 48}}
 
-#[allow(unused_variable)];
+#![allow(unused_variable)]
 
 struct NoPadding1 {
     x: (i32, i32),

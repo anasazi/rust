@@ -8,21 +8,26 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[crate_type = "bin"];
+#![crate_type = "bin"]
+#![feature(phase)]
 
-#[allow(non_camel_case_types)];
-#[deny(warnings)];
+// we use our own (green) start below; do not link in libnative; issue #13247.
+#![no_start]
 
-extern mod extra;
+#![allow(non_camel_case_types)]
+#![deny(warnings)]
+
+extern crate test;
+extern crate getopts;
+#[phase(link, syntax)]
+extern crate log;
+extern crate green;
+extern crate rustuv;
 
 use std::os;
 use std::io;
 use std::io::fs;
-
-use extra::getopts;
-use extra::getopts::groups::{optopt, optflag, reqopt};
-use extra::test;
-
+use getopts::{optopt, optflag, reqopt};
 use common::config;
 use common::mode_run_pass;
 use common::mode_run_fail;
@@ -40,17 +45,22 @@ pub mod runtest;
 pub mod common;
 pub mod errors;
 
+#[start]
+fn start(argc: int, argv: **u8) -> int {
+    green::start(argc, argv, rustuv::event_loop, main)
+}
+
 pub fn main() {
     let args = os::args();
-    let config = parse_config(args);
+    let config = parse_config(args.move_iter().collect());
     log_config(&config);
     run_tests(&config);
 }
 
-pub fn parse_config(args: ~[~str]) -> config {
+pub fn parse_config(args: Vec<~str> ) -> config {
 
-    let groups : ~[getopts::groups::OptGroup] =
-        ~[reqopt("", "compile-lib-path", "path to host shared libraries", "PATH"),
+    let groups : Vec<getopts::OptGroup> =
+        vec!(reqopt("", "compile-lib-path", "path to host shared libraries", "PATH"),
           reqopt("", "run-lib-path", "path to target shared libraries", "PATH"),
           reqopt("", "rustc-path", "path to rustc to use for compiling", "PATH"),
           optopt("", "clang-path", "path to  executable for codegen tests", "PATH"),
@@ -61,10 +71,11 @@ pub fn parse_config(args: ~[~str]) -> config {
           reqopt("", "stage-id", "the target-stage identifier", "stageN-TARGET"),
           reqopt("", "mode", "which sort of compile tests to run",
                  "(compile-fail|run-fail|run-pass|pretty|debug-info)"),
-          optflag("", "ignored", "run tests marked as ignored / xfailed"),
+          optflag("", "ignored", "run tests marked as ignored"),
           optopt("", "runtool", "supervisor program to run tests under \
                                  (eg. emulator, valgrind)", "PROGRAM"),
-          optopt("", "rustcflags", "flags to pass to rustc", "FLAGS"),
+          optopt("", "host-rustcflags", "flags to pass to rustc for host", "FLAGS"),
+          optopt("", "target-rustcflags", "flags to pass to rustc for target", "FLAGS"),
           optflag("", "verbose", "run tests verbosely, showing all output"),
           optopt("", "logfile", "file to log test execution to", "FILE"),
           optopt("", "save-metrics", "file to save metrics to", "FILE"),
@@ -77,28 +88,27 @@ pub fn parse_config(args: ~[~str]) -> config {
           optopt("", "adb-path", "path to the android debugger", "PATH"),
           optopt("", "adb-test-dir", "path to tests for the android debugger", "PATH"),
           optopt("", "test-shard", "run shard A, of B shards, worth of the testsuite", "A.B"),
-          optflag("h", "help", "show this message"),
-         ];
+          optflag("h", "help", "show this message"));
 
     assert!(!args.is_empty());
-    let argv0 = args[0].clone();
+    let argv0 = (*args.get(0)).clone();
     let args_ = args.tail();
-    if args[1] == ~"-h" || args[1] == ~"--help" {
+    if *args.get(1) == "-h".to_owned() || *args.get(1) == "--help".to_owned() {
         let message = format!("Usage: {} [OPTIONS] [TESTNAME...]", argv0);
-        println!("{}", getopts::groups::usage(message, groups));
+        println!("{}", getopts::usage(message, groups.as_slice()));
         println!("");
         fail!()
     }
 
     let matches =
-        &match getopts::groups::getopts(args_, groups) {
+        &match getopts::getopts(args_, groups.as_slice()) {
           Ok(m) => m,
           Err(f) => fail!("{}", f.to_err_msg())
         };
 
     if matches.opt_present("h") || matches.opt_present("help") {
         let message = format!("Usage: {} [OPTIONS]  [TESTNAME...]", argv0);
-        println!("{}", getopts::groups::usage(message, groups));
+        println!("{}", getopts::usage(message, groups.as_slice()));
         println!("");
         fail!()
     }
@@ -121,7 +131,7 @@ pub fn parse_config(args: ~[~str]) -> config {
         run_ignored: matches.opt_present("ignored"),
         filter:
             if !matches.free.is_empty() {
-                 Some(matches.free[0].clone())
+                 Some((*matches.free.get(0)).clone())
             } else {
                 None
             },
@@ -132,7 +142,8 @@ pub fn parse_config(args: ~[~str]) -> config {
         ratchet_noise_percent:
             matches.opt_str("ratchet-noise-percent").and_then(|s| from_str::<f64>(s)),
         runtool: matches.opt_str("runtool"),
-        rustcflags: matches.opt_str("rustcflags"),
+        host_rustcflags: matches.opt_str("host-rustcflags"),
+        target_rustcflags: matches.opt_str("target-rustcflags"),
         jit: matches.opt_present("jit"),
         target: opt_str2(matches.opt_str("target")).to_str(),
         host: opt_str2(matches.opt_str("host")).to_str(),
@@ -161,7 +172,8 @@ pub fn log_config(config: &config) {
     logv(c, format!("run_ignored: {}", config.run_ignored));
     logv(c, format!("filter: {}", opt_str(&config.filter)));
     logv(c, format!("runtool: {}", opt_str(&config.runtool)));
-    logv(c, format!("rustcflags: {}", opt_str(&config.rustcflags)));
+    logv(c, format!("host-rustcflags: {}", opt_str(&config.host_rustcflags)));
+    logv(c, format!("target-rustcflags: {}", opt_str(&config.target_rustcflags)));
     logv(c, format!("jit: {}", config.jit));
     logv(c, format!("target: {}", config.target));
     logv(c, format!("host: {}", config.host));
@@ -169,7 +181,7 @@ pub fn log_config(config: &config) {
     logv(c, format!("adb_test_dir: {}", config.adb_test_dir));
     logv(c, format!("adb_device_status: {}", config.adb_device_status));
     match config.test_shard {
-        None => logv(c, ~"test_shard: (all)"),
+        None => logv(c, "test_shard: (all)".to_owned()),
         Some((a,b)) => logv(c, format!("test_shard: {}.{}", a, b))
     }
     logv(c, format!("verbose: {}", config.verbose));
@@ -187,44 +199,46 @@ pub fn opt_str<'a>(maybestr: &'a Option<~str>) -> &'a str {
 }
 
 pub fn opt_str2(maybestr: Option<~str>) -> ~str {
-    match maybestr { None => ~"(none)", Some(s) => { s } }
+    match maybestr { None => "(none)".to_owned(), Some(s) => { s } }
 }
 
 pub fn str_mode(s: ~str) -> mode {
-    match s {
-      ~"compile-fail" => mode_compile_fail,
-      ~"run-fail" => mode_run_fail,
-      ~"run-pass" => mode_run_pass,
-      ~"pretty" => mode_pretty,
-      ~"debug-info" => mode_debug_info,
-      ~"codegen" => mode_codegen,
+    match s.as_slice() {
+      "compile-fail" => mode_compile_fail,
+      "run-fail" => mode_run_fail,
+      "run-pass" => mode_run_pass,
+      "pretty" => mode_pretty,
+      "debug-info" => mode_debug_info,
+      "codegen" => mode_codegen,
       _ => fail!("invalid mode")
     }
 }
 
 pub fn mode_str(mode: mode) -> ~str {
     match mode {
-      mode_compile_fail => ~"compile-fail",
-      mode_run_fail => ~"run-fail",
-      mode_run_pass => ~"run-pass",
-      mode_pretty => ~"pretty",
-      mode_debug_info => ~"debug-info",
-      mode_codegen => ~"codegen",
+      mode_compile_fail => "compile-fail".to_owned(),
+      mode_run_fail => "run-fail".to_owned(),
+      mode_run_pass => "run-pass".to_owned(),
+      mode_pretty => "pretty".to_owned(),
+      mode_debug_info => "debug-info".to_owned(),
+      mode_codegen => "codegen".to_owned(),
     }
 }
 
 pub fn run_tests(config: &config) {
-    if config.target == ~"arm-linux-androideabi" {
+    if config.target == "arm-linux-androideabi".to_owned() {
         match config.mode{
             mode_debug_info => {
                 println!("arm-linux-androideabi debug-info \
                          test uses tcp 5039 port. please reserve it");
-                //arm-linux-androideabi debug-info test uses remote debugger
-                //so, we test 1 task at once
-                os::setenv("RUST_TEST_TASKS","1");
             }
             _ =>{}
         }
+
+        //arm-linux-androideabi debug-info test uses remote debugger
+        //so, we test 1 task at once.
+        // also trying to isolate problems with adb_run_wrapper.sh ilooping
+        os::setenv("RUST_TEST_TASKS","1");
     }
 
     let opts = test_opts(config);
@@ -233,7 +247,7 @@ pub fn run_tests(config: &config) {
     // parallel (especially when we have lots and lots of child processes).
     // For context, see #8904
     io::test::raise_fd_limit();
-    let res = test::run_tests_console(&opts, tests);
+    let res = test::run_tests_console(&opts, tests.move_iter().collect());
     match res {
         Ok(true) => {}
         Ok(false) => fail!("Some tests failed"),
@@ -253,14 +267,15 @@ pub fn test_opts(config: &config) -> test::TestOpts {
         ratchet_metrics: config.ratchet_metrics.clone(),
         ratchet_noise_percent: config.ratchet_noise_percent.clone(),
         save_metrics: config.save_metrics.clone(),
-        test_shard: config.test_shard.clone()
+        test_shard: config.test_shard.clone(),
+        nocapture: false,
     }
 }
 
-pub fn make_tests(config: &config) -> ~[test::TestDescAndFn] {
+pub fn make_tests(config: &config) -> Vec<test::TestDescAndFn> {
     debug!("making tests from {}",
            config.src_base.display());
-    let mut tests = ~[];
+    let mut tests = Vec::new();
     let dirs = fs::readdir(&config.src_base).unwrap();
     for file in dirs.iter() {
         let file = file.clone();
@@ -282,10 +297,10 @@ pub fn is_test(config: &config, testfile: &Path) -> bool {
     // Pretty-printer does not work with .rc files yet
     let valid_extensions =
         match config.mode {
-          mode_pretty => ~[~".rs"],
-          _ => ~[~".rc", ~".rs"]
+          mode_pretty => vec!(".rs".to_owned()),
+          _ => vec!(".rc".to_owned(), ".rs".to_owned())
         };
-    let invalid_prefixes = ~[~".", ~"#", ~"~"];
+    let invalid_prefixes = vec!(".".to_owned(), "#".to_owned(), "~".to_owned());
     let name = testfile.filename_str().unwrap();
 
     let mut valid = false;

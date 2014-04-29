@@ -11,13 +11,13 @@
 use std::rt::env::max_cached_stacks;
 use std::os::{errno, page_size, MemoryMap, MapReadable, MapWritable,
               MapNonStandardFlags, MapVirtual};
-use std::libc;
+use libc;
 
 /// A task's stack. The name "Stack" is a vestige of segmented stacks.
 pub struct Stack {
-    priv buf: MemoryMap,
-    priv min_size: uint,
-    priv valgrind_id: libc::c_uint,
+    buf: MemoryMap,
+    min_size: uint,
+    valgrind_id: libc::c_uint,
 }
 
 // Try to use MAP_STACK on platforms that support it (it's what we're doing
@@ -126,21 +126,21 @@ impl Drop for Stack {
 pub struct StackPool {
     // Ideally this would be some datastructure that preserved ordering on
     // Stack.min_size.
-    priv stacks: ~[Stack],
+    stacks: Vec<Stack>,
 }
 
 impl StackPool {
     pub fn new() -> StackPool {
         StackPool {
-            stacks: ~[],
+            stacks: vec![],
         }
     }
 
     pub fn take_stack(&mut self, min_size: uint) -> Stack {
         // Ideally this would be a binary search
-        match self.stacks.iter().position(|s| s.min_size < min_size) {
-            Some(idx) => self.stacks.swap_remove(idx),
-            None      => Stack::new(min_size)
+        match self.stacks.iter().position(|s| min_size <= s.min_size) {
+            Some(idx) => self.stacks.swap_remove(idx).unwrap(),
+            None => Stack::new(min_size)
         }
     }
 
@@ -155,4 +155,34 @@ extern {
     fn rust_valgrind_stack_register(start: *libc::uintptr_t,
                                     end: *libc::uintptr_t) -> libc::c_uint;
     fn rust_valgrind_stack_deregister(id: libc::c_uint);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StackPool;
+
+    #[test]
+    fn stack_pool_caches() {
+        let mut p = StackPool::new();
+        let s = p.take_stack(10);
+        p.give_stack(s);
+        let s = p.take_stack(4);
+        assert_eq!(s.min_size, 10);
+        p.give_stack(s);
+        let s = p.take_stack(14);
+        assert_eq!(s.min_size, 14);
+        p.give_stack(s);
+    }
+
+    #[test]
+    fn stack_pool_caches_exact() {
+        let mut p = StackPool::new();
+        let mut s = p.take_stack(10);
+        s.valgrind_id = 100;
+        p.give_stack(s);
+
+        let s = p.take_stack(10);
+        assert_eq!(s.min_size, 10);
+        assert_eq!(s.valgrind_id, 100);
+    }
 }

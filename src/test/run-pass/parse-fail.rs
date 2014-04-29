@@ -8,8 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[allow(unreachable_code)];
+#![allow(unreachable_code)]
 
-fn dont_call_me() { fail!(); info!("{}", 1); }
+// ignore-test #12920
+
+fn dont_call_me() { fail!(); println!("{}", 1); }
 
 pub fn main() { }

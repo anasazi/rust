@@ -10,63 +10,11 @@
 
 use clone::Clone;
 use kinds::Send;
-use ops::Drop;
-use option::{Option,Some,None};
 use sync::arc::UnsafeArc;
-use unstable::mutex::Mutex;
-
-pub struct LittleLock {
-    priv l: Mutex,
-}
-
-pub struct LittleGuard<'a> {
-    priv l: &'a mut Mutex,
-}
-
-impl Drop for LittleLock {
-    fn drop(&mut self) {
-        unsafe { self.l.destroy(); }
-    }
-}
-
-#[unsafe_destructor]
-impl<'a> Drop for LittleGuard<'a> {
-    fn drop(&mut self) {
-        unsafe { self.l.unlock(); }
-    }
-}
-
-impl LittleLock {
-    pub fn new() -> LittleLock {
-        unsafe { LittleLock { l: Mutex::new() } }
-    }
-
-    pub unsafe fn lock<'a>(&'a mut self) -> LittleGuard<'a> {
-        self.l.lock();
-        LittleGuard { l: &mut self.l }
-    }
-
-    pub unsafe fn try_lock<'a>(&'a mut self) -> Option<LittleGuard<'a>> {
-        if self.l.trylock() {
-            Some(LittleGuard { l: &mut self.l })
-        } else {
-            None
-        }
-    }
-
-    pub unsafe fn signal(&mut self) {
-        self.l.signal();
-    }
-}
-
-impl<'a> LittleGuard<'a> {
-    pub unsafe fn wait(&mut self) {
-        self.l.wait();
-    }
-}
+use unstable::mutex::NativeMutex;
 
 struct ExData<T> {
-    lock: LittleLock,
+    lock: NativeMutex,
     failed: bool,
     data: T,
 }
@@ -82,7 +30,7 @@ struct ExData<T> {
  * need to block or deschedule while accessing shared state, use extra::sync::RWArc.
  */
 pub struct Exclusive<T> {
-    priv x: UnsafeArc<ExData<T>>
+    x: UnsafeArc<ExData<T>>
 }
 
 impl<T:Send> Clone for Exclusive<T> {
@@ -95,7 +43,7 @@ impl<T:Send> Clone for Exclusive<T> {
 impl<T:Send> Exclusive<T> {
     pub fn new(user_data: T) -> Exclusive<T> {
         let data = ExData {
-            lock: LittleLock::new(),
+            lock: unsafe {NativeMutex::new()},
             failed: false,
             data: user_data
         };
@@ -104,8 +52,8 @@ impl<T:Send> Exclusive<T> {
         }
     }
 
-    // Exactly like std::arc::MutexArc,access(), but with the LittleLock
-    // instead of a proper mutex. Same reason for being unsafe.
+    // Exactly like sync::MutexArc.access(). Same reason for being
+    // unsafe.
     //
     // Currently, scheduling operations (i.e., descheduling, receiving on a pipe,
     // accessing the provided condition variable) are prohibited while inside
@@ -131,20 +79,20 @@ impl<T:Send> Exclusive<T> {
     #[inline]
     pub unsafe fn hold_and_signal(&self, f: |x: &mut T|) {
         let rec = self.x.get();
-        let _l = (*rec).lock.lock();
+        let guard = (*rec).lock.lock();
         if (*rec).failed {
             fail!("Poisoned Exclusive::new - another task failed inside!");
         }
         (*rec).failed = true;
         f(&mut (*rec).data);
         (*rec).failed = false;
-        (*rec).lock.signal();
+        guard.signal();
     }
 
     #[inline]
     pub unsafe fn hold_and_wait(&self, f: |x: &T| -> bool) {
         let rec = self.x.get();
-        let mut l = (*rec).lock.lock();
+        let l = (*rec).lock.lock();
         if (*rec).failed {
             fail!("Poisoned Exclusive::new - another task failed inside!");
         }
@@ -167,7 +115,7 @@ mod tests {
     #[test]
     fn exclusive_new_arc() {
         unsafe {
-            let mut futures = ~[];
+            let mut futures = Vec::new();
 
             let num_tasks = 10;
             let count = 10;
@@ -176,14 +124,14 @@ mod tests {
 
             for _ in range(0u, num_tasks) {
                 let total = total.clone();
-                let (port, chan) = Chan::new();
-                futures.push(port);
+                let (tx, rx) = channel();
+                futures.push(rx);
 
                 task::spawn(proc() {
                     for _ in range(0u, count) {
                         total.with(|count| **count += 1);
                     }
-                    chan.send(());
+                    tx.send(());
                 });
             };
 

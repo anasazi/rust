@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(managed_boxes)];
+#![feature(managed_boxes)]
 
 use std::cell::RefCell;
 
@@ -19,7 +19,7 @@ enum taggy {
 
 fn f() {
     let a_box = @RefCell::new(nil);
-    a_box.set(cons(a_box));
+    *a_box.borrow_mut() = cons(a_box);
 }
 
 pub fn main() {

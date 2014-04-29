@@ -18,45 +18,46 @@
 
 */
 
-extern mod extra;
+extern crate getopts;
+extern crate time;
 
-use extra::{time, getopts};
 use std::os;
 use std::result::{Ok, Err};
 use std::task;
+use std::task::TaskBuilder;
 use std::uint;
 
 fn fib(n: int) -> int {
-    fn pfib(c: &SharedChan<int>, n: int) {
+    fn pfib(tx: &Sender<int>, n: int) {
         if n == 0 {
-            c.send(0);
+            tx.send(0);
         } else if n <= 2 {
-            c.send(1);
+            tx.send(1);
         } else {
-            let (pp, cc) = SharedChan::new();
-            let ch = cc.clone();
-            task::spawn(proc() pfib(&ch, n - 1));
-            let ch = cc.clone();
-            task::spawn(proc() pfib(&ch, n - 2));
-            c.send(pp.recv() + pp.recv());
+            let (tx1, rx) = channel();
+            let tx2 = tx1.clone();
+            task::spawn(proc() pfib(&tx2, n - 1));
+            let tx2 = tx1.clone();
+            task::spawn(proc() pfib(&tx2, n - 2));
+            tx.send(rx.recv() + rx.recv());
         }
     }
 
-    let (p, ch) = SharedChan::new();
-    let _t = task::spawn(proc() pfib(&ch, n) );
-    p.recv()
+    let (tx, rx) = channel();
+    spawn(proc() pfib(&tx, n) );
+    rx.recv()
 }
 
 struct Config {
     stress: bool
 }
 
-fn parse_opts(argv: ~[~str]) -> Config {
-    let opts = ~[getopts::optflag("stress")];
+fn parse_opts(argv: Vec<~str> ) -> Config {
+    let opts = vec!(getopts::optflag("", "stress", ""));
 
     let opt_args = argv.slice(1, argv.len());
 
-    match getopts::getopts(opt_args, opts) {
+    match getopts::getopts(opt_args, opts.as_slice()) {
       Ok(ref m) => {
           return Config {stress: m.opt_present("stress")}
       }
@@ -70,14 +71,14 @@ fn stress_task(id: int) {
         let n = 15;
         assert_eq!(fib(n), fib(n));
         i += 1;
-        error!("{}: Completed {} iterations", id, i);
+        println!("{}: Completed {} iterations", id, i);
     }
 }
 
 fn stress(num_tasks: int) {
-    let mut results = ~[];
+    let mut results = Vec::new();
     for i in range(0, num_tasks) {
-        let mut builder = task::task();
+        let mut builder = TaskBuilder::new();
         results.push(builder.future_result());
         builder.spawn(proc() {
             stress_task(i);
@@ -91,11 +92,11 @@ fn stress(num_tasks: int) {
 fn main() {
     let args = os::args();
     let args = if os::getenv("RUST_BENCH").is_some() {
-        ~[~"", ~"20"]
+        vec!("".to_owned(), "20".to_owned())
     } else if args.len() <= 1u {
-        ~[~"", ~"8"]
+        vec!("".to_owned(), "8".to_owned())
     } else {
-        args
+        args.move_iter().collect()
     };
 
     let opts = parse_opts(args.clone());
@@ -103,7 +104,8 @@ fn main() {
     if opts.stress {
         stress(2);
     } else {
-        let max = uint::parse_bytes(args[1].as_bytes(), 10u).unwrap() as int;
+        let max = uint::parse_bytes(args.get(1).as_bytes(), 10u).unwrap() as
+            int;
 
         let num_trials = 10;
 

@@ -13,14 +13,16 @@
 //! These are implemented for the primitive numeric types in `std::{u8, u16,
 //! u32, u64, uint, i8, i16, i32, i64, int, f32, f64, float}`.
 
-#[allow(missing_doc)];
+#![allow(missing_doc)]
 
-use clone::{Clone, DeepClone};
+use clone::Clone;
 use cmp::{Eq, Ord};
+use kinds::Copy;
 use mem::size_of;
 use ops::{Add, Sub, Mul, Div, Rem, Neg};
 use ops::{Not, BitAnd, BitOr, BitXor, Shl, Shr};
 use option::{Option, Some, None};
+use fmt::{Show, Binary, Octal, LowerHex, UpperHex};
 
 pub mod strconv;
 
@@ -33,22 +35,11 @@ pub trait Num: Eq + Zero + One
              + Div<Self,Self>
              + Rem<Self,Self> {}
 
-pub trait Orderable: Ord {
-    // These should be methods on `Ord`, with overridable default implementations. We don't want
-    // to encumber all implementors of Ord by requiring them to implement these functions, but at
-    // the same time we want to be able to take advantage of the speed of the specific numeric
-    // functions (like the `fmin` and `fmax` intrinsics).
-    fn min(&self, other: &Self) -> Self;
-    fn max(&self, other: &Self) -> Self;
-    fn clamp(&self, mn: &Self, mx: &Self) -> Self;
+/// Simultaneous division and remainder
+#[inline]
+pub fn div_rem<T: Div<T, T> + Rem<T, T>>(x: T, y: T) -> (T, T) {
+    (x / y, x % y)
 }
-
-/// Return the smaller number.
-#[inline(always)] pub fn min<T: Orderable>(x: T, y: T) -> T { x.min(&y) }
-/// Return the larger number.
-#[inline(always)] pub fn max<T: Orderable>(x: T, y: T) -> T { x.max(&y) }
-/// Returns the number constrained within the range `mn <= self <= mx`.
-#[inline(always)] pub fn clamp<T: Orderable>(value: T, mn: T, mx: T) -> T { value.clamp(&mn, &mx) }
 
 /// Defines an additive identity element for `Self`.
 ///
@@ -62,7 +53,7 @@ pub trait Zero: Add<Self, Self> {
     ///
     /// # Laws
     ///
-    /// ~~~
+    /// ~~~notrust
     /// a + 0 = a       ∀ a ∈ Self
     /// 0 + a = a       ∀ a ∈ Self
     /// ~~~
@@ -88,7 +79,7 @@ pub trait One: Mul<Self, Self> {
     ///
     /// # Laws
     ///
-    /// ~~~
+    /// ~~~notrust
     /// a * 1 = a       ∀ a ∈ Self
     /// 1 * a = a       ∀ a ∈ Self
     /// ~~~
@@ -105,25 +96,56 @@ pub trait One: Mul<Self, Self> {
 /// Returns the multiplicative identity, `1`.
 #[inline(always)] pub fn one<T: One>() -> T { One::one() }
 
-pub trait Signed: Num
-                + Neg<Self> {
+/// Useful functions for signed numbers (i.e. numbers that can be negative).
+pub trait Signed: Num + Neg<Self> {
+    /// Computes the absolute value.
+    ///
+    /// For float, f32, and f64, `NaN` will be returned if the number is `NaN`.
     fn abs(&self) -> Self;
+
+    /// The positive difference of two numbers.
+    ///
+    /// Returns `zero` if the number is less than or equal to `other`, otherwise the difference
+    /// between `self` and `other` is returned.
     fn abs_sub(&self, other: &Self) -> Self;
+
+    /// Returns the sign of the number.
+    ///
+    /// For `float`, `f32`, `f64`:
+    ///   * `1.0` if the number is positive, `+0.0` or `INFINITY`
+    ///   * `-1.0` if the number is negative, `-0.0` or `NEG_INFINITY`
+    ///   * `NaN` if the number is `NaN`
+    ///
+    /// For `int`:
+    ///   * `0` if the number is zero
+    ///   * `1` if the number is positive
+    ///   * `-1` if the number is negative
     fn signum(&self) -> Self;
 
+    /// Returns true if the number is positive and false if the number is zero or negative.
     fn is_positive(&self) -> bool;
+
+    /// Returns true if the number is negative and false if the number is zero or positive.
     fn is_negative(&self) -> bool;
 }
 
 /// Computes the absolute value.
 ///
 /// For float, f32, and f64, `NaN` will be returned if the number is `NaN`
-#[inline(always)] pub fn abs<T: Signed>(value: T) -> T { value.abs() }
+#[inline(always)]
+pub fn abs<T: Signed>(value: T) -> T {
+    value.abs()
+}
+
 /// The positive difference of two numbers.
 ///
 /// Returns `zero` if the number is less than or equal to `other`,
 /// otherwise the difference between `self` and `other` is returned.
-#[inline(always)] pub fn abs_sub<T: Signed>(x: T, y: T) -> T { x.abs_sub(&y) }
+#[inline(always)]
+pub fn abs_sub<T: Signed>(x: T, y: T) -> T {
+    x.abs_sub(&y)
+}
+
 /// Returns the sign of the number.
 ///
 /// For float, f32, f64:
@@ -137,160 +159,8 @@ pub trait Signed: Num
 /// - `-1` if the number is negative
 #[inline(always)] pub fn signum<T: Signed>(value: T) -> T { value.signum() }
 
+/// A trait for values which cannot be negative
 pub trait Unsigned: Num {}
-
-pub trait Integer: Num
-                 + Orderable
-                 + Div<Self,Self>
-                 + Rem<Self,Self> {
-    fn div_rem(&self, other: &Self) -> (Self,Self);
-
-    fn div_floor(&self, other: &Self) -> Self;
-    fn mod_floor(&self, other: &Self) -> Self;
-    fn div_mod_floor(&self, other: &Self) -> (Self,Self);
-
-    fn gcd(&self, other: &Self) -> Self;
-    fn lcm(&self, other: &Self) -> Self;
-
-    fn is_multiple_of(&self, other: &Self) -> bool;
-    fn is_even(&self) -> bool;
-    fn is_odd(&self) -> bool;
-}
-
-/// Calculates the Greatest Common Divisor (GCD) of the number and `other`.
-///
-/// The result is always positive.
-#[inline(always)] pub fn gcd<T: Integer>(x: T, y: T) -> T { x.gcd(&y) }
-/// Calculates the Lowest Common Multiple (LCM) of the number and `other`.
-#[inline(always)] pub fn lcm<T: Integer>(x: T, y: T) -> T { x.lcm(&y) }
-
-/// A collection of rounding operations.
-pub trait Round {
-    /// Return the largest integer less than or equal to a number.
-    fn floor(&self) -> Self;
-
-    /// Return the smallest integer greater than or equal to a number.
-    fn ceil(&self) -> Self;
-
-    /// Return the nearest integer to a number. Round half-way cases away from
-    /// `0.0`.
-    fn round(&self) -> Self;
-
-    /// Return the integer part of a number.
-    fn trunc(&self) -> Self;
-
-    /// Return the fractional part of a number.
-    fn fract(&self) -> Self;
-}
-
-/// Defines constants and methods common to real numbers
-pub trait Real: Signed
-              + Orderable
-              + Round
-              + Div<Self,Self> {
-    // Common Constants
-    // FIXME (#5527): These should be associated constants
-    fn pi() -> Self;
-    fn two_pi() -> Self;
-    fn frac_pi_2() -> Self;
-    fn frac_pi_3() -> Self;
-    fn frac_pi_4() -> Self;
-    fn frac_pi_6() -> Self;
-    fn frac_pi_8() -> Self;
-    fn frac_1_pi() -> Self;
-    fn frac_2_pi() -> Self;
-    fn frac_2_sqrtpi() -> Self;
-    fn sqrt2() -> Self;
-    fn frac_1_sqrt2() -> Self;
-    fn e() -> Self;
-    fn log2_e() -> Self;
-    fn log10_e() -> Self;
-    fn ln_2() -> Self;
-    fn ln_10() -> Self;
-
-    // Fractional functions
-
-    /// Take the reciprocal (inverse) of a number, `1/x`.
-    fn recip(&self) -> Self;
-
-    // Algebraic functions
-    /// Raise a number to a power.
-    fn powf(&self, n: &Self) -> Self;
-
-    /// Take the square root of a number.
-    fn sqrt(&self) -> Self;
-    /// Take the reciprocal (inverse) square root of a number, `1/sqrt(x)`.
-    fn rsqrt(&self) -> Self;
-    /// Take the cubic root of a number.
-    fn cbrt(&self) -> Self;
-    /// Calculate the length of the hypotenuse of a right-angle triangle given
-    /// legs of length `x` and `y`.
-    fn hypot(&self, other: &Self) -> Self;
-
-    // Trigonometric functions
-
-    /// Computes the sine of a number (in radians).
-    fn sin(&self) -> Self;
-    /// Computes the cosine of a number (in radians).
-    fn cos(&self) -> Self;
-    /// Computes the tangent of a number (in radians).
-    fn tan(&self) -> Self;
-
-    /// Computes the arcsine of a number. Return value is in radians in
-    /// the range [-pi/2, pi/2] or NaN if the number is outside the range
-    /// [-1, 1].
-    fn asin(&self) -> Self;
-    /// Computes the arccosine of a number. Return value is in radians in
-    /// the range [0, pi] or NaN if the number is outside the range
-    /// [-1, 1].
-    fn acos(&self) -> Self;
-    /// Computes the arctangent of a number. Return value is in radians in the
-    /// range [-pi/2, pi/2];
-    fn atan(&self) -> Self;
-    /// Computes the four quadrant arctangent of a number, `y`, and another
-    /// number `x`. Return value is in radians in the range [-pi, pi].
-    fn atan2(&self, other: &Self) -> Self;
-    /// Simultaneously computes the sine and cosine of the number, `x`. Returns
-    /// `(sin(x), cos(x))`.
-    fn sin_cos(&self) -> (Self, Self);
-
-    // Exponential functions
-
-    /// Returns `e^(self)`, (the exponential function).
-    fn exp(&self) -> Self;
-    /// Returns 2 raised to the power of the number, `2^(self)`.
-    fn exp2(&self) -> Self;
-    /// Returns the natural logarithm of the number.
-    fn ln(&self) -> Self;
-    /// Returns the logarithm of the number with respect to an arbitrary base.
-    fn log(&self, base: &Self) -> Self;
-    /// Returns the base 2 logarithm of the number.
-    fn log2(&self) -> Self;
-    /// Returns the base 10 logarithm of the number.
-    fn log10(&self) -> Self;
-
-    // Hyperbolic functions
-
-    /// Hyperbolic sine function.
-    fn sinh(&self) -> Self;
-    /// Hyperbolic cosine function.
-    fn cosh(&self) -> Self;
-    /// Hyperbolic tangent function.
-    fn tanh(&self) -> Self;
-    /// Inverse hyperbolic sine function.
-    fn asinh(&self) -> Self;
-    /// Inverse hyperbolic cosine function.
-    fn acosh(&self) -> Self;
-    /// Inverse hyperbolic tangent function.
-    fn atanh(&self) -> Self;
-
-    // Angular conversions
-
-    /// Convert radians to degrees.
-    fn to_degrees(&self) -> Self;
-    /// Convert degrees to radians.
-    fn to_radians(&self) -> Self;
-}
 
 /// Raises a value to the power of exp, using exponentiation by squaring.
 ///
@@ -317,70 +187,12 @@ pub fn pow<T: One + Mul<T, T>>(mut base: T, mut exp: uint) -> T {
     }
 }
 
-/// Raise a number to a power.
-///
-/// # Example
-///
-/// ```rust
-/// use std::num;
-///
-/// let sixteen: f64 = num::powf(2.0, 4.0);
-/// assert_eq!(sixteen, 16.0);
-/// ```
-#[inline(always)] pub fn powf<T: Real>(value: T, n: T) -> T { value.powf(&n) }
-/// Take the square root of a number.
-#[inline(always)] pub fn sqrt<T: Real>(value: T) -> T { value.sqrt() }
-/// Take the reciprocal (inverse) square root of a number, `1/sqrt(x)`.
-#[inline(always)] pub fn rsqrt<T: Real>(value: T) -> T { value.rsqrt() }
-/// Take the cubic root of a number.
-#[inline(always)] pub fn cbrt<T: Real>(value: T) -> T { value.cbrt() }
-/// Calculate the length of the hypotenuse of a right-angle triangle given legs of length `x` and
-/// `y`.
-#[inline(always)] pub fn hypot<T: Real>(x: T, y: T) -> T { x.hypot(&y) }
-/// Sine function.
-#[inline(always)] pub fn sin<T: Real>(value: T) -> T { value.sin() }
-/// Cosine function.
-#[inline(always)] pub fn cos<T: Real>(value: T) -> T { value.cos() }
-/// Tangent function.
-#[inline(always)] pub fn tan<T: Real>(value: T) -> T { value.tan() }
-/// Compute the arcsine of the number.
-#[inline(always)] pub fn asin<T: Real>(value: T) -> T { value.asin() }
-/// Compute the arccosine of the number.
-#[inline(always)] pub fn acos<T: Real>(value: T) -> T { value.acos() }
-/// Compute the arctangent of the number.
-#[inline(always)] pub fn atan<T: Real>(value: T) -> T { value.atan() }
-/// Compute the arctangent with 2 arguments.
-#[inline(always)] pub fn atan2<T: Real>(x: T, y: T) -> T { x.atan2(&y) }
-/// Simultaneously computes the sine and cosine of the number.
-#[inline(always)] pub fn sin_cos<T: Real>(value: T) -> (T, T) { value.sin_cos() }
-/// Returns `e^(value)`, (the exponential function).
-#[inline(always)] pub fn exp<T: Real>(value: T) -> T { value.exp() }
-/// Returns 2 raised to the power of the number, `2^(value)`.
-#[inline(always)] pub fn exp2<T: Real>(value: T) -> T { value.exp2() }
-/// Returns the natural logarithm of the number.
-#[inline(always)] pub fn ln<T: Real>(value: T) -> T { value.ln() }
-/// Returns the logarithm of the number with respect to an arbitrary base.
-#[inline(always)] pub fn log<T: Real>(value: T, base: T) -> T { value.log(&base) }
-/// Returns the base 2 logarithm of the number.
-#[inline(always)] pub fn log2<T: Real>(value: T) -> T { value.log2() }
-/// Returns the base 10 logarithm of the number.
-#[inline(always)] pub fn log10<T: Real>(value: T) -> T { value.log10() }
-/// Hyperbolic sine function.
-#[inline(always)] pub fn sinh<T: Real>(value: T) -> T { value.sinh() }
-/// Hyperbolic cosine function.
-#[inline(always)] pub fn cosh<T: Real>(value: T) -> T { value.cosh() }
-/// Hyperbolic tangent function.
-#[inline(always)] pub fn tanh<T: Real>(value: T) -> T { value.tanh() }
-/// Inverse hyperbolic sine function.
-#[inline(always)] pub fn asinh<T: Real>(value: T) -> T { value.asinh() }
-/// Inverse hyperbolic cosine function.
-#[inline(always)] pub fn acosh<T: Real>(value: T) -> T { value.acosh() }
-/// Inverse hyperbolic tangent function.
-#[inline(always)] pub fn atanh<T: Real>(value: T) -> T { value.atanh() }
-
+/// Numbers which have upper and lower bounds
 pub trait Bounded {
     // FIXME (#5527): These should be associated constants
+    /// returns the smallest finite number this type can represent
     fn min_value() -> Self;
+    /// returns the largest finite number this type can represent
     fn max_value() -> Self;
 }
 
@@ -392,18 +204,35 @@ pub trait Bitwise: Bounded
                  + BitXor<Self,Self>
                  + Shl<Self,Self>
                  + Shr<Self,Self> {
-    /// Returns the number of bits set in the number.
+    /// Returns the number of ones in the binary representation of the number.
     ///
     /// # Example
     ///
     /// ```rust
     /// use std::num::Bitwise;
     ///
-    /// let n = 0b0101000u16;
-    /// assert_eq!(n.population_count(), 2);
+    /// let n = 0b01001100u8;
+    /// assert_eq!(n.count_ones(), 3);
     /// ```
-    fn population_count(&self) -> Self;
-    /// Returns the number of leading zeros in the number.
+    fn count_ones(&self) -> Self;
+
+    /// Returns the number of zeros in the binary representation of the number.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::num::Bitwise;
+    ///
+    /// let n = 0b01001100u8;
+    /// assert_eq!(n.count_zeros(), 5);
+    /// ```
+    #[inline]
+    fn count_zeros(&self) -> Self {
+        (!*self).count_ones()
+    }
+
+    /// Returns the number of leading zeros in the in the binary representation
+    /// of the number.
     ///
     /// # Example
     ///
@@ -414,7 +243,9 @@ pub trait Bitwise: Bounded
     /// assert_eq!(n.leading_zeros(), 10);
     /// ```
     fn leading_zeros(&self) -> Self;
-    /// Returns the number of trailing zeros in the number.
+
+    /// Returns the number of trailing zeros in the in the binary representation
+    /// of the number.
     ///
     /// # Example
     ///
@@ -430,21 +261,25 @@ pub trait Bitwise: Bounded
 /// Specifies the available operations common to all of Rust's core numeric primitives.
 /// These may not always make sense from a purely mathematical point of view, but
 /// may be useful for systems programming.
-pub trait Primitive: Clone
-                   + DeepClone
+pub trait Primitive: Copy
+                   + Clone
                    + Num
                    + NumCast
-                   + Orderable
+                   + Ord
                    + Bounded {}
 
 /// A collection of traits relevant to primitive signed and unsigned integers
-pub trait Int: Integer
-             + Primitive
+pub trait Int: Primitive
              + Bitwise
              + CheckedAdd
              + CheckedSub
-             // + CheckedMul // FIXME #8849: currently not impled on 32-bit
-             + CheckedDiv {}
+             + CheckedMul
+             + CheckedDiv
+             + Show
+             + Binary
+             + Octal
+             + LowerHex
+             + UpperHex {}
 
 /// Returns the smallest power of 2 greater than or equal to `n`.
 #[inline]
@@ -457,6 +292,12 @@ pub fn next_power_of_two<T: Unsigned + Int>(n: T) -> T {
         shift = shift << one();
     }
     tmp + one()
+}
+
+// Returns `true` iff `n == 2^k` for some k.
+#[inline]
+pub fn is_power_of_two<T: Unsigned + Int>(n: T) -> bool {
+    (n - one()) & n == zero()
 }
 
 /// Returns the smallest power of 2 greater than or equal to `n`. If the next
@@ -475,7 +316,7 @@ pub fn checked_next_power_of_two<T: Unsigned + Int>(n: T) -> Option<T> {
 }
 
 /// Used for representing the classification of floating point numbers
-#[deriving(Eq)]
+#[deriving(Eq, Show)]
 pub enum FPCategory {
     /// "Not a Number", often obtained by dividing by zero
     FPNaN,
@@ -489,53 +330,212 @@ pub enum FPCategory {
     FPNormal,
 }
 
-/// Primitive floating point numbers
-pub trait Float: Real
-               + Signed
-               + Primitive {
-    // FIXME (#5527): These should be associated constants
+/// Operations on primitive floating point numbers.
+// FIXME(#5527): In a future version of Rust, many of these functions will
+//               become constants.
+//
+// FIXME(#8888): Several of these functions have a parameter named
+//               `unused_self`. Removing it requires #8888 to be fixed.
+pub trait Float: Signed + Primitive {
+    /// Returns the NaN value.
     fn nan() -> Self;
+    /// Returns the infinite value.
     fn infinity() -> Self;
+    /// Returns the negative infinite value.
     fn neg_infinity() -> Self;
+    /// Returns -0.0.
     fn neg_zero() -> Self;
 
-    fn is_nan(&self) -> bool;
-    fn is_infinite(&self) -> bool;
-    fn is_finite(&self) -> bool;
-    fn is_normal(&self) -> bool;
-    fn classify(&self) -> FPCategory;
+    /// Returns true if this value is NaN and false otherwise.
+    fn is_nan(self) -> bool;
+    /// Returns true if this value is positive infinity or negative infinity and
+    /// false otherwise.
+    fn is_infinite(self) -> bool;
+    /// Returns true if this number is neither infinite nor NaN.
+    fn is_finite(self) -> bool;
+    /// Returns true if this number is neither zero, infinite, denormal, or NaN.
+    fn is_normal(self) -> bool;
+    /// Returns the category that this number falls into.
+    fn classify(self) -> FPCategory;
 
-    // FIXME (#8888): Removing `unused_self` requires #8888 to be fixed.
+    // FIXME (#5527): These should be associated constants
+
+    /// Returns the number of binary digits of mantissa that this type supports.
     fn mantissa_digits(unused_self: Option<Self>) -> uint;
+    /// Returns the number of base-10 digits of precision that this type supports.
     fn digits(unused_self: Option<Self>) -> uint;
+    /// Returns the difference between 1.0 and the smallest representable number larger than 1.0.
     fn epsilon() -> Self;
+    /// Returns the minimum binary exponent that this type can represent.
     fn min_exp(unused_self: Option<Self>) -> int;
+    /// Returns the maximum binary exponent that this type can represent.
     fn max_exp(unused_self: Option<Self>) -> int;
+    /// Returns the minimum base-10 exponent that this type can represent.
     fn min_10_exp(unused_self: Option<Self>) -> int;
+    /// Returns the maximum base-10 exponent that this type can represent.
     fn max_10_exp(unused_self: Option<Self>) -> int;
+    /// Returns the smallest normalized positive number that this type can represent.
+    fn min_pos_value(unused_self: Option<Self>) -> Self;
 
+    /// Constructs a floating point number created by multiplying `x` by 2
+    /// raised to the power of `exp`.
     fn ldexp(x: Self, exp: int) -> Self;
-    fn frexp(&self) -> (Self, int);
+    /// Breaks the number into a normalized fraction and a base-2 exponent,
+    /// satisfying:
+    ///
+    ///  * `self = x * pow(2, exp)`
+    ///
+    ///  * `0.5 <= abs(x) < 1.0`
+    fn frexp(self) -> (Self, int);
+    /// Returns the mantissa, exponent and sign as integers, respectively.
+    fn integer_decode(self) -> (u64, i16, i8);
 
-    fn exp_m1(&self) -> Self;
-    fn ln_1p(&self) -> Self;
-    fn mul_add(&self, a: Self, b: Self) -> Self;
-    fn next_after(&self, other: Self) -> Self;
+    /// Returns the next representable floating-point value in the direction of
+    /// `other`.
+    fn next_after(self, other: Self) -> Self;
 
-    fn integer_decode(&self) -> (u64, i16, i8);
+    /// Return the largest integer less than or equal to a number.
+    fn floor(self) -> Self;
+    /// Return the smallest integer greater than or equal to a number.
+    fn ceil(self) -> Self;
+    /// Return the nearest integer to a number. Round half-way cases away from
+    /// `0.0`.
+    fn round(self) -> Self;
+    /// Return the integer part of a number.
+    fn trunc(self) -> Self;
+    /// Return the fractional part of a number.
+    fn fract(self) -> Self;
+
+    /// Returns the maximum of the two numbers.
+    fn max(self, other: Self) -> Self;
+    /// Returns the minimum of the two numbers.
+    fn min(self, other: Self) -> Self;
+
+    /// Fused multiply-add. Computes `(self * a) + b` with only one rounding
+    /// error. This produces a more accurate result with better performance than
+    /// a separate multiplication operation followed by an add.
+    fn mul_add(self, a: Self, b: Self) -> Self;
+    /// Take the reciprocal (inverse) of a number, `1/x`.
+    fn recip(self) -> Self;
+
+    /// Raise a number to an integer power.
+    ///
+    /// Using this function is generally faster than using `powf`
+    fn powi(self, n: i32) -> Self;
+    /// Raise a number to a floating point power.
+    fn powf(self, n: Self) -> Self;
+
+    /// sqrt(2.0).
+    fn sqrt2() -> Self;
+    /// 1.0 / sqrt(2.0).
+    fn frac_1_sqrt2() -> Self;
+
+    /// Take the square root of a number.
+    fn sqrt(self) -> Self;
+    /// Take the reciprocal (inverse) square root of a number, `1/sqrt(x)`.
+    fn rsqrt(self) -> Self;
+    /// Take the cubic root of a number.
+    fn cbrt(self) -> Self;
+    /// Calculate the length of the hypotenuse of a right-angle triangle given
+    /// legs of length `x` and `y`.
+    fn hypot(self, other: Self) -> Self;
+
+    // FIXME (#5527): These should be associated constants
+
+    /// Archimedes' constant.
+    fn pi() -> Self;
+    /// 2.0 * pi.
+    fn two_pi() -> Self;
+    /// pi / 2.0.
+    fn frac_pi_2() -> Self;
+    /// pi / 3.0.
+    fn frac_pi_3() -> Self;
+    /// pi / 4.0.
+    fn frac_pi_4() -> Self;
+    /// pi / 6.0.
+    fn frac_pi_6() -> Self;
+    /// pi / 8.0.
+    fn frac_pi_8() -> Self;
+    /// 1.0 / pi.
+    fn frac_1_pi() -> Self;
+    /// 2.0 / pi.
+    fn frac_2_pi() -> Self;
+    /// 2.0 / sqrt(pi).
+    fn frac_2_sqrtpi() -> Self;
+
+    /// Computes the sine of a number (in radians).
+    fn sin(self) -> Self;
+    /// Computes the cosine of a number (in radians).
+    fn cos(self) -> Self;
+    /// Computes the tangent of a number (in radians).
+    fn tan(self) -> Self;
+
+    /// Computes the arcsine of a number. Return value is in radians in
+    /// the range [-pi/2, pi/2] or NaN if the number is outside the range
+    /// [-1, 1].
+    fn asin(self) -> Self;
+    /// Computes the arccosine of a number. Return value is in radians in
+    /// the range [0, pi] or NaN if the number is outside the range
+    /// [-1, 1].
+    fn acos(self) -> Self;
+    /// Computes the arctangent of a number. Return value is in radians in the
+    /// range [-pi/2, pi/2];
+    fn atan(self) -> Self;
+    /// Computes the four quadrant arctangent of a number, `y`, and another
+    /// number `x`. Return value is in radians in the range [-pi, pi].
+    fn atan2(self, other: Self) -> Self;
+    /// Simultaneously computes the sine and cosine of the number, `x`. Returns
+    /// `(sin(x), cos(x))`.
+    fn sin_cos(self) -> (Self, Self);
+
+    /// Euler's number.
+    fn e() -> Self;
+    /// log2(e).
+    fn log2_e() -> Self;
+    /// log10(e).
+    fn log10_e() -> Self;
+    /// ln(2.0).
+    fn ln_2() -> Self;
+    /// ln(10.0).
+    fn ln_10() -> Self;
+
+    /// Returns `e^(self)`, (the exponential function).
+    fn exp(self) -> Self;
+    /// Returns 2 raised to the power of the number, `2^(self)`.
+    fn exp2(self) -> Self;
+    /// Returns the exponential of the number, minus 1, in a way that is
+    /// accurate even if the number is close to zero.
+    fn exp_m1(self) -> Self;
+    /// Returns the natural logarithm of the number.
+    fn ln(self) -> Self;
+    /// Returns the logarithm of the number with respect to an arbitrary base.
+    fn log(self, base: Self) -> Self;
+    /// Returns the base 2 logarithm of the number.
+    fn log2(self) -> Self;
+    /// Returns the base 10 logarithm of the number.
+    fn log10(self) -> Self;
+    /// Returns the natural logarithm of the number plus 1 (`ln(1+n)`) more
+    /// accurately than if the operations were performed separately.
+    fn ln_1p(self) -> Self;
+
+    /// Hyperbolic sine function.
+    fn sinh(self) -> Self;
+    /// Hyperbolic cosine function.
+    fn cosh(self) -> Self;
+    /// Hyperbolic tangent function.
+    fn tanh(self) -> Self;
+    /// Inverse hyperbolic sine function.
+    fn asinh(self) -> Self;
+    /// Inverse hyperbolic cosine function.
+    fn acosh(self) -> Self;
+    /// Inverse hyperbolic tangent function.
+    fn atanh(self) -> Self;
+
+    /// Convert radians to degrees.
+    fn to_degrees(self) -> Self;
+    /// Convert degrees to radians.
+    fn to_radians(self) -> Self;
 }
-
-/// Returns the exponential of the number, minus `1`, `exp(n) - 1`, in a way
-/// that is accurate even if the number is close to zero.
-#[inline(always)] pub fn exp_m1<T: Float>(value: T) -> T { value.exp_m1() }
-/// Returns the natural logarithm of the number plus `1`, `ln(n + 1)`, more
-/// accurately than if the operations were performed separately.
-#[inline(always)] pub fn ln_1p<T: Float>(value: T) -> T { value.ln_1p() }
-/// Fused multiply-add. Computes `(a * b) + c` with only one rounding error.
-///
-/// This produces a more accurate result with better performance (on some
-/// architectures) than a separate multiplication operation followed by an add.
-#[inline(always)] pub fn mul_add<T: Float>(a: T, b: T, c: T) -> T { a.mul_add(b, c) }
 
 /// A generic trait for converting a value to a number.
 pub trait ToPrimitive {
@@ -981,6 +981,8 @@ impl_from_primitive!(f64, n.to_f64())
 /// # Example
 ///
 /// ```
+/// use std::num;
+///
 /// let twenty: f32 = num::cast(0x14).unwrap();
 /// assert_eq!(twenty, 20f32);
 /// ```
@@ -990,8 +992,10 @@ pub fn cast<T: NumCast,U: NumCast>(n: T) -> Option<U> {
     NumCast::from(n)
 }
 
-/// An interface for casting between machine scalars
+/// An interface for casting between machine scalars.
 pub trait NumCast: ToPrimitive {
+    /// Creates a number from another value that can be converted into a primitive via the
+    /// `ToPrimitive` trait.
     fn from<T: ToPrimitive>(n: T) -> Option<Self>;
 }
 
@@ -1021,10 +1025,12 @@ impl_num_cast!(int,   to_int)
 impl_num_cast!(f32,   to_f32)
 impl_num_cast!(f64,   to_f64)
 
+/// A generic trait for converting a value to a string with a radix (base)
 pub trait ToStrRadix {
     fn to_str_radix(&self, radix: uint) -> ~str;
 }
 
+/// A generic trait for converting a string with a radix (base) to a value
 pub trait FromStrRadix {
     fn from_str_radix(str: &str, radix: uint) -> Option<Self>;
 }
@@ -1071,25 +1077,36 @@ impl<T: CheckedAdd + CheckedSub + Zero + Ord + Bounded> Saturating for T {
     }
 }
 
+/// Performs addition that returns `None` instead of wrapping around on overflow.
 pub trait CheckedAdd: Add<Self, Self> {
+    /// Adds two numbers, checking for overflow. If overflow happens, `None` is returned.
     fn checked_add(&self, v: &Self) -> Option<Self>;
 }
 
+/// Performs subtraction that returns `None` instead of wrapping around on underflow.
 pub trait CheckedSub: Sub<Self, Self> {
+    /// Subtracts two numbers, checking for underflow. If underflow happens, `None` is returned.
     fn checked_sub(&self, v: &Self) -> Option<Self>;
 }
 
+/// Performs multiplication that returns `None` instead of wrapping around on underflow or
+/// overflow.
 pub trait CheckedMul: Mul<Self, Self> {
+    /// Multiplies two numbers, checking for underflow or overflow. If underflow or overflow
+    /// happens, `None` is returned.
     fn checked_mul(&self, v: &Self) -> Option<Self>;
 }
 
+/// Performs division that returns `None` instead of wrapping around on underflow or overflow.
 pub trait CheckedDiv: Div<Self, Self> {
+    /// Divides two numbers, checking for underflow or overflow. If underflow or overflow happens,
+    /// `None` is returned.
     fn checked_div(&self, v: &Self) -> Option<Self>;
 }
 
 /// Helper function for testing numeric operations
 #[cfg(test)]
-pub fn test_num<T:Num + NumCast>(ten: T, two: T) {
+pub fn test_num<T:Num + NumCast + Show>(ten: T, two: T) {
     assert_eq!(ten.add(&two),  cast(12).unwrap());
     assert_eq!(ten.sub(&two),  cast(8).unwrap());
     assert_eq!(ten.mul(&two),  cast(20).unwrap());
@@ -1624,7 +1641,7 @@ mod tests {
     macro_rules! test_next_power_of_two(
         ($test_name:ident, $T:ident) => (
             fn $test_name() {
-                #[test];
+                #![test]
                 assert_eq!(next_power_of_two::<$T>(0), 0);
                 let mut next_power = 1;
                 for i in range::<$T>(1, 40) {
@@ -1644,7 +1661,7 @@ mod tests {
     macro_rules! test_checked_next_power_of_two(
         ($test_name:ident, $T:ident) => (
             fn $test_name() {
-                #[test];
+                #![test]
                 assert_eq!(checked_next_power_of_two::<$T>(0), None);
                 let mut next_power = 1;
                 for i in range::<$T>(1, 40) {
@@ -1664,7 +1681,7 @@ mod tests {
     test_checked_next_power_of_two!(test_checked_next_power_of_two_u64, u64)
     test_checked_next_power_of_two!(test_checked_next_power_of_two_uint, uint)
 
-    #[deriving(Eq)]
+    #[deriving(Eq, Show)]
     struct Value { x: int }
 
     impl ToPrimitive for Value {
@@ -1736,14 +1753,14 @@ mod tests {
 
 #[cfg(test)]
 mod bench {
+    extern crate test;
+    use self::test::Bencher;
     use num;
-    use vec;
     use prelude::*;
-    use extra::test::BenchHarness;
 
     #[bench]
-    fn bench_pow_function(b: &mut BenchHarness) {
-        let v = vec::from_fn(1024, |n| n);
+    fn bench_pow_function(b: &mut Bencher) {
+        let v = Vec::from_fn(1024, |n| n);
         b.iter(|| {v.iter().fold(0, |old, new| num::pow(old, *new));});
     }
 }

@@ -14,7 +14,7 @@ struct dog {
 
 impl dog {
     pub fn chase_cat(&mut self) {
-        let p: &'static mut uint = &mut self.cats_chased; //~ ERROR cannot infer an appropriate lifetime
+        let p: &'static mut uint = &mut self.cats_chased; //~ ERROR cannot infer
         *p += 1u;
     }
 
@@ -33,5 +33,5 @@ fn dog() -> dog {
 fn main() {
     let mut d = dog();
     d.chase_cat();
-    info!("cats_chased: {}", d.cats_chased);
+    println!("cats_chased: {}", d.cats_chased);
 }

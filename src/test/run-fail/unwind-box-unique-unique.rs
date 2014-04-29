@@ -10,7 +10,7 @@
 
 // error-pattern:fail
 
-#[feature(managed_boxes)];
+#![feature(managed_boxes)]
 
 fn failfn() {
     fail!();
@@ -19,5 +19,5 @@ fn failfn() {
 fn main() {
     let x = @~~0;
     failfn();
-    error!("{:?}", x);
+    println!("{:?}", x);
 }

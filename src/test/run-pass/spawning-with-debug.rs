@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,14 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// ignore-win32
 // exec-env:RUST_LOG=debug
-// xfail-fast
 
-// regression test for issue #10405, make sure we don't call debug! too soon.
+// regression test for issue #10405, make sure we don't call println! too soon.
 
-use std::task;
+use std::task::TaskBuilder;
 
 pub fn main() {
-    let mut t = task::task();
+    let mut t = TaskBuilder::new();
     t.spawn(proc() ());
 }

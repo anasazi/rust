@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,16 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-test newsched transition
+// ignore-test newsched transition
 
 // This test attempts to force the dynamic linker to resolve
 // external symbols as close to the red zone as possible.
 
-use std::rand;
+extern crate rand;
+
 use std::task;
 
 mod rustrt {
-    use std::libc;
+    extern crate libc;
 
     extern {
         pub fn debug_get_stk_seg() -> *u8;
@@ -59,14 +60,15 @@ fn runtest2(f: extern fn(), frame_backoff: u32, last_stk: *u8) -> u32 {
 }
 
 pub fn main() {
-    use std::rand::Rng;
-    let fns = ~[
+    use rand::Rng;
+    let fns = vec!(
         calllink01,
         calllink02,
         calllink08,
         calllink10
-    ];
-    let mut rng = rand::rng();
+    );
+    let mut rng = rand::task_rng();
+
     for f in fns.iter() {
         let f = *f;
         let sz = rng.gen::<u32>() % 256u32 + 256u32;

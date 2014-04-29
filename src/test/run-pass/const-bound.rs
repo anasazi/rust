@@ -12,13 +12,13 @@
 // are const.
 
 
-fn foo<T:Freeze>(x: T) -> T { x }
+fn foo<T: Share>(x: T) -> T { x }
 
 struct F { field: int }
 
 pub fn main() {
     /*foo(1);
-    foo(~"hi");
+    foo("hi".to_owned());
     foo(~[1, 2, 3]);
     foo(F{field: 42});
     foo((1, 2u));

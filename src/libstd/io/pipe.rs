@@ -13,13 +13,17 @@
 //! Currently these aren't particularly useful, there only exists bindings
 //! enough so that pipes can be created to child processes.
 
+#![allow(missing_doc)]
+
 use prelude::*;
 use io::IoResult;
 use libc;
 use rt::rtio::{RtioPipe, LocalIo};
 
+/// A synchronous, in-memory pipe.
 pub struct PipeStream {
-    priv obj: ~RtioPipe,
+    /// The internal, opaque runtime pipe object.
+    obj: ~RtioPipe:Send,
 }
 
 impl PipeStream {
@@ -33,12 +37,15 @@ impl PipeStream {
     /// # Example
     ///
     /// ```rust
-    /// # #[allow(unused_must_use)];
-    /// use std::libc;
+    /// # #![allow(unused_must_use)]
+    /// extern crate libc;
+    ///
     /// use std::io::pipe::PipeStream;
     ///
-    /// let mut pipe = PipeStream::open(libc::STDERR_FILENO);
-    /// pipe.write(bytes!("Hello, stderr!"));
+    /// fn main() {
+    ///     let mut pipe = PipeStream::open(libc::STDERR_FILENO);
+    ///     pipe.write(bytes!("Hello, stderr!"));
+    /// }
     /// ```
     pub fn open(fd: libc::c_int) -> IoResult<PipeStream> {
         LocalIo::maybe_raise(|io| {
@@ -46,8 +53,15 @@ impl PipeStream {
         })
     }
 
-    pub fn new(inner: ~RtioPipe) -> PipeStream {
+    #[doc(hidden)]
+    pub fn new(inner: ~RtioPipe:Send) -> PipeStream {
         PipeStream { obj: inner }
+    }
+}
+
+impl Clone for PipeStream {
+    fn clone(&self) -> PipeStream {
+        PipeStream { obj: self.obj.clone() }
     }
 }
 
@@ -68,15 +82,15 @@ mod test {
         let os::Pipe { input, out } = os::pipe();
         let out = PipeStream::open(out);
         let mut input = PipeStream::open(input);
-        let (p, c) = Chan::new();
+        let (tx, rx) = channel();
         spawn(proc() {
             let mut out = out;
             out.write([10]).unwrap();
-            p.recv(); // don't close the pipe until the other read has finished
+            rx.recv(); // don't close the pipe until the other read has finished
         });
 
         let mut buf = [0, ..10];
         input.read(buf).unwrap();
-        c.send(());
+        tx.send(());
     })
 }

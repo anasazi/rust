@@ -7,8 +7,8 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
-#[crate_id="lint_stability#0.1"];
-#[crate_type = "lib"];
+#![crate_id="lint_stability#0.1"]
+#![crate_type = "lib"]
 
 #[deprecated]
 pub fn deprecated() {}
@@ -116,18 +116,18 @@ pub trait Trait {
 impl Trait for MethodTester {}
 
 #[deprecated]
-pub struct DeprecatedStruct { i: int }
+pub struct DeprecatedStruct { pub i: int }
 #[experimental]
-pub struct ExperimentalStruct { i: int }
+pub struct ExperimentalStruct { pub i: int }
 #[unstable]
-pub struct UnstableStruct { i: int }
-pub struct UnmarkedStruct { i: int }
+pub struct UnstableStruct { pub i: int }
+pub struct UnmarkedStruct { pub i: int }
 #[stable]
-pub struct StableStruct { i: int }
+pub struct StableStruct { pub i: int }
 #[frozen]
-pub struct FrozenStruct { i: int }
+pub struct FrozenStruct { pub i: int }
 #[locked]
-pub struct LockedStruct { i: int }
+pub struct LockedStruct { pub i: int }
 
 #[deprecated]
 pub struct DeprecatedUnitStruct;
@@ -161,15 +161,15 @@ pub enum Enum {
 }
 
 #[deprecated]
-pub struct DeprecatedTupleStruct(int);
+pub struct DeprecatedTupleStruct(pub int);
 #[experimental]
-pub struct ExperimentalTupleStruct(int);
+pub struct ExperimentalTupleStruct(pub int);
 #[unstable]
-pub struct UnstableTupleStruct(int);
-pub struct UnmarkedTupleStruct(int);
+pub struct UnstableTupleStruct(pub int);
+pub struct UnmarkedTupleStruct(pub int);
 #[stable]
-pub struct StableTupleStruct(int);
+pub struct StableTupleStruct(pub int);
 #[frozen]
-pub struct FrozenTupleStruct(int);
+pub struct FrozenTupleStruct(pub int);
 #[locked]
-pub struct LockedTupleStruct(int);
+pub struct LockedTupleStruct(pub int);

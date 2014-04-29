@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,9 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-android: FIXME(#10381)
+// ignore-android: FIXME(#10381)
 
-// compile-flags:-Z extra-debug-info
+// compile-flags:-g
 // debugger:rbreak zzz
 // debugger:run
 // debugger:finish
@@ -26,7 +26,7 @@
 // debugger:print nested
 // check:$4 = {a = {a = {x = 7890, y = 9870}}}
 
-#[allow(unused_variable)];
+#![allow(unused_variable)]
 
 struct NoDestructor {
     x: i32,

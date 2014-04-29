@@ -1,6 +1,5 @@
-// xfail-fast
 
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -10,7 +9,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(managed_boxes)];
+#![feature(managed_boxes)]
+
+extern crate collections;
+
 
 /**
    A somewhat reduced test case to expose some Valgrind issues.
@@ -18,20 +20,20 @@
    This originally came from the word-count benchmark.
 */
 
-pub fn map(filename: ~str, emit: map_reduce::putter) { emit(filename, ~"1"); }
+pub fn map(filename: ~str, emit: map_reduce::putter) { emit(filename, "1".to_owned()); }
 
 mod map_reduce {
-    use std::hashmap::HashMap;
+    use collections::HashMap;
     use std::str;
     use std::task;
 
-    pub type putter<'a> = 'a |~str, ~str|;
+    pub type putter<'a> = |~str, ~str|: 'a;
 
     pub type mapper = extern fn(~str, putter);
 
-    enum ctrl_proto { find_reducer(~[u8], Chan<int>), mapper_done, }
+    enum ctrl_proto { find_reducer(Vec<u8>, Sender<int>), mapper_done, }
 
-    fn start_mappers(ctrl: SharedChan<ctrl_proto>, inputs: ~[~str]) {
+    fn start_mappers(ctrl: Sender<ctrl_proto>, inputs: Vec<~str>) {
         for i in inputs.iter() {
             let ctrl = ctrl.clone();
             let i = i.clone();
@@ -39,21 +41,21 @@ mod map_reduce {
         }
     }
 
-    fn map_task(ctrl: SharedChan<ctrl_proto>, input: ~str) {
+    fn map_task(ctrl: Sender<ctrl_proto>, input: ~str) {
         let mut intermediates = HashMap::new();
 
         fn emit(im: &mut HashMap<~str, int>,
-                ctrl: SharedChan<ctrl_proto>, key: ~str,
+                ctrl: Sender<ctrl_proto>, key: ~str,
                 _val: ~str) {
             if im.contains_key(&key) {
                 return;
             }
-            let (pp, cc) = Chan::new();
-            error!("sending find_reducer");
-            ctrl.send(find_reducer(key.as_bytes().to_owned(), cc));
-            error!("receiving");
-            let c = pp.recv();
-            error!("{:?}", c);
+            let (tx, rx) = channel();
+            println!("sending find_reducer");
+            ctrl.send(find_reducer(Vec::from_slice(key.as_bytes()), tx));
+            println!("receiving");
+            let c = rx.recv();
+            println!("{:?}", c);
             im.insert(key, c);
         }
 
@@ -62,8 +64,8 @@ mod map_reduce {
         ctrl_clone.send(mapper_done);
     }
 
-    pub fn map_reduce(inputs: ~[~str]) {
-        let (ctrl_port, ctrl_chan) = SharedChan::new();
+    pub fn map_reduce(inputs: Vec<~str>) {
+        let (tx, rx) = channel();
 
         // This task becomes the master control task. It spawns others
         // to do the rest.
@@ -72,16 +74,17 @@ mod map_reduce {
 
         reducers = HashMap::new();
 
-        start_mappers(ctrl_chan, inputs.clone());
+        start_mappers(tx, inputs.clone());
 
         let mut num_mappers = inputs.len() as int;
 
         while num_mappers > 0 {
-            match ctrl_port.recv() {
+            match rx.recv() {
               mapper_done => { num_mappers -= 1; }
               find_reducer(k, cc) => {
                 let mut c;
-                match reducers.find(&str::from_utf8(k).unwrap().to_owned()) {
+                match reducers.find(&str::from_utf8(k.as_slice()).unwrap()
+                                                                 .to_owned()) {
                   Some(&_c) => { c = _c; }
                   None => { c = 0; }
                 }
@@ -93,5 +96,5 @@ mod map_reduce {
 }
 
 pub fn main() {
-    map_reduce::map_reduce(~[~"../src/test/run-pass/hashmap-memory.rs"]);
+    map_reduce::map_reduce(vec!("../src/test/run-pass/hashmap-memory.rs".to_owned()));
 }

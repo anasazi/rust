@@ -8,9 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::libc::c_int;
+use libc::c_int;
 use std::io::signal::Signum;
-use std::comm::SharedChan;
 use std::rt::rtio::RtioSignal;
 
 use homing::{HomingIO, HomeHandle};
@@ -22,13 +21,13 @@ pub struct SignalWatcher {
     handle: *uvll::uv_signal_t,
     home: HomeHandle,
 
-    channel: SharedChan<Signum>,
+    channel: Sender<Signum>,
     signal: Signum,
 }
 
 impl SignalWatcher {
     pub fn new(io: &mut UvIoFactory, signum: Signum,
-               channel: SharedChan<Signum>) -> Result<~SignalWatcher, UvError> {
+               channel: Sender<Signum>) -> Result<~SignalWatcher, UvError> {
         let s = ~SignalWatcher {
             handle: UvHandle::alloc(None::<SignalWatcher>, uvll::UV_SIGNAL),
             home: io.make_handle(),
@@ -52,7 +51,7 @@ impl SignalWatcher {
 extern fn signal_cb(handle: *uvll::uv_signal_t, signum: c_int) {
     let s: &mut SignalWatcher = unsafe { UvHandle::from_uv_handle(&handle) };
     assert_eq!(signum as int, s.signal as int);
-    s.channel.try_send(s.signal);
+    let _ = s.channel.send_opt(s.signal);
 }
 
 impl HomingIO for SignalWatcher {
@@ -81,12 +80,12 @@ mod test {
     #[test]
     fn closing_channel_during_drop_doesnt_kill_everything() {
         // see issue #10375, relates to timers as well.
-        let (port, chan) = SharedChan::new();
+        let (tx, rx) = channel();
         let _signal = SignalWatcher::new(local_loop(), signal::Interrupt,
-                                         chan);
+                                         tx);
 
         spawn(proc() {
-            let _ = port.recv_opt();
+            let _ = rx.recv_opt();
         });
 
         // when we drop the SignalWatcher we're going to destroy the channel,

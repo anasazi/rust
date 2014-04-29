@@ -8,47 +8,84 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[allow(missing_doc)];
+#![allow(missing_doc)]
 
+use char;
 use clone::Clone;
 use container::Container;
-use std::cmp::{Ord, Eq};
+use iter::Iterator;
+use num::{NumCast, Zero, One, cast, Int};
+use num::{Float, FPNaN, FPInfinite, ToPrimitive};
+use num;
 use ops::{Add, Sub, Mul, Div, Rem, Neg};
 use option::{None, Option, Some};
-use char;
+use slice::OwnedVector;
+use slice::{CloneableVector, ImmutableVector, MutableVector};
+use std::cmp::{Ord, Eq};
 use str::{StrSlice};
 use str;
-use vec::{CloneableVector, ImmutableVector, MutableVector};
-use vec::OwnedVector;
-use num;
-use num::{NumCast, Zero, One, cast, Integer};
-use num::{Round, Float, FPNaN, FPInfinite, ToPrimitive};
+use vec::Vec;
 
+/// A flag that specifies whether to use exponential (scientific) notation.
 pub enum ExponentFormat {
+    /// Do not use exponential notation.
     ExpNone,
+    /// Use exponential notation with the exponent having a base of 10 and the
+    /// exponent sign being `e` or `E`. For example, 1000 would be printed
+    /// 1e3.
     ExpDec,
-    ExpBin
+    /// Use exponential notation with the exponent having a base of 2 and the
+    /// exponent sign being `p` or `P`. For example, 8 would be printed 1p3.
+    ExpBin,
 }
 
+/// The number of digits used for emitting the fractional part of a number, if
+/// any.
 pub enum SignificantDigits {
+    /// All calculable digits will be printed.
+    ///
+    /// Note that bignums or fractions may cause a surprisingly large number
+    /// of digits to be printed.
     DigAll,
+
+    /// At most the given number of digits will be printed, truncating any
+    /// trailing zeroes.
     DigMax(uint),
+
+    /// Precisely the given number of digits will be printed.
     DigExact(uint)
 }
 
+/// How to emit the sign of a number.
 pub enum SignFormat {
+    /// No sign will be printed. The exponent sign will also be emitted.
     SignNone,
+    /// `-` will be printed for negative values, but no sign will be emitted
+    /// for positive numbers.
     SignNeg,
-    SignAll
+    /// `+` will be printed for positive values, and `-` will be printed for
+    /// negative values.
+    SignAll,
 }
 
+/// Encompasses functions used by the string converter.
 pub trait NumStrConv {
+    /// Returns the NaN value.
     fn nan()      -> Option<Self>;
+
+    /// Returns the infinite value.
     fn inf()      -> Option<Self>;
+
+    /// Returns the negative infinite value.
     fn neg_inf()  -> Option<Self>;
+
+    /// Returns -0.0.
     fn neg_zero() -> Option<Self>;
 
+    /// Rounds the number toward zero.
     fn round_to_zero(&self)   -> Self;
+
+    /// Returns the fractional part of the number.
     fn fractional_part(&self) -> Self;
 }
 
@@ -133,19 +170,7 @@ static NAN_BUF:          [u8, ..3] = ['N' as u8, 'a' as u8, 'N' as u8];
  * # Failure
  * - Fails if `radix` < 2 or `radix` > 36.
  */
-pub fn int_to_str_bytes_common<T:NumCast
-                                +Zero
-                                +Eq
-                                +Ord
-                                +Integer
-                                +Div<T,T>
-                                +Neg<T>
-                                +Rem<T,T>
-                                +Mul<T,T>>(
-                                num: T,
-                                radix: uint,
-                                sign: SignFormat,
-                                f: |u8|) {
+pub fn int_to_str_bytes_common<T: Int>(num: T, radix: uint, sign: SignFormat, f: |u8|) {
     assert!(2 <= radix && radix <= 36);
 
     let _0: T = Zero::zero();
@@ -212,25 +237,11 @@ pub fn int_to_str_bytes_common<T:NumCast
  *                     itself always printed using a base of 10.
  * - `negative_zero` - Whether to treat the special value `-0` as
  *                     `-0` or as `+0`.
- * - `sign`          - How to emit the sign. Options are:
- *     - `SignNone`: No sign at all. The exponent sign is also omitted.
- *     - `SignNeg`:  Only `-` on negative values.
- *     - `SignAll`:  Both `+` on positive, and `-` on negative numbers.
- * - `digits`        - The amount of digits to use for emitting the
- *                     fractional part, if any. Options are:
- *     - `DigAll`:         All calculatable digits. Beware of bignums or
- *                         fractions!
- *     - `DigMax(uint)`:   Maximum N digits, truncating any trailing zeros.
- *     - `DigExact(uint)`: Exactly N digits.
+ * - `sign`          - How to emit the sign. See `SignFormat`.
+ * - `digits`        - The amount of digits to use for emitting the fractional
+ *                     part, if any. See `SignificantDigits`.
  * - `exp_format`   - Whether or not to use the exponential (scientific) notation.
- *                    Options are:
- *     - `ExpNone`: Do not use the exponential notation.
- *     - `ExpDec`:  Use the exponential notation with the exponent having a base of 10,
- *                  and exponent sign being `'e'` or `'E'` depending on the value of
- *                  the `exp_upper` argument. E.g. the number 1000 would be printed as 1e3.
- *     - `ExpBin`:  Use the exponential notation with the exponent having a base of 2,
- *                  and exponent sign being `'p'` or `'P'` depending on the value of
- *                  the `exp_upper` argument. E.g. the number 8 would be printed as 1p3.
+ *                    See `ExponentFormat`.
  * - `exp_capital`   - Whether or not to use a capital letter for the exponent sign, if
  *                     exponential notation is desired.
  *
@@ -247,7 +258,7 @@ pub fn int_to_str_bytes_common<T:NumCast
  * - Fails if `radix` > 25 and `exp_format` is `ExpBin` due to conflict
  *   between digit and exponent sign `'p'`.
  */
-pub fn float_to_str_bytes_common<T:NumCast+Zero+One+Eq+Ord+Float+Round+
+pub fn float_to_str_bytes_common<T:NumCast+Zero+One+Eq+Ord+Float+
                                   Div<T,T>+Neg<T>+Rem<T,T>+Mul<T,T>>(
         num: T, radix: uint, negative_zero: bool,
         sign: SignFormat, digits: SignificantDigits, exp_format: ExponentFormat, exp_upper: bool
@@ -284,7 +295,7 @@ pub fn float_to_str_bytes_common<T:NumCast+Zero+One+Eq+Ord+Float+Round+
     }
 
     let neg = num < _0 || (negative_zero && _1 / num == Float::neg_infinity());
-    let mut buf: ~[u8] = ~[];
+    let mut buf = Vec::new();
     let radix_gen: T   = cast(radix as int).unwrap();
 
     let (num, exp) = match exp_format {
@@ -299,7 +310,7 @@ pub fn float_to_str_bytes_common<T:NumCast+Zero+One+Eq+Ord+Float+Round+
                     ExpNone => unreachable!()
                 };
 
-                (num / exp_base.powf(&exp), cast::<T, i32>(exp).unwrap())
+                (num / exp_base.powf(exp), cast::<T, i32>(exp).unwrap())
             }
         }
     };
@@ -402,23 +413,23 @@ pub fn float_to_str_bytes_common<T:NumCast+Zero+One+Eq+Ord+Float+Round+
                     // If reached left end of number, have to
                     // insert additional digit:
                     if i < 0
-                    || buf[i] == '-' as u8
-                    || buf[i] == '+' as u8 {
+                    || *buf.get(i as uint) == '-' as u8
+                    || *buf.get(i as uint) == '+' as u8 {
                         buf.insert((i + 1) as uint, value2ascii(1));
                         break;
                     }
 
                     // Skip the '.'
-                    if buf[i] == '.' as u8 { i -= 1; continue; }
+                    if *buf.get(i as uint) == '.' as u8 { i -= 1; continue; }
 
                     // Either increment the digit,
                     // or set to 0 if max and carry the 1.
-                    let current_digit = ascii2value(buf[i]);
+                    let current_digit = ascii2value(*buf.get(i as uint));
                     if current_digit < (radix - 1) {
-                        buf[i] = value2ascii(current_digit+1);
+                        *buf.get_mut(i as uint) = value2ascii(current_digit+1);
                         break;
                     } else {
-                        buf[i] = value2ascii(0);
+                        *buf.get_mut(i as uint) = value2ascii(0);
                         i -= 1;
                     }
                 }
@@ -435,25 +446,25 @@ pub fn float_to_str_bytes_common<T:NumCast+Zero+One+Eq+Ord+Float+Round+
         let mut i = buf_max_i;
 
         // discover trailing zeros of fractional part
-        while i > start_fractional_digits && buf[i] == '0' as u8 {
+        while i > start_fractional_digits && *buf.get(i) == '0' as u8 {
             i -= 1;
         }
 
         // Only attempt to truncate digits if buf has fractional digits
         if i >= start_fractional_digits {
             // If buf ends with '.', cut that too.
-            if buf[i] == '.' as u8 { i -= 1 }
+            if *buf.get(i) == '.' as u8 { i -= 1 }
 
             // only resize buf if we actually remove digits
             if i < buf_max_i {
-                buf = buf.slice(0, i + 1).to_owned();
+                buf = Vec::from_slice(buf.slice(0, i + 1));
             }
         }
     } // If exact and trailing '.', just cut that
     else {
         let max_i = buf.len() - 1;
-        if buf[max_i] == '.' as u8 {
-            buf = buf.slice(0, max_i).to_owned();
+        if *buf.get(max_i) == '.' as u8 {
+            buf = Vec::from_slice(buf.slice(0, max_i));
         }
     }
 
@@ -472,7 +483,7 @@ pub fn float_to_str_bytes_common<T:NumCast+Zero+One+Eq+Ord+Float+Round+
         }
     }
 
-    (buf, false)
+    (buf.move_iter().collect(), false)
 }
 
 /**
@@ -480,7 +491,7 @@ pub fn float_to_str_bytes_common<T:NumCast+Zero+One+Eq+Ord+Float+Round+
  * `to_str_bytes_common()`, for details see there.
  */
 #[inline]
-pub fn float_to_str_common<T:NumCast+Zero+One+Eq+Ord+NumStrConv+Float+Round+
+pub fn float_to_str_common<T:NumCast+Zero+One+Eq+Ord+NumStrConv+Float+
                              Div<T,T>+Neg<T>+Rem<T,T>+Mul<T,T>>(
         num: T, radix: uint, negative_zero: bool,
         sign: SignFormat, digits: SignificantDigits, exp_format: ExponentFormat, exp_capital: bool
@@ -544,19 +555,19 @@ pub fn from_str_bytes_common<T:NumCast+Zero+One+Eq+Ord+Div<T,T>+
         ) -> Option<T> {
     match exponent {
         ExpDec if radix >= DIGIT_E_RADIX       // decimal exponent 'e'
-          => fail!("from_str_bytes_common: radix {:?} incompatible with \
+          => fail!("from_str_bytes_common: radix {} incompatible with \
                     use of 'e' as decimal exponent", radix),
         ExpBin if radix >= DIGIT_P_RADIX       // binary exponent 'p'
-          => fail!("from_str_bytes_common: radix {:?} incompatible with \
+          => fail!("from_str_bytes_common: radix {} incompatible with \
                     use of 'p' as binary exponent", radix),
         _ if special && radix >= DIGIT_I_RADIX // first digit of 'inf'
-          => fail!("from_str_bytes_common: radix {:?} incompatible with \
+          => fail!("from_str_bytes_common: radix {} incompatible with \
                     special values 'inf' and 'NaN'", radix),
         _ if (radix as int) < 2
-          => fail!("from_str_bytes_common: radix {:?} to low, \
+          => fail!("from_str_bytes_common: radix {} to low, \
                     must lie in the range [2, 36]", radix),
         _ if (radix as int) > 36
-          => fail!("from_str_bytes_common: radix {:?} to high, \
+          => fail!("from_str_bytes_common: radix {} to high, \
                     must lie in the range [2, 36]", radix),
         _ => ()
     }
@@ -803,24 +814,89 @@ mod test {
 
 #[cfg(test)]
 mod bench {
-    use extra::test::BenchHarness;
-    use rand::{XorShiftRng, Rng};
-    use to_str::ToStr;
-    use f64;
+    extern crate test;
 
-    #[bench]
-    fn uint_to_str_rand(bh: &mut BenchHarness) {
-        let mut rng = XorShiftRng::new();
-        bh.iter(|| {
-            rng.gen::<uint>().to_str();
-        })
+    mod uint {
+        use super::test::Bencher;
+        use rand::{XorShiftRng, Rng};
+        use num::ToStrRadix;
+
+        #[bench]
+        fn to_str_bin(b: &mut Bencher) {
+            let mut rng = XorShiftRng::new().unwrap();
+            b.iter(|| { rng.gen::<uint>().to_str_radix(2); })
+        }
+
+        #[bench]
+        fn to_str_oct(b: &mut Bencher) {
+            let mut rng = XorShiftRng::new().unwrap();
+            b.iter(|| { rng.gen::<uint>().to_str_radix(8); })
+        }
+
+        #[bench]
+        fn to_str_dec(b: &mut Bencher) {
+            let mut rng = XorShiftRng::new().unwrap();
+            b.iter(|| { rng.gen::<uint>().to_str_radix(10); })
+        }
+
+        #[bench]
+        fn to_str_hex(b: &mut Bencher) {
+            let mut rng = XorShiftRng::new().unwrap();
+            b.iter(|| { rng.gen::<uint>().to_str_radix(16); })
+        }
+
+        #[bench]
+        fn to_str_base_36(b: &mut Bencher) {
+            let mut rng = XorShiftRng::new().unwrap();
+            b.iter(|| { rng.gen::<uint>().to_str_radix(36); })
+        }
     }
 
-    #[bench]
-    fn float_to_str_rand(bh: &mut BenchHarness) {
-        let mut rng = XorShiftRng::new();
-        bh.iter(|| {
-            f64::to_str(rng.gen());
-        })
+    mod int {
+        use super::test::Bencher;
+        use rand::{XorShiftRng, Rng};
+        use num::ToStrRadix;
+
+        #[bench]
+        fn to_str_bin(b: &mut Bencher) {
+            let mut rng = XorShiftRng::new().unwrap();
+            b.iter(|| { rng.gen::<int>().to_str_radix(2); })
+        }
+
+        #[bench]
+        fn to_str_oct(b: &mut Bencher) {
+            let mut rng = XorShiftRng::new().unwrap();
+            b.iter(|| { rng.gen::<int>().to_str_radix(8); })
+        }
+
+        #[bench]
+        fn to_str_dec(b: &mut Bencher) {
+            let mut rng = XorShiftRng::new().unwrap();
+            b.iter(|| { rng.gen::<int>().to_str_radix(10); })
+        }
+
+        #[bench]
+        fn to_str_hex(b: &mut Bencher) {
+            let mut rng = XorShiftRng::new().unwrap();
+            b.iter(|| { rng.gen::<int>().to_str_radix(16); })
+        }
+
+        #[bench]
+        fn to_str_base_36(b: &mut Bencher) {
+            let mut rng = XorShiftRng::new().unwrap();
+            b.iter(|| { rng.gen::<int>().to_str_radix(36); })
+        }
+    }
+
+    mod f64 {
+        use super::test::Bencher;
+        use rand::{XorShiftRng, Rng};
+        use f64;
+
+        #[bench]
+        fn float_to_str(b: &mut Bencher) {
+            let mut rng = XorShiftRng::new().unwrap();
+            b.iter(|| { f64::to_str(rng.gen()); })
+        }
     }
 }

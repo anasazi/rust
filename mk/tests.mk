@@ -19,12 +19,6 @@ TEST_DOC_CRATES = $(DOC_CRATES)
 TEST_HOST_CRATES = $(HOST_CRATES)
 TEST_CRATES = $(TEST_TARGET_CRATES) $(TEST_HOST_CRATES)
 
-# Markdown files under doc/ that should have their code extracted and run
-DOC_TEST_NAMES = tutorial guide-ffi guide-macros guide-lifetimes \
-                 guide-tasks guide-conditions guide-container guide-pointers \
-                 complement-cheatsheet guide-runtime \
-                 rust
-
 ######################################################################
 # Environment configuration
 ######################################################################
@@ -34,7 +28,7 @@ ifdef TESTNAME
   TESTARGS += $(TESTNAME)
 endif
 
-ifdef CHECK_XFAILS
+ifdef CHECK_IGNORED
   TESTARGS += --ignored
 endif
 
@@ -110,15 +104,17 @@ ifdef CFG_WINDOWSY_$(1)
                stage2/$$(CFG_LIBDIR_RELATIVE), \
                $$(if $$(findstring stage3,$$(1)), \
                     stage3/$$(CFG_LIBDIR_RELATIVE), \
-               )))))/$$(CFG_RUSTLIBDIR)/$$(CFG_BUILD)/lib
+               )))))/rustlib/$$(CFG_BUILD)/lib
   CFG_RUN_TEST_$(1)=$$(call CFG_RUN_$(1),$$(call CFG_TESTLIB_$(1),$$(1),$$(3)),$$(1))
 endif
 
 # Run the compiletest runner itself under valgrind
 ifdef CTEST_VALGRIND
-CFG_RUN_CTEST_$(1)=$$(call CFG_RUN_TEST_$$(CFG_BUILD),$$(2),$$(3))
+CFG_RUN_CTEST_$(1)=$$(RPATH_VAR$$(1)_T_$$(3)_H_$$(3)) \
+      $$(call CFG_RUN_TEST_$$(CFG_BUILD),$$(2),$$(3))
 else
-CFG_RUN_CTEST_$(1)=$$(call CFG_RUN_$$(CFG_BUILD),$$(TLIB$$(1)_T_$$(3)_H_$$(3)),$$(2))
+CFG_RUN_CTEST_$(1)=$$(RPATH_VAR$$(1)_T_$$(3)_H_$$(3)) \
+      $$(call CFG_RUN_$$(CFG_BUILD),$$(TLIB$$(1)_T_$$(3)_H_$$(3)),$$(2))
 endif
 
 endef
@@ -169,24 +165,26 @@ endif
 # Main test targets
 ######################################################################
 
-check: cleantestlibs cleantmptestlogs tidy all check-stage2
-	$(Q)$(CFG_PYTHON) $(S)src/etc/check-summary.py tmp/*.log
+check: cleantmptestlogs cleantestlibs tidy check-notidy
 
-check-notidy: cleantestlibs cleantmptestlogs all check-stage2
-	$(Q)$(CFG_PYTHON) $(S)src/etc/check-summary.py tmp/*.log
-
-check-full: cleantestlibs cleantmptestlogs tidy \
-            all check-stage1 check-stage2 check-stage3
-	$(Q)$(CFG_PYTHON) $(S)src/etc/check-summary.py tmp/*.log
-
-check-test: cleantestlibs cleantmptestlogs all check-stage2-rfail
+check-notidy: cleantmptestlogs cleantestlibs all check-stage2
 	$(Q)$(CFG_PYTHON) $(S)src/etc/check-summary.py tmp/*.log
 
 check-lite: cleantestlibs cleantmptestlogs \
-	check-stage2-std check-stage2-extra check-stage2-rpass \
-	check-stage2-rustuv check-stage2-native check-stage2-green \
+	$(foreach crate,$(TARGET_CRATES),check-stage2-$(crate)) \
+	check-stage2-rpass \
 	check-stage2-rfail check-stage2-cfail check-stage2-rmake
 	$(Q)$(CFG_PYTHON) $(S)src/etc/check-summary.py tmp/*.log
+
+check-ref: cleantestlibs cleantmptestlogs check-stage2-rpass \
+	check-stage2-rfail check-stage2-cfail check-stage2-rmake
+	$(Q)$(CFG_PYTHON) $(S)src/etc/check-summary.py tmp/*.log
+
+check-docs: cleantestlibs cleantmptestlogs check-stage2-docs
+	$(Q)$(CFG_PYTHON) $(S)src/etc/check-summary.py tmp/*.log
+
+# NOTE: Remove after reprogramming windows bots
+check-fast: check-lite
 
 .PHONY: cleantmptestlogs cleantestlibs
 
@@ -242,12 +240,22 @@ ALL_HS := $(filter-out $(S)src/rt/vg/valgrind.h \
 tidy:
 		@$(call E, check: formatting)
 		$(Q)find $(S)src -name '*.r[sc]' \
-		| grep '^$(S)src/test' -v \
 		| grep '^$(S)src/libuv' -v \
 		| grep '^$(S)src/llvm' -v \
 		| grep '^$(S)src/gyp' -v \
+		| grep '^$(S)src/libbacktrace' -v \
 		| xargs -n 10 $(CFG_PYTHON) $(S)src/etc/tidy.py
 		$(Q)find $(S)src/etc -name '*.py' \
+		| xargs -n 10 $(CFG_PYTHON) $(S)src/etc/tidy.py
+		$(Q)find $(S)src/doc -name '*.js' \
+		| xargs -n 10 $(CFG_PYTHON) $(S)src/etc/tidy.py
+		$(Q)find $(S)src/etc -name '*.sh' \
+		| xargs -n 10 $(CFG_PYTHON) $(S)src/etc/tidy.py
+		$(Q)find $(S)src/etc -name '*.pl' \
+		| xargs -n 10 $(CFG_PYTHON) $(S)src/etc/tidy.py
+		$(Q)find $(S)src/etc -name '*.c' \
+		| xargs -n 10 $(CFG_PYTHON) $(S)src/etc/tidy.py
+		$(Q)find $(S)src/etc -name '*.h' \
 		| xargs -n 10 $(CFG_PYTHON) $(S)src/etc/tidy.py
 		$(Q)echo $(ALL_CS) \
 		| xargs -n 10 $(CFG_PYTHON) $(S)src/etc/tidy.py
@@ -261,6 +269,8 @@ tidy:
 		| grep '^$(S)src/gyp' -v \
 		| grep '^$(S)src/etc' -v \
 		| grep '^$(S)src/doc' -v \
+		| grep '^$(S)src/compiler-rt' -v \
+		| grep '^$(S)src/libbacktrace' -v \
 		| xargs $(CFG_PYTHON) $(S)src/etc/check-binaries.py
 
 endif
@@ -304,10 +314,10 @@ endif
 
 check-stage$(1)-T-$(2)-H-$(3)-doc-crates-exec: \
         $$(foreach crate,$$(TEST_DOC_CRATES), \
-           check-stage$(1)-T-$(2)-H-$(3)-doc-$$(crate)-exec)
+           check-stage$(1)-T-$(2)-H-$(3)-doc-crate-$$(crate)-exec)
 
 check-stage$(1)-T-$(2)-H-$(3)-doc-exec: \
-        $$(foreach docname,$$(DOC_TEST_NAMES), \
+        $$(foreach docname,$$(DOCS), \
            check-stage$(1)-T-$(2)-H-$(3)-doc-$$(docname)-exec)
 
 check-stage$(1)-T-$(2)-H-$(3)-pretty-exec: \
@@ -331,22 +341,33 @@ $(foreach host,$(CFG_HOST), \
 
 define TEST_RUNNER
 
-# If NO_REBUILD is set then break the dependencies on extra so we can
-# test crates without rebuilding std and extra first
+# If NO_REBUILD is set then break the dependencies on everything but
+# the source files so we can test crates without rebuilding any of the
+# parent crates.
 ifeq ($(NO_REBUILD),)
-STDTESTDEP_$(1)_$(2)_$(3)_$(4) = $$(SREQ$(1)_T_$(2)_H_$(3)) \
+TESTDEP_$(1)_$(2)_$(3)_$(4) = $$(SREQ$(1)_T_$(2)_H_$(3)) \
 			    $$(foreach crate,$$(TARGET_CRATES),\
-				$$(TLIB$(1)_T_$(2)_H_$(3))/stamp.$$(crate))
-else
-STDTESTDEP_$(1)_$(2)_$(3)_$(4) =
+				$$(TLIB$(1)_T_$(2)_H_$(3))/stamp.$$(crate)) \
+				$$(CRATE_FULLDEPS_$(1)_T_$(2)_H_$(3)_$(4))
+
+# The regex crate depends on the regex_macros crate during testing, but it
+# notably depend on the *host* regex_macros crate, not the target version.
+# Additionally, this is not a dependency in stage1, only in stage2.
+ifeq ($(4),regex)
+ifneq ($(1),1)
+TESTDEP_$(1)_$(2)_$(3)_$(4) += $$(TLIB$(1)_T_$(3)_H_$(3))/stamp.regex_macros
+endif
 endif
 
-$(3)/stage$(1)/test/$(4)test-$(2)$$(X_$(2)): CFG_COMPILER = $(2)
+else
+TESTDEP_$(1)_$(2)_$(3)_$(4) = $$(RSINPUTS_$(4))
+endif
+
+$(3)/stage$(1)/test/$(4)test-$(2)$$(X_$(2)): CFG_COMPILER_HOST_TRIPLE = $(2)
 $(3)/stage$(1)/test/$(4)test-$(2)$$(X_$(2)):				\
-		$$(CRATEFILE_$(4))					\
-		$$(CRATE_FULLDEPS_$(1)_T_$(2)_H_$(3)_$(4))		\
-		$$(STDTESTDEP_$(1)_$(2)_$(3)_$(4))
-	@$$(call E, compile_and_link: $$@)
+		$$(CRATEFILE_$(4)) \
+		$$(TESTDEP_$(1)_$(2)_$(3)_$(4))
+	@$$(call E, oxidize: $$@)
 	$$(STAGE$(1)_T_$(2)_H_$(3)) -o $$@ $$< --test	\
 		-L "$$(RT_OUTPUT_DIR_$(2))"		\
 		-L "$$(LLVM_LIBDIR_$(2))"
@@ -360,8 +381,6 @@ $(foreach host,$(CFG_HOST), \
     $(eval $(call TEST_RUNNER,$(stage),$(target),$(host),$(crate))))))))))
 
 define DEF_TEST_CRATE_RULES
-check-stage$(1)-T-$(2)-H-$(3)-$(4)-exec: $$(call TEST_OK_FILE,$(1),$(2),$(3),$(4))
-
 check-stage$(1)-T-$(2)-H-$(3)-$(4)-exec: $$(call TEST_OK_FILE,$(1),$(2),$(3),$(4))
 
 $$(call TEST_OK_FILE,$(1),$(2),$(3),$(4)): \
@@ -495,6 +514,10 @@ CTEST_BUILD_BASE_codegen = codegen
 CTEST_MODE_codegen = codegen
 CTEST_RUNTOOL_codegen = $(CTEST_RUNTOOL)
 
+# CTEST_DISABLE_$(TEST_GROUP), if set, will cause the test group to be
+# disabled and the associated message to be printed as a warning
+# during attempts to run those tests.
+
 ifeq ($(CFG_GDB),)
 CTEST_DISABLE_debuginfo = "no gdb found"
 endif
@@ -506,6 +529,12 @@ endif
 ifeq ($(CFG_OSTYPE),apple-darwin)
 CTEST_DISABLE_debuginfo = "gdb on darwing needs root"
 endif
+
+# CTEST_DISABLE_NONSELFHOST_$(TEST_GROUP), if set, will cause that
+# test group to be disabled *unless* the target is able to build a
+# compiler (i.e. when the target triple is in the set of of host
+# triples).  The associated message will be printed as a warning
+# during attempts to run those tests.
 
 define DEF_CTEST_VARS
 
@@ -527,10 +556,6 @@ TEST_SREQ$(1)_T_$(2)_H_$(3) = \
 # remove directive, if present, from CFG_RUSTC_FLAGS (issue #7898).
 CTEST_RUSTC_FLAGS := $$(subst --cfg ndebug,,$$(CFG_RUSTC_FLAGS))
 
-# There's no need our entire test suite to take up gigabytes of space on disk
-# including copies of libstd/libextra all over the place
-CTEST_RUSTC_FLAGS := $$(CTEST_RUSTC_FLAGS) -Z prefer-dynamic
-
 # The tests can not be optimized while the rest of the compiler is optimized, so
 # filter out the optimization (if any) from rustc and then figure out if we need
 # to be optimized
@@ -551,11 +576,12 @@ CTEST_COMMON_ARGS$(1)-T-$(2)-H-$(3) :=						\
         --host $(3)                                       \
         --adb-path=$(CFG_ADB)                          \
         --adb-test-dir=$(CFG_ADB_TEST_DIR)                  \
-        --rustcflags "$(RUSTC_FLAGS_$(2)) $$(CTEST_RUSTC_FLAGS) -L $$(RT_OUTPUT_DIR_$(2))" \
+        --host-rustcflags "$(RUSTC_FLAGS_$(3)) $$(CTEST_RUSTC_FLAGS) -L $$(RT_OUTPUT_DIR_$(3))" \
+        --target-rustcflags "$(RUSTC_FLAGS_$(2)) $$(CTEST_RUSTC_FLAGS) -L $$(RT_OUTPUT_DIR_$(2))" \
         $$(CTEST_TESTARGS)
 
 CTEST_DEPS_rpass_$(1)-T-$(2)-H-$(3) = $$(RPASS_TESTS)
-CTEST_DEPS_rpass_full_$(1)-T-$(2)-H-$(3) = $$(RPASS_FULL_TESTS) $$(TLIBRUSTC_DEFAULT$(1)_T_$(2)_H_$(3))
+CTEST_DEPS_rpass-full_$(1)-T-$(2)-H-$(3) = $$(RPASS_FULL_TESTS) $$(CSREQ$(1)_T_$(3)_H_$(3)) $$(SREQ$(1)_T_$(2)_H_$(3))
 CTEST_DEPS_rfail_$(1)-T-$(2)-H-$(3) = $$(RFAIL_TESTS)
 CTEST_DEPS_cfail_$(1)-T-$(2)-H-$(3) = $$(CFAIL_TESTS)
 CTEST_DEPS_bench_$(1)-T-$(2)-H-$(3) = $$(BENCH_TESTS)
@@ -582,8 +608,28 @@ CTEST_ARGS$(1)-T-$(2)-H-$(3)-$(4) := \
 
 check-stage$(1)-T-$(2)-H-$(3)-$(4)-exec: $$(call TEST_OK_FILE,$(1),$(2),$(3),$(4))
 
-ifeq ($$(CTEST_DISABLE_$(4)),)
+# CTEST_DONT_RUN_$(1)-T-$(2)-H-$(3)-$(4)
+# Goal: leave this variable as empty string if we should run the test.
+# Otherwise, set it to the reason we are not running the test.
+# (Encoded as a separate variable because GNU make does not have a
+# good way to express OR on ifeq commands)
 
+ifneq ($$(CTEST_DISABLE_$(4)),)
+# Test suite is disabled for all configured targets.
+CTEST_DONT_RUN_$(1)-T-$(2)-H-$(3)-$(4) := $$(CTEST_DISABLE_$(4))
+else
+# else, check if non-self-hosted target (i.e. target not-in hosts) ...
+ifeq ($$(findstring $(2),$$(CFG_HOST)),)
+# ... if so, then check if this test suite is disabled for non-selfhosts.
+ifneq ($$(CTEST_DISABLE_NONSELFHOST_$(4)),)
+# Test suite is disabled for this target.
+CTEST_DONT_RUN_$(1)-T-$(2)-H-$(3)-$(4) := $$(CTEST_DISABLE_NONSELFHOST_$(4))
+endif
+endif
+# Neither DISABLE nor DISABLE_NONSELFHOST is set ==> okay, run the test.
+endif
+
+ifeq ($$(CTEST_DONT_RUN_$(1)-T-$(2)-H-$(3)-$(4)),)
 $$(call TEST_OK_FILE,$(1),$(2),$(3),$(4)): \
 		$$(TEST_SREQ$(1)_T_$(2)_H_$(3)) \
                 $$(CTEST_DEPS_$(4)_$(1)-T-$(2)-H-$(3))
@@ -595,11 +641,9 @@ $$(call TEST_OK_FILE,$(1),$(2),$(3),$(4)): \
 
 else
 
-$$(call TEST_OK_FILE,$(1),$(2),$(3),$(4)): \
-		$$(TEST_SREQ$(1)_T_$(2)_H_$(3)) \
-                $$(CTEST_DEPS_$(4)_$(1)-T-$(2)-H-$(3))
+$$(call TEST_OK_FILE,$(1),$(2),$(3),$(4)):
 	@$$(call E, run $(4) [$(2)]: $$<)
-	@$$(call E, warning: tests disabled: $$(CTEST_DISABLE_$(4)))
+	@$$(call E, warning: tests disabled: $$(CTEST_DONT_RUN_$(1)-T-$(2)-H-$(3)-$(4)))
 	touch $$@
 
 endif
@@ -653,47 +697,81 @@ $(foreach host,$(CFG_HOST), \
    $(foreach pretty-name,$(PRETTY_NAMES), \
     $(eval $(call DEF_RUN_PRETTY_TEST,$(stage),$(target),$(host),$(pretty-name)))))))
 
-define DEF_RUN_DOC_TEST
 
-DOC_TEST_ARGS$(1)-T-$(2)-H-$(3)-doc-$(4) := \
-        $$(CTEST_COMMON_ARGS$(1)-T-$(2)-H-$(3))	\
-        --src-base $(3)/test/doc-$(4)/	\
-        --build-base $(3)/test/doc-$(4)/	\
-        --mode run-pass
+######################################################################
+# Crate & freestanding documentation tests
+######################################################################
 
-check-stage$(1)-T-$(2)-H-$(3)-doc-$(4)-exec: $$(call TEST_OK_FILE,$(1),$(2),$(3),doc-$(4))
-
-$$(call TEST_OK_FILE,$(1),$(2),$(3),doc-$(4)): \
-	        $$(TEST_SREQ$(1)_T_$(2)_H_$(3))		\
-                doc-$(4)-extract$(3)
-	@$$(call E, run doc-$(4) [$(2)]: $$<)
-	$$(Q)$$(call CFG_RUN_CTEST_$(2),$(1),$$<,$(3)) \
-                $$(DOC_TEST_ARGS$(1)-T-$(2)-H-$(3)-doc-$(4)) \
-		--logfile $$(call TEST_LOG_FILE,$(1),$(2),$(3),doc-$(4)) \
-                && touch $$@
-
+define DEF_RUSTDOC
+RUSTDOC_EXE_$(1)_T_$(2)_H_$(3) := $$(HBIN$(1)_H_$(3))/rustdoc$$(X_$(3))
+RUSTDOC_$(1)_T_$(2)_H_$(3) := $$(RPATH_VAR$(1)_T_$(2)_H_$(3)) $$(RUSTDOC_EXE_$(1)_T_$(2)_H_$(3))
 endef
 
 $(foreach host,$(CFG_HOST), \
  $(foreach target,$(CFG_TARGET), \
   $(foreach stage,$(STAGES), \
-   $(foreach docname,$(DOC_TEST_NAMES), \
-    $(eval $(call DEF_RUN_DOC_TEST,$(stage),$(target),$(host),$(docname)))))))
+   $(eval $(call DEF_RUSTDOC,$(stage),$(target),$(host))))))
 
-define DEF_CRATE_DOC_TEST
+# Freestanding
+
+define DEF_DOC_TEST
 
 check-stage$(1)-T-$(2)-H-$(3)-doc-$(4)-exec: $$(call TEST_OK_FILE,$(1),$(2),$(3),doc-$(4))
 
+# If NO_REBUILD is set then break the dependencies on everything but
+# the source files so we can test documentation without rebuilding
+# rustdoc etc.
+ifeq ($(NO_REBUILD),)
+DOCTESTDEP_$(1)_$(2)_$(3)_$(4) = \
+	$$(D)/$(4).md \
+	$$(TEST_SREQ$(1)_T_$(2)_H_$(3))				\
+	$$(RUSTDOC_EXE_$(1)_T_$(2)_H_$(3))
+else
+DOCTESTDEP_$(1)_$(2)_$(3)_$(4) = $$(D)/$(4).md
+endif
+
 ifeq ($(2),$$(CFG_BUILD))
-$$(call TEST_OK_FILE,$(1),$(2),$(3),doc-$(4)):				\
-	        $$(TEST_SREQ$(1)_T_$(2)_H_$(3))				\
-		$$(CRATE_FULLDEPS_$(1)_T_$(2)_H_$(3)_$(4))		\
-		$$(HBIN$(1)_H_$(3))/rustdoc$$(X_$(3))
+$$(call TEST_OK_FILE,$(1),$(2),$(3),doc-$(4)): $$(DOCTESTDEP_$(1)_$(2)_$(3)_$(4))
 	@$$(call E, run doc-$(4) [$(2)])
-	$$(Q)$$(HBIN$(1)_H_$(3))/rustdoc$$(X_$(3)) --test \
-	    $$(CRATEFILE_$(4)) --test-args "$$(TESTARGS)" && touch $$@
+	$$(Q)$$(RUSTDOC_$(1)_T_$(2)_H_$(3)) --cfg dox --test $$< --test-args "$$(TESTARGS)" && touch $$@
 else
 $$(call TEST_OK_FILE,$(1),$(2),$(3),doc-$(4)):
+	touch $$@
+endif
+endef
+
+$(foreach host,$(CFG_HOST), \
+ $(foreach target,$(CFG_TARGET), \
+  $(foreach stage,$(STAGES), \
+   $(foreach docname,$(DOCS), \
+    $(eval $(call DEF_DOC_TEST,$(stage),$(target),$(host),$(docname)))))))
+
+# Crates
+
+define DEF_CRATE_DOC_TEST
+
+# If NO_REBUILD is set then break the dependencies on everything but
+# the source files so we can test crate documentation without
+# rebuilding any of the parent crates.
+ifeq ($(NO_REBUILD),)
+CRATEDOCTESTDEP_$(1)_$(2)_$(3)_$(4) = \
+	$$(TEST_SREQ$(1)_T_$(2)_H_$(3))				\
+	$$(CRATE_FULLDEPS_$(1)_T_$(2)_H_$(3)_$(4))		\
+	$$(RUSTDOC_EXE_$(1)_T_$(2)_H_$(3))
+else
+CRATEDOCTESTDEP_$(1)_$(2)_$(3)_$(4) = $$(RSINPUTS_$(4))
+endif
+
+check-stage$(1)-T-$(2)-H-$(3)-doc-crate-$(4)-exec: \
+	$$(call TEST_OK_FILE,$(1),$(2),$(3),doc-crate-$(4))
+
+ifeq ($(2),$$(CFG_BUILD))
+$$(call TEST_OK_FILE,$(1),$(2),$(3),doc-crate-$(4)): $$(CRATEDOCTESTDEP_$(1)_$(2)_$(3)_$(4))
+	@$$(call E, run doc-crate-$(4) [$(2)])
+	$$(Q)$$(RUSTDOC_$(1)_T_$(2)_H_$(3)) --test \
+	    	$$(CRATEFILE_$(4)) --test-args "$$(TESTARGS)" && touch $$@
+else
+$$(call TEST_OK_FILE,$(1),$(2),$(3),doc-crate-$(4)):
 	touch $$@
 endif
 
@@ -706,33 +784,13 @@ $(foreach host,$(CFG_HOST), \
     $(eval $(call DEF_CRATE_DOC_TEST,$(stage),$(target),$(host),$(crate)))))))
 
 ######################################################################
-# Extracting tests for docs
-######################################################################
-
-EXTRACT_TESTS := "$(CFG_PYTHON)" $(S)src/etc/extract-tests.py
-
-define DEF_DOC_TEST_HOST
-
-doc-$(2)-extract$(1):
-	@$$(call E, extract: $(2) tests)
-	$$(Q)rm -f $(1)/test/doc-$(2)/*.rs
-	$$(Q)$$(EXTRACT_TESTS) $$(D)/$(2).md $(1)/test/doc-$(2)
-
-endef
-
-$(foreach host,$(CFG_HOST), \
- $(foreach docname,$(DOC_TEST_NAMES), \
-  $(eval $(call DEF_DOC_TEST_HOST,$(host),$(docname)))))
-
-
-######################################################################
 # Shortcut rules
 ######################################################################
 
 TEST_GROUPS = \
 	crates \
 	$(foreach crate,$(TEST_CRATES),$(crate)) \
-	$(foreach crate,$(TEST_DOC_CRATES),doc-$(crate)) \
+	$(foreach crate,$(TEST_DOC_CRATES),doc-crate-$(crate)) \
 	rpass \
 	rpass-full \
 	rfail \
@@ -743,7 +801,7 @@ TEST_GROUPS = \
 	debuginfo \
 	codegen \
 	doc \
-	$(foreach docname,$(DOC_TEST_NAMES),doc-$(docname)) \
+	$(foreach docname,$(DOCS),doc-$(docname)) \
 	pretty \
 	pretty-rpass \
 	pretty-rpass-full \
@@ -810,68 +868,26 @@ $(foreach stage,$(STAGES), \
   $(foreach group,$(TEST_GROUPS), \
    $(eval $(call DEF_CHECK_FOR_STAGE_AND_HOSTS_AND_GROUP,$(stage),$(host),$(group))))))
 
-######################################################################
-# check-fast rules
-######################################################################
-
-FT := run_pass_stage2
-FT_LIB := $(call CFG_LIB_NAME_$(CFG_BUILD),$(FT))
-FT_DRIVER := $(FT)_driver
-
-GENERATED += tmp/$(FT).rc tmp/$(FT_DRIVER).rs
-
-tmp/$(FT).rc tmp/$(FT_DRIVER).rs: \
-		$(RPASS_TESTS) \
-		$(S)src/etc/combine-tests.py
-	@$(call E, check: building combined stage2 test runner)
-	$(Q)$(CFG_PYTHON) $(S)src/etc/combine-tests.py
-
-define DEF_CHECK_FAST_FOR_T_H
-# $(1) unused
-# $(2) target triple
-# $(3) host triple
-
-$$(TLIB2_T_$(2)_H_$(3))/$$(FT_LIB): \
-		tmp/$$(FT).rc \
-		$$(SREQ2_T_$(2)_H_$(3))
-	@$$(call E, compile_and_link: $$@)
-	$$(STAGE2_T_$(2)_H_$(3)) --lib -o $$@ $$< \
-	  -L "$$(RT_OUTPUT_DIR_$(2))"
-
-$(3)/test/$$(FT_DRIVER)-$(2)$$(X_$(2)): \
-		tmp/$$(FT_DRIVER).rs \
-		$$(TLIB2_T_$(2)_H_$(3))/$$(FT_LIB) \
-		$$(SREQ2_T_$(2)_H_$(3))
-	@$$(call E, compile_and_link: $$@ $$<)
-	$$(STAGE2_T_$(2)_H_$(3)) -o $$@ $$< \
-	  -L "$$(RT_OUTPUT_DIR_$(2))"
-
-$(3)/test/$$(FT_DRIVER)-$(2).out: \
-		$(3)/test/$$(FT_DRIVER)-$(2)$$(X_$(2)) \
-		$$(SREQ2_T_$(2)_H_$(3))
-	$$(Q)$$(call CFG_RUN_TEST_$(2),$$<,$(2),$(3)) \
-	--logfile tmp/$$(FT_DRIVER)-$(2).log
-
-check-fast-T-$(2)-H-$(3):     			\
-	$(3)/test/$$(FT_DRIVER)-$(2).out
-
+define DEF_CHECK_DOC_FOR_STAGE
+check-stage$(1)-docs: $$(foreach docname,$$(DOCS),\
+                       check-stage$(1)-T-$$(CFG_BUILD)-H-$$(CFG_BUILD)-doc-$$(docname)) \
+                     $$(foreach crate,$$(TEST_DOC_CRATES),\
+                       check-stage$(1)-T-$$(CFG_BUILD)-H-$$(CFG_BUILD)-doc-crate-$$(crate))
 endef
 
-$(foreach host,$(CFG_HOST), \
- $(eval $(foreach target,$(CFG_TARGET), \
-   $(eval $(call DEF_CHECK_FAST_FOR_T_H,,$(target),$(host))))))
+$(foreach stage,$(STAGES), \
+ $(eval $(call DEF_CHECK_DOC_FOR_STAGE,$(stage))))
 
-check-fast: tidy check-fast-H-$(CFG_BUILD) check-stage2-std check-stage2-extra
-	$(Q)$(CFG_PYTHON) $(S)src/etc/check-summary.py tmp/*.log
-
-define DEF_CHECK_FAST_FOR_H
-
-check-fast-H-$(1): 		check-fast-T-$(1)-H-$(1)
-
+define DEF_CHECK_CRATE
+check-$(1): check-stage2-T-$$(CFG_BUILD)-H-$$(CFG_BUILD)-$(1)-exec
 endef
 
-$(foreach host,$(CFG_HOST),			\
- $(eval $(call DEF_CHECK_FAST_FOR_H,$(host))))
+$(foreach crate,$(TEST_CRATES), \
+ $(eval $(call DEF_CHECK_CRATE,$(crate))))
+
+######################################################################
+# RMAKE rules
+######################################################################
 
 RMAKE_TESTS := $(shell ls -d $(S)src/test/run-make/*/)
 RMAKE_TESTS := $(RMAKE_TESTS:$(S)src/test/run-make/%/=%)
@@ -896,11 +912,13 @@ $(3)/test/run-make/%-$(1)-T-$(2)-H-$(3).ok: \
 	@rm -rf $(3)/test/run-make/$$*
 	@mkdir -p $(3)/test/run-make/$$*
 	$$(Q)$$(CFG_PYTHON) $(S)src/etc/maketest.py $$(dir $$<) \
+        $$(MAKE) \
 	    $$(HBIN$(1)_H_$(3))/rustc$$(X_$(3)) \
 	    $(3)/test/run-make/$$* \
 	    "$$(CC_$(3)) $$(CFG_GCCISH_CFLAGS_$(3))" \
 	    $$(HBIN$(1)_H_$(3))/rustdoc$$(X_$(3)) \
-	    "$$(TESTNAME)"
+	    "$$(TESTNAME)" \
+	    "$$(RPATH_VAR$(1)_T_$(2)_H_$(3))"
 	@touch $$@
 else
 # FIXME #11094 - The above rule doesn't work right for multiple targets

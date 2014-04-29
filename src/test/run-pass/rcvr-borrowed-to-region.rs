@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(managed_boxes)];
+#![feature(managed_boxes)]
 
 trait get {
     fn get(self) -> int;
@@ -30,16 +30,16 @@ pub fn main() {
 
     let x = @6;
     let y = x.get();
-    info!("y={}", y);
+    println!("y={}", y);
     assert_eq!(y, 6);
 
     let x = ~6;
     let y = x.get();
-    info!("y={}", y);
+    println!("y={}", y);
     assert_eq!(y, 6);
 
     let x = &6;
     let y = x.get();
-    info!("y={}", y);
+    println!("y={}", y);
     assert_eq!(y, 6);
 }

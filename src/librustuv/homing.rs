@@ -31,7 +31,7 @@
 //! This enqueueing is done with a concurrent queue from libstd, and the
 //! signalling is achieved with an async handle.
 
-#[allow(dead_code)];
+#![allow(dead_code)]
 
 use std::cast;
 use std::rt::local::Local;
@@ -48,8 +48,8 @@ use queue::{Queue, QueuePool};
 /// Handles are clone-able in order to derive new handles from existing handles
 /// (very useful for when accepting a socket from a server).
 pub struct HomeHandle {
-    priv queue: Queue,
-    priv id: uint,
+    queue: Queue,
+    id: uint,
 }
 
 impl HomeHandle {
@@ -125,7 +125,7 @@ pub trait HomingIO {
 /// After a homing operation has been completed, this will return the current
 /// task back to its appropriate home (if applicable). The field is used to
 /// assert that we are where we think we are.
-struct HomingMissile {
+pub struct HomingMissile {
     io_home: uint,
 }
 
@@ -164,19 +164,19 @@ mod test {
     // thread, close itself, and then come back to the last thread.
     #[test]
     fn test_homing_closes_correctly() {
-        let (port, chan) = Chan::new();
+        let (tx, rx) = channel();
         let mut pool = SchedPool::new(PoolConfig {
             threads: 1,
-            event_loop_factory: None,
+            event_loop_factory: ::event_loop,
         });
 
         pool.spawn(TaskOpts::new(), proc() {
             let listener = UdpWatcher::bind(local_loop(), next_test_ip4());
-            chan.send(listener.unwrap());
+            tx.send(listener.unwrap());
         });
 
         let task = pool.task(TaskOpts::new(), proc() {
-            drop(port.recv());
+            drop(rx.recv());
         });
         pool.spawn_sched().send(sched::TaskFromFriend(task));
 
@@ -185,23 +185,23 @@ mod test {
 
     #[test]
     fn test_homing_read() {
-        let (port, chan) = Chan::new();
+        let (tx, rx) = channel();
         let mut pool = SchedPool::new(PoolConfig {
             threads: 1,
-            event_loop_factory: None,
+            event_loop_factory: ::event_loop,
         });
 
         pool.spawn(TaskOpts::new(), proc() {
             let addr1 = next_test_ip4();
             let addr2 = next_test_ip4();
             let listener = UdpWatcher::bind(local_loop(), addr2);
-            chan.send((listener.unwrap(), addr1));
+            tx.send((listener.unwrap(), addr1));
             let mut listener = UdpWatcher::bind(local_loop(), addr1).unwrap();
             listener.sendto([1, 2, 3, 4], addr2).unwrap();
         });
 
         let task = pool.task(TaskOpts::new(), proc() {
-            let (mut watcher, addr) = port.recv();
+            let (mut watcher, addr) = rx.recv();
             let mut buf = [0, ..10];
             assert_eq!(watcher.recvfrom(buf).unwrap(), (4, addr));
         });

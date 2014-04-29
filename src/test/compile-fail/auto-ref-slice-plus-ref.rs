@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(managed_boxes)];
+#![feature(managed_boxes)]
 
 fn main() {
 
@@ -17,7 +17,7 @@ fn main() {
     // reference.  That would allow creating a mutable pointer to a
     // temporary, which would be a source of confusion
 
-    let mut a = ~[0];
+    let mut a = vec!(0);
     a.test_mut(); //~ ERROR does not implement any method in scope named `test_mut`
 }
 

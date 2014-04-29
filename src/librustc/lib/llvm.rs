@@ -8,12 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[allow(non_uppercase_pattern_statics)];
+#![allow(non_uppercase_pattern_statics)]
+#![allow(non_camel_case_types)]
+#![allow(dead_code)]
 
 use std::c_str::ToCStr;
 use std::cell::RefCell;
-use std::hashmap::HashMap;
-use std::libc::{c_uint, c_ushort, c_void, free};
+use collections::HashMap;
+use libc::{c_uint, c_ushort, c_void, free};
 use std::str::raw::from_c_str;
 
 use middle::trans::type_::Type;
@@ -42,24 +44,22 @@ pub enum Visibility {
     ProtectedVisibility = 2,
 }
 
+// This enum omits the obsolete (and no-op) linkage types DLLImportLinkage,
+// DLLExportLinkage, GhostLinkage and LinkOnceODRAutoHideLinkage.
+// LinkerPrivateLinkage and LinkerPrivateWeakLinkage are not included either;
+// they've been removed in upstream LLVM commit r203866.
 pub enum Linkage {
     ExternalLinkage = 0,
     AvailableExternallyLinkage = 1,
     LinkOnceAnyLinkage = 2,
     LinkOnceODRLinkage = 3,
-    LinkOnceODRAutoHideLinkage = 4,
     WeakAnyLinkage = 5,
     WeakODRLinkage = 6,
     AppendingLinkage = 7,
     InternalLinkage = 8,
     PrivateLinkage = 9,
-    DLLImportLinkage = 10,
-    DLLExportLinkage = 11,
     ExternalWeakLinkage = 12,
-    GhostLinkage = 13,
     CommonLinkage = 14,
-    LinkerPrivateLinkage = 15,
-    LinkerPrivateWeakLinkage = 16,
 }
 
 #[deriving(Clone)]
@@ -278,6 +278,7 @@ pub mod debuginfo {
     pub type DIDerivedType = DIType;
     pub type DICompositeType = DIDerivedType;
     pub type DIVariable = DIDescriptor;
+    pub type DIGlobalVariable = DIDescriptor;
     pub type DIArray = DIDescriptor;
     pub type DISubrange = DIDescriptor;
 
@@ -306,7 +307,7 @@ pub mod llvm {
     use super::{ValueRef, TargetMachineRef, FileType, ArchiveRef};
     use super::{CodeGenModel, RelocMode, CodeGenOptLevel};
     use super::debuginfo::*;
-    use std::libc::{c_char, c_int, c_longlong, c_ushort, c_uint, c_ulonglong,
+    use libc::{c_char, c_int, c_longlong, c_ushort, c_uint, c_ulonglong,
                     size_t};
 
     // Link to our native llvm bindings (things that we need to use the C++ api
@@ -708,6 +709,7 @@ pub mod llvm {
         pub fn LLVMSetGC(Fn: ValueRef, Name: *c_char);
         pub fn LLVMAddFunctionAttr(Fn: ValueRef, PA: c_uint);
         pub fn LLVMAddFunctionAttrString(Fn: ValueRef, Name: *c_char);
+        pub fn LLVMRemoveFunctionAttrString(Fn: ValueRef, Name: *c_char);
         pub fn LLVMGetFunctionAttr(Fn: ValueRef) -> c_ulonglong;
 
         pub fn LLVMAddReturnAttribute(Fn: ValueRef, PA: c_uint);
@@ -1260,7 +1262,8 @@ pub mod llvm {
                                       LHS: ValueRef,
                                       CMP: ValueRef,
                                       RHS: ValueRef,
-                                      Order: AtomicOrdering)
+                                      Order: AtomicOrdering,
+                                      FailureOrder: AtomicOrdering)
                                       -> ValueRef;
         pub fn LLVMBuildAtomicRMW(B: BuilderRef,
                                   Op: AtomicBinOp,
@@ -1437,8 +1440,6 @@ pub mod llvm {
                                           -> Bool;
         /** Moves the section iterator to point to the next section. */
         pub fn LLVMMoveToNextSection(SI: SectionIteratorRef);
-        /** Returns the current section name. */
-        pub fn LLVMGetSectionName(SI: SectionIteratorRef) -> *c_char;
         /** Returns the current section size. */
         pub fn LLVMGetSectionSize(SI: SectionIteratorRef) -> c_ulonglong;
         /** Returns the current section contents as a string buffer. */
@@ -1587,8 +1588,21 @@ pub mod llvm {
                                                Scope: DIDescriptor,
                                                File: DIFile,
                                                Line: c_uint,
-                                               Col: c_uint)
+                                               Col: c_uint,
+                                               Discriminator: c_uint)
                                                -> DILexicalBlock;
+
+        pub fn LLVMDIBuilderCreateStaticVariable(Builder: DIBuilderRef,
+                                                 Context: DIDescriptor,
+                                                 Name: *c_char,
+                                                 LinkageName: *c_char,
+                                                 File: DIFile,
+                                                 LineNo: c_uint,
+                                                 Ty: DIType,
+                                                 isLocalToUnit: bool,
+                                                 Val: ValueRef,
+                                                 Decl: ValueRef)
+                                                 -> DIGlobalVariable;
 
         pub fn LLVMDIBuilderCreateLocalVariable(Builder: DIBuilderRef,
                                                 Tag: c_uint,
@@ -1770,28 +1784,32 @@ pub mod llvm {
         pub fn LLVMRustDestroyArchive(AR: ArchiveRef);
 
         pub fn LLVMRustSetDLLExportStorageClass(V: ValueRef);
+        pub fn LLVMVersionMinor() -> c_int;
+
+        pub fn LLVMRustGetSectionName(SI: SectionIteratorRef,
+                                      data: *mut *c_char) -> c_int;
     }
 }
 
-pub fn SetInstructionCallConv(Instr: ValueRef, CC: CallConv) {
+pub fn SetInstructionCallConv(instr: ValueRef, cc: CallConv) {
     unsafe {
-        llvm::LLVMSetInstructionCallConv(Instr, CC as c_uint);
+        llvm::LLVMSetInstructionCallConv(instr, cc as c_uint);
     }
 }
-pub fn SetFunctionCallConv(Fn: ValueRef, CC: CallConv) {
+pub fn SetFunctionCallConv(fn_: ValueRef, cc: CallConv) {
     unsafe {
-        llvm::LLVMSetFunctionCallConv(Fn, CC as c_uint);
+        llvm::LLVMSetFunctionCallConv(fn_, cc as c_uint);
     }
 }
-pub fn SetLinkage(Global: ValueRef, Link: Linkage) {
+pub fn SetLinkage(global: ValueRef, link: Linkage) {
     unsafe {
-        llvm::LLVMSetLinkage(Global, Link as c_uint);
+        llvm::LLVMSetLinkage(global, link as c_uint);
     }
 }
 
-pub fn SetUnnamedAddr(Global: ValueRef, Unnamed: bool) {
+pub fn SetUnnamedAddr(global: ValueRef, unnamed: bool) {
     unsafe {
-        llvm::LLVMSetUnnamedAddr(Global, Unnamed as Bool);
+        llvm::LLVMSetUnnamedAddr(global, unnamed as Bool);
     }
 }
 
@@ -1801,20 +1819,20 @@ pub fn set_thread_local(global: ValueRef, is_thread_local: bool) {
     }
 }
 
-pub fn ConstICmp(Pred: IntPredicate, V1: ValueRef, V2: ValueRef) -> ValueRef {
+pub fn ConstICmp(pred: IntPredicate, v1: ValueRef, v2: ValueRef) -> ValueRef {
     unsafe {
-        llvm::LLVMConstICmp(Pred as c_ushort, V1, V2)
+        llvm::LLVMConstICmp(pred as c_ushort, v1, v2)
     }
 }
-pub fn ConstFCmp(Pred: RealPredicate, V1: ValueRef, V2: ValueRef) -> ValueRef {
+pub fn ConstFCmp(pred: RealPredicate, v1: ValueRef, v2: ValueRef) -> ValueRef {
     unsafe {
-        llvm::LLVMConstFCmp(Pred as c_ushort, V1, V2)
+        llvm::LLVMConstFCmp(pred as c_ushort, v1, v2)
     }
 }
 
-pub fn SetFunctionAttribute(Fn: ValueRef, attr: Attribute) {
+pub fn SetFunctionAttribute(fn_: ValueRef, attr: Attribute) {
     unsafe {
-        llvm::LLVMAddFunctionAttr(Fn, attr as c_uint)
+        llvm::LLVMAddFunctionAttr(fn_, attr as c_uint)
     }
 }
 /* Memory-managed object interface to type handles. */
@@ -1831,13 +1849,11 @@ impl TypeNames {
     }
 
     pub fn associate_type(&self, s: &str, t: &Type) {
-        let mut named_types = self.named_types.borrow_mut();
-        assert!(named_types.get().insert(s.to_owned(), t.to_ref()));
+        assert!(self.named_types.borrow_mut().insert(s.to_owned(), t.to_ref()));
     }
 
     pub fn find_type(&self, s: &str) -> Option<Type> {
-        let named_types = self.named_types.borrow();
-        named_types.get().find_equiv(&s).map(|x| Type::from_ref(*x))
+        self.named_types.borrow().find_equiv(&s).map(|x| Type::from_ref(*x))
     }
 
     pub fn type_to_str(&self, ty: Type) -> ~str {
@@ -1850,7 +1866,7 @@ impl TypeNames {
     }
 
     pub fn types_to_str(&self, tys: &[Type]) -> ~str {
-        let strs = tys.map(|t| self.type_to_str(*t));
+        let strs: Vec<~str> = tys.iter().map(|t| self.type_to_str(*t)).collect();
         format!("[{}]", strs.connect(","))
     }
 
@@ -1866,80 +1882,30 @@ impl TypeNames {
 
 /* Memory-managed interface to target data. */
 
-pub struct target_data_res {
-    TD: TargetDataRef,
+pub struct TargetData {
+    pub lltd: TargetDataRef
 }
 
-impl Drop for target_data_res {
+impl Drop for TargetData {
     fn drop(&mut self) {
         unsafe {
-            llvm::LLVMDisposeTargetData(self.TD);
+            llvm::LLVMDisposeTargetData(self.lltd);
         }
     }
-}
-
-pub fn target_data_res(TD: TargetDataRef) -> target_data_res {
-    target_data_res {
-        TD: TD
-    }
-}
-
-pub struct TargetData {
-    lltd: TargetDataRef,
-    dtor: @target_data_res
 }
 
 pub fn mk_target_data(string_rep: &str) -> TargetData {
-    let lltd = string_rep.with_c_str(|buf| {
-        unsafe { llvm::LLVMCreateTargetData(buf) }
-    });
-
     TargetData {
-        lltd: lltd,
-        dtor: @target_data_res(lltd)
-    }
-}
-
-/* Memory-managed interface to pass managers. */
-
-pub struct pass_manager_res {
-    PM: PassManagerRef,
-}
-
-impl Drop for pass_manager_res {
-    fn drop(&mut self) {
-        unsafe {
-            llvm::LLVMDisposePassManager(self.PM);
-        }
-    }
-}
-
-pub fn pass_manager_res(PM: PassManagerRef) -> pass_manager_res {
-    pass_manager_res {
-        PM: PM
-    }
-}
-
-pub struct PassManager {
-    llpm: PassManagerRef,
-    dtor: @pass_manager_res
-}
-
-pub fn mk_pass_manager() -> PassManager {
-    unsafe {
-        let llpm = llvm::LLVMCreatePassManager();
-
-        PassManager {
-            llpm: llpm,
-            dtor: @pass_manager_res(llpm)
-        }
+        lltd: string_rep.with_c_str(|buf| {
+            unsafe { llvm::LLVMCreateTargetData(buf) }
+        })
     }
 }
 
 /* Memory-managed interface to object files. */
 
 pub struct ObjectFile {
-    llof: ObjectFileRef,
+    pub llof: ObjectFileRef,
 }
 
 impl ObjectFile {
@@ -1969,35 +1935,22 @@ impl Drop for ObjectFile {
 
 /* Memory-managed interface to section iterators. */
 
-pub struct section_iter_res {
-    SI: SectionIteratorRef,
+pub struct SectionIter {
+    pub llsi: SectionIteratorRef
 }
 
-impl Drop for section_iter_res {
+impl Drop for SectionIter {
     fn drop(&mut self) {
         unsafe {
-            llvm::LLVMDisposeSectionIterator(self.SI);
+            llvm::LLVMDisposeSectionIterator(self.llsi);
         }
     }
 }
 
-pub fn section_iter_res(SI: SectionIteratorRef) -> section_iter_res {
-    section_iter_res {
-        SI: SI
-    }
-}
-
-pub struct SectionIter {
-    llsi: SectionIteratorRef,
-    dtor: @section_iter_res
-}
-
 pub fn mk_section_iter(llof: ObjectFileRef) -> SectionIter {
     unsafe {
-        let llsi = llvm::LLVMGetSections(llof);
         SectionIter {
-            llsi: llsi,
-            dtor: @section_iter_res(llsi)
+            llsi: llvm::LLVMGetSections(llof)
         }
     }
 }

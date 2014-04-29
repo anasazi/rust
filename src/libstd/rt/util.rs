@@ -12,6 +12,7 @@ use container::Container;
 use fmt;
 use from_str::FromStr;
 use io::IoResult;
+use io;
 use iter::Iterator;
 use libc;
 use option::{Some, None, Option};
@@ -19,7 +20,7 @@ use os;
 use result::Ok;
 use str::StrSlice;
 use unstable::running_on_valgrind;
-use vec::ImmutableVector;
+use slice::ImmutableVector;
 
 // Indicates whether we should perform expensive sanity checks, including rtassert!
 // FIXME: Once the runtime matures remove the `true` below to turn off rtassert, etc.
@@ -70,20 +71,28 @@ pub fn default_sched_threads() -> uint {
     }
 }
 
-pub fn dumb_println(args: &fmt::Arguments) {
-    use io;
+pub struct Stdio(libc::c_int);
 
-    struct Stderr;
-    impl io::Writer for Stderr {
-        fn write(&mut self, data: &[u8]) -> IoResult<()> {
-            unsafe {
-                libc::write(libc::STDERR_FILENO,
-                            data.as_ptr() as *libc::c_void,
-                            data.len() as libc::size_t);
-            }
-            Ok(()) // yes, we're lying
+pub static Stdout: Stdio = Stdio(libc::STDOUT_FILENO);
+pub static Stderr: Stdio = Stdio(libc::STDERR_FILENO);
+
+impl io::Writer for Stdio {
+    fn write(&mut self, data: &[u8]) -> IoResult<()> {
+        #[cfg(unix)]
+        type WriteLen = libc::size_t;
+        #[cfg(windows)]
+        type WriteLen = libc::c_uint;
+        unsafe {
+            let Stdio(fd) = *self;
+            libc::write(fd,
+                        data.as_ptr() as *libc::c_void,
+                        data.len() as WriteLen);
         }
+        Ok(()) // yes, we're lying
     }
+}
+
+pub fn dumb_println(args: &fmt::Arguments) {
     let mut w = Stderr;
     let _ = fmt::writeln(&mut w as &mut io::Writer, args);
 }
@@ -140,10 +149,14 @@ memory and partly incapable of presentation to others.",
     rterrln!("{}", "");
     rterrln!("fatal runtime error: {}", msg);
 
+    {
+        let mut err = Stderr;
+        let _err = ::rt::backtrace::write(&mut err);
+    }
     abort();
 
     fn abort() -> ! {
-        use std::unstable::intrinsics;
+        use intrinsics;
         unsafe { intrinsics::abort() }
     }
 }

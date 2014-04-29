@@ -1,6 +1,5 @@
-// xfail-fast
 
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -10,10 +9,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern mod extra;
+extern crate collections;
+extern crate serialize;
 
-use extra::json;
-use std::hashmap::HashMap;
+use collections::HashMap;
+use serialize::json;
 use std::option;
 
 enum object {
@@ -24,11 +24,11 @@ enum object {
 fn lookup(table: ~json::Object, key: ~str, default: ~str) -> ~str
 {
     match table.find(&key) {
-        option::Some(&extra::json::String(ref s)) => {
+        option::Some(&json::String(ref s)) => {
             (*s).clone()
         }
         option::Some(value) => {
-            error!("{} was expected to be a string but is a {:?}", key, value);
+            println!("{} was expected to be a string but is a {:?}", key, value);
             default
         }
         option::None => {
@@ -37,37 +37,37 @@ fn lookup(table: ~json::Object, key: ~str, default: ~str) -> ~str
     }
 }
 
-fn add_interface(_store: int, managed_ip: ~str, data: extra::json::Json) -> (~str, object)
+fn add_interface(_store: int, managed_ip: ~str, data: json::Json) -> (~str, object)
 {
     match &data {
-        &extra::json::Object(ref interface) => {
-            let name = lookup((*interface).clone(), ~"ifDescr", ~"");
+        &json::Object(ref interface) => {
+            let name = lookup((*interface).clone(), "ifDescr".to_owned(), "".to_owned());
             let label = format!("{}-{}", managed_ip, name);
 
             (label, bool_value(false))
         }
         _ => {
-            error!("Expected dict for {} interfaces but found {:?}", managed_ip, data);
-            (~"gnos:missing-interface", bool_value(true))
+            println!("Expected dict for {} interfaces but found {:?}", managed_ip, data);
+            ("gnos:missing-interface".to_owned(), bool_value(true))
         }
     }
 }
 
-fn add_interfaces(store: int, managed_ip: ~str, device: HashMap<~str, extra::json::Json>) -> ~[(~str, object)]
-{
-    match device.get(&~"interfaces")
+fn add_interfaces(store: int, managed_ip: ~str, device: HashMap<~str, json::Json>)
+-> Vec<(~str, object)> {
+    match device.get(&"interfaces".to_owned())
     {
-        &extra::json::List(ref interfaces) =>
+        &json::List(ref interfaces) =>
         {
-          interfaces.map(|interface| {
+          interfaces.iter().map(|interface| {
                 add_interface(store, managed_ip.clone(), (*interface).clone())
-          })
+          }).collect()
         }
         _ =>
         {
-            error!("Expected list for {} interfaces but found {:?}", managed_ip,
-                   device.get(&~"interfaces"));
-            ~[]
+            println!("Expected list for {} interfaces but found {:?}", managed_ip,
+                   device.get(&"interfaces".to_owned()));
+            Vec::new()
         }
     }
 }

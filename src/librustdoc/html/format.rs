@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -16,24 +16,27 @@
 //! them in the future to instead emit any format desired.
 
 use std::fmt;
-use std::local_data;
 use std::io;
+use std::local_data;
+use std::strbuf::StrBuf;
 
 use syntax::ast;
 use syntax::ast_util;
 
 use clean;
+use html::item_type;
+use html::item_type::ItemType;
 use html::render;
 use html::render::{cache_key, current_location_key};
 
 /// Helper to render an optional visibility with a space after it (if the
 /// visibility is preset)
-pub struct VisSpace(Option<ast::Visibility>);
-/// Similarly to VisSpace, this structure is used to render a purity with a
+pub struct VisSpace(pub Option<ast::Visibility>);
+/// Similarly to VisSpace, this structure is used to render a function style with a
 /// space after it.
-pub struct PuritySpace(ast::Purity);
+pub struct FnStyleSpace(pub ast::FnStyle);
 /// Wrapper struct for properly emitting a method declaration.
-pub struct Method<'a>(&'a clean::SelfTy, &'a clean::FnDecl);
+pub struct Method<'a>(pub &'a clean::SelfTy, pub &'a clean::FnDecl);
 
 impl VisSpace {
     pub fn get(&self) -> Option<ast::Visibility> {
@@ -41,62 +44,62 @@ impl VisSpace {
     }
 }
 
-impl PuritySpace {
-    pub fn get(&self) -> ast::Purity {
-        let PuritySpace(v) = *self; v
+impl FnStyleSpace {
+    pub fn get(&self) -> ast::FnStyle {
+        let FnStyleSpace(v) = *self; v
     }
 }
 
 impl fmt::Show for clean::Generics {
-    fn fmt(g: &clean::Generics, f: &mut fmt::Formatter) -> fmt::Result {
-        if g.lifetimes.len() == 0 && g.type_params.len() == 0 { return Ok(()) }
-        if_ok!(f.buf.write("&lt;".as_bytes()));
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.lifetimes.len() == 0 && self.type_params.len() == 0 { return Ok(()) }
+        try!(f.buf.write("&lt;".as_bytes()));
 
-        for (i, life) in g.lifetimes.iter().enumerate() {
+        for (i, life) in self.lifetimes.iter().enumerate() {
             if i > 0 {
-                if_ok!(f.buf.write(", ".as_bytes()));
+                try!(f.buf.write(", ".as_bytes()));
             }
-            if_ok!(write!(f.buf, "{}", *life));
+            try!(write!(f.buf, "{}", *life));
         }
 
-        if g.type_params.len() > 0 {
-            if g.lifetimes.len() > 0 {
-                if_ok!(f.buf.write(", ".as_bytes()));
+        if self.type_params.len() > 0 {
+            if self.lifetimes.len() > 0 {
+                try!(f.buf.write(", ".as_bytes()));
             }
 
-            for (i, tp) in g.type_params.iter().enumerate() {
+            for (i, tp) in self.type_params.iter().enumerate() {
                 if i > 0 {
-                    if_ok!(f.buf.write(", ".as_bytes()))
+                    try!(f.buf.write(", ".as_bytes()))
                 }
-                if_ok!(f.buf.write(tp.name.as_bytes()));
+                try!(f.buf.write(tp.name.as_bytes()));
 
                 if tp.bounds.len() > 0 {
-                    if_ok!(f.buf.write(": ".as_bytes()));
+                    try!(f.buf.write(": ".as_bytes()));
                     for (i, bound) in tp.bounds.iter().enumerate() {
                         if i > 0 {
-                            if_ok!(f.buf.write(" + ".as_bytes()));
+                            try!(f.buf.write(" + ".as_bytes()));
                         }
-                        if_ok!(write!(f.buf, "{}", *bound));
+                        try!(write!(f.buf, "{}", *bound));
                     }
                 }
             }
         }
-        if_ok!(f.buf.write("&gt;".as_bytes()));
+        try!(f.buf.write("&gt;".as_bytes()));
         Ok(())
     }
 }
 
 impl fmt::Show for clean::Lifetime {
-    fn fmt(l: &clean::Lifetime, f: &mut fmt::Formatter) -> fmt::Result {
-        if_ok!(f.buf.write("'".as_bytes()));
-        if_ok!(f.buf.write(l.get_ref().as_bytes()));
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        try!(f.buf.write("'".as_bytes()));
+        try!(f.buf.write(self.get_ref().as_bytes()));
         Ok(())
     }
 }
 
 impl fmt::Show for clean::TyParamBound {
-    fn fmt(bound: &clean::TyParamBound, f: &mut fmt::Formatter) -> fmt::Result {
-        match *bound {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
             clean::RegionBound => {
                 f.buf.write("'static".as_bytes())
             }
@@ -108,34 +111,34 @@ impl fmt::Show for clean::TyParamBound {
 }
 
 impl fmt::Show for clean::Path {
-    fn fmt(path: &clean::Path, f: &mut fmt::Formatter) -> fmt::Result {
-        if path.global {
-            if_ok!(f.buf.write("::".as_bytes()))
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.global {
+            try!(f.buf.write("::".as_bytes()))
         }
-        for (i, seg) in path.segments.iter().enumerate() {
+        for (i, seg) in self.segments.iter().enumerate() {
             if i > 0 {
-                if_ok!(f.buf.write("::".as_bytes()))
+                try!(f.buf.write("::".as_bytes()))
             }
-            if_ok!(f.buf.write(seg.name.as_bytes()));
+            try!(f.buf.write(seg.name.as_bytes()));
 
             if seg.lifetimes.len() > 0 || seg.types.len() > 0 {
-                if_ok!(f.buf.write("&lt;".as_bytes()));
+                try!(f.buf.write("&lt;".as_bytes()));
                 let mut comma = false;
                 for lifetime in seg.lifetimes.iter() {
                     if comma {
-                        if_ok!(f.buf.write(", ".as_bytes()));
+                        try!(f.buf.write(", ".as_bytes()));
                     }
                     comma = true;
-                    if_ok!(write!(f.buf, "{}", *lifetime));
+                    try!(write!(f.buf, "{}", *lifetime));
                 }
                 for ty in seg.types.iter() {
                     if comma {
-                        if_ok!(f.buf.write(", ".as_bytes()));
+                        try!(f.buf.write(", ".as_bytes()));
                     }
                     comma = true;
-                    if_ok!(write!(f.buf, "{}", *ty));
+                    try!(write!(f.buf, "{}", *ty));
                 }
-                if_ok!(f.buf.write("&gt;".as_bytes()));
+                try!(f.buf.write("&gt;".as_bytes()));
             }
         }
         Ok(())
@@ -160,32 +163,32 @@ fn resolved_path(w: &mut io::Writer, id: ast::NodeId, p: &clean::Path,
 /// will invoke `path` with proper linking-style arguments.
 fn external_path(w: &mut io::Writer, p: &clean::Path, print_all: bool,
                  fqn: &[~str], kind: clean::TypeKind,
-                 crate: ast::CrateNum) -> fmt::Result {
+                 krate: ast::CrateNum) -> fmt::Result {
     path(w, p, print_all,
         |cache, loc| {
-            match *cache.extern_locations.get(&crate) {
+            match *cache.extern_locations.get(&krate) {
                 render::Remote(ref s) => Some(s.clone()),
                 render::Local => Some("../".repeat(loc.len())),
                 render::Unknown => None,
             }
         },
         |_cache| {
-            Some((fqn.to_owned(), match kind {
-                clean::TypeStruct => "struct",
-                clean::TypeEnum => "enum",
-                clean::TypeFunction => "fn",
-                clean::TypeTrait => "trait",
+            Some((Vec::from_slice(fqn), match kind {
+                clean::TypeStruct => item_type::Struct,
+                clean::TypeEnum => item_type::Enum,
+                clean::TypeFunction => item_type::Function,
+                clean::TypeTrait => item_type::Trait,
             }))
         })
 }
 
 fn path(w: &mut io::Writer, path: &clean::Path, print_all: bool,
         root: |&render::Cache, &[~str]| -> Option<~str>,
-        info: |&render::Cache| -> Option<(~[~str], &'static str)>)
+        info: |&render::Cache| -> Option<(Vec<~str> , ItemType)>)
     -> fmt::Result
 {
     // The generics will get written to both the title and link
-    let mut generics = ~"";
+    let mut generics = StrBuf::new();
     let last = path.segments.last().unwrap();
     if last.lifetimes.len() > 0 || last.types.len() > 0 {
         let mut counter = 0;
@@ -208,10 +211,10 @@ fn path(w: &mut io::Writer, path: &clean::Path, print_all: bool,
         let loc = loc.unwrap();
 
         local_data::get(cache_key, |cache| {
-            let cache = cache.unwrap().get();
-            let abs_root = root(cache, loc.as_slice());
-            let rel_root = match path.segments[0].name.as_slice() {
-                "self" => Some(~"./"),
+            let cache = cache.unwrap();
+            let abs_root = root(&**cache, loc.as_slice());
+            let rel_root = match path.segments.get(0).name.as_slice() {
+                "self" => Some("./".to_owned()),
                 _ => None,
             };
 
@@ -219,77 +222,76 @@ fn path(w: &mut io::Writer, path: &clean::Path, print_all: bool,
                 let amt = path.segments.len() - 1;
                 match rel_root {
                     Some(root) => {
-                        let mut root = root;
+                        let mut root = StrBuf::from_str(root);
                         for seg in path.segments.slice_to(amt).iter() {
                             if "super" == seg.name || "self" == seg.name {
-                                if_ok!(write!(w, "{}::", seg.name));
+                                try!(write!(w, "{}::", seg.name));
                             } else {
                                 root.push_str(seg.name);
                                 root.push_str("/");
-                                if_ok!(write!(w, "<a class='mod'
+                                try!(write!(w, "<a class='mod'
                                                     href='{}index.html'>{}</a>::",
-                                              root,
+                                              root.as_slice(),
                                               seg.name));
                             }
                         }
                     }
                     None => {
                         for seg in path.segments.slice_to(amt).iter() {
-                            if_ok!(write!(w, "{}::", seg.name));
+                            try!(write!(w, "{}::", seg.name));
                         }
                     }
                 }
             }
 
-            match info(cache) {
+            match info(&**cache) {
                 // This is a documented path, link to it!
                 Some((ref fqp, shortty)) if abs_root.is_some() => {
-                    let mut url = abs_root.unwrap();
+                    let mut url = StrBuf::from_str(abs_root.unwrap());
                     let to_link = fqp.slice_to(fqp.len() - 1);
                     for component in to_link.iter() {
                         url.push_str(*component);
                         url.push_str("/");
                     }
                     match shortty {
-                        "mod" => {
+                        item_type::Module => {
                             url.push_str(*fqp.last().unwrap());
                             url.push_str("/index.html");
                         }
                         _ => {
-                            url.push_str(shortty);
+                            url.push_str(shortty.to_static_str());
                             url.push_str(".");
                             url.push_str(*fqp.last().unwrap());
                             url.push_str(".html");
                         }
                     }
 
-                    if_ok!(write!(w, "<a class='{}' href='{}' title='{}'>{}</a>",
+                    try!(write!(w, "<a class='{}' href='{}' title='{}'>{}</a>",
                                   shortty, url, fqp.connect("::"), last.name));
                 }
 
                 _ => {
-                    if_ok!(write!(w, "{}", last.name));
+                    try!(write!(w, "{}", last.name));
                 }
             }
-            if_ok!(write!(w, "{}", generics));
+            try!(write!(w, "{}", generics.as_slice()));
             Ok(())
         })
     })
 }
 
 /// Helper to render type parameters
-fn typarams(w: &mut io::Writer,
-            typarams: &Option<~[clean::TyParamBound]>) -> fmt::Result {
+fn tybounds(w: &mut io::Writer,
+            typarams: &Option<Vec<clean::TyParamBound> >) -> fmt::Result {
     match *typarams {
         Some(ref params) => {
-            if_ok!(write!(w, "&lt;"));
+            try!(write!(w, ":"));
             for (i, param) in params.iter().enumerate() {
                 if i > 0 {
-                    if_ok!(write!(w, ", "));
+                    try!(write!(w, " + "));
                 }
-                if_ok!(write!(w, "{}", *param));
+                try!(write!(w, "{}", *param));
             }
-            if_ok!(write!(w, "&gt;"));
             Ok(())
         }
         None => Ok(())
@@ -297,23 +299,23 @@ fn typarams(w: &mut io::Writer,
 }
 
 impl fmt::Show for clean::Type {
-    fn fmt(g: &clean::Type, f: &mut fmt::Formatter) -> fmt::Result {
-        match *g {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
             clean::TyParamBinder(id) | clean::Generic(id) => {
                 local_data::get(cache_key, |cache| {
-                    let m = cache.unwrap().get();
+                    let m = cache.unwrap();
                     f.buf.write(m.typarams.get(&id).as_bytes())
                 })
             }
             clean::ResolvedPath{id, typarams: ref tp, path: ref path} => {
-                if_ok!(resolved_path(f.buf, id, path, false));
-                typarams(f.buf, tp)
+                try!(resolved_path(f.buf, id, path, false));
+                tybounds(f.buf, tp)
             }
             clean::ExternalPath{path: ref path, typarams: ref tp,
-                                fqn: ref fqn, kind, crate} => {
-                if_ok!(external_path(f.buf, path, false, fqn.as_slice(), kind,
-                                     crate))
-                typarams(f.buf, tp)
+                                fqn: ref fqn, kind, krate} => {
+                try!(external_path(f.buf, path, false, fqn.as_slice(), kind,
+                                     krate))
+                tybounds(f.buf, tp)
             }
             clean::Self(..) => f.buf.write("Self".as_bytes()),
             clean::Primitive(prim) => {
@@ -330,46 +332,86 @@ impl fmt::Show for clean::Type {
                     ast::TyUint(ast::TyU64) => "u64",
                     ast::TyFloat(ast::TyF32) => "f32",
                     ast::TyFloat(ast::TyF64) => "f64",
+                    ast::TyFloat(ast::TyF128) => "f128",
                     ast::TyStr => "str",
                     ast::TyBool => "bool",
                     ast::TyChar => "char",
                 };
                 f.buf.write(s.as_bytes())
             }
-            clean::Closure(ref decl) => {
-                let region = match decl.region {
-                    Some(ref region) => format!("{} ", *region),
-                    None => ~"",
-                };
-
-                write!(f.buf, "{}{}{arrow, select, yes{ -&gt; {ret}} other{}}",
-                       PuritySpace(decl.purity),
-                       match decl.sigil {
-                           ast::OwnedSigil => format!("proc({})", decl.decl.inputs),
-                           ast::BorrowedSigil => format!("{}|{}|", region, decl.decl.inputs),
-                           ast::ManagedSigil => format!("@{}fn({})", region, decl.decl.inputs),
+            clean::Closure(ref decl, ref region) => {
+                write!(f.buf, "{style}{lifetimes}|{args}|{bounds}\
+                               {arrow, select, yes{ -&gt; {ret}} other{}}",
+                       style = FnStyleSpace(decl.fn_style),
+                       lifetimes = if decl.lifetimes.len() == 0 {
+                           "".to_owned()
+                       } else {
+                           format!("&lt;{:#}&gt;", decl.lifetimes)
+                       },
+                       args = decl.decl.inputs,
+                       arrow = match decl.decl.output { clean::Unit => "no", _ => "yes" },
+                       ret = decl.decl.output,
+                       bounds = {
+                           let mut ret = StrBuf::new();
+                           match *region {
+                               Some(ref lt) => {
+                                   ret.push_str(format!(": {}", *lt));
+                               }
+                               None => {}
+                           }
+                           for bound in decl.bounds.iter() {
+                                match *bound {
+                                    clean::RegionBound => {}
+                                    clean::TraitBound(ref t) => {
+                                        if ret.len() == 0 {
+                                            ret.push_str(": ");
+                                        } else {
+                                            ret.push_str(" + ");
+                                        }
+                                        ret.push_str(format!("{}", *t));
+                                    }
+                                }
+                           }
+                           ret.into_owned()
+                       })
+            }
+            clean::Proc(ref decl) => {
+                write!(f.buf, "{style}{lifetimes}proc({args}){bounds}\
+                               {arrow, select, yes{ -&gt; {ret}} other{}}",
+                       style = FnStyleSpace(decl.fn_style),
+                       lifetimes = if decl.lifetimes.len() == 0 {
+                           "".to_owned()
+                       } else {
+                           format!("&lt;{:#}&gt;", decl.lifetimes)
+                       },
+                       args = decl.decl.inputs,
+                       bounds = if decl.bounds.len() == 0 {
+                           "".to_owned()
+                       } else {
+                           let mut m = decl.bounds.iter().map(|s| s.to_str());
+                           ": " + m.collect::<~[~str]>().connect(" + ")
                        },
                        arrow = match decl.decl.output { clean::Unit => "no", _ => "yes" },
                        ret = decl.decl.output)
-                // FIXME: where are bounds and lifetimes printed?!
             }
             clean::BareFunction(ref decl) => {
                 write!(f.buf, "{}{}fn{}{}",
-                       PuritySpace(decl.purity),
+                       FnStyleSpace(decl.fn_style),
                        match decl.abi {
-                           ~"" | ~"\"Rust\"" => ~"",
+                           ref x if "" == *x => "".to_owned(),
+                           ref x if "\"Rust\"" == *x => "".to_owned(),
                            ref s => " " + *s + " ",
                        },
                        decl.generics,
                        decl.decl)
             }
             clean::Tuple(ref typs) => {
-                if_ok!(f.buf.write("(".as_bytes()));
+                try!(f.buf.write("(".as_bytes()));
                 for (i, typ) in typs.iter().enumerate() {
                     if i > 0 {
-                        if_ok!(f.buf.write(", ".as_bytes()))
+                        try!(f.buf.write(", ".as_bytes()))
                     }
-                    if_ok!(write!(f.buf, "{}", *typ));
+                    try!(write!(f.buf, "{}", *typ));
                 }
                 f.buf.write(")".as_bytes())
             }
@@ -391,7 +433,7 @@ impl fmt::Show for clean::Type {
                        }, **t)
             }
             clean::BorrowedRef{ lifetime: ref l, mutability, type_: ref ty} => {
-                let lt = match *l { Some(ref l) => format!("{} ", *l), _ => ~"" };
+                let lt = match *l { Some(ref l) => format!("{} ", *l), _ => "".to_owned() };
                 write!(f.buf, "&amp;{}{}{}",
                        lt,
                        match mutability {
@@ -404,38 +446,36 @@ impl fmt::Show for clean::Type {
     }
 }
 
-impl fmt::Show for clean::FnDecl {
-    fn fmt(d: &clean::FnDecl, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f.buf, "({args}){arrow, select, yes{ -&gt; {ret}} other{}}",
-               args = d.inputs,
-               arrow = match d.output { clean::Unit => "no", _ => "yes" },
-               ret = d.output)
+impl fmt::Show for clean::Arguments {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        for (i, input) in self.values.iter().enumerate() {
+            if i > 0 { try!(write!(f.buf, ", ")); }
+            if input.name.len() > 0 {
+                try!(write!(f.buf, "{}: ", input.name));
+            }
+            try!(write!(f.buf, "{}", input.type_));
+        }
+        Ok(())
     }
 }
 
-impl fmt::Show for ~[clean::Argument] {
-    fn fmt(inputs: &~[clean::Argument], f: &mut fmt::Formatter) -> fmt::Result {
-        let mut args = ~"";
-        for (i, input) in inputs.iter().enumerate() {
-            if i > 0 { args.push_str(", "); }
-            if input.name.len() > 0 {
-                args.push_str(format!("{}: ", input.name));
-            }
-            args.push_str(format!("{}", input.type_));
-        }
-        f.buf.write(args.as_bytes())
+impl fmt::Show for clean::FnDecl {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f.buf, "({args}){arrow, select, yes{ -&gt; {ret}} other{}}",
+               args = self.inputs,
+               arrow = match self.output { clean::Unit => "no", _ => "yes" },
+               ret = self.output)
     }
 }
 
 impl<'a> fmt::Show for Method<'a> {
-    fn fmt(m: &Method<'a>, f: &mut fmt::Formatter) -> fmt::Result {
-        let Method(selfty, d) = *m;
-        let mut args = ~"";
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let Method(selfty, d) = *self;
+        let mut args = StrBuf::new();
         match *selfty {
             clean::SelfStatic => {},
             clean::SelfValue => args.push_str("self"),
             clean::SelfOwned => args.push_str("~self"),
-            clean::SelfManaged => args.push_str("@self"),
             clean::SelfBorrowed(Some(ref lt), clean::Immutable) => {
                 args.push_str(format!("&amp;{} self", *lt));
             }
@@ -449,14 +489,15 @@ impl<'a> fmt::Show for Method<'a> {
                 args.push_str("&amp;self");
             }
         }
-        for (i, input) in d.inputs.iter().enumerate() {
+        for (i, input) in d.inputs.values.iter().enumerate() {
             if i > 0 || args.len() > 0 { args.push_str(", "); }
             if input.name.len() > 0 {
                 args.push_str(format!("{}: ", input.name));
             }
             args.push_str(format!("{}", input.type_));
         }
-        write!(f.buf, "({args}){arrow, select, yes{ -&gt; {ret}} other{}}",
+        write!(f.buf,
+               "({args}){arrow, select, yes{ -&gt; {ret}} other{}}",
                args = args,
                arrow = match d.output { clean::Unit => "no", _ => "yes" },
                ret = d.output)
@@ -464,28 +505,27 @@ impl<'a> fmt::Show for Method<'a> {
 }
 
 impl fmt::Show for VisSpace {
-    fn fmt(v: &VisSpace, f: &mut fmt::Formatter) -> fmt::Result {
-        match v.get() {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.get() {
             Some(ast::Public) => write!(f.buf, "pub "),
-            Some(ast::Private) => write!(f.buf, "priv "),
             Some(ast::Inherited) | None => Ok(())
         }
     }
 }
 
-impl fmt::Show for PuritySpace {
-    fn fmt(p: &PuritySpace, f: &mut fmt::Formatter) -> fmt::Result {
-        match p.get() {
+impl fmt::Show for FnStyleSpace {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.get() {
             ast::UnsafeFn => write!(f.buf, "unsafe "),
             ast::ExternFn => write!(f.buf, "extern "),
-            ast::ImpureFn => Ok(())
+            ast::NormalFn => Ok(())
         }
     }
 }
 
 impl fmt::Show for clean::ViewPath {
-    fn fmt(v: &clean::ViewPath, f: &mut fmt::Formatter) -> fmt::Result {
-        match *v {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
             clean::SimpleImport(ref name, ref src) => {
                 if *name == src.path.segments.last().unwrap().name {
                     write!(f.buf, "use {};", *src)
@@ -497,12 +537,12 @@ impl fmt::Show for clean::ViewPath {
                 write!(f.buf, "use {}::*;", *src)
             }
             clean::ImportList(ref src, ref names) => {
-                if_ok!(write!(f.buf, "use {}::\\{", *src));
+                try!(write!(f.buf, "use {}::\\{", *src));
                 for (i, n) in names.iter().enumerate() {
                     if i > 0 {
-                        if_ok!(write!(f.buf, ", "));
+                        try!(write!(f.buf, ", "));
                     }
-                    if_ok!(write!(f.buf, "{}", *n));
+                    try!(write!(f.buf, "{}", *n));
                 }
                 write!(f.buf, "\\};")
             }
@@ -511,18 +551,18 @@ impl fmt::Show for clean::ViewPath {
 }
 
 impl fmt::Show for clean::ImportSource {
-    fn fmt(v: &clean::ImportSource, f: &mut fmt::Formatter) -> fmt::Result {
-        match v.did {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.did {
             // FIXME: shouldn't be restricted to just local imports
             Some(did) if ast_util::is_local(did) => {
-                resolved_path(f.buf, did.node, &v.path, true)
+                resolved_path(f.buf, did.node, &self.path, true)
             }
             _ => {
-                for (i, seg) in v.path.segments.iter().enumerate() {
+                for (i, seg) in self.path.segments.iter().enumerate() {
                     if i > 0 {
-                        if_ok!(write!(f.buf, "::"))
+                        try!(write!(f.buf, "::"))
                     }
-                    if_ok!(write!(f.buf, "{}", seg.name));
+                    try!(write!(f.buf, "{}", seg.name));
                 }
                 Ok(())
             }
@@ -531,21 +571,21 @@ impl fmt::Show for clean::ImportSource {
 }
 
 impl fmt::Show for clean::ViewListIdent {
-    fn fmt(v: &clean::ViewListIdent, f: &mut fmt::Formatter) -> fmt::Result {
-        match v.source {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.source {
             // FIXME: shouldn't be limited to just local imports
             Some(did) if ast_util::is_local(did) => {
                 let path = clean::Path {
                     global: false,
-                    segments: ~[clean::PathSegment {
-                        name: v.name.clone(),
-                        lifetimes: ~[],
-                        types: ~[],
-                    }]
+                    segments: vec!(clean::PathSegment {
+                        name: self.name.clone(),
+                        lifetimes: Vec::new(),
+                        types: Vec::new(),
+                    })
                 };
                 resolved_path(f.buf, did.node, &path, false)
             }
-            _ => write!(f.buf, "{}", v.name),
+            _ => write!(f.buf, "{}", self.name),
         }
     }
 }

@@ -16,22 +16,22 @@
 //! loop if no other one is provided (and M:N scheduling is desired).
 
 use std::cast;
+use std::mem::replace;
 use std::rt::rtio::{EventLoop, IoFactory, RemoteCallback, PausableIdleCallback,
                     Callback};
 use std::unstable::sync::Exclusive;
-use std::util;
 
 /// This is the only exported function from this module.
-pub fn event_loop() -> ~EventLoop {
-    ~BasicLoop::new() as ~EventLoop
+pub fn event_loop() -> ~EventLoop:Send {
+    ~BasicLoop::new() as ~EventLoop:Send
 }
 
 struct BasicLoop {
-    work: ~[proc()],                  // pending work
+    work: Vec<proc():Send>,             // pending work
     idle: Option<*mut BasicPausable>, // only one is allowed
-    remotes: ~[(uint, ~Callback)],
+    remotes: Vec<(uint, ~Callback:Send)>,
     next_remote: uint,
-    messages: Exclusive<~[Message]>,
+    messages: Exclusive<Vec<Message>>,
 }
 
 enum Message { RunRemote(uint), RemoveRemote(uint) }
@@ -39,18 +39,18 @@ enum Message { RunRemote(uint), RemoveRemote(uint) }
 impl BasicLoop {
     fn new() -> BasicLoop {
         BasicLoop {
-            work: ~[],
+            work: vec![],
             idle: None,
             next_remote: 0,
-            remotes: ~[],
-            messages: Exclusive::new(~[]),
+            remotes: vec![],
+            messages: Exclusive::new(vec![]),
         }
     }
 
     /// Process everything in the work queue (continually)
     fn work(&mut self) {
         while self.work.len() > 0 {
-            for work in util::replace(&mut self.work, ~[]).move_iter() {
+            for work in replace(&mut self.work, vec![]).move_iter() {
                 work();
             }
         }
@@ -60,7 +60,7 @@ impl BasicLoop {
         let messages = unsafe {
             self.messages.with(|messages| {
                 if messages.len() > 0 {
-                    Some(util::replace(messages, ~[]))
+                    Some(replace(messages, vec![]))
                 } else {
                     None
                 }
@@ -135,38 +135,42 @@ impl EventLoop for BasicLoop {
         }
     }
 
-    fn callback(&mut self, f: proc()) {
+    fn callback(&mut self, f: proc():Send) {
         self.work.push(f);
     }
 
     // FIXME: Seems like a really weird requirement to have an event loop provide.
-    fn pausable_idle_callback(&mut self, cb: ~Callback) -> ~PausableIdleCallback {
+    fn pausable_idle_callback(&mut self, cb: ~Callback:Send)
+        -> ~PausableIdleCallback:Send
+    {
         let callback = ~BasicPausable::new(self, cb);
         rtassert!(self.idle.is_none());
         unsafe {
             let cb_ptr: &*mut BasicPausable = cast::transmute(&callback);
             self.idle = Some(*cb_ptr);
         }
-        return callback as ~PausableIdleCallback;
+        callback as ~PausableIdleCallback:Send
     }
 
-    fn remote_callback(&mut self, f: ~Callback) -> ~RemoteCallback {
+    fn remote_callback(&mut self, f: ~Callback:Send) -> ~RemoteCallback:Send {
         let id = self.next_remote;
         self.next_remote += 1;
         self.remotes.push((id, f));
-        ~BasicRemote::new(self.messages.clone(), id) as ~RemoteCallback
+        ~BasicRemote::new(self.messages.clone(), id) as ~RemoteCallback:Send
     }
 
     fn io<'a>(&'a mut self) -> Option<&'a mut IoFactory> { None }
+
+    fn has_active_io(&self) -> bool { false }
 }
 
 struct BasicRemote {
-    queue: Exclusive<~[Message]>,
+    queue: Exclusive<Vec<Message>>,
     id: uint,
 }
 
 impl BasicRemote {
-    fn new(queue: Exclusive<~[Message]>, id: uint) -> BasicRemote {
+    fn new(queue: Exclusive<Vec<Message>>, id: uint) -> BasicRemote {
         BasicRemote { queue: queue, id: id }
     }
 }
@@ -193,12 +197,12 @@ impl Drop for BasicRemote {
 
 struct BasicPausable {
     eloop: *mut BasicLoop,
-    work: ~Callback,
+    work: ~Callback:Send,
     active: bool,
 }
 
 impl BasicPausable {
-    fn new(eloop: &mut BasicLoop, cb: ~Callback) -> BasicPausable {
+    fn new(eloop: &mut BasicLoop, cb: ~Callback:Send) -> BasicPausable {
         BasicPausable {
             active: false,
             work: cb,
@@ -235,11 +239,11 @@ mod test {
     fn pool() -> SchedPool {
         SchedPool::new(PoolConfig {
             threads: 1,
-            event_loop_factory: Some(basic::event_loop),
+            event_loop_factory: basic::event_loop,
         })
     }
 
-    fn run(f: proc()) {
+    fn run(f: proc():Send) {
         let mut pool = pool();
         pool.spawn(TaskOpts::new(), f);
         pool.shutdown();
@@ -253,11 +257,11 @@ mod test {
     #[test]
     fn some_channels() {
         run(proc() {
-            let (p, c) = Chan::new();
+            let (tx, rx) = channel();
             spawn(proc() {
-                c.send(());
+                tx.send(());
             });
-            p.recv();
+            rx.recv();
         });
     }
 
@@ -265,16 +269,16 @@ mod test {
     fn multi_thread() {
         let mut pool = SchedPool::new(PoolConfig {
             threads: 2,
-            event_loop_factory: Some(basic::event_loop),
+            event_loop_factory: basic::event_loop,
         });
 
         for _ in range(0, 20) {
             pool.spawn(TaskOpts::new(), proc() {
-                let (p, c) = Chan::new();
+                let (tx, rx) = channel();
                 spawn(proc() {
-                    c.send(());
+                    tx.send(());
                 });
-                p.recv();
+                rx.recv();
             });
         }
 

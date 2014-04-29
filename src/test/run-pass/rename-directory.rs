@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -11,12 +11,10 @@
 // This test can't be a unit test in std,
 // because it needs TempDir, which is in extra
 
-// xfail-fast
-extern mod extra;
+extern crate libc;
 
-use extra::tempfile::TempDir;
+use std::io::TempDir;
 use std::os;
-use std::libc;
 use std::io;
 use std::io::fs;
 
@@ -37,7 +35,7 @@ fn rename_directory() {
             })
         });
         assert!((ostream as uint != 0u));
-        let s = ~"hello";
+        let s = "hello".to_owned();
         "hello".with_c_str(|buf| {
             let write_len = libc::fwrite(buf as *libc::c_void,
                                          1u as libc::size_t,

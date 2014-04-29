@@ -8,13 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[crate_id="externcallback#0.1"];
-#[crate_type = "lib"];
+#![crate_id="externcallback#0.1"]
+#![crate_type = "lib"]
 
-use std::libc;
+extern crate libc;
 
 pub mod rustrt {
-    use std::libc;
+    extern crate libc;
 
     #[link(name = "rustrt")]
     extern {
@@ -26,7 +26,7 @@ pub mod rustrt {
 
 pub fn fact(n: uint) -> uint {
     unsafe {
-        info!("n = {}", n);
+        println!("n = {}", n);
         rustrt::rust_dbg_call(cb, n)
     }
 }

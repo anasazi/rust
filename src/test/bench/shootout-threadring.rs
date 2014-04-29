@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,71 +8,39 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Based on threadring.erlang by Jira Isa
-
-use std::os;
+#![feature(phase)]
+#[phase(syntax)] extern crate green;
+green_start!(main)
 
 fn start(n_tasks: int, token: int) {
-    let (p, ch1) = Chan::new();
-    let mut p = p;
-    let ch1 = ch1;
-    ch1.send(token);
-    //  XXX could not get this to work with a range closure
-    let mut i = 2;
-    while i <= n_tasks {
-        let (next_p, ch) = Chan::new();
-        let imm_i = i;
-        let imm_p = p;
-        spawn(proc() {
-            roundtrip(imm_i, n_tasks, &imm_p, &ch);
-        });
-        p = next_p;
-        i += 1;
+    let (tx, mut rx) = channel();
+    tx.send(token);
+    for i in range(2, n_tasks + 1) {
+        let (tx, next_rx) = channel();
+        spawn(proc() roundtrip(i, tx, rx));
+        rx = next_rx;
     }
-    let imm_p = p;
-    let imm_ch = ch1;
-    spawn(proc() {
-        roundtrip(1, n_tasks, &imm_p, &imm_ch);
-    });
+    spawn(proc() roundtrip(1, tx, rx));
 }
 
-fn roundtrip(id: int, n_tasks: int, p: &Port<int>, ch: &Chan<int>) {
-    loop {
-        match p.recv() {
-          1 => {
-            println!("{}\n", id);
-            return;
-          }
-          token => {
-            info!("thread: {}   got token: {}", id, token);
-            ch.send(token - 1);
-            if token <= n_tasks {
-                return;
-            }
-          }
+fn roundtrip(id: int, tx: Sender<int>, rx: Receiver<int>) {
+    for token in rx.iter() {
+        if token == 1 {
+            println!("{}", id);
+            break;
         }
+        tx.send(token - 1);
     }
 }
 
 fn main() {
-    let args = if os::getenv("RUST_BENCH").is_some() {
-        ~[~"", ~"2000000", ~"503"]
-    }
-    else {
-        os::args()
+    let args = std::os::args();
+    let token = if std::os::getenv("RUST_BENCH").is_some() {
+        2000000
+    } else {
+        args.get(1).and_then(|arg| from_str(*arg)).unwrap_or(1000)
     };
-    let token = if args.len() > 1u {
-        FromStr::from_str(args[1]).unwrap()
-    }
-    else {
-        1000
-    };
-    let n_tasks = if args.len() > 2u {
-        FromStr::from_str(args[2]).unwrap()
-    }
-    else {
-        503
-    };
-    start(n_tasks, token);
+    let n_tasks = args.get(2).and_then(|arg| from_str(*arg)).unwrap_or(503);
 
+    start(n_tasks, token);
 }

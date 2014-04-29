@@ -10,18 +10,19 @@
 
 //! Operations and constants for unsigned 32-bits integers (`u32` type)
 
-#[allow(non_uppercase_statics)];
+#![allow(non_uppercase_statics)]
 
 use prelude::*;
 
 use default::Default;
+use from_str::FromStr;
 use num::{Bitwise, Bounded};
 use num::{CheckedAdd, CheckedSub, CheckedMul};
 use num::{CheckedDiv, Zero, One, strconv};
 use num::{ToStrRadix, FromStrRadix};
 use option::{Option, Some, None};
 use str;
-use unstable::intrinsics;
+use intrinsics;
 
 uint_module!(u32, i32, 32)
 

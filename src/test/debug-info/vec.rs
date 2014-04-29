@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,20 +8,31 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-android: FIXME(#10381)
+// ignore-win32: FIXME #13256
+// ignore-android: FIXME(#10381)
 
-// compile-flags:-Z extra-debug-info
+// compile-flags:-g
 // debugger:set print pretty off
 // debugger:rbreak zzz
 // debugger:run
 // debugger:finish
 // debugger:print a
 // check:$1 = {1, 2, 3}
+// debugger:print vec::VECT
+// check:$2 = {4, 5, 6}
 
-#[allow(unused_variable)];
+#![allow(unused_variable)]
+
+static mut VECT: [i32, ..3] = [1, 2, 3];
 
 fn main() {
     let a = [1, 2, 3];
+
+    unsafe {
+        VECT[0] = 4;
+        VECT[1] = 5;
+        VECT[2] = 6;
+    }
 
     zzz();
 }

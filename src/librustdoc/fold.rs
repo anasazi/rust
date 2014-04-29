@@ -8,9 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std;
 use clean::*;
 use std::iter::Extendable;
+use std::mem::{replace, swap};
 
 pub trait DocFolder {
     fn fold_item(&mut self, item: Item) -> Option<Item> {
@@ -19,15 +19,13 @@ pub trait DocFolder {
 
     /// don't override!
     fn fold_item_recur(&mut self, item: Item) -> Option<Item> {
-        use std::util::swap;
         let Item { attrs, name, source, visibility, id, inner } = item;
         let inner = inner;
-        let c = |x| self.fold_item(x);
         let inner = match inner {
             StructItem(mut i) => {
-                let mut foo = ~[]; swap(&mut foo, &mut i.fields);
+                let mut foo = Vec::new(); swap(&mut foo, &mut i.fields);
                 let num_fields = foo.len();
-                i.fields.extend(&mut foo.move_iter().filter_map(|x| self.fold_item(x)));
+                i.fields.extend(foo.move_iter().filter_map(|x| self.fold_item(x)));
                 i.fields_stripped |= num_fields != i.fields.len();
                 StructItem(i)
             },
@@ -35,9 +33,9 @@ pub trait DocFolder {
                 ModuleItem(self.fold_mod(i))
             },
             EnumItem(mut i) => {
-                let mut foo = ~[]; swap(&mut foo, &mut i.variants);
+                let mut foo = Vec::new(); swap(&mut foo, &mut i.variants);
                 let num_variants = foo.len();
-                i.variants.extend(&mut foo.move_iter().filter_map(|x| self.fold_item(x)));
+                i.variants.extend(foo.move_iter().filter_map(|x| self.fold_item(x)));
                 i.variants_stripped |= num_variants != i.variants.len();
                 EnumItem(i)
             },
@@ -58,22 +56,23 @@ pub trait DocFolder {
                         },
                     }
                 }
-                let mut foo = ~[]; swap(&mut foo, &mut i.methods);
-                i.methods.extend(&mut foo.move_iter().filter_map(|x| vtrm(self, x)));
+                let mut foo = Vec::new(); swap(&mut foo, &mut i.methods);
+                i.methods.extend(foo.move_iter().filter_map(|x| vtrm(self, x)));
                 TraitItem(i)
             },
             ImplItem(mut i) => {
-                let mut foo = ~[]; swap(&mut foo, &mut i.methods);
-                i.methods.extend(&mut foo.move_iter().filter_map(|x| self.fold_item(x)));
+                let mut foo = Vec::new(); swap(&mut foo, &mut i.methods);
+                i.methods.extend(foo.move_iter().filter_map(|x| self.fold_item(x)));
                 ImplItem(i)
             },
             VariantItem(i) => {
                 let i2 = i.clone(); // this clone is small
                 match i.kind {
                     StructVariant(mut j) => {
-                        let mut foo = ~[]; swap(&mut foo, &mut j.fields);
+                        let mut foo = Vec::new(); swap(&mut foo, &mut j.fields);
                         let num_fields = foo.len();
-                        j.fields.extend(&mut foo.move_iter().filter_map(c));
+                        let c = |x| self.fold_item(x);
+                        j.fields.extend(foo.move_iter().filter_map(c));
                         j.fields_stripped |= num_fields != j.fields.len();
                         VariantItem(Variant {kind: StructVariant(j), ..i2})
                     },
@@ -88,11 +87,14 @@ pub trait DocFolder {
     }
 
     fn fold_mod(&mut self, m: Module) -> Module {
-        Module { items: m.items.move_iter().filter_map(|i| self.fold_item(i)).collect() }
+        Module {
+            is_crate: m.is_crate,
+            items: m.items.move_iter().filter_map(|i| self.fold_item(i)).collect()
+        }
     }
 
     fn fold_crate(&mut self, mut c: Crate) -> Crate {
-        c.module = match std::util::replace(&mut c.module, None) {
+        c.module = match replace(&mut c.module, None) {
             Some(module) => self.fold_item(module), None => None
         };
         return c;

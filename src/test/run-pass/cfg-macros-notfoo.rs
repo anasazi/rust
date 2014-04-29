@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,13 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-fast compile-flags directive doesn't work for check-fast
 // compile-flags:
 
 // check that cfg correctly chooses between the macro impls (see also
 // cfg-macros-foo.rs)
 
-#[feature(macro_rules)];
+#![feature(macro_rules)]
 
 #[cfg(foo)]
 #[macro_escape]

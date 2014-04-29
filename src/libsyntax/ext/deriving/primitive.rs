@@ -16,59 +16,63 @@ use ext::build::AstBuilder;
 use ext::deriving::generic::*;
 use parse::token::InternedString;
 
-pub fn expand_deriving_from_primitive(cx: &ExtCtxt,
+pub fn expand_deriving_from_primitive(cx: &mut ExtCtxt,
                                       span: Span,
                                       mitem: @MetaItem,
-                                      in_items: ~[@Item]) -> ~[@Item] {
+                                      item: @Item,
+                                      push: |@Item|) {
+    let inline = cx.meta_word(span, InternedString::new("inline"));
+    let attrs = vec!(cx.attribute(span, inline));
     let trait_def = TraitDef {
-        cx: cx, span: span,
-
-        path: Path::new(~["std", "num", "FromPrimitive"]),
-        additional_bounds: ~[],
+        span: span,
+        attributes: Vec::new(),
+        path: Path::new(vec!("std", "num", "FromPrimitive")),
+        additional_bounds: Vec::new(),
         generics: LifetimeBounds::empty(),
-        methods: ~[
+        methods: vec!(
             MethodDef {
                 name: "from_i64",
                 generics: LifetimeBounds::empty(),
                 explicit_self: None,
-                args: ~[
-                    Literal(Path::new(~["i64"])),
-                ],
-                ret_ty: Literal(Path::new_(~["std", "option", "Option"],
+                args: vec!(
+                    Literal(Path::new(vec!("i64")))),
+                ret_ty: Literal(Path::new_(vec!("std", "option", "Option"),
                                            None,
-                                           ~[~Self],
+                                           vec!(~Self),
                                            true)),
-                // liable to cause code-bloat
-                inline: true,
+                // #[inline] liable to cause code-bloat
+                attributes: attrs.clone(),
                 const_nonmatching: false,
-                combine_substructure: |c, s, sub| cs_from("i64", c, s, sub),
+                combine_substructure: combine_substructure(|c, s, sub| {
+                    cs_from("i64", c, s, sub)
+                }),
             },
             MethodDef {
                 name: "from_u64",
                 generics: LifetimeBounds::empty(),
                 explicit_self: None,
-                args: ~[
-                    Literal(Path::new(~["u64"])),
-                ],
-                ret_ty: Literal(Path::new_(~["std", "option", "Option"],
+                args: vec!(
+                    Literal(Path::new(vec!("u64")))),
+                ret_ty: Literal(Path::new_(vec!("std", "option", "Option"),
                                            None,
-                                           ~[~Self],
+                                           vec!(~Self),
                                            true)),
-                // liable to cause code-bloat
-                inline: true,
+                // #[inline] liable to cause code-bloat
+                attributes: attrs,
                 const_nonmatching: false,
-                combine_substructure: |c, s, sub| cs_from("u64", c, s, sub),
-            },
-        ]
+                combine_substructure: combine_substructure(|c, s, sub| {
+                    cs_from("u64", c, s, sub)
+                }),
+            })
     };
 
-    trait_def.expand(mitem, in_items)
+    trait_def.expand(cx, mitem, item, push)
 }
 
-fn cs_from(name: &str, cx: &ExtCtxt, trait_span: Span, substr: &Substructure) -> @Expr {
+fn cs_from(name: &str, cx: &mut ExtCtxt, trait_span: Span, substr: &Substructure) -> @Expr {
     let n = match substr.nonself_args {
         [n] => n,
-        _ => cx.span_bug(trait_span, "Incorrect number of arguments in `deriving(FromPrimitive)`")
+        _ => cx.span_bug(trait_span, "incorrect number of arguments in `deriving(FromPrimitive)`")
     };
 
     match *substr.fields {
@@ -83,7 +87,7 @@ fn cs_from(name: &str, cx: &ExtCtxt, trait_span: Span, substr: &Substructure) ->
                 return cx.expr_fail(trait_span, InternedString::new(""));
             }
 
-            let mut arms = ~[];
+            let mut arms = Vec::new();
 
             for variant in enum_def.variants.iter() {
                 match variant.node.kind {
@@ -108,9 +112,10 @@ fn cs_from(name: &str, cx: &ExtCtxt, trait_span: Span, substr: &Substructure) ->
 
                         // arm for `_ if $guard => $body`
                         let arm = ast::Arm {
-                            pats: ~[cx.pat_wild(span)],
+                            attrs: vec!(),
+                            pats: vec!(cx.pat_wild(span)),
                             guard: Some(guard),
-                            body: cx.block_expr(body),
+                            body: body,
                         };
 
                         arms.push(arm);
@@ -127,9 +132,10 @@ fn cs_from(name: &str, cx: &ExtCtxt, trait_span: Span, substr: &Substructure) ->
 
             // arm for `_ => None`
             let arm = ast::Arm {
-                pats: ~[cx.pat_wild(trait_span)],
+                attrs: vec!(),
+                pats: vec!(cx.pat_wild(trait_span)),
                 guard: None,
-                body: cx.block_expr(cx.expr_none(trait_span)),
+                body: cx.expr_none(trait_span),
             };
             arms.push(arm);
 

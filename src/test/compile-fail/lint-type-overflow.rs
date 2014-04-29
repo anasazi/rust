@@ -9,7 +9,7 @@
 // except according to those terms.
 //
 
-#[deny(type_overflow)];
+#![deny(type_overflow)]
 
 fn test(x: i8) {
     println!("x {}", x);
@@ -34,9 +34,9 @@ fn main() {
     test(1000); //~ error: literal out of range for its type
 
     let x = 128_i8; //~ error: literal out of range for its type
-    let x = 127_i8; 
-    let x = -128_i8; 
-    let x = -(128_i8); 
+    let x = 127_i8;
+    let x = -128_i8;
+    let x = -(128_i8);
     let x = -129_i8; //~ error: literal out of range for its type
 
     let x: i32 = 2147483647; // should be OK

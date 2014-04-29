@@ -8,18 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-
-
-extern mod extra;
-
 pub fn main() {
-    let a: ~str = ~"this \
-is a test";
+    let a: ~str = "this \
+is a test".to_owned();
     let b: ~str =
-        ~"this \
-               is \
-               another \
-               test";
-    assert_eq!(a, ~"this is a test");
-    assert_eq!(b, ~"this is another test");
+        "this \
+              is \
+              another \
+              test".to_owned();
+    assert_eq!(a, "this is a test".to_owned());
+    assert_eq!(b, "this is another test".to_owned());
 }

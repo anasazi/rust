@@ -8,9 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// error-pattern: Multiple macro registration functions found
+// error-pattern: multiple macro registration functions found
 
-#[feature(macro_registrar)];
+#![feature(macro_registrar)]
 
 // the registration function isn't typechecked yet
 #[macro_registrar]

@@ -8,8 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-/// Implement ncurses-compatible database discovery
-/// Does not support hashed database, only filesystem!
+//! ncurses-compatible database discovery
+//!
+//! Does not support hashed database, only filesystem!
 
 use std::io::File;
 use std::os::getenv;
@@ -23,7 +24,7 @@ pub fn get_dbpath_for_term(term: &str) -> Option<~Path> {
 
     let homedir = os::homedir();
 
-    let mut dirs_to_search = ~[];
+    let mut dirs_to_search = Vec::new();
     let first_char = term.char_at(0);
 
     // Find search directory
@@ -42,12 +43,14 @@ pub fn get_dbpath_for_term(term: &str) -> Option<~Path> {
                         dirs_to_search.push(Path::new(i.to_owned()));
                     }
                 },
-                // Found nothing, use the default paths
-                // /usr/share/terminfo is the de facto location, but it seems
-                // Ubuntu puts it in /lib/terminfo
+                // Found nothing in TERMINFO_DIRS, use the default paths:
+                // According to  /etc/terminfo/README, after looking at
+                // ~/.terminfo, ncurses will search /etc/terminfo, then
+                // /lib/terminfo, and eventually /usr/share/terminfo.
                 None => {
-                    dirs_to_search.push(Path::new("/usr/share/terminfo"));
+                    dirs_to_search.push(Path::new("/etc/terminfo"));
                     dirs_to_search.push(Path::new("/lib/terminfo"));
+                    dirs_to_search.push(Path::new("/usr/share/terminfo"));
                 }
             }
         }
@@ -96,10 +99,10 @@ fn test_get_dbpath_for_term() {
         let p = get_dbpath_for_term(t).expect("no terminfo entry found");
         p.as_str().unwrap().to_owned()
     };
-    assert!(x("screen") == ~"/usr/share/terminfo/s/screen");
+    assert!(x("screen") == "/usr/share/terminfo/s/screen".to_owned());
     assert!(get_dbpath_for_term("") == None);
     setenv("TERMINFO_DIRS", ":");
-    assert!(x("screen") == ~"/usr/share/terminfo/s/screen");
+    assert!(x("screen") == "/usr/share/terminfo/s/screen".to_owned());
     unsetenv("TERMINFO_DIRS");
 }
 

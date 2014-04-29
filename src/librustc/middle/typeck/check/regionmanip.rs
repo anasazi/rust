@@ -8,23 +8,24 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// #[warn(deprecated_mode)];
+// #![warn(deprecated_mode)]
 
 use middle::ty;
 use middle::ty_fold;
 use middle::ty_fold::TypeFolder;
-use std::hashmap::HashMap;
+
+use collections::HashMap;
 use util::ppaux::Repr;
 use util::ppaux;
 
 // Helper functions related to manipulating region types.
 
-pub fn replace_bound_regions_in_fn_sig(
-        tcx: ty::ctxt,
+pub fn replace_late_bound_regions_in_fn_sig(
+        tcx: &ty::ctxt,
         fn_sig: &ty::FnSig,
         mapf: |ty::BoundRegion| -> ty::Region)
         -> (HashMap<ty::BoundRegion,ty::Region>, ty::FnSig) {
-    debug!("replace_bound_regions_in_fn_sig({})", fn_sig.repr(tcx));
+    debug!("replace_late_bound_regions_in_fn_sig({})", fn_sig.repr(tcx));
 
     let mut map = HashMap::new();
     let fn_sig = {
@@ -39,11 +40,11 @@ pub fn replace_bound_regions_in_fn_sig(
         });
         ty_fold::super_fold_sig(&mut f, fn_sig)
     };
-    debug!("resulting map: {}", map.to_str());
+    debug!("resulting map: {}", map);
     (map, fn_sig)
 }
 
-pub fn relate_nested_regions(tcx: ty::ctxt,
+pub fn relate_nested_regions(tcx: &ty::ctxt,
                              opt_region: Option<ty::Region>,
                              ty: ty::t,
                              relate_op: |ty::Region, ty::Region|) {
@@ -74,7 +75,7 @@ pub fn relate_nested_regions(tcx: ty::ctxt,
      */
 
     let mut rr = RegionRelator { tcx: tcx,
-                                 stack: ~[],
+                                 stack: Vec::new(),
                                  relate_op: relate_op };
     match opt_region {
         Some(o_r) => { rr.stack.push(o_r); }
@@ -83,9 +84,9 @@ pub fn relate_nested_regions(tcx: ty::ctxt,
     rr.fold_ty(ty);
 
     struct RegionRelator<'a> {
-        tcx: ty::ctxt,
-        stack: ~[ty::Region],
-        relate_op: 'a |ty::Region, ty::Region|,
+        tcx: &'a ty::ctxt,
+        stack: Vec<ty::Region>,
+        relate_op: |ty::Region, ty::Region|: 'a,
     }
 
     // FIXME(#10151) -- Define more precisely when a region is
@@ -93,17 +94,16 @@ pub fn relate_nested_regions(tcx: ty::ctxt,
     // well.
 
     impl<'a> TypeFolder for RegionRelator<'a> {
-        fn tcx(&self) -> ty::ctxt {
+        fn tcx<'a>(&'a self) -> &'a ty::ctxt {
             self.tcx
         }
 
         fn fold_ty(&mut self, ty: ty::t) -> ty::t {
             match ty::get(ty).sty {
-                ty::ty_rptr(r, ref mt) |
-                ty::ty_vec(ref mt, ty::vstore_slice(r)) => {
+                ty::ty_rptr(r, ty::mt {ty, ..}) => {
                     self.relate(r);
                     self.stack.push(r);
-                    ty_fold::super_fold_ty(self, mt.ty);
+                    ty_fold::super_fold_ty(self, ty);
                     self.stack.pop().unwrap();
                 }
 
@@ -132,7 +132,7 @@ pub fn relate_nested_regions(tcx: ty::ctxt,
     }
 }
 
-pub fn relate_free_regions(tcx: ty::ctxt, fn_sig: &ty::FnSig) {
+pub fn relate_free_regions(tcx: &ty::ctxt, fn_sig: &ty::FnSig) {
     /*!
      * This function populates the region map's `free_region_map`.
      * It walks over the transformed self type and argument types
@@ -147,7 +147,7 @@ pub fn relate_free_regions(tcx: ty::ctxt, fn_sig: &ty::FnSig) {
 
     debug!("relate_free_regions >>");
 
-    let mut all_tys = ~[];
+    let mut all_tys = Vec::new();
     for arg in fn_sig.inputs.iter() {
         all_tys.push(*arg);
     }

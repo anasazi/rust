@@ -9,7 +9,7 @@
 // except according to those terms.
 
 
-use extra::smallintmap::SmallIntMap;
+use collections::SmallIntMap;
 
 use middle::ty::{Vid, expected_found, IntVarValue};
 use middle::ty;
@@ -26,14 +26,14 @@ pub enum VarValue<V, T> {
 }
 
 pub struct ValsAndBindings<V, T> {
-    vals: SmallIntMap<VarValue<V, T>>,
-    bindings: ~[(V, VarValue<V, T>)],
+    pub vals: SmallIntMap<VarValue<V, T>>,
+    pub bindings: Vec<(V, VarValue<V, T>)> ,
 }
 
 pub struct Node<V, T> {
-    root: V,
-    possible_types: T,
-    rank: uint,
+    pub root: V,
+    pub possible_types: T,
+    pub rank: uint,
 }
 
 pub trait UnifyVid<T> {
@@ -60,7 +60,7 @@ pub trait UnifyInferCtxtMethods {
              -> (V, uint);
 }
 
-impl UnifyInferCtxtMethods for InferCtxt {
+impl<'a> UnifyInferCtxtMethods for InferCtxt<'a> {
     fn get<T:Clone,
            V:Clone + Eq + Vid + UnifyVid<T>>(
            &self,
@@ -75,11 +75,10 @@ impl UnifyInferCtxtMethods for InferCtxt {
 
         let tcx = self.tcx;
         let vb = UnifyVid::appropriate_vals_and_bindings(self);
-        let mut vb = vb.borrow_mut();
-        return helper(tcx, vb.get(), vid);
+        return helper(tcx, &mut *vb.borrow_mut(), vid);
 
         fn helper<T:Clone, V:Clone+Eq+Vid>(
-            tcx: ty::ctxt,
+            tcx: &ty::ctxt,
             vb: &mut ValsAndBindings<V,T>,
             vid: V) -> Node<V, T>
         {
@@ -123,9 +122,9 @@ impl UnifyInferCtxtMethods for InferCtxt {
 
         let vb = UnifyVid::appropriate_vals_and_bindings(self);
         let mut vb = vb.borrow_mut();
-        let old_v = (*vb.get().vals.get(&vid.to_uint())).clone();
-        vb.get().bindings.push((vid.clone(), old_v));
-        vb.get().vals.insert(vid.to_uint(), new_v);
+        let old_v = (*vb.vals.get(&vid.to_uint())).clone();
+        vb.bindings.push((vid.clone(), old_v));
+        vb.vals.insert(vid.to_uint(), new_v);
     }
 
     fn unify<T:Clone + InferStr,
@@ -199,7 +198,7 @@ pub trait InferCtxtMethods {
                     -> ures;
 }
 
-impl InferCtxtMethods for InferCtxt {
+impl<'a> InferCtxtMethods for InferCtxt<'a> {
     fn simple_vars<T:Clone + Eq + InferStr + SimplyUnifiable,
                    V:Clone + Eq + Vid + ToStr + UnifyVid<Option<T>>>(
                    &self,

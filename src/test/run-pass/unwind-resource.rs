@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,39 +8,36 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-fast
-
-extern mod extra;
 
 use std::task;
 
 struct complainer {
-  c: SharedChan<bool>,
+    tx: Sender<bool>,
 }
 
 impl Drop for complainer {
     fn drop(&mut self) {
-        error!("About to send!");
-        self.c.send(true);
-        error!("Sent!");
+        println!("About to send!");
+        self.tx.send(true);
+        println!("Sent!");
     }
 }
 
-fn complainer(c: SharedChan<bool>) -> complainer {
-    error!("Hello!");
+fn complainer(tx: Sender<bool>) -> complainer {
+    println!("Hello!");
     complainer {
-        c: c
+        tx: tx
     }
 }
 
-fn f(c: SharedChan<bool>) {
-    let _c = complainer(c);
+fn f(tx: Sender<bool>) {
+    let _tx = complainer(tx);
     fail!();
 }
 
 pub fn main() {
-    let (p, c) = SharedChan::new();
-    task::spawn(proc() f(c.clone()));
-    error!("hiiiiiiiii");
-    assert!(p.recv());
+    let (tx, rx) = channel();
+    task::spawn(proc() f(tx.clone()));
+    println!("hiiiiiiiii");
+    assert!(rx.recv());
 }

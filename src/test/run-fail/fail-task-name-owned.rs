@@ -10,12 +10,10 @@
 
 // error-pattern:task 'owned name' failed at 'test'
 
-use std::task;
+use std::task::TaskBuilder;
 
 fn main() {
-    let mut t = task::task();
-    t.name(~"owned name");
-    t.try(proc() {
+    TaskBuilder::new().named("owned name".to_owned()).try(proc() {
         fail!("test");
         1
     }).unwrap()

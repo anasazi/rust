@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-test #5723
+// ignore-test #5723
 
 // Test that you cannot escape a reference
 // into a trait.
@@ -29,7 +29,7 @@ fn make_gc() -> @get_ctxt  {
     let ctxt = ctxt { v: 22u };
     let hc = has_ctxt { c: &ctxt };
     return @hc as @get_ctxt;
-    //^~ ERROR source contains reference
+    //~^ ERROR source contains reference
 }
 
 fn main() {

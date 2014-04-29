@@ -8,43 +8,43 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(managed_boxes)];
+#![feature(managed_boxes)]
 
-use std::unstable::intrinsics::{TyDesc, get_tydesc, visit_tydesc, TyVisitor, Disr, Opaque};
+use std::intrinsics::{TyDesc, get_tydesc, visit_tydesc, TyVisitor, Disr, Opaque};
 
 struct MyVisitor {
-    types: ~[~str],
+    types: Vec<~str> ,
 }
 
 impl TyVisitor for MyVisitor {
     fn visit_bot(&mut self) -> bool {
-        self.types.push(~"bot");
-        error!("visited bot type");
+        self.types.push("bot".to_owned());
+        println!("visited bot type");
         true
     }
     fn visit_nil(&mut self) -> bool {
-        self.types.push(~"nil");
-        error!("visited nil type");
+        self.types.push("nil".to_owned());
+        println!("visited nil type");
         true
     }
     fn visit_bool(&mut self) -> bool {
-        self.types.push(~"bool");
-        error!("visited bool type");
+        self.types.push("bool".to_owned());
+        println!("visited bool type");
         true
     }
     fn visit_int(&mut self) -> bool {
-        self.types.push(~"int");
-        error!("visited int type");
+        self.types.push("int".to_owned());
+        println!("visited int type");
         true
     }
     fn visit_i8(&mut self) -> bool {
-        self.types.push(~"i8");
-        error!("visited i8 type");
+        self.types.push("i8".to_owned());
+        println!("visited i8 type");
         true
     }
     fn visit_i16(&mut self) -> bool {
-        self.types.push(~"i16");
-        error!("visited i16 type");
+        self.types.push("i16".to_owned());
+        println!("visited i16 type");
         true
     }
     fn visit_i32(&mut self) -> bool { true }
@@ -58,6 +58,7 @@ impl TyVisitor for MyVisitor {
 
     fn visit_f32(&mut self) -> bool { true }
     fn visit_f64(&mut self) -> bool { true }
+    fn visit_f128(&mut self) -> bool { true }
 
     fn visit_char(&mut self) -> bool { true }
 
@@ -73,13 +74,11 @@ impl TyVisitor for MyVisitor {
     fn visit_ptr(&mut self, _mtbl: uint, _inner: *TyDesc) -> bool { true }
     fn visit_rptr(&mut self, _mtbl: uint, _inner: *TyDesc) -> bool { true }
 
-    fn visit_vec(&mut self, _mtbl: uint, _inner: *TyDesc) -> bool { true }
-    fn visit_unboxed_vec(&mut self, _mtbl: uint, _inner: *TyDesc) -> bool { true }
     fn visit_evec_box(&mut self, _mtbl: uint, _inner: *TyDesc) -> bool { true }
     fn visit_evec_uniq(&mut self, _mtbl: uint, inner: *TyDesc) -> bool {
-        self.types.push(~"[");
+        self.types.push("[".to_owned());
         unsafe { visit_tydesc(inner, &mut *self as &mut TyVisitor); }
-        self.types.push(~"]");
+        self.types.push("]".to_owned());
         true
     }
     fn visit_evec_slice(&mut self, _mtbl: uint, _inner: *TyDesc) -> bool { true }
@@ -114,7 +113,8 @@ impl TyVisitor for MyVisitor {
                                 _disr_val: Disr,
                                 _n_fields: uint,
                                 _name: &str) -> bool { true }
-    fn visit_enum_variant_field(&mut self, _i: uint, _offset: uint, _inner: *TyDesc) -> bool { true }
+    fn visit_enum_variant_field(&mut self, _i: uint, _offset: uint, _inner: *TyDesc)
+        -> bool { true }
     fn visit_leave_enum_variant(&mut self,
                                 _variant: uint,
                                 _disr_val: Disr,
@@ -128,7 +128,8 @@ impl TyVisitor for MyVisitor {
     fn visit_enter_fn(&mut self, _purity: uint, _proto: uint,
                       _n_inputs: uint, _retstyle: uint) -> bool { true }
     fn visit_fn_input(&mut self, _i: uint, _mode: uint, _inner: *TyDesc) -> bool { true }
-    fn visit_fn_output(&mut self, _retstyle: uint, _variadic: bool, _inner: *TyDesc) -> bool { true }
+    fn visit_fn_output(&mut self, _retstyle: uint, _variadic: bool, _inner: *TyDesc)
+        -> bool { true }
     fn visit_leave_fn(&mut self, _purity: uint, _proto: uint,
                       _n_inputs: uint, _retstyle: uint) -> bool { true }
 
@@ -136,7 +137,6 @@ impl TyVisitor for MyVisitor {
     fn visit_trait(&mut self, _name: &str) -> bool { true }
     fn visit_param(&mut self, _i: uint) -> bool { true }
     fn visit_self(&mut self) -> bool { true }
-    fn visit_type(&mut self) -> bool { true }
 }
 
 fn visit_ty<T>(v: &mut MyVisitor) {
@@ -144,16 +144,18 @@ fn visit_ty<T>(v: &mut MyVisitor) {
 }
 
 pub fn main() {
-    let mut v = MyVisitor {types: ~[]};
+    let mut v = MyVisitor {types: Vec::new()};
 
     visit_ty::<bool>(&mut v);
     visit_ty::<int>(&mut v);
     visit_ty::<i8>(&mut v);
     visit_ty::<i16>(&mut v);
-    visit_ty::<~[int]>(&mut v);
 
     for s in v.types.iter() {
         println!("type: {}", (*s).clone());
     }
-    assert_eq!(v.types.clone(), ~[~"bool", ~"int", ~"i8", ~"i16", ~"[", ~"int", ~"]"]);
+
+    let vec_types: Vec<~str> = v.types.clone().move_iter().collect();
+    assert_eq!(vec_types, vec!("bool".to_owned(), "int".to_owned(),
+                               "i8".to_owned(), "i16".to_owned()));
 }

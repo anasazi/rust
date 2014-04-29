@@ -8,11 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern mod extra;
-extern mod arena;
+extern crate sync;
+extern crate arena;
 
 use std::iter::range_step;
-use extra::future::Future;
+use sync::Future;
 use arena::TypedArena;
 
 enum Tree<'a> {
@@ -76,7 +76,7 @@ fn main() {
                 format!("{}\t trees of depth {}\t check: {}",
                         iterations * 2, depth, chk)
             })
-        }).to_owned_vec();
+        }).collect::<Vec<Future<~str>>>();
 
     for message in messages.mut_iter() {
         println!("{}", *message.get_ref());

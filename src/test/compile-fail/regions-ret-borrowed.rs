@@ -22,10 +22,10 @@ fn with<R>(f: |x: &int| -> R) -> R {
 fn return_it() -> &int {
     with(|o| o) //~ ERROR mismatched types
         //~^ ERROR lifetime of return value does not outlive the function call
-        //~^^ ERROR cannot infer an appropriate lifetime
+        //~^^ ERROR cannot infer
 }
 
 fn main() {
     let x = return_it();
-    info!("foo={}", *x);
+    println!("foo={}", *x);
 }

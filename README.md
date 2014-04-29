@@ -5,20 +5,19 @@ documentation.
 
 ## Quick Start
 
-### Windows
-
-1. Download and use the [installer and MinGW][win-wiki].
+1. Download a [binary installer][installer] for your platform.
 2. Read the [tutorial].
-2. Enjoy!
+3. Enjoy!
 
 > ***Note:*** Windows users can read the detailed
 > [getting started][wiki-start] notes on the wiki.
 
+[installer]: http://www.rust-lang.org/install.html
 [tutorial]: http://static.rust-lang.org/doc/tutorial.html
 [wiki-start]: https://github.com/mozilla/rust/wiki/Note-getting-started-developing-Rust
 [win-wiki]: https://github.com/mozilla/rust/wiki/Using-Rust-on-Windows
 
-### Linux / OS X
+## Building from Source
 
 1. Make sure you have installed the dependencies:
     * `g++` 4.4 or `clang++` 3.x
@@ -26,15 +25,16 @@ documentation.
     * `perl` 5.0 or later
     * GNU `make` 3.81 or later
     * `curl`
+    * `git`
 2. Download and build Rust:
 
     You can either download a [tarball] or build directly from the [repo].
 
     To build from the [tarball] do:
 
-        $ curl -O http://static.rust-lang.org/dist/rust-0.9.tar.gz
-        $ tar -xzf rust-0.9.tar.gz
-        $ cd rust-0.9
+        $ curl -O http://static.rust-lang.org/dist/rust-nightly.tar.gz
+        $ tar -xzf rust-nightly.tar.gz
+        $ cd rust-nightly
 
     Or to build from the [repo] do:
 
@@ -59,8 +59,8 @@ documentation.
 4. Enjoy!
 
 [repo]: https://github.com/mozilla/rust
-[tarball]: http://static.rust-lang.org/dist/rust-0.9.tar.gz
-[tutorial]: http://static.rust-lang.org/doc/0.9/tutorial.html
+[tarball]: http://static.rust-lang.org/dist/rust-nightly.tar.gz
+[tutorial]: http://static.rust-lang.org/doc/master/tutorial.html
 
 ## Notes
 

@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(managed_boxes)];
+#![feature(managed_boxes)]
 
 use std::cell::RefCell;
 
@@ -23,7 +23,7 @@ struct Pointy {
 
 pub fn main() {
     let m = @RefCell::new(Pointy { x : no_pointy });
-    m.set(Pointy {
+    *m.borrow_mut() = Pointy {
         x: yes_pointy(m)
-    });
+    };
 }

@@ -11,7 +11,7 @@
 # This is the compile-time target-triple for the compiler. For the compiler at
 # runtime, this should be considered the host-triple. More explanation for why
 # this exists can be found on issue #2400
-export CFG_COMPILER
+export CFG_COMPILER_HOST_TRIPLE
 
 # The standard libraries should be held up to a higher standard than any old
 # code, make sure that these common warnings are denied by default. These can
@@ -68,13 +68,13 @@ $(foreach host,$(CFG_HOST),						    \
 # $(4) is the crate name
 define RUST_TARGET_STAGE_N
 
-$$(TLIB$(1)_T_$(2)_H_$(3))/stamp.$(4): CFG_COMPILER = $(2)
+$$(TLIB$(1)_T_$(2)_H_$(3))/stamp.$(4): CFG_COMPILER_HOST_TRIPLE = $(2)
 $$(TLIB$(1)_T_$(2)_H_$(3))/stamp.$(4):				    \
 		$$(CRATEFILE_$(4))				    \
 		$$(CRATE_FULLDEPS_$(1)_T_$(2)_H_$(3)_$(4))	    \
 		$$(TSREQ$(1)_T_$(2)_H_$(3))			    \
 		| $$(TLIB$(1)_T_$(2)_H_$(3))/
-	@$$(call E, compile_and_link: $$(@D)/lib$(4))
+	@$$(call E, oxidize: $$(@D)/lib$(4))
 	$$(call REMOVE_ALL_OLD_GLOB_MATCHES,\
 	    $$(dir $$@)$$(call CFG_LIB_GLOB_$(2),$(4)))
 	$$(call REMOVE_ALL_OLD_GLOB_MATCHES,\
@@ -83,6 +83,7 @@ $$(TLIB$(1)_T_$(2)_H_$(3))/stamp.$(4):				    \
 		$$(WFLAGS_ST$(1)) \
 		-L "$$(RT_OUTPUT_DIR_$(2))" \
 		-L "$$(LLVM_LIBDIR_$(2))" \
+		-L "$$(dir $$(LLVM_STDCPP_LOCATION_$(2)))" \
 		--out-dir $$(@D) $$<
 	@touch $$@
 	$$(call LIST_ALL_OLD_GLOB_MATCHES,\
@@ -113,7 +114,7 @@ $$(TBIN$(1)_T_$(2)_H_$(3))/$(4)$$(X_$(2)):			\
 		    $$(TLIB$(1)_T_$(2)_H_$(3))/stamp.$$(dep))	\
 		$$(TSREQ$(1)_T_$(2)_H_$(3))			\
 		| $$(TBIN$(1)_T_$(4)_H_$(3))/
-	@$$(call E, compile_and_link: $$@)
+	@$$(call E, oxidize: $$@)
 	$$(STAGE$(1)_T_$(2)_H_$(3)) -o $$@ $$< --cfg $(4)
 
 endef
@@ -137,6 +138,12 @@ $$(TBIN$(1)_T_$(2)_H_$(3))/:
 
 $$(TLIB$(1)_T_$(2)_H_$(3))/:
 	mkdir -p $$@
+
+$$(TLIB$(1)_T_$(2)_H_$(3))/libcompiler-rt.a: \
+	    $$(RT_OUTPUT_DIR_$(2))/$$(call CFG_STATIC_LIB_NAME_$(2),compiler-rt) \
+	    | $$(TLIB$(1)_T_$(2)_H_$(3))/ $$(SNAPSHOT_RUSTC_POST_CLEANUP)
+	@$$(call E, cp: $$@)
+	$$(Q)cp $$< $$@
 
 $$(TLIB$(1)_T_$(2)_H_$(3))/libmorestack.a: \
 	    $$(RT_OUTPUT_DIR_$(2))/$$(call CFG_STATIC_LIB_NAME_$(2),morestack) \

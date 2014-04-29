@@ -205,7 +205,7 @@ struct X { f: int }
 fn example1() {
     let mut x = X { f: 3 };
     let y = &mut x.f;  // -+ L
-    ...                //  |
+    // ...             //  |
 }                      // -+
 ~~~
 
@@ -221,7 +221,7 @@ The situation gets more complex when borrowing data inside heap boxes:
 fn example2() {
     let mut x = @X { f: 3 };
     let y = &x.f;      // -+ L
-    ...                //  |
+    // ...             //  |
 }                      // -+
 ~~~
 
@@ -236,7 +236,7 @@ it. It would violate memory safety for the box that was originally
 assigned to `x` to be garbage-collected, since a non-heap
 pointer *`y`* still points into it.
 
-> ***Note:*** Our current implementation implements the garbage collector
+> *Note:* Our current implementation implements the garbage collector
 > using reference counting and cycle detection.
 
 For this reason, whenever an `&` expression borrows the interior of a
@@ -251,7 +251,7 @@ fn example2() {
     let mut x = @X {f: 3};
     let x1 = x;
     let y = &x1.f;     // -+ L
-    ...                //  |
+    // ...             //  |
 }                      // -+
 ~~~
 
@@ -282,7 +282,7 @@ fn example3() -> int {
         return *y;         //  |
     }                      // -+
     x = ~Foo {f: 4};
-    ...
+    // ...
 # return 0;
 }
 ~~~
@@ -559,9 +559,14 @@ points at a static constant).
 
 # Named lifetimes
 
-Let's look at named lifetimes in more detail. Named lifetimes allow
-for grouping of parameters by lifetime. For example, consider this
-function:
+Lifetimes can be named and referenced. For example, the special lifetime
+`'static`, which does not go out of scope, can be used to create global
+variables and communicate between tasks (see the manual for use cases).
+
+## Parameter Lifetimes
+
+Named lifetimes allow for grouping of parameters by lifetime.
+For example, consider this function:
 
 ~~~
 # struct Point {x: f64, y: f64}; // as before
@@ -654,6 +659,25 @@ fn select<'r, T>(shape: &Shape, threshold: f64,
 ~~~
 
 This is equivalent to the previous definition.
+
+## Labeled Control Structures
+
+Named lifetime notation can also be used to control the flow of execution:
+
+~~~
+'h: for i in range(0,10) {
+    'g: loop {
+        if i % 2 == 0 { continue 'h; }
+        if i == 9 { break 'h; }
+        break 'g;
+    }
+}
+~~~
+
+> *Note:* Labelled breaks are not currently supported within `while` loops.
+
+Named labels are hygienic and can be used safely within macros.
+See the macros guide section on hygiene for more details.
 
 # Conclusion
 

@@ -196,11 +196,11 @@ msgstr ""
 #. type: Plain text
 #: src/doc/tutorial.md:57
 msgid ""
-"> ***Warning:*** Rust is a language under ongoing development. Notes > about "
+"> *Warning:* Rust is a language under ongoing development. Notes > about "
 "potential changes to the language, implementation > deficiencies, and other "
 "caveats appear offset in blockquotes."
 msgstr ""
-"> ***警告:*** Rust は開発途上の言語です。将来予定されている言語への変更や、実"
+"> *警告:* Rust は開発途上の言語です。将来予定されている言語への変更や、実"
 "装上の不備、その他の注意事項など、 blockquote の段落 (この段落もそうです) に"
 "注意してください。"
 
@@ -287,13 +287,13 @@ msgstr ""
 #. type: Plain text
 #: src/doc/tutorial.md:88
 msgid ""
-"> ***Note:*** Windows users should read the detailed > \"[getting started]"
+"> *Note:* Windows users should read the detailed > \"[getting started]"
 "[wiki-start]\" notes on the wiki. Even when using > the binary installer, "
 "the Windows build requires a MinGW installation, > the precise details of "
 "which are not discussed here. Finally, `rustc` may > need to be [referred to "
 "as `rustc.exe`][bug-3319]. It's a bummer, we > know."
 msgstr ""
-"> ***注意:*** Windows ユーザーは wiki の [getting started][wiki-start] の記事"
+"> *注意:* Windows ユーザーは wiki の [getting started][wiki-start] の記事"
 "を読んでください。 本書では詳細を説明しませんが、インストーラを利用する場合で"
 "も、MinGW のインストールなど、追加の手順が必要です。また、コンパイラは "
 "`rustc` ではなく、 [`rustc.exe` として呼び出す必要がある][bug-3319] かもしれ"
@@ -356,17 +356,17 @@ msgstr "上記条件を満たしていれば、以下のような手順でビル
 #: src/doc/tutorial.md:112
 #, fuzzy
 #| msgid ""
-#| "~~~~ {.notrust} $ curl -O http://static.rust-lang.org/dist/rust-0.7.tar."
-#| "gz $ tar -xzf rust-0.7.tar.gz $ cd rust-0.7 $ ./configure $ make && make "
+#| "~~~~ {.notrust} $ curl -O http://static.rust-lang.org/dist/rust-nightly.tar."
+#| "gz $ tar -xzf rust-nightly.tar.gz $ cd rust-nightly $ ./configure $ make && make "
 #| "install ~~~~"
 msgid ""
-"~~~~ {.notrust} $ curl -O http://static.rust-lang.org/dist/rust-0.9.tar.gz $ "
-"tar -xzf rust-0.9.tar.gz $ cd rust-0.9 $ ./configure $ make && make install "
+"~~~~ {.notrust} $ curl -O http://static.rust-lang.org/dist/rust-nightly.tar.gz $ "
+"tar -xzf rust-nightly.tar.gz $ cd rust-nightly $ ./configure $ make && make install "
 "~~~~"
 msgstr ""
 "~~~~ {.notrust}\n"
-"$ curl -O http://static.rust-lang.org/dist/rust-0.7.tar.gz\n"
-"$ tar -xzf rust-0.7.tar.gz $ cd rust-0.7 $ ./configure\n"
+"$ curl -O http://static.rust-lang.org/dist/rust-nightly.tar.gz\n"
+"$ tar -xzf rust-nightly.tar.gz $ cd rust-nightly $ ./configure\n"
 "$ make && make install\n"
 "~~~~"
 
@@ -405,14 +405,14 @@ msgstr ""
 #: src/doc/tutorial.md:125
 #, fuzzy
 #| msgid ""
-#| "[tarball]: http://static.rust-lang.org/dist/rust-0.7.tar.gz [win-exe]: "
-#| "http://static.rust-lang.org/dist/rust-0.7-install.exe"
+#| "[tarball]: http://static.rust-lang.org/dist/rust-nightly.tar.gz [win-exe]: "
+#| "http://static.rust-lang.org/dist/rust-nightly-install.exe"
 msgid ""
-"[tarball]: http://static.rust-lang.org/dist/rust-0.9.tar.gz [win-exe]: "
-"http://static.rust-lang.org/dist/rust-0.9-install.exe"
+"[tarball]: http://static.rust-lang.org/dist/rust-nightly.tar.gz [win-exe]: "
+"http://static.rust-lang.org/dist/rust-nightly-install.exe"
 msgstr ""
-"[tarball]: http://static.rust-lang.org/dist/rust-0.7.tar.gz\n"
-"[win-exe]: http://static.rust-lang.org/dist/rust-0.7-install.exe"
+"[tarball]: http://static.rust-lang.org/dist/rust-nightly.tar.gz\n"
+"[win-exe]: http://static.rust-lang.org/dist/rust-nightly-install.exe"
 
 #. type: Plain text
 #: src/doc/tutorial.md:127
@@ -431,7 +431,7 @@ msgstr ""
 #. type: Plain text
 #: src/doc/tutorial.md:136
 #, fuzzy, no-wrap
-#| msgid "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
+#| msgid "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
 msgid ""
 "~~~~\n"
 "fn main() {\n"
@@ -441,7 +441,7 @@ msgid ""
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
@@ -634,7 +634,7 @@ msgstr ""
 #. type: Plain text
 #: src/doc/tutorial.md:222
 #, fuzzy, no-wrap
-#| msgid "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
+#| msgid "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
 msgid ""
 "while count < 10 {\n"
 "    println!(\"count is {}\", count);\n"
@@ -644,7 +644,7 @@ msgid ""
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
@@ -1002,14 +1002,14 @@ msgstr ""
 #: src/doc/tutorial.md:385
 #, fuzzy
 #| msgid ""
-#| "[tarball]: http://static.rust-lang.org/dist/rust-0.7.tar.gz [win-exe]: "
-#| "http://static.rust-lang.org/dist/rust-0.7-install.exe"
+#| "[tarball]: http://static.rust-lang.org/dist/rust-nightly.tar.gz [win-exe]: "
+#| "http://static.rust-lang.org/dist/rust-nightly-install.exe"
 msgid ""
 "[transmute]: http://static.rust-lang.org/doc/master/std/cast/fn.transmute."
 "html"
 msgstr ""
-"[tarball]: http://static.rust-lang.org/dist/rust-0.7.tar.gz\n"
-"[win-exe]: http://static.rust-lang.org/dist/rust-0.7-install.exe"
+"[tarball]: http://static.rust-lang.org/dist/rust-nightly.tar.gz\n"
+"[win-exe]: http://static.rust-lang.org/dist/rust-nightly-install.exe"
 
 #. type: Plain text
 #: src/doc/tutorial.md:387
@@ -1078,14 +1078,14 @@ msgstr ""
 #: src/doc/tutorial.md:412
 #, fuzzy
 #| msgid ""
-#| "[tarball]: http://static.rust-lang.org/dist/rust-0.7.tar.gz [win-exe]: "
-#| "http://static.rust-lang.org/dist/rust-0.7-install.exe"
+#| "[tarball]: http://static.rust-lang.org/dist/rust-nightly.tar.gz [win-exe]: "
+#| "http://static.rust-lang.org/dist/rust-nightly-install.exe"
 msgid ""
 "[pf]: http://en.cppreference.com/w/cpp/io/c/fprintf [fmt]: http://static."
 "rust-lang.org/doc/master/std/fmt/index.html"
 msgstr ""
-"[tarball]: http://static.rust-lang.org/dist/rust-0.7.tar.gz\n"
-"[win-exe]: http://static.rust-lang.org/dist/rust-0.7-install.exe"
+"[tarball]: http://static.rust-lang.org/dist/rust-nightly.tar.gz\n"
+"[win-exe]: http://static.rust-lang.org/dist/rust-nightly-install.exe"
 
 #. type: Plain text
 #: src/doc/tutorial.md:416
@@ -1254,11 +1254,11 @@ msgstr ""
 #. type: Plain text
 #: src/doc/tutorial.md:504
 msgid ""
-"> ***Note:*** The following code makes use of tuples (`(f64, f64)`) which > "
+"> *Note:* The following code makes use of tuples (`(f64, f64)`) which > "
 "are explained in section 5.3. For now you can think of tuples as a list of > "
 "items."
 msgstr ""
-"> ***注意:*** 以下のコード例では5.3 節で説明されるタプル (`(f64, f64)`) を"
+"> *注意:* 以下のコード例では5.3 節で説明されるタプル (`(f64, f64)`) を"
 "使っています。現時点では、タプルは項目のリストのようなものだとみなしてくださ"
 "い。"
 
@@ -1413,7 +1413,7 @@ msgstr ""
 #. type: Plain text
 #: src/doc/tutorial.md:602
 #, fuzzy, no-wrap
-#| msgid "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
+#| msgid "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
 msgid ""
 "~~~~\n"
 "struct Point {\n"
@@ -1424,7 +1424,7 @@ msgid ""
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
@@ -2161,14 +2161,14 @@ msgstr ""
 #: src/doc/tutorial.md:944
 #, fuzzy
 #| msgid ""
-#| "[tarball]: http://static.rust-lang.org/dist/rust-0.7.tar.gz [win-exe]: "
-#| "http://static.rust-lang.org/dist/rust-0.7-install.exe"
+#| "[tarball]: http://static.rust-lang.org/dist/rust-nightly.tar.gz [win-exe]: "
+#| "http://static.rust-lang.org/dist/rust-nightly-install.exe"
 msgid ""
 "[gc]: http://static.rust-lang.org/doc/master/std/gc/struct.Gc.html [rc]: "
 "http://static.rust-lang.org/doc/master/std/rc/struct.Rc.html"
 msgstr ""
-"[tarball]: http://static.rust-lang.org/dist/rust-0.7.tar.gz\n"
-"[win-exe]: http://static.rust-lang.org/dist/rust-0.7-install.exe"
+"[tarball]: http://static.rust-lang.org/dist/rust-nightly.tar.gz\n"
+"[win-exe]: http://static.rust-lang.org/dist/rust-nightly-install.exe"
 
 #. type: Plain text
 #: src/doc/tutorial.md:946
@@ -2187,7 +2187,7 @@ msgstr "# ボックス"
 #. type: Plain text
 #: src/doc/tutorial.md:986
 #, fuzzy, no-wrap
-#| msgid "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
+#| msgid "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
 msgid ""
 "struct Foo {\n"
 "    a: u32,\n"
@@ -2198,7 +2198,7 @@ msgid ""
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
@@ -2312,7 +2312,7 @@ msgstr "例として、シンプルな構造体型の `Point` について考え
 #. type: Plain text
 #: src/doc/tutorial.md:1376
 #, fuzzy, no-wrap
-#| msgid "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
+#| msgid "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
 msgid ""
 "~~~\n"
 "struct Point {\n"
@@ -2323,7 +2323,7 @@ msgid ""
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
@@ -2553,14 +2553,14 @@ msgstr ""
 #: src/doc/tutorial.md:1461
 #, fuzzy
 #| msgid ""
-#| "[tarball]: http://static.rust-lang.org/dist/rust-0.7.tar.gz [win-exe]: "
-#| "http://static.rust-lang.org/dist/rust-0.7-install.exe"
+#| "[tarball]: http://static.rust-lang.org/dist/rust-nightly.tar.gz [win-exe]: "
+#| "http://static.rust-lang.org/dist/rust-nightly-install.exe"
 msgid ""
 "[refcell]: http://static.rust-lang.org/doc/master/std/cell/struct.RefCell."
 "html"
 msgstr ""
-"[tarball]: http://static.rust-lang.org/dist/rust-0.7.tar.gz\n"
-"[win-exe]: http://static.rust-lang.org/dist/rust-0.7-install.exe"
+"[tarball]: http://static.rust-lang.org/dist/rust-nightly.tar.gz\n"
+"[win-exe]: http://static.rust-lang.org/dist/rust-nightly-install.exe"
 
 #. type: Plain text
 #: src/doc/tutorial.md:1463
@@ -3005,11 +3005,11 @@ msgstr ""
 #. type: Plain text
 #: src/doc/tutorial.md:1774
 msgid ""
-"> ***Note:*** Both the syntax and the semantics will be changing > in small "
+"> *Note:* Both the syntax and the semantics will be changing > in small "
 "ways. At the moment they can be unsound in some > scenarios, particularly "
 "with non-copyable types."
 msgstr ""
-"> ***注意*** コードの文法と意味は将来的に変更されるかもしれません。現時点では"
+"> *注意* コードの文法と意味は将来的に変更されるかもしれません。現時点では"
 "いくつかの状況、特にコピーできない型が関連するケースにおいて望ましくない振る"
 "舞いが起こされる場合があります。"
 
@@ -3660,10 +3660,10 @@ msgstr ""
 #. type: Plain text
 #: src/doc/tutorial.md:2099
 msgid ""
-"> ***Note:*** These two traits were referred to as 'kinds' in earlier > "
+"> *Note:* These two traits were referred to as 'kinds' in earlier > "
 "iterations of the language, and often still are."
 msgstr ""
-"> ***注意*** これら2つのトレイトは、以前は 「種」 (kind) と呼ばれており、現在"
+"> *注意* これら2つのトレイトは、以前は 「種」 (kind) と呼ばれており、現在"
 "でもそう呼ばれる場合があります。"
 
 #. type: Plain text
@@ -3688,7 +3688,7 @@ msgstr ""
 #. type: Plain text
 #: src/doc/tutorial.md:2110
 #, fuzzy, no-wrap
-#| msgid "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
+#| msgid "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
 msgid ""
 "~~~\n"
 "struct TimeBomb {\n"
@@ -3697,7 +3697,7 @@ msgid ""
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
@@ -3735,7 +3735,7 @@ msgstr ""
 #. type: Plain text
 #: src/doc/tutorial.md:2135
 #, fuzzy, no-wrap
-#| msgid "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
+#| msgid "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
 msgid ""
 "~~~~\n"
 "trait Printable {\n"
@@ -3745,7 +3745,7 @@ msgid ""
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
@@ -3774,7 +3774,7 @@ msgstr "[impls]: #メソッド"
 #. type: Plain text
 #: src/doc/tutorial.md:2160 src/doc/tutorial.md:2206
 #, fuzzy, no-wrap
-#| msgid "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
+#| msgid "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
 msgid ""
 "impl Printable for ~str {\n"
 "    fn print(&self) { println!(\"{}\", *self) }\n"
@@ -3782,7 +3782,7 @@ msgid ""
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
@@ -3821,7 +3821,7 @@ msgstr "## トレイトの実装の導出"
 #. type: Plain text
 #: src/doc/tutorial.md:2185
 #, fuzzy, no-wrap
-#| msgid "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
+#| msgid "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
 msgid ""
 "impl Printable for bool {\n"
 "    fn print(&self) { println!(\"{:?}\", *self) }\n"
@@ -3829,7 +3829,7 @@ msgid ""
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
@@ -3864,7 +3864,7 @@ msgstr "## タプル"
 #. type: Plain text
 #: src/doc/tutorial.md:2235
 #, fuzzy, no-wrap
-#| msgid "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
+#| msgid "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
 msgid ""
 "~~~~\n"
 "trait Seq<T> {\n"
@@ -3873,14 +3873,14 @@ msgid ""
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
 #. type: Plain text
 #: src/doc/tutorial.md:2240
 #, fuzzy, no-wrap
-#| msgid "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
+#| msgid "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
 msgid ""
 "impl<T> Seq<T> for ~[T] {\n"
 "    fn length(&self) -> uint { self.len() }\n"
@@ -3889,7 +3889,7 @@ msgid ""
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
@@ -4374,9 +4374,9 @@ msgstr ""
 
 #. type: Plain text
 #: src/doc/tutorial.md:2511
-msgid "> ***Note:*** Trait inheritance does not actually work with objects yet"
+msgid "> *Note:* Trait inheritance does not actually work with objects yet"
 msgstr ""
-"> ***注意*** トレイトの継承は、実際にはまだオブジェクトに対しては動作しませ"
+"> *注意* トレイトの継承は、実際にはまだオブジェクトに対しては動作しませ"
 "ん。"
 
 #. type: Plain text
@@ -4421,15 +4421,15 @@ msgstr ""
 #, fuzzy
 #| msgid ""
 #| "The full list of derivable traits is `Eq`, `TotalEq`, `Ord`, `TotalOrd`, "
-#| "`Encodable` `Decodable`, `Clone`, `DeepClone`, `IterBytes`, `Rand`, "
+#| "`Encodable` `Decodable`, `Clone`, `DeepClone`, `Hash`, `Rand`, "
 #| "`Zero`, and `ToStr`."
 msgid ""
 "The full list of derivable traits is `Eq`, `TotalEq`, `Ord`, `TotalOrd`, "
-"`Encodable` `Decodable`, `Clone`, `DeepClone`, `IterBytes`, `Rand`, "
+"`Encodable` `Decodable`, `Clone`, `DeepClone`, `Hash`, `Rand`, "
 "`Default`, `Zero`, and `ToStr`."
 msgstr ""
 "実装を自動的に導出可能なトレイトは、 `Eq`, `TotalEq`, `Ord`, `TotalOrd`, "
-"`Encodable` `Decodable`, `Clone`, `DeepClone`, `IterBytes`, `Rand`, `Zero`, "
+"`Encodable` `Decodable`, `Clone`, `DeepClone`, `Hash`, `Rand`, `Zero`, "
 "および `ToStr` です。."
 
 #. type: Plain text
@@ -4447,7 +4447,7 @@ msgstr "## クレート"
 #. type: Plain text
 #: src/doc/tutorial.md:2554
 #, fuzzy, no-wrap
-#| msgid "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
+#| msgid "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
 msgid ""
 "~~~~\n"
 "// `main.rs`\n"
@@ -4458,7 +4458,7 @@ msgid ""
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
@@ -4487,7 +4487,7 @@ msgstr "## 標準ライブラリ"
 #. type: Plain text
 #: src/doc/tutorial.md:2587
 #, fuzzy, no-wrap
-#| msgid "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
+#| msgid "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
 msgid ""
 "fn main() {\n"
 "    println!(\"Hello farm!\");\n"
@@ -4496,7 +4496,7 @@ msgid ""
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
@@ -4510,21 +4510,21 @@ msgstr "## マネージドクロージャ"
 #. type: Plain text
 #: src/doc/tutorial.md:2607
 #, fuzzy, no-wrap
-#| msgid "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
+#| msgid "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
 msgid ""
 "fn main() {\n"
 "    println!(\"Hello chicken!\");\n"
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
 #. type: Plain text
 #: src/doc/tutorial.md:2639
 #, fuzzy, no-wrap
-#| msgid "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
+#| msgid "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
 msgid ""
 "fn main() {\n"
 "    println!(\"Hello chicken!\");\n"
@@ -4534,7 +4534,7 @@ msgid ""
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
@@ -4573,7 +4573,7 @@ msgstr "# モジュールとクレート"
 #. type: Plain text
 #: src/doc/tutorial.md:2719
 #, fuzzy, no-wrap
-#| msgid "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
+#| msgid "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
 msgid ""
 "fn main() {\n"
 "    println!(\"Hello farm!\");\n"
@@ -4583,7 +4583,7 @@ msgid ""
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
@@ -4653,34 +4653,34 @@ msgstr ""
 #: src/doc/tutorial.md:2897
 #, fuzzy
 #| msgid ""
-#| "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello "
+#| "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello "
 #| "\" + world::explore()); } ~~~~"
 msgid "fn main() { cow() } ~~~"
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
 #. type: Plain text
 #: src/doc/tutorial.md:2916
 #, fuzzy, no-wrap
-#| msgid "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
+#| msgid "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
 msgid ""
 "fn main() {\n"
 "    println!(\"Hello farm!\");\n"
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
 #. type: Plain text
 #: src/doc/tutorial.md:2923
 #, fuzzy, no-wrap
-#| msgid "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
+#| msgid "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
 msgid ""
 "    // Can now refer to those names directly:\n"
 "    chicken();\n"
@@ -4691,7 +4691,7 @@ msgid ""
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
@@ -4699,7 +4699,7 @@ msgstr ""
 #: src/doc/tutorial.md:2932
 #, fuzzy
 #| msgid ""
-#| "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello "
+#| "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello "
 #| "\" + world::explore()); } ~~~~"
 msgid ""
 "~~~{.ignore} // `a.rs` - crate root use b::foo; mod b; fn main() { foo(); } "
@@ -4707,7 +4707,7 @@ msgid ""
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
@@ -4715,21 +4715,21 @@ msgstr ""
 #: src/doc/tutorial.md:2939
 #, fuzzy
 #| msgid ""
-#| "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello "
+#| "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello "
 #| "\" + world::explore()); } ~~~~"
 msgid ""
 "~~~{.ignore} // `b.rs` use b::c::bar; pub mod c; pub fn foo() { bar(); } ~~~"
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
 #. type: Plain text
 #: src/doc/tutorial.md:2985
 #, fuzzy, no-wrap
-#| msgid "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
+#| msgid "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
 msgid ""
 "fn main() {\n"
 "    egg_layer();\n"
@@ -4738,7 +4738,7 @@ msgid ""
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
@@ -4752,7 +4752,7 @@ msgstr "# ポインタのデリファレンス"
 #. type: Plain text
 #: src/doc/tutorial.md:3014
 #, fuzzy, no-wrap
-#| msgid "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
+#| msgid "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
 msgid ""
 "fn main() {\n"
 "    farm::chicken();\n"
@@ -4763,7 +4763,7 @@ msgid ""
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
@@ -4778,13 +4778,13 @@ msgstr "## 他のクレートの利用"
 #: src/doc/tutorial.md:3035
 #, fuzzy
 #| msgid "## Using other crates"
-msgid "For that, Rust offers you the `extern mod` declaration:"
+msgid "For that, Rust offers you the `extern crate` declaration:"
 msgstr "## 他のクレートの利用"
 
 #. type: Plain text
 #: src/doc/tutorial.md:3045
 #, fuzzy, no-wrap
-#| msgid "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
+#| msgid "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
 msgid ""
 "fn main() {\n"
 "    // The rational number '1/2':\n"
@@ -4794,7 +4794,7 @@ msgid ""
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
@@ -4802,7 +4802,7 @@ msgstr ""
 #: src/doc/tutorial.md:3068
 #, fuzzy
 #| msgid "~~~~ {.ignore} let foo = 10;"
-msgid "~~~ extern mod extra;"
+msgid "~~~ extern crate extra;"
 msgstr ""
 "~~~~ {.ignore}\n"
 "let foo = 10;"
@@ -4810,7 +4810,7 @@ msgstr ""
 #. type: Plain text
 #: src/doc/tutorial.md:3081
 #, fuzzy, no-wrap
-#| msgid "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
+#| msgid "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello \" + world::explore()); } ~~~~"
 msgid ""
 "fn main() {\n"
 "    farm::dog();\n"
@@ -4820,7 +4820,7 @@ msgid ""
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
@@ -4835,29 +4835,29 @@ msgstr "## 構造体"
 #: src/doc/tutorial.md:3123
 #, fuzzy
 #| msgid ""
-#| "~~~~ {.ignore} extern mod farm; extern mod my_farm (name = \"farm\", vers "
-#| "= \"2.5\"); extern mod my_auxiliary_farm (name = \"farm\", author = \"mjh"
+#| "~~~~ {.ignore} extern crate farm; extern crate my_farm (name = \"farm\", vers "
+#| "= \"2.5\"); extern crate my_auxiliary_farm (name = \"farm\", author = \"mjh"
 #| "\"); ~~~~"
 msgid ""
-"~~~~ {.ignore} extern mod farm; extern mod farm = \"farm#2.5\"; extern mod "
+"~~~~ {.ignore} extern crate farm; extern crate farm = \"farm#2.5\"; extern crate "
 "my_farm = \"farm\"; ~~~~"
 msgstr ""
 "~~~~ {.ignore}\n"
-"extern mod farm;\n"
-"extern mod my_farm (name = \"farm\", vers = \"2.5\");\n"
-"extern mod my_auxiliary_farm (name = \"farm\", author = \"mjh\");\n"
+"extern crate farm;\n"
+"extern crate my_farm (name = \"farm\", vers = \"2.5\");\n"
+"extern crate my_auxiliary_farm (name = \"farm\", author = \"mjh\");\n"
 "~~~~"
 
 #. type: Plain text
 #: src/doc/tutorial.md:3134
 #, fuzzy
-#| msgid "// Make a library (\"bin\" is the default)  #[crate_type = \"lib\"];"
+#| msgid "// Make a library (\"bin\" is the default)  #![crate_type = \"lib\"]"
 msgid ""
 "// This crate is a library (\"bin\" is the default)  #[crate_id = "
-"\"farm#2.5\"]; #[crate_type = \"lib\"];"
+"\"farm#2.5\"]; #![crate_type = \"lib\"]"
 msgstr ""
 "// ライブラリを作成する (\"bin\" がデフォルト値)\n"
-"#[crate_type = \"lib\"];"
+"#![crate_type = \"lib\"]"
 
 #. type: Plain text
 #: src/doc/tutorial.md:3139
@@ -4888,15 +4888,15 @@ msgstr ""
 #: src/doc/tutorial.md:3153
 #, fuzzy
 #| msgid ""
-#| "~~~~ // world.rs #[link(name = \"world\", vers = \"1.0\")]; pub fn "
+#| "~~~~ // world.rs #![link(name = \"world\", vers = \"1.0\")] pub fn "
 #| "explore() -> &str { \"world\" } ~~~~"
 msgid ""
-"~~~~ // `world.rs` #[crate_id = \"world#0.42\"]; # extern mod extra; pub fn "
+"~~~~ // `world.rs` #![crate_id = \"world#0.42\"] # extern crate extra; pub fn "
 "explore() -> &'static str { \"world\" } # fn main() {} ~~~~"
 msgstr ""
 "~~~~\n"
 "// world.rs\n"
-"#[link(name = \"world\", vers = \"1.0\")];\n"
+"#![link(name = \"world\", vers = \"1.0\")]\n"
 "pub fn explore() -> &str { \"world\" }\n"
 "~~~~"
 
@@ -4904,15 +4904,15 @@ msgstr ""
 #: src/doc/tutorial.md:3159
 #, fuzzy
 #| msgid ""
-#| "~~~~ {.ignore} // main.rs extern mod world; fn main() { println(~\"hello "
+#| "~~~~ {.ignore} // main.rs extern crate world; fn main() { println(~\"hello "
 #| "\" + world::explore()); } ~~~~"
 msgid ""
-"~~~~ {.ignore} // `main.rs` extern mod world; fn main() { println!(\"hello "
+"~~~~ {.ignore} // `main.rs` extern crate world; fn main() { println!(\"hello "
 "{}\", world::explore()); } ~~~~"
 msgstr ""
 "~~~~ {.ignore}\n"
 "// main.rs\n"
-"extern mod world;\n"
+"extern crate world;\n"
 "fn main() { println(~\"hello \" + world::explore()); }\n"
 "~~~~"
 
@@ -4977,7 +4977,7 @@ msgstr "## 標準ライブラリ"
 #: src/doc/tutorial.md:3187
 #, fuzzy
 #| msgid "~~~~ {.ignore} let foo = 10;"
-msgid "~~~ {.ignore} extern mod std; ~~~"
+msgid "~~~ {.ignore} extern crate std; ~~~"
 msgstr ""
 "~~~~ {.ignore}\n"
 "let foo = 10;"

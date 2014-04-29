@@ -8,29 +8,59 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! The native runtime crate
+//! The native I/O and threading crate
 //!
 //! This crate contains an implementation of 1:1 scheduling for a "native"
 //! runtime. In addition, all I/O provided by this crate is the thread blocking
 //! version of I/O.
+//!
+//! # Starting with libnative
+//!
+//! ```rust
+//! extern crate native;
+//!
+//! #[start]
+//! fn start(argc: int, argv: **u8) -> int { native::start(argc, argv, main) }
+//!
+//! fn main() {
+//!     // this code is running on the main OS thread
+//! }
+//! ```
+//!
+//! # Force spawning a native task
+//!
+//! ```rust
+//! extern crate native;
+//!
+//! fn main() {
+//!     // We're not sure whether this main function is run in 1:1 or M:N mode.
+//!
+//!     native::task::spawn(proc() {
+//!         // this code is guaranteed to be run on a native thread
+//!     });
+//! }
+//! ```
 
-#[crate_id = "native#0.10-pre"];
-#[license = "MIT/ASL2"];
-#[crate_type = "rlib"];
-#[crate_type = "dylib"];
-#[doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk.png",
-      html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-      html_root_url = "http://static.rust-lang.org/doc/master")];
-#[deny(unused_result, unused_must_use)];
+#![crate_id = "native#0.11-pre"]
+#![license = "MIT/ASL2"]
+#![crate_type = "rlib"]
+#![crate_type = "dylib"]
+#![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
+       html_favicon_url = "http://www.rust-lang.org/favicon.ico",
+       html_root_url = "http://static.rust-lang.org/doc/master")]
+#![deny(unused_result, unused_must_use)]
+#![allow(non_camel_case_types)]
 
 // NB this crate explicitly does *not* allow glob imports, please seriously
 //    consider whether they're needed before adding that feature here (the
 //    answer is that you don't need them)
 
+extern crate libc;
+
 use std::os;
 use std::rt;
+use std::str;
 
-mod bookkeeping;
 pub mod io;
 pub mod task;
 
@@ -39,6 +69,16 @@ pub mod task;
 static OS_DEFAULT_STACK_ESTIMATE: uint = 1 << 20;
 #[cfg(unix, not(android))]
 static OS_DEFAULT_STACK_ESTIMATE: uint = 2 * (1 << 20);
+
+#[lang = "start"]
+#[cfg(not(test))]
+pub fn lang_start(main: *u8, argc: int, argv: **u8) -> int {
+    use std::cast;
+    start(argc, argv, proc() {
+        let main: extern "Rust" fn() = unsafe { cast::transmute(main) };
+        main();
+    })
+}
 
 /// Executes the given procedure after initializing the runtime with the given
 /// argc/argv.
@@ -59,10 +99,33 @@ pub fn start(argc: int, argv: **u8, main: proc()) -> int {
     // frames above our current position.
     let my_stack_bottom = my_stack_top + 20000 - OS_DEFAULT_STACK_ESTIMATE;
 
+    // When using libgreen, one of the first things that we do is to turn off
+    // the SIGPIPE signal (set it to ignore). By default, some platforms will
+    // send a *signal* when a EPIPE error would otherwise be delivered. This
+    // runtime doesn't install a SIGPIPE handler, causing it to kill the
+    // program, which isn't exactly what we want!
+    //
+    // Hence, we set SIGPIPE to ignore when the program starts up in order to
+    // prevent this problem.
+    #[cfg(windows)] fn ignore_sigpipe() {}
+    #[cfg(unix)] fn ignore_sigpipe() {
+        use libc;
+        use libc::funcs::posix01::signal::signal;
+        unsafe {
+            assert!(signal(libc::SIGPIPE, libc::SIG_IGN) != -1);
+        }
+    }
+    ignore_sigpipe();
+
     rt::init(argc, argv);
     let mut exit_code = None;
     let mut main = Some(main);
-    let t = task::new((my_stack_bottom, my_stack_top)).run(|| {
+    let mut task = task::new((my_stack_bottom, my_stack_top));
+    task.name = Some(str::Slice("<main>"));
+    let t = task.run(|| {
+        unsafe {
+            rt::stack::record_stack_bounds(my_stack_bottom, my_stack_top);
+        }
         exit_code = Some(run(main.take_unwrap()));
     });
     drop(t);
@@ -77,6 +140,5 @@ pub fn start(argc: int, argv: **u8, main: proc()) -> int {
 /// number of arguments.
 pub fn run(main: proc()) -> int {
     main();
-    bookkeeping::wait_for_other_tasks();
     os::get_exit_status()
 }

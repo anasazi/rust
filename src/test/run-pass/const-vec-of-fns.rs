@@ -16,14 +16,16 @@
  */
 
 fn f() { }
-static bare_fns: &'static [extern fn()] = &[f, f];
-struct S<'a>('a ||);
-static closures: &'static [S<'static>] = &[S(f), S(f)];
+static bare_fns: &'static [fn()] = &[f, f];
+struct S<'a>(||:'a);
+static mut closures: &'static mut [S<'static>] = &mut [S(f), S(f)];
 
 pub fn main() {
-    for &bare_fn in bare_fns.iter() { bare_fn() }
-    for closure in closures.iter() {
-        let S(ref closure) = *closure;
-        (*closure)()
+    unsafe {
+        for &bare_fn in bare_fns.iter() { bare_fn() }
+        for closure in closures.mut_iter() {
+            let S(ref mut closure) = *closure;
+            (*closure)()
+        }
     }
 }

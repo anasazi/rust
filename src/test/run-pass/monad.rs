@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,15 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-fast
+
 
 trait vec_monad<A> {
-    fn bind<B>(&self, f: |&A| -> ~[B]) -> ~[B];
+    fn bind<B>(&self, f: |&A| -> Vec<B> ) -> Vec<B> ;
 }
 
-impl<A> vec_monad<A> for ~[A] {
-    fn bind<B>(&self, f: |&A| -> ~[B]) -> ~[B] {
-        let mut r = ~[];
+impl<A> vec_monad<A> for Vec<A> {
+    fn bind<B>(&self, f: |&A| -> Vec<B> ) -> Vec<B> {
+        let mut r = Vec::new();
         for elt in self.iter() {
             r.push_all_move(f(elt));
         }
@@ -42,10 +42,10 @@ fn transform(x: Option<int>) -> Option<~str> {
 }
 
 pub fn main() {
-    assert_eq!(transform(Some(10)), Some(~"11"));
+    assert_eq!(transform(Some(10)), Some("11".to_owned()));
     assert_eq!(transform(None), None);
-    assert!((~[~"hi"])
-        .bind(|x| ~[x.clone(), *x + "!"] )
-        .bind(|x| ~[x.clone(), *x + "?"] ) ==
-        ~[~"hi", ~"hi?", ~"hi!", ~"hi!?"]);
+    assert!((vec!("hi".to_owned()))
+        .bind(|x| vec!(x.clone(), *x + "!") )
+        .bind(|x| vec!(x.clone(), *x + "?") ) ==
+        vec!("hi".to_owned(), "hi?".to_owned(), "hi!".to_owned(), "hi!?".to_owned()));
 }

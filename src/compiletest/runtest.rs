@@ -31,16 +31,15 @@ use std::io::timer;
 use std::io;
 use std::os;
 use std::str;
+use std::strbuf::StrBuf;
 use std::task;
-use std::vec;
-
-use extra::test::MetricMap;
+use test::MetricMap;
 
 pub fn run(config: config, testfile: ~str) {
 
-    match config.target {
+    match config.target.as_slice() {
 
-        ~"arm-linux-androideabi" => {
+        "arm-linux-androideabi" => {
             if !config.adb_device_status {
                 fail!("android device not available");
             }
@@ -73,31 +72,31 @@ pub fn run_metrics(config: config, testfile: ~str, mm: &mut MetricMap) {
 }
 
 fn run_cfail_test(config: &config, props: &TestProps, testfile: &Path) {
-    let ProcRes = compile_test(config, props, testfile);
+    let proc_res = compile_test(config, props, testfile);
 
-    if ProcRes.status.success() {
-        fatal_ProcRes(~"compile-fail test compiled successfully!", &ProcRes);
+    if proc_res.status.success() {
+        fatal_ProcRes("compile-fail test compiled successfully!".to_owned(), &proc_res);
     }
 
-    check_correct_failure_status(&ProcRes);
+    check_correct_failure_status(&proc_res);
 
     let expected_errors = errors::load_errors(testfile);
     if !expected_errors.is_empty() {
         if !props.error_patterns.is_empty() {
-            fatal(~"both error pattern and expected errors specified");
+            fatal("both error pattern and expected errors specified".to_owned());
         }
-        check_expected_errors(expected_errors, testfile, &ProcRes);
+        check_expected_errors(expected_errors, testfile, &proc_res);
     } else {
-        check_error_patterns(props, testfile, &ProcRes);
+        check_error_patterns(props, testfile, &proc_res);
     }
 }
 
 fn run_rfail_test(config: &config, props: &TestProps, testfile: &Path) {
-    let ProcRes = if !config.jit {
-        let ProcRes = compile_test(config, props, testfile);
+    let proc_res = if !config.jit {
+        let proc_res = compile_test(config, props, testfile);
 
-        if !ProcRes.status.success() {
-            fatal_ProcRes(~"compilation failed!", &ProcRes);
+        if !proc_res.status.success() {
+            fatal_ProcRes("compilation failed!".to_owned(), &proc_res);
         }
 
         exec_compiled_test(config, props, testfile)
@@ -107,67 +106,69 @@ fn run_rfail_test(config: &config, props: &TestProps, testfile: &Path) {
 
     // The value our Makefile configures valgrind to return on failure
     static VALGRIND_ERR: int = 100;
-    if ProcRes.status.matches_exit_status(VALGRIND_ERR) {
-        fatal_ProcRes(~"run-fail test isn't valgrind-clean!", &ProcRes);
+    if proc_res.status.matches_exit_status(VALGRIND_ERR) {
+        fatal_ProcRes("run-fail test isn't valgrind-clean!".to_owned(), &proc_res);
     }
 
-    check_correct_failure_status(&ProcRes);
-    check_error_patterns(props, testfile, &ProcRes);
+    check_correct_failure_status(&proc_res);
+    check_error_patterns(props, testfile, &proc_res);
 }
 
-fn check_correct_failure_status(ProcRes: &ProcRes) {
+fn check_correct_failure_status(proc_res: &ProcRes) {
     // The value the rust runtime returns on failure
     static RUST_ERR: int = 101;
-    if !ProcRes.status.matches_exit_status(RUST_ERR) {
+    if !proc_res.status.matches_exit_status(RUST_ERR) {
         fatal_ProcRes(
-            format!("failure produced the wrong error: {}", ProcRes.status),
-            ProcRes);
+            format!("failure produced the wrong error: {}", proc_res.status),
+            proc_res);
     }
 }
 
 fn run_rpass_test(config: &config, props: &TestProps, testfile: &Path) {
     if !config.jit {
-        let mut ProcRes = compile_test(config, props, testfile);
+        let mut proc_res = compile_test(config, props, testfile);
 
-        if !ProcRes.status.success() {
-            fatal_ProcRes(~"compilation failed!", &ProcRes);
+        if !proc_res.status.success() {
+            fatal_ProcRes("compilation failed!".to_owned(), &proc_res);
         }
 
-        ProcRes = exec_compiled_test(config, props, testfile);
+        proc_res = exec_compiled_test(config, props, testfile);
 
-        if !ProcRes.status.success() {
-            fatal_ProcRes(~"test run failed!", &ProcRes);
+        if !proc_res.status.success() {
+            fatal_ProcRes("test run failed!".to_owned(), &proc_res);
         }
     } else {
-        let ProcRes = jit_test(config, props, testfile);
+        let proc_res = jit_test(config, props, testfile);
 
-        if !ProcRes.status.success() { fatal_ProcRes(~"jit failed!", &ProcRes); }
+        if !proc_res.status.success() { fatal_ProcRes("jit failed!".to_owned(), &proc_res); }
     }
 }
 
 fn run_pretty_test(config: &config, props: &TestProps, testfile: &Path) {
     if props.pp_exact.is_some() {
-        logv(config, ~"testing for exact pretty-printing");
-    } else { logv(config, ~"testing for converging pretty-printing"); }
+        logv(config, "testing for exact pretty-printing".to_owned());
+    } else { logv(config, "testing for converging pretty-printing".to_owned()); }
 
     let rounds =
         match props.pp_exact { Some(_) => 1, None => 2 };
 
     let src = File::open(testfile).read_to_end().unwrap();
-    let src = str::from_utf8_owned(src).unwrap();
-    let mut srcs = ~[src];
+    let src = str::from_utf8(src.as_slice()).unwrap().to_owned();
+    let mut srcs = vec!(src);
 
     let mut round = 0;
     while round < rounds {
         logv(config, format!("pretty-printing round {}", round));
-        let ProcRes = print_source(config, testfile, srcs[round].clone());
+        let proc_res = print_source(config,
+                                    testfile,
+                                    (*srcs.get(round)).clone());
 
-        if !ProcRes.status.success() {
+        if !proc_res.status.success() {
             fatal_ProcRes(format!("pretty-printing failed in round {}", round),
-                          &ProcRes);
+                          &proc_res);
         }
 
-        let ProcRes{ stdout, .. } = ProcRes;
+        let ProcRes{ stdout, .. } = proc_res;
         srcs.push(stdout);
         round += 1;
     }
@@ -176,15 +177,15 @@ fn run_pretty_test(config: &config, props: &TestProps, testfile: &Path) {
         Some(ref file) => {
             let filepath = testfile.dir_path().join(file);
             let s = File::open(&filepath).read_to_end().unwrap();
-            str::from_utf8_owned(s).unwrap()
+            str::from_utf8(s.as_slice()).unwrap().to_owned()
           }
-          None => { srcs[srcs.len() - 2u].clone() }
+          None => { (*srcs.get(srcs.len() - 2u)).clone() }
         };
-    let mut actual = srcs[srcs.len() - 1u].clone();
+    let mut actual = (*srcs.get(srcs.len() - 1u)).clone();
 
     if props.pp_exact.is_some() {
         // Now we have to care about line endings
-        let cr = ~"\r";
+        let cr = "\r".to_owned();
         actual = actual.replace(cr, "");
         expected = expected.replace(cr, "");
     }
@@ -192,29 +193,29 @@ fn run_pretty_test(config: &config, props: &TestProps, testfile: &Path) {
     compare_source(expected, actual);
 
     // Finally, let's make sure it actually appears to remain valid code
-    let ProcRes = typecheck_source(config, props, testfile, actual);
+    let proc_res = typecheck_source(config, props, testfile, actual);
 
-    if !ProcRes.status.success() {
-        fatal_ProcRes(~"pretty-printed source does not typecheck", &ProcRes);
+    if !proc_res.status.success() {
+        fatal_ProcRes("pretty-printed source does not typecheck".to_owned(), &proc_res);
     }
 
     return;
 
     fn print_source(config: &config, testfile: &Path, src: ~str) -> ProcRes {
         compose_and_run(config, testfile, make_pp_args(config, testfile),
-                        ~[], config.compile_lib_path, Some(src))
+                        Vec::new(), config.compile_lib_path, Some(src))
     }
 
     fn make_pp_args(config: &config, _testfile: &Path) -> ProcArgs {
-        let args = ~[~"-", ~"--pretty", ~"normal",
-                     ~"--target=" + config.target];
+        let args = vec!("-".to_owned(), "--pretty".to_owned(), "normal".to_owned(),
+                     "--target=".to_owned() + config.target);
         // FIXME (#9639): This needs to handle non-utf8 paths
         return ProcArgs {prog: config.rustc_path.as_str().unwrap().to_owned(), args: args};
     }
 
     fn compare_source(expected: &str, actual: &str) {
         if expected != actual {
-            error(~"pretty-printed source does not match expected source");
+            error("pretty-printed source does not match expected source".to_owned());
             println!("\n\
 expected:\n\
 ------------------------------------------\n\
@@ -244,13 +245,13 @@ actual:\n\
             config.target.as_slice()
         };
         // FIXME (#9639): This needs to handle non-utf8 paths
-        let mut args = ~[~"-",
-                         ~"--no-trans", ~"--lib",
-                         ~"--target=" + target,
-                         ~"-L", config.build_base.as_str().unwrap().to_owned(),
-                         ~"-L",
-                         aux_dir.as_str().unwrap().to_owned()];
-        args.push_all_move(split_maybe_args(&config.rustcflags));
+        let mut args = vec!("-".to_owned(),
+                         "--no-trans".to_owned(), "--crate-type=lib".to_owned(),
+                         "--target=".to_owned() + target,
+                         "-L".to_owned(), config.build_base.as_str().unwrap().to_owned(),
+                         "-L".to_owned(),
+                         aux_dir.as_str().unwrap().to_owned());
+        args.push_all_move(split_maybe_args(&config.target_rustcflags));
         args.push_all_move(split_maybe_args(&props.compile_flags));
         // FIXME (#9639): This needs to handle non-utf8 paths
         return ProcArgs {prog: config.rustc_path.as_str().unwrap().to_owned(), args: args};
@@ -258,52 +259,49 @@ actual:\n\
 }
 
 fn run_debuginfo_test(config: &config, props: &TestProps, testfile: &Path) {
-
-    // do not optimize debuginfo tests
-    let mut config = match config.rustcflags {
-        Some(ref flags) => config {
-            rustcflags: Some(flags.replace("-O", "")),
-            .. (*config).clone()
-        },
-        None => (*config).clone()
+    let mut config = config {
+        target_rustcflags: cleanup_debug_info_options(&config.target_rustcflags),
+        host_rustcflags: cleanup_debug_info_options(&config.host_rustcflags),
+        .. config.clone()
     };
+
     let config = &mut config;
     let check_lines = &props.check_lines;
     let mut cmds = props.debugger_cmds.connect("\n");
 
     // compile test file (it shoud have 'compile-flags:-g' in the header)
-    let mut ProcRes = compile_test(config, props, testfile);
-    if !ProcRes.status.success() {
-        fatal_ProcRes(~"compilation failed!", &ProcRes);
+    let mut proc_res = compile_test(config, props, testfile);
+    if !proc_res.status.success() {
+        fatal_ProcRes("compilation failed!".to_owned(), &proc_res);
     }
 
     let exe_file = make_exe_name(config, testfile);
 
-    let mut ProcArgs;
-    match config.target {
-        ~"arm-linux-androideabi" => {
+    let mut proc_args;
+    match config.target.as_slice() {
+        "arm-linux-androideabi" => {
 
             cmds = cmds.replace("run","continue");
 
             // write debugger script
-            let script_str = [~"set charset UTF-8",
+            let script_str = ["set charset UTF-8".to_owned(),
                               format!("file {}",exe_file.as_str().unwrap().to_owned()),
-                              ~"target remote :5039",
+                              "target remote :5039".to_owned(),
                               cmds,
-                              ~"quit"].connect("\n");
+                              "quit".to_owned()].connect("\n");
             debug!("script_str = {}", script_str);
             dump_output_file(config, testfile, script_str, "debugger.script");
 
 
             procsrv::run("", config.adb_path,
-                         [~"push", exe_file.as_str().unwrap().to_owned(),
+                         ["push".to_owned(), exe_file.as_str().unwrap().to_owned(),
                           config.adb_test_dir.clone()],
-                         ~[(~"",~"")], Some(~""))
+                         vec!(("".to_owned(),"".to_owned())), Some("".to_owned()))
                 .expect(format!("failed to exec `{}`", config.adb_path));
 
             procsrv::run("", config.adb_path,
-                         [~"forward", ~"tcp:5039", ~"tcp:5039"],
-                         ~[(~"",~"")], Some(~""))
+                         ["forward".to_owned(), "tcp:5039".to_owned(), "tcp:5039".to_owned()],
+                         vec!(("".to_owned(),"".to_owned())), Some("".to_owned()))
                 .expect(format!("failed to exec `{}`", config.adb_path));
 
             let adb_arg = format!("export LD_LIBRARY_PATH={}; gdbserver :5039 {}/{}",
@@ -311,8 +309,9 @@ fn run_debuginfo_test(config: &config, props: &TestProps, testfile: &Path) {
                                   str::from_utf8(exe_file.filename().unwrap()).unwrap());
 
             let mut process = procsrv::run_background("", config.adb_path,
-                                                      [~"shell",adb_arg.clone()],
-                                                      ~[(~"",~"")], Some(~""))
+                                                      ["shell".to_owned(),adb_arg.clone()],
+                                                      vec!(("".to_owned(),"".to_owned())),
+                                                      Some("".to_owned()))
                 .expect(format!("failed to exec `{}`", config.adb_path));
             loop {
                 //waiting 1 second for gdbserver start
@@ -329,88 +328,95 @@ fn run_debuginfo_test(config: &config, props: &TestProps, testfile: &Path) {
                 break;
             }
 
-            let args = split_maybe_args(&config.rustcflags);
-            let mut tool_path:~str = ~"";
+            let args = split_maybe_args(&config.target_rustcflags);
+            let mut tool_path = StrBuf::new();
             for arg in args.iter() {
-                if arg.contains("--android-cross-path=") {
-                    tool_path = arg.replace("--android-cross-path=","");
+                if arg.contains("android-cross-path=") {
+                    tool_path = StrBuf::from_str(arg.replace("android-cross-path=", ""));
                     break;
                 }
             }
 
-            if tool_path.equals(&~"") {
-                fatal(~"cannot found android cross path");
+            if tool_path.is_empty() {
+                fatal("cannot found android cross path".to_owned());
             }
 
             let debugger_script = make_out_name(config, testfile, "debugger.script");
             // FIXME (#9639): This needs to handle non-utf8 paths
-            let debugger_opts = ~[~"-quiet", ~"-batch", ~"-nx",
-                                  "-command=" + debugger_script.as_str().unwrap().to_owned()];
+            let debugger_opts = vec!("-quiet".to_owned(), "-batch".to_owned(), "-nx".to_owned(),
+                                  "-command=" + debugger_script.as_str().unwrap().to_owned());
 
             let gdb_path = tool_path.append("/bin/arm-linux-androideabi-gdb");
             let procsrv::Result{ out, err, status }=
                 procsrv::run("",
-                             gdb_path,
-                             debugger_opts, ~[(~"",~"")], None)
+                             gdb_path.as_slice(),
+                             debugger_opts.as_slice(),
+                             vec!(("".to_owned(),"".to_owned())),
+                             None)
                 .expect(format!("failed to exec `{}`", gdb_path));
             let cmdline = {
-                let cmdline = make_cmdline("", "arm-linux-androideabi-gdb", debugger_opts);
+                let cmdline = make_cmdline("",
+                                           "arm-linux-androideabi-gdb",
+                                           debugger_opts.as_slice());
                 logv(config, format!("executing {}", cmdline));
                 cmdline
             };
 
-            ProcRes = ProcRes {status: status,
+            proc_res = ProcRes {status: status,
                                stdout: out,
                                stderr: err,
                                cmdline: cmdline};
-            process.force_destroy().unwrap();
+            process.signal_kill().unwrap();
         }
 
         _=> {
             // write debugger script
-            let script_str = [~"set charset UTF-8",
+            let script_str = ["set charset UTF-8".to_owned(),
                 cmds,
-                ~"quit\n"].connect("\n");
+                "quit\n".to_owned()].connect("\n");
             debug!("script_str = {}", script_str);
             dump_output_file(config, testfile, script_str, "debugger.script");
 
             // run debugger script with gdb
             #[cfg(windows)]
-            fn debugger() -> ~str { ~"gdb.exe" }
+            fn debugger() -> ~str { "gdb.exe".to_owned() }
             #[cfg(unix)]
-            fn debugger() -> ~str { ~"gdb" }
+            fn debugger() -> ~str { "gdb".to_owned() }
 
             let debugger_script = make_out_name(config, testfile, "debugger.script");
 
             // FIXME (#9639): This needs to handle non-utf8 paths
-            let debugger_opts = ~[~"-quiet", ~"-batch", ~"-nx",
+            let debugger_opts = vec!("-quiet".to_owned(), "-batch".to_owned(), "-nx".to_owned(),
                 "-command=" + debugger_script.as_str().unwrap().to_owned(),
-                exe_file.as_str().unwrap().to_owned()];
-            ProcArgs = ProcArgs {prog: debugger(), args: debugger_opts};
-            ProcRes = compose_and_run(config, testfile, ProcArgs, ~[], "", None);
+                exe_file.as_str().unwrap().to_owned());
+            proc_args = ProcArgs {prog: debugger(), args: debugger_opts};
+            proc_res = compose_and_run(config, testfile, proc_args, Vec::new(), "", None);
         }
     }
 
-    if !ProcRes.status.success() {
-        fatal(~"gdb failed to execute");
+    if !proc_res.status.success() {
+        fatal("gdb failed to execute".to_owned());
     }
     let num_check_lines = check_lines.len();
     if num_check_lines > 0 {
         // Allow check lines to leave parts unspecified (e.g., uninitialized
         // bits in the wrong case of an enum) with the notation "[...]".
-        let check_fragments: ~[~[&str]] = check_lines.map(|s| s.split_str("[...]").collect());
+        let check_fragments: Vec<Vec<~str>> =
+            check_lines.iter().map(|s| {
+                s.split_str("[...]").map(|x| x.to_str()).collect()
+            }).collect();
         // check if each line in props.check_lines appears in the
         // output (in order)
         let mut i = 0u;
-        for line in ProcRes.stdout.lines() {
+        for line in proc_res.stdout.lines() {
             let mut rest = line.trim();
             let mut first = true;
             let mut failed = false;
-            for &frag in check_fragments[i].iter() {
+            for frag in check_fragments.get(i).iter() {
                 let found = if first {
-                    if rest.starts_with(frag) { Some(0) } else { None }
+                    if rest.starts_with(*frag) { Some(0) } else { None }
                 } else {
-                    rest.find_str(frag)
+                    rest.find_str(*frag)
                 };
                 match found {
                     None => {
@@ -433,28 +439,46 @@ fn run_debuginfo_test(config: &config, props: &TestProps, testfile: &Path) {
         }
         if i != num_check_lines {
             fatal_ProcRes(format!("line not found in debugger output: {}",
-                                  check_lines[i]), &ProcRes);
+                                  *check_lines.get(i)), &proc_res);
         }
+    }
+
+    fn cleanup_debug_info_options(options: &Option<~str>) -> Option<~str> {
+        if options.is_none() {
+            return None;
+        }
+
+        // Remove options that are either unwanted (-O) or may lead to duplicates due to RUSTFLAGS.
+        let options_to_remove = ["-O".to_owned(), "-g".to_owned(), "--debuginfo".to_owned()];
+        let new_options = split_maybe_args(options).move_iter()
+                                                   .filter(|x| !options_to_remove.contains(x))
+                                                   .collect::<Vec<~str>>()
+                                                   .connect(" ");
+        Some(new_options)
     }
 }
 
 fn check_error_patterns(props: &TestProps,
                         testfile: &Path,
-                        ProcRes: &ProcRes) {
+                        proc_res: &ProcRes) {
     if props.error_patterns.is_empty() {
-        testfile.display().with_str(|s| {
-            fatal(~"no error pattern specified in " + s);
-        })
+        fatal("no error pattern specified in ".to_owned() +
+              testfile.display().as_maybe_owned().as_slice());
     }
 
-    if ProcRes.status.success() {
-        fatal(~"process did not return an error status");
+    if proc_res.status.success() {
+        fatal("process did not return an error status".to_owned());
     }
 
     let mut next_err_idx = 0u;
-    let mut next_err_pat = &props.error_patterns[next_err_idx];
+    let mut next_err_pat = props.error_patterns.get(next_err_idx);
     let mut done = false;
-    for line in ProcRes.stderr.lines() {
+    let output_to_check = if props.check_stdout {
+        proc_res.stdout + proc_res.stderr
+    } else {
+        proc_res.stderr.clone()
+    };
+    for line in output_to_check.lines() {
         if line.contains(*next_err_pat) {
             debug!("found error pattern {}", *next_err_pat);
             next_err_idx += 1u;
@@ -463,7 +487,7 @@ fn check_error_patterns(props: &TestProps,
                 done = true;
                 break;
             }
-            next_err_pat = &props.error_patterns[next_err_idx];
+            next_err_pat = props.error_patterns.get(next_err_idx);
         }
     }
     if done { return; }
@@ -472,42 +496,42 @@ fn check_error_patterns(props: &TestProps,
         props.error_patterns.slice(next_err_idx, props.error_patterns.len());
     if missing_patterns.len() == 1u {
         fatal_ProcRes(format!("error pattern '{}' not found!",
-                              missing_patterns[0]), ProcRes);
+                              missing_patterns[0]), proc_res);
     } else {
         for pattern in missing_patterns.iter() {
             error(format!("error pattern '{}' not found!", *pattern));
         }
-        fatal_ProcRes(~"multiple error patterns not found", ProcRes);
+        fatal_ProcRes("multiple error patterns not found".to_owned(), proc_res);
     }
 }
 
-fn check_expected_errors(expected_errors: ~[errors::ExpectedError],
+fn check_expected_errors(expected_errors: Vec<errors::ExpectedError> ,
                          testfile: &Path,
-                         ProcRes: &ProcRes) {
+                         proc_res: &ProcRes) {
 
     // true if we found the error in question
-    let mut found_flags = vec::from_elem(
+    let mut found_flags = Vec::from_elem(
         expected_errors.len(), false);
 
-    if ProcRes.status.success() {
-        fatal(~"process did not return an error status");
+    if proc_res.status.success() {
+        fatal("process did not return an error status".to_owned());
     }
 
     let prefixes = expected_errors.iter().map(|ee| {
         format!("{}:{}:", testfile.display(), ee.line)
-    }).collect::<~[~str]>();
+    }).collect::<Vec<~str> >();
 
     #[cfg(target_os = "win32")]
     fn to_lower( s : &str ) -> ~str {
         let i = s.chars();
-        let c : ~[char] = i.map( |c| {
+        let c : Vec<char> = i.map( |c| {
             if c.is_ascii() {
                 c.to_ascii().to_lower().to_char()
             } else {
                 c
             }
         } ).collect();
-        str::from_chars( c )
+        str::from_chars(c.as_slice())
     }
 
     #[cfg(target_os = "win32")]
@@ -528,16 +552,16 @@ fn check_expected_errors(expected_errors: ~[errors::ExpectedError],
     //    filename:line1:col1: line2:col2: *warning:* msg
     // where line1:col1: is the starting point, line2:col2:
     // is the ending point, and * represents ANSI color codes.
-    for line in ProcRes.stderr.lines() {
+    for line in proc_res.stderr.lines() {
         let mut was_expected = false;
         for (i, ee) in expected_errors.iter().enumerate() {
-            if !found_flags[i] {
+            if !*found_flags.get(i) {
                 debug!("prefix={} ee.kind={} ee.msg={} line={}",
-                       prefixes[i], ee.kind, ee.msg, line);
-                if prefix_matches(line, prefixes[i]) &&
+                       *prefixes.get(i), ee.kind, ee.msg, line);
+                if prefix_matches(line, *prefixes.get(i)) &&
                     line.contains(ee.kind) &&
                     line.contains(ee.msg) {
-                    found_flags[i] = true;
+                    *found_flags.get_mut(i) = true;
                     was_expected = true;
                     break;
                 }
@@ -552,15 +576,15 @@ fn check_expected_errors(expected_errors: ~[errors::ExpectedError],
         if !was_expected && is_compiler_error_or_warning(line) {
             fatal_ProcRes(format!("unexpected compiler error or warning: '{}'",
                                line),
-                          ProcRes);
+                          proc_res);
         }
     }
 
     for (i, &flag) in found_flags.iter().enumerate() {
         if !flag {
-            let ee = &expected_errors[i];
+            let ee = expected_errors.get(i);
             fatal_ProcRes(format!("expected {} on line {} not found: {}",
-                               ee.kind, ee.line, ee.msg), ProcRes);
+                               ee.kind, ee.line, ee.msg), proc_res);
         }
     }
 }
@@ -640,7 +664,7 @@ fn scan_string(haystack: &str, needle: &str, idx: &mut uint) -> bool {
     return true;
 }
 
-struct ProcArgs {prog: ~str, args: ~[~str]}
+struct ProcArgs {prog: ~str, args: Vec<~str> }
 
 struct ProcRes {status: ProcessExit, stdout: ~str, stderr: ~str, cmdline: ~str}
 
@@ -650,16 +674,18 @@ fn compile_test(config: &config, props: &TestProps,
 }
 
 fn jit_test(config: &config, props: &TestProps, testfile: &Path) -> ProcRes {
-    compile_test_(config, props, testfile, [~"--jit"])
+    compile_test_(config, props, testfile, ["--jit".to_owned()])
 }
 
 fn compile_test_(config: &config, props: &TestProps,
                  testfile: &Path, extra_args: &[~str]) -> ProcRes {
     let aux_dir = aux_output_dir_name(config, testfile);
     // FIXME (#9639): This needs to handle non-utf8 paths
-    let link_args = ~[~"-L", aux_dir.as_str().unwrap().to_owned()];
-    let args = make_compile_args(config, props, link_args + extra_args,
-                                 make_exe_name, testfile);
+    let link_args = vec!("-L".to_owned(), aux_dir.as_str().unwrap().to_owned());
+    let args = make_compile_args(config,
+                                 props,
+                                 link_args.append(extra_args),
+                                 |a, b| ThisFile(make_exe_name(a, b)), testfile);
     compose_and_run_compiler(config, props, testfile, args, None)
 }
 
@@ -668,9 +694,9 @@ fn exec_compiled_test(config: &config, props: &TestProps,
 
     let env = props.exec_env.clone();
 
-    match config.target {
+    match config.target.as_slice() {
 
-        ~"arm-linux-androideabi" => {
+        "arm-linux-androideabi" => {
             _arm_exec_compiled_test(config, props, testfile, env)
         }
 
@@ -696,15 +722,25 @@ fn compose_and_run_compiler(
 
     let aux_dir = aux_output_dir_name(config, testfile);
     // FIXME (#9639): This needs to handle non-utf8 paths
-    let extra_link_args = ~[~"-L", aux_dir.as_str().unwrap().to_owned()];
+    let extra_link_args = vec!("-L".to_owned(), aux_dir.as_str().unwrap().to_owned());
 
     for rel_ab in props.aux_builds.iter() {
         let abs_ab = config.aux_base.join(rel_ab.as_slice());
         let aux_props = load_props(&abs_ab);
+        let crate_type = if aux_props.no_prefer_dynamic {
+            Vec::new()
+        } else {
+            vec!("--crate-type=dylib".to_owned())
+        };
         let aux_args =
-            make_compile_args(config, &aux_props, ~[~"--dylib"] + extra_link_args,
-                              |a,b| make_lib_name(a, b, testfile), &abs_ab);
-        let auxres = compose_and_run(config, &abs_ab, aux_args, ~[],
+            make_compile_args(config,
+                              &aux_props,
+                              crate_type.append(extra_link_args.as_slice()),
+                              |a,b| {
+                                  let f = make_lib_name(a, b, testfile);
+                                  ThisDirectory(f.dir_path())
+                              }, &abs_ab);
+        let auxres = compose_and_run(config, &abs_ab, aux_args, Vec::new(),
                                      config.compile_lib_path, None);
         if !auxres.status.success() {
             fatal_ProcRes(
@@ -713,9 +749,9 @@ fn compose_and_run_compiler(
                 &auxres);
         }
 
-        match config.target {
+        match config.target.as_slice() {
 
-            ~"arm-linux-androideabi" => {
+            "arm-linux-androideabi" => {
                 _arm_push_aux_shared_library(config, testfile);
             }
 
@@ -723,7 +759,7 @@ fn compose_and_run_compiler(
         }
     }
 
-    compose_and_run(config, testfile, args, ~[],
+    compose_and_run(config, testfile, args, Vec::new(),
                     config.compile_lib_path, input)
 }
 
@@ -734,17 +770,22 @@ fn ensure_dir(path: &Path) {
 
 fn compose_and_run(config: &config, testfile: &Path,
                    ProcArgs{ args, prog }: ProcArgs,
-                   procenv: ~[(~str, ~str)],
+                   procenv: Vec<(~str, ~str)> ,
                    lib_path: &str,
                    input: Option<~str>) -> ProcRes {
     return program_output(config, testfile, lib_path,
                           prog, args, procenv, input);
 }
 
+enum TargetLocation {
+    ThisFile(Path),
+    ThisDirectory(Path),
+}
+
 fn make_compile_args(config: &config,
                      props: &TestProps,
-                     extras: ~[~str],
-                     xform: |&config, &Path| -> Path,
+                     extras: Vec<~str> ,
+                     xform: |&config, &Path| -> TargetLocation,
                      testfile: &Path)
                      -> ProcArgs {
     let xform_file = xform(config, testfile);
@@ -754,12 +795,24 @@ fn make_compile_args(config: &config,
         config.target.as_slice()
     };
     // FIXME (#9639): This needs to handle non-utf8 paths
-    let mut args = ~[testfile.as_str().unwrap().to_owned(),
-                     ~"-o", xform_file.as_str().unwrap().to_owned(),
-                     ~"-L", config.build_base.as_str().unwrap().to_owned(),
-                     ~"--target=" + target]
-        + extras;
-    args.push_all_move(split_maybe_args(&config.rustcflags));
+    let mut args = vec!(testfile.as_str().unwrap().to_owned(),
+                     "-L".to_owned(), config.build_base.as_str().unwrap().to_owned(),
+                     "--target=".to_owned() + target);
+    args.push_all(extras.as_slice());
+    if !props.no_prefer_dynamic {
+        args.push("-C".to_owned());
+        args.push("prefer-dynamic".to_owned());
+    }
+    let path = match xform_file {
+        ThisFile(path) => { args.push("-o".to_owned()); path }
+        ThisDirectory(path) => { args.push("--out-dir".to_owned()); path }
+    };
+    args.push(path.as_str().unwrap().to_owned());
+    if props.force_host {
+        args.push_all_move(split_maybe_args(&config.host_rustcflags));
+    } else {
+        args.push_all_move(split_maybe_args(&config.target_rustcflags));
+    }
     args.push_all_move(split_maybe_args(&props.compile_flags));
     return ProcArgs {prog: config.rustc_path.as_str().unwrap().to_owned(), args: args};
 }
@@ -782,40 +835,45 @@ fn make_exe_name(config: &config, testfile: &Path) -> Path {
     f
 }
 
-fn make_run_args(config: &config, _props: &TestProps, testfile: &Path) ->
+fn make_run_args(config: &config, props: &TestProps, testfile: &Path) ->
    ProcArgs {
     // If we've got another tool to run under (valgrind),
     // then split apart its command
     let mut args = split_maybe_args(&config.runtool);
     let exe_file = make_exe_name(config, testfile);
+
     // FIXME (#9639): This needs to handle non-utf8 paths
     args.push(exe_file.as_str().unwrap().to_owned());
+
+    // Add the arguments in the run_flags directive
+    args.push_all_move(split_maybe_args(&props.run_flags));
+
     let prog = args.shift().unwrap();
     return ProcArgs {prog: prog, args: args};
 }
 
-fn split_maybe_args(argstr: &Option<~str>) -> ~[~str] {
+fn split_maybe_args(argstr: &Option<~str>) -> Vec<~str> {
     match *argstr {
         Some(ref s) => {
             s.split(' ')
                 .filter_map(|s| if s.is_whitespace() {None} else {Some(s.to_owned())})
                 .collect()
         }
-        None => ~[]
+        None => Vec::new()
     }
 }
 
 fn program_output(config: &config, testfile: &Path, lib_path: &str, prog: ~str,
-                  args: ~[~str], env: ~[(~str, ~str)],
+                  args: Vec<~str> , env: Vec<(~str, ~str)> ,
                   input: Option<~str>) -> ProcRes {
     let cmdline =
         {
-            let cmdline = make_cmdline(lib_path, prog, args);
+            let cmdline = make_cmdline(lib_path, prog, args.as_slice());
             logv(config, format!("executing {}", cmdline));
             cmdline
         };
     let procsrv::Result{ out, err, status } =
-            procsrv::run(lib_path, prog, args, env, input)
+            procsrv::run(lib_path, prog, args.as_slice(), env, input)
             .expect(format!("failed to exec `{}`", prog));
     dump_output(config, testfile, out, err);
     return ProcRes {status: status,
@@ -894,9 +952,10 @@ fn error(err: ~str) { println!("\nerror: {}", err); }
 
 fn fatal(err: ~str) -> ! { error(err); fail!(); }
 
-fn fatal_ProcRes(err: ~str, ProcRes: &ProcRes) -> ! {
+fn fatal_ProcRes(err: ~str, proc_res: &ProcRes) -> ! {
     print!("\n\
 error: {}\n\
+status: {}\n\
 command: {}\n\
 stdout:\n\
 ------------------------------------------\n\
@@ -907,24 +966,25 @@ stderr:\n\
 {}\n\
 ------------------------------------------\n\
 \n",
-             err, ProcRes.cmdline, ProcRes.stdout, ProcRes.stderr);
+             err, proc_res.status, proc_res.cmdline, proc_res.stdout,
+             proc_res.stderr);
     fail!();
 }
 
 fn _arm_exec_compiled_test(config: &config, props: &TestProps,
-                      testfile: &Path, env: ~[(~str, ~str)]) -> ProcRes {
+                      testfile: &Path, env: Vec<(~str, ~str)> ) -> ProcRes {
 
     let args = make_run_args(config, props, testfile);
-    let cmdline = make_cmdline("", args.prog, args.args);
+    let cmdline = make_cmdline("", args.prog, args.args.as_slice());
 
     // get bare program string
-    let mut tvec: ~[~str] = args.prog.split('/').map(|ts| ts.to_owned()).collect();
+    let mut tvec: Vec<~str> = args.prog.split('/').map(|ts| ts.to_owned()).collect();
     let prog_short = tvec.pop().unwrap();
 
     // copy to target
     let copy_result = procsrv::run("", config.adb_path,
-        [~"push", args.prog.clone(), config.adb_test_dir.clone()],
-        ~[(~"",~"")], Some(~""))
+        ["push".to_owned(), args.prog.clone(), config.adb_test_dir.clone()],
+        vec!(("".to_owned(),"".to_owned())), Some("".to_owned()))
         .expect(format!("failed to exec `{}`", config.adb_path));
 
     if config.verbose {
@@ -935,10 +995,10 @@ fn _arm_exec_compiled_test(config: &config, props: &TestProps,
 
     logv(config, format!("executing ({}) {}", config.target, cmdline));
 
-    let mut runargs = ~[];
+    let mut runargs = Vec::new();
 
     // run test via adb_run_wrapper
-    runargs.push(~"shell");
+    runargs.push("shell".to_owned());
     for (key, val) in env.move_iter() {
         runargs.push(format!("{}={}", key, val));
     }
@@ -949,18 +1009,21 @@ fn _arm_exec_compiled_test(config: &config, props: &TestProps,
     for tv in args.args.iter() {
         runargs.push(tv.to_owned());
     }
-    procsrv::run("", config.adb_path, runargs, ~[(~"",~"")], Some(~""))
+    procsrv::run("",
+                 config.adb_path,
+                 runargs.as_slice(),
+                 vec!(("".to_owned(),"".to_owned())), Some("".to_owned()))
         .expect(format!("failed to exec `{}`", config.adb_path));
 
     // get exitcode of result
-    runargs = ~[];
-    runargs.push(~"shell");
-    runargs.push(~"cat");
+    runargs = Vec::new();
+    runargs.push("shell".to_owned());
+    runargs.push("cat".to_owned());
     runargs.push(format!("{}/{}.exitcode", config.adb_test_dir, prog_short));
 
     let procsrv::Result{ out: exitcode_out, err: _, status: _ } =
-        procsrv::run("", config.adb_path, runargs, ~[(~"",~"")],
-                     Some(~""))
+        procsrv::run("", config.adb_path, runargs.as_slice(), vec!(("".to_owned(),"".to_owned())),
+                     Some("".to_owned()))
         .expect(format!("failed to exec `{}`", config.adb_path));
 
     let mut exitcode : int = 0;
@@ -973,23 +1036,29 @@ fn _arm_exec_compiled_test(config: &config, props: &TestProps,
     }
 
     // get stdout of result
-    runargs = ~[];
-    runargs.push(~"shell");
-    runargs.push(~"cat");
+    runargs = Vec::new();
+    runargs.push("shell".to_owned());
+    runargs.push("cat".to_owned());
     runargs.push(format!("{}/{}.stdout", config.adb_test_dir, prog_short));
 
     let procsrv::Result{ out: stdout_out, err: _, status: _ } =
-        procsrv::run("", config.adb_path, runargs, ~[(~"",~"")], Some(~""))
+        procsrv::run("",
+                     config.adb_path,
+                     runargs.as_slice(),
+                     vec!(("".to_owned(),"".to_owned())), Some("".to_owned()))
         .expect(format!("failed to exec `{}`", config.adb_path));
 
     // get stderr of result
-    runargs = ~[];
-    runargs.push(~"shell");
-    runargs.push(~"cat");
+    runargs = Vec::new();
+    runargs.push("shell".to_owned());
+    runargs.push("cat".to_owned());
     runargs.push(format!("{}/{}.stderr", config.adb_test_dir, prog_short));
 
     let procsrv::Result{ out: stderr_out, err: _, status: _ } =
-        procsrv::run("", config.adb_path, runargs, ~[(~"",~"")], Some(~""))
+        procsrv::run("",
+                     config.adb_path,
+                     runargs.as_slice(),
+                     vec!(("".to_owned(),"".to_owned())), Some("".to_owned()))
         .expect(format!("failed to exec `{}`", config.adb_path));
 
     dump_output(config, testfile, stdout_out, stderr_out);
@@ -1010,8 +1079,8 @@ fn _arm_push_aux_shared_library(config: &config, testfile: &Path) {
         if file.extension_str() == Some("so") {
             // FIXME (#9639): This needs to handle non-utf8 paths
             let copy_result = procsrv::run("", config.adb_path,
-                [~"push", file.as_str().unwrap().to_owned(), config.adb_test_dir.clone()],
-                ~[(~"",~"")], Some(~""))
+                ["push".to_owned(), file.as_str().unwrap().to_owned(), config.adb_test_dir.clone()],
+                vec!(("".to_owned(),"".to_owned())), Some("".to_owned()))
                 .expect(format!("failed to exec `{}`", config.adb_path));
 
             if config.verbose {
@@ -1042,11 +1111,13 @@ fn compile_test_and_save_bitcode(config: &config, props: &TestProps,
                                  testfile: &Path) -> ProcRes {
     let aux_dir = aux_output_dir_name(config, testfile);
     // FIXME (#9639): This needs to handle non-utf8 paths
-    let link_args = ~[~"-L", aux_dir.as_str().unwrap().to_owned()];
-    let llvm_args = ~[~"-c", ~"--lib", ~"--save-temps"];
-    let args = make_compile_args(config, props,
-                                 link_args + llvm_args,
-                                 make_o_name, testfile);
+    let link_args = vec!("-L".to_owned(), aux_dir.as_str().unwrap().to_owned());
+    let llvm_args = vec!("--emit=obj".to_owned(), "--crate-type=lib".to_owned(),
+                         "-C".to_owned(), "save-temps".to_owned());
+    let args = make_compile_args(config,
+                                 props,
+                                 link_args.append(llvm_args.as_slice()),
+                                 |a, b| ThisFile(make_o_name(a, b)), testfile);
     compose_and_run_compiler(config, props, testfile, args, None)
 }
 
@@ -1055,15 +1126,15 @@ fn compile_cc_with_clang_and_save_bitcode(config: &config, _props: &TestProps,
     let bitcodefile = output_base_name(config, testfile).with_extension("bc");
     let bitcodefile = append_suffix_to_stem(&bitcodefile, "clang");
     let testcc = testfile.with_extension("cc");
-    let ProcArgs = ProcArgs {
+    let proc_args = ProcArgs {
         // FIXME (#9639): This needs to handle non-utf8 paths
         prog: config.clang_path.get_ref().as_str().unwrap().to_owned(),
-        args: ~[~"-c",
-                ~"-emit-llvm",
-                ~"-o", bitcodefile.as_str().unwrap().to_owned(),
-                testcc.as_str().unwrap().to_owned() ]
+        args: vec!("-c".to_owned(),
+                "-emit-llvm".to_owned(),
+                "-o".to_owned(), bitcodefile.as_str().unwrap().to_owned(),
+                testcc.as_str().unwrap().to_owned() )
     };
-    compose_and_run(config, testfile, ProcArgs, ~[], "", None)
+    compose_and_run(config, testfile, proc_args, Vec::new(), "", None)
 }
 
 fn extract_function_from_bitcode(config: &config, _props: &TestProps,
@@ -1073,14 +1144,14 @@ fn extract_function_from_bitcode(config: &config, _props: &TestProps,
     let bitcodefile = append_suffix_to_stem(&bitcodefile, suffix);
     let extracted_bc = append_suffix_to_stem(&bitcodefile, "extract");
     let prog = config.llvm_bin_path.get_ref().join("llvm-extract");
-    let ProcArgs = ProcArgs {
+    let proc_args = ProcArgs {
         // FIXME (#9639): This needs to handle non-utf8 paths
         prog: prog.as_str().unwrap().to_owned(),
-        args: ~["-func=" + fname,
+        args: vec!("-func=" + fname,
                 "-o=" + extracted_bc.as_str().unwrap(),
-                bitcodefile.as_str().unwrap().to_owned() ]
+                bitcodefile.as_str().unwrap().to_owned() )
     };
-    compose_and_run(config, testfile, ProcArgs, ~[], "", None)
+    compose_and_run(config, testfile, proc_args, Vec::new(), "", None)
 }
 
 fn disassemble_extract(config: &config, _props: &TestProps,
@@ -1090,19 +1161,19 @@ fn disassemble_extract(config: &config, _props: &TestProps,
     let extracted_bc = append_suffix_to_stem(&bitcodefile, "extract");
     let extracted_ll = extracted_bc.with_extension("ll");
     let prog = config.llvm_bin_path.get_ref().join("llvm-dis");
-    let ProcArgs = ProcArgs {
+    let proc_args = ProcArgs {
         // FIXME (#9639): This needs to handle non-utf8 paths
         prog: prog.as_str().unwrap().to_owned(),
-        args: ~["-o=" + extracted_ll.as_str().unwrap(),
-                extracted_bc.as_str().unwrap().to_owned() ]
+        args: vec!("-o=" + extracted_ll.as_str().unwrap(),
+                extracted_bc.as_str().unwrap().to_owned() )
     };
-    compose_and_run(config, testfile, ProcArgs, ~[], "", None)
+    compose_and_run(config, testfile, proc_args, Vec::new(), "", None)
 }
 
 
 fn count_extracted_lines(p: &Path) -> uint {
     let x = File::open(&p.with_extension("ll")).read_to_end().unwrap();
-    let x = str::from_utf8_owned(x).unwrap();
+    let x = str::from_utf8(x.as_slice()).unwrap();
     x.lines().len()
 }
 
@@ -1111,42 +1182,42 @@ fn run_codegen_test(config: &config, props: &TestProps,
                     testfile: &Path, mm: &mut MetricMap) {
 
     if config.llvm_bin_path.is_none() {
-        fatal(~"missing --llvm-bin-path");
+        fatal("missing --llvm-bin-path".to_owned());
     }
 
     if config.clang_path.is_none() {
-        fatal(~"missing --clang-path");
+        fatal("missing --clang-path".to_owned());
     }
 
-    let mut ProcRes = compile_test_and_save_bitcode(config, props, testfile);
-    if !ProcRes.status.success() {
-        fatal_ProcRes(~"compilation failed!", &ProcRes);
+    let mut proc_res = compile_test_and_save_bitcode(config, props, testfile);
+    if !proc_res.status.success() {
+        fatal_ProcRes("compilation failed!".to_owned(), &proc_res);
     }
 
-    ProcRes = extract_function_from_bitcode(config, props, "test", testfile, "");
-    if !ProcRes.status.success() {
-        fatal_ProcRes(~"extracting 'test' function failed", &ProcRes);
+    proc_res = extract_function_from_bitcode(config, props, "test", testfile, "");
+    if !proc_res.status.success() {
+        fatal_ProcRes("extracting 'test' function failed".to_owned(), &proc_res);
     }
 
-    ProcRes = disassemble_extract(config, props, testfile, "");
-    if !ProcRes.status.success() {
-        fatal_ProcRes(~"disassembling extract failed", &ProcRes);
+    proc_res = disassemble_extract(config, props, testfile, "");
+    if !proc_res.status.success() {
+        fatal_ProcRes("disassembling extract failed".to_owned(), &proc_res);
     }
 
 
-    let mut ProcRes = compile_cc_with_clang_and_save_bitcode(config, props, testfile);
-    if !ProcRes.status.success() {
-        fatal_ProcRes(~"compilation failed!", &ProcRes);
+    let mut proc_res = compile_cc_with_clang_and_save_bitcode(config, props, testfile);
+    if !proc_res.status.success() {
+        fatal_ProcRes("compilation failed!".to_owned(), &proc_res);
     }
 
-    ProcRes = extract_function_from_bitcode(config, props, "test", testfile, "clang");
-    if !ProcRes.status.success() {
-        fatal_ProcRes(~"extracting 'test' function failed", &ProcRes);
+    proc_res = extract_function_from_bitcode(config, props, "test", testfile, "clang");
+    if !proc_res.status.success() {
+        fatal_ProcRes("extracting 'test' function failed".to_owned(), &proc_res);
     }
 
-    ProcRes = disassemble_extract(config, props, testfile, "clang");
-    if !ProcRes.status.success() {
-        fatal_ProcRes(~"disassembling extract failed", &ProcRes);
+    proc_res = disassemble_extract(config, props, testfile, "clang");
+    if !proc_res.status.success() {
+        fatal_ProcRes("disassembling extract failed".to_owned(), &proc_res);
     }
 
     let base = output_base_name(config, testfile);

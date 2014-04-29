@@ -10,13 +10,13 @@
 
 // This file was auto-generated using 'src/etc/generate-keyword-span-tests.py'
 
-#[feature(struct_variant)];
-extern mod extra;
+#![feature(struct_variant)]
+extern crate rand;
 
-
+#[deriving(Eq)]
 struct Error;
 
-#[deriving(TotalEq)]
+#[deriving(Eq, TotalEq)]
 enum Enum {
    A(
      Error //~ ERROR

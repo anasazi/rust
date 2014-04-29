@@ -10,7 +10,7 @@
 
 
 
-type compare<'a, T> = 'a |~T, ~T| -> bool;
+type compare<'a, T> = |~T, ~T|: 'a -> bool;
 
 fn test_generic<T:Clone>(expected: ~T, eq: compare<T>) {
     let actual: ~T = { expected.clone() };
@@ -19,8 +19,8 @@ fn test_generic<T:Clone>(expected: ~T, eq: compare<T>) {
 
 fn test_box() {
     fn compare_box(b1: ~bool, b2: ~bool) -> bool {
-        info!("{}", *b1);
-        info!("{}", *b2);
+        println!("{}", *b1);
+        println!("{}", *b2);
         return *b1 == *b2;
     }
     test_generic::<bool>(~true, compare_box);

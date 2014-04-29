@@ -17,30 +17,24 @@ use parse::token::INTERPOLATED;
 
 // a parser that can parse attributes.
 pub trait ParserAttr {
-    fn parse_outer_attributes(&mut self) -> ~[ast::Attribute];
+    fn parse_outer_attributes(&mut self) -> Vec<ast::Attribute> ;
     fn parse_attribute(&mut self, permit_inner: bool) -> ast::Attribute;
     fn parse_inner_attrs_and_next(&mut self)
-                                  -> (~[ast::Attribute], ~[ast::Attribute]);
+                                  -> (Vec<ast::Attribute> , Vec<ast::Attribute> );
     fn parse_meta_item(&mut self) -> @ast::MetaItem;
-    fn parse_meta_seq(&mut self) -> ~[@ast::MetaItem];
-    fn parse_optional_meta(&mut self) -> ~[@ast::MetaItem];
+    fn parse_meta_seq(&mut self) -> Vec<@ast::MetaItem> ;
+    fn parse_optional_meta(&mut self) -> Vec<@ast::MetaItem> ;
 }
 
-impl ParserAttr for Parser {
+impl<'a> ParserAttr for Parser<'a> {
     // Parse attributes that appear before an item
-    fn parse_outer_attributes(&mut self) -> ~[ast::Attribute] {
-        let mut attrs: ~[ast::Attribute] = ~[];
+    fn parse_outer_attributes(&mut self) -> Vec<ast::Attribute> {
+        let mut attrs: Vec<ast::Attribute> = Vec::new();
         loop {
             debug!("parse_outer_attributes: self.token={:?}",
                    self.token);
             match self.token {
-              token::INTERPOLATED(token::NtAttr(..)) => {
-                attrs.push(self.parse_attribute(false));
-              }
               token::POUND => {
-                if self.look_ahead(1, |t| *t != token::LBRACKET) {
-                    break;
-                }
                 attrs.push(self.parse_attribute(false));
               }
               token::DOC_COMMENT(s) => {
@@ -61,27 +55,35 @@ impl ParserAttr for Parser {
         return attrs;
     }
 
-    // matches attribute = # [ meta_item ]
+    // matches attribute = # ! [ meta_item ]
     //
-    // if permit_inner is true, then a trailing `;` indicates an inner
+    // if permit_inner is true, then a leading `!` indicates an inner
     // attribute
     fn parse_attribute(&mut self, permit_inner: bool) -> ast::Attribute {
         debug!("parse_attributes: permit_inner={:?} self.token={:?}",
                permit_inner, self.token);
-        let (span, value) = match self.token {
-            INTERPOLATED(token::NtAttr(attr)) => {
-                assert!(attr.node.style == ast::AttrOuter);
-                self.bump();
-                (attr.span, attr.node.value)
-            }
+        let (span, value, mut style) = match self.token {
             token::POUND => {
                 let lo = self.span.lo;
                 self.bump();
+
+                let style = if self.eat(&token::NOT) {
+                    if !permit_inner {
+                        self.span_err(self.span,
+                                      "an inner attribute is not permitted in \
+                                       this context");
+                    }
+                    ast::AttrInner
+                } else {
+                    ast::AttrOuter
+                };
+
                 self.expect(&token::LBRACKET);
                 let meta_item = self.parse_meta_item();
                 self.expect(&token::RBRACKET);
+
                 let hi = self.span.hi;
-                (mk_sp(lo, hi), meta_item)
+                (mk_sp(lo, hi), meta_item, style)
             }
             _ => {
                 let token_str = self.this_token_to_str();
@@ -89,12 +91,13 @@ impl ParserAttr for Parser {
                                    token_str));
             }
         };
-        let style = if permit_inner && self.token == token::SEMI {
-            self.bump();
-            ast::AttrInner
-        } else {
-            ast::AttrOuter
-        };
+
+        if permit_inner && self.eat(&token::SEMI) {
+            self.span_warn(span, "this inner attribute syntax is deprecated. \
+                           The new syntax is `#![foo]`, with a bang and no semicolon.");
+            style = ast::AttrInner;
+        }
+
         return Spanned {
             span: span,
             node: ast::Attribute_ {
@@ -116,19 +119,12 @@ impl ParserAttr for Parser {
     // you can make the 'next' field an Option, but the result is going to be
     // more useful as a vector.
     fn parse_inner_attrs_and_next(&mut self)
-                                  -> (~[ast::Attribute], ~[ast::Attribute]) {
-        let mut inner_attrs: ~[ast::Attribute] = ~[];
-        let mut next_outer_attrs: ~[ast::Attribute] = ~[];
+                                  -> (Vec<ast::Attribute> , Vec<ast::Attribute> ) {
+        let mut inner_attrs: Vec<ast::Attribute> = Vec::new();
+        let mut next_outer_attrs: Vec<ast::Attribute> = Vec::new();
         loop {
             let attr = match self.token {
-                token::INTERPOLATED(token::NtAttr(..)) => {
-                    self.parse_attribute(true)
-                }
                 token::POUND => {
-                    if self.look_ahead(1, |t| *t != token::LBRACKET) {
-                        // This is an extension
-                        break;
-                    }
                     self.parse_attribute(true)
                 }
                 token::DOC_COMMENT(s) => {
@@ -155,6 +151,14 @@ impl ParserAttr for Parser {
     // | IDENT = lit
     // | IDENT meta_seq
     fn parse_meta_item(&mut self) -> @ast::MetaItem {
+        match self.token {
+            token::INTERPOLATED(token::NtMeta(e)) => {
+                self.bump();
+                return e
+            }
+            _ => {}
+        }
+
         let lo = self.span.lo;
         let ident = self.parse_ident();
         let name = self.id_to_interned_str(ident);
@@ -188,17 +192,17 @@ impl ParserAttr for Parser {
     }
 
     // matches meta_seq = ( COMMASEP(meta_item) )
-    fn parse_meta_seq(&mut self) -> ~[@ast::MetaItem] {
+    fn parse_meta_seq(&mut self) -> Vec<@ast::MetaItem> {
         self.parse_seq(&token::LPAREN,
                        &token::RPAREN,
                        seq_sep_trailing_disallowed(token::COMMA),
                        |p| p.parse_meta_item()).node
     }
 
-    fn parse_optional_meta(&mut self) -> ~[@ast::MetaItem] {
+    fn parse_optional_meta(&mut self) -> Vec<@ast::MetaItem> {
         match self.token {
             token::LPAREN => self.parse_meta_seq(),
-            _ => ~[]
+            _ => Vec::new()
         }
     }
 }

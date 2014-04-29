@@ -8,68 +8,64 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::clone::{Clone, DeepClone};
-use std::cmp::{TotalEq, Ord, TotalOrd, Equiv};
-use std::cmp::Equal;
-use std::container::{Container, Map, MutableMap};
-use std::default::Default;
-use std::send_str::{SendStr, SendStrOwned, SendStrStatic};
-use std::str::Str;
-use std::to_str::ToStr;
-use std::hashmap::HashMap;
+extern crate collections;
+
+use std::container::{Map, MutableMap};
+use std::str::{SendStr, Owned, Slice};
+use collections::HashMap;
 use std::option::Some;
 
 pub fn main() {
     let mut map: HashMap<SendStr, uint> = HashMap::new();
-    assert!(map.insert(SendStrStatic("foo"), 42));
-    assert!(!map.insert(SendStrOwned(~"foo"), 42));
-    assert!(!map.insert(SendStrStatic("foo"), 42));
-    assert!(!map.insert(SendStrOwned(~"foo"), 42));
+    assert!(map.insert(Slice("foo"), 42));
+    assert!(!map.insert(Owned("foo".to_owned()), 42));
+    assert!(!map.insert(Slice("foo"), 42));
+    assert!(!map.insert(Owned("foo".to_owned()), 42));
 
-    assert!(!map.insert(SendStrStatic("foo"), 43));
-    assert!(!map.insert(SendStrOwned(~"foo"), 44));
-    assert!(!map.insert(SendStrStatic("foo"), 45));
-    assert!(!map.insert(SendStrOwned(~"foo"), 46));
+    assert!(!map.insert(Slice("foo"), 43));
+    assert!(!map.insert(Owned("foo".to_owned()), 44));
+    assert!(!map.insert(Slice("foo"), 45));
+    assert!(!map.insert(Owned("foo".to_owned()), 46));
 
     let v = 46;
 
-    assert_eq!(map.find(&SendStrOwned(~"foo")), Some(&v));
-    assert_eq!(map.find(&SendStrStatic("foo")), Some(&v));
+    assert_eq!(map.find(&Owned("foo".to_owned())), Some(&v));
+    assert_eq!(map.find(&Slice("foo")), Some(&v));
 
     let (a, b, c, d) = (50, 51, 52, 53);
 
-    assert!(map.insert(SendStrStatic("abc"), a));
-    assert!(map.insert(SendStrOwned(~"bcd"), b));
-    assert!(map.insert(SendStrStatic("cde"), c));
-    assert!(map.insert(SendStrOwned(~"def"), d));
+    assert!(map.insert(Slice("abc"), a));
+    assert!(map.insert(Owned("bcd".to_owned()), b));
+    assert!(map.insert(Slice("cde"), c));
+    assert!(map.insert(Owned("def".to_owned()), d));
 
-    assert!(!map.insert(SendStrStatic("abc"), a));
-    assert!(!map.insert(SendStrOwned(~"bcd"), b));
-    assert!(!map.insert(SendStrStatic("cde"), c));
-    assert!(!map.insert(SendStrOwned(~"def"), d));
+    assert!(!map.insert(Slice("abc"), a));
+    assert!(!map.insert(Owned("bcd".to_owned()), b));
+    assert!(!map.insert(Slice("cde"), c));
+    assert!(!map.insert(Owned("def".to_owned()), d));
 
-    assert!(!map.insert(SendStrOwned(~"abc"), a));
-    assert!(!map.insert(SendStrStatic("bcd"), b));
-    assert!(!map.insert(SendStrOwned(~"cde"), c));
-    assert!(!map.insert(SendStrStatic("def"), d));
+    assert!(!map.insert(Owned("abc".to_owned()), a));
+    assert!(!map.insert(Slice("bcd"), b));
+    assert!(!map.insert(Owned("cde".to_owned()), c));
+    assert!(!map.insert(Slice("def"), d));
 
     assert_eq!(map.find_equiv(&("abc")), Some(&a));
     assert_eq!(map.find_equiv(&("bcd")), Some(&b));
     assert_eq!(map.find_equiv(&("cde")), Some(&c));
     assert_eq!(map.find_equiv(&("def")), Some(&d));
 
-    assert_eq!(map.find_equiv(&(~"abc")), Some(&a));
-    assert_eq!(map.find_equiv(&(~"bcd")), Some(&b));
-    assert_eq!(map.find_equiv(&(~"cde")), Some(&c));
-    assert_eq!(map.find_equiv(&(~"def")), Some(&d));
+    assert_eq!(map.find_equiv(&("abc".to_owned())), Some(&a));
+    assert_eq!(map.find_equiv(&("bcd".to_owned())), Some(&b));
+    assert_eq!(map.find_equiv(&("cde".to_owned())), Some(&c));
+    assert_eq!(map.find_equiv(&("def".to_owned())), Some(&d));
 
-    assert_eq!(map.find_equiv(&SendStrStatic("abc")), Some(&a));
-    assert_eq!(map.find_equiv(&SendStrStatic("bcd")), Some(&b));
-    assert_eq!(map.find_equiv(&SendStrStatic("cde")), Some(&c));
-    assert_eq!(map.find_equiv(&SendStrStatic("def")), Some(&d));
+    assert_eq!(map.find_equiv(&Slice("abc")), Some(&a));
+    assert_eq!(map.find_equiv(&Slice("bcd")), Some(&b));
+    assert_eq!(map.find_equiv(&Slice("cde")), Some(&c));
+    assert_eq!(map.find_equiv(&Slice("def")), Some(&d));
 
-    assert_eq!(map.find_equiv(&SendStrOwned(~"abc")), Some(&a));
-    assert_eq!(map.find_equiv(&SendStrOwned(~"bcd")), Some(&b));
-    assert_eq!(map.find_equiv(&SendStrOwned(~"cde")), Some(&c));
-    assert_eq!(map.find_equiv(&SendStrOwned(~"def")), Some(&d));
+    assert_eq!(map.find_equiv(&Owned("abc".to_owned())), Some(&a));
+    assert_eq!(map.find_equiv(&Owned("bcd".to_owned())), Some(&b));
+    assert_eq!(map.find_equiv(&Owned("cde".to_owned())), Some(&c));
+    assert_eq!(map.find_equiv(&Owned("def".to_owned())), Some(&d));
 }

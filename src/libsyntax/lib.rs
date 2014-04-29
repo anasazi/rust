@@ -18,20 +18,23 @@ This API is completely unstable and subject to change.
 
 */
 
-#[crate_id = "syntax#0.10-pre"];
-#[license = "MIT/ASL2"];
-#[crate_type = "dylib"];
-#[crate_type = "rlib"];
-#[doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk.png",
-      html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-      html_root_url = "http://static.rust-lang.org/doc/master")];
+#![crate_id = "syntax#0.11-pre"]
+#![license = "MIT/ASL2"]
+#![crate_type = "dylib"]
+#![crate_type = "rlib"]
+#![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
+       html_favicon_url = "http://www.rust-lang.org/favicon.ico",
+       html_root_url = "http://static.rust-lang.org/doc/master")]
 
-#[feature(macro_rules, globs, managed_boxes)];
+#![feature(macro_rules, globs, managed_boxes, default_type_params, phase,
+           quote)]
+#![allow(deprecated)]
 
-#[deny(non_camel_case_types)];
-
-extern mod extra;
-extern mod term;
+extern crate serialize;
+extern crate term;
+extern crate collections;
+#[phase(syntax, link)]
+extern crate log;
 
 pub mod util {
     pub mod interner;
@@ -45,7 +48,7 @@ pub mod syntax {
     pub use parse;
 }
 
-pub mod opt_vec;
+pub mod owned_slice;
 pub mod attr;
 pub mod diagnostic;
 pub mod codemap;
@@ -83,6 +86,7 @@ pub mod ext {
         pub mod macro_rules;
     }
 
+    pub mod mtwt;
 
     pub mod cfg;
     pub mod fmt;

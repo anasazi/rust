@@ -15,21 +15,21 @@ use lib::llvm::{ModuleRef, TargetMachineRef, llvm, True, False};
 use metadata::cstore;
 use util::common::time;
 
-use std::libc;
+use libc;
+use flate;
 
-pub fn run(sess: session::Session, llmod: ModuleRef,
+pub fn run(sess: &session::Session, llmod: ModuleRef,
            tm: TargetMachineRef, reachable: &[~str]) {
-    if sess.prefer_dynamic() {
+    if sess.opts.cg.prefer_dynamic {
         sess.err("cannot prefer dynamic linking when performing LTO");
         sess.note("only 'staticlib' and 'bin' outputs are supported with LTO");
         sess.abort_if_errors();
     }
 
     // Make sure we actually can run LTO
-    let outputs = sess.outputs.borrow();
-    for output in outputs.get().iter() {
-        match *output {
-            session::OutputExecutable | session::OutputStaticlib => {}
+    for crate_type in sess.crate_types.borrow().iter() {
+        match *crate_type {
+            session::CrateTypeExecutable | session::CrateTypeStaticlib => {}
             _ => {
                 sess.fatal("lto can only be run for executables and \
                             static library outputs");
@@ -52,10 +52,15 @@ pub fn run(sess: session::Session, llmod: ModuleRef,
 
         let archive = ArchiveRO::open(&path).expect("wanted an rlib");
         debug!("reading {}", name);
-        let bc = time(sess.time_passes(), format!("read {}.bc", name), (), |_|
-                      archive.read(format!("{}.bc", name)));
-        let bc = bc.expect("missing bytecode in archive!");
-        let ptr = bc.as_ptr();
+        let bc = time(sess.time_passes(), format!("read {}.bc.deflate", name), (), |_|
+                      archive.read(format!("{}.bc.deflate", name)));
+        let bc = bc.expect("missing compressed bytecode in archive!");
+        let bc = time(sess.time_passes(), format!("inflate {}.bc", name), (), |_|
+                      match flate::inflate_bytes(bc) {
+                          Some(bc) => bc,
+                          None => sess.fatal(format!("failed to decompress bc of `{}`", name))
+                      });
+        let ptr = bc.as_slice().as_ptr();
         debug!("linking {}", name);
         time(sess.time_passes(), format!("ll link {}", name), (), |()| unsafe {
             if !llvm::LLVMRustLinkInExternalBitcode(llmod,
@@ -67,8 +72,8 @@ pub fn run(sess: session::Session, llmod: ModuleRef,
     }
 
     // Internalize everything but the reachable symbols of the current module
-    let cstrs = reachable.map(|s| s.to_c_str());
-    let arr = cstrs.map(|c| c.with_ref(|p| p));
+    let cstrs: Vec<::std::c_str::CString> = reachable.iter().map(|s| s.to_c_str()).collect();
+    let arr: Vec<*i8> = cstrs.iter().map(|c| c.with_ref(|p| p)).collect();
     let ptr = arr.as_ptr();
     unsafe {
         llvm::LLVMRustRunRestrictionPass(llmod, ptr as **libc::c_char,

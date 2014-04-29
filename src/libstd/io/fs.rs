@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -28,7 +28,7 @@ particular bits of it, etc.
 # Example
 
 ```rust
-# #[allow(unused_must_use)];
+# #![allow(unused_must_use)]
 use std::io::{File, fs};
 
 let path = Path::new("foo.txt");
@@ -51,7 +51,9 @@ fs::unlink(&path);
 
 use c_str::ToCStr;
 use clone::Clone;
+use container::Container;
 use iter::Iterator;
+use kinds::Send;
 use super::{Reader, Writer, Seek};
 use super::{SeekStyle, Read, Write, Open, IoError, Truncate,
             FileMode, FileAccess, FileStat, IoResult, FilePermission};
@@ -61,7 +63,8 @@ use option::{Some, None, Option};
 use result::{Ok, Err};
 use path;
 use path::{Path, GenericPath};
-use vec::{OwnedVector, ImmutableVector};
+use slice::{OwnedVector, ImmutableVector};
+use vec::Vec;
 
 /// Unconstrained file access type that exposes read and write operations
 ///
@@ -75,9 +78,9 @@ use vec::{OwnedVector, ImmutableVector};
 /// configured at creation time, via the `FileAccess` parameter to
 /// `File::open_mode()`.
 pub struct File {
-    priv fd: ~RtioFileStream,
-    priv path: Path,
-    priv last_nread: int,
+    fd: ~RtioFileStream:Send,
+    path: Path,
+    last_nread: int,
 }
 
 impl File {
@@ -103,7 +106,7 @@ impl File {
     /// `FileMode` and `FileAccess` provide information about the permissions
     /// context in which a given stream is created. More information about them
     /// can be found in `std::io`'s docs. If a file is opened with `Write`
-    /// or `ReadWrite` access, then it will be created it it does not already
+    /// or `ReadWrite` access, then it will be created it does not already
     /// exist.
     ///
     /// Note that, with this function, a `File` is returned regardless of the
@@ -159,7 +162,7 @@ impl File {
     /// # Example
     ///
     /// ```rust
-    /// # #[allow(unused_must_use)];
+    /// # #![allow(unused_must_use)]
     /// use std::io::File;
     ///
     /// let mut f = File::create(&Path::new("foo.txt"));
@@ -217,7 +220,7 @@ impl File {
 /// # Example
 ///
 /// ```rust
-/// # #[allow(unused_must_use)];
+/// # #![allow(unused_must_use)]
 /// use std::io::fs;
 ///
 /// let p = Path::new("/some/file/path.txt");
@@ -240,10 +243,6 @@ pub fn unlink(path: &Path) -> IoResult<()> {
 /// Given a path, query the file system to get information about a file,
 /// directory, etc. This function will traverse symlinks to query
 /// information about the destination file.
-///
-/// Returns a fully-filled out stat structure on success, and on failure it
-/// will return a dummy stat structure (it is expected that the condition
-/// raised is handled as well).
 ///
 /// # Example
 ///
@@ -287,7 +286,7 @@ pub fn lstat(path: &Path) -> IoResult<FileStat> {
 /// # Example
 ///
 /// ```rust
-/// # #[allow(unused_must_use)];
+/// # #![allow(unused_must_use)]
 /// use std::io::fs;
 ///
 /// fs::rename(&Path::new("foo"), &Path::new("bar"));
@@ -311,7 +310,7 @@ pub fn rename(from: &Path, to: &Path) -> IoResult<()> {
 /// # Example
 ///
 /// ```rust
-/// # #[allow(unused_must_use)];
+/// # #![allow(unused_must_use)]
 /// use std::io::fs;
 ///
 /// fs::copy(&Path::new("foo.txt"), &Path::new("bar.txt"));
@@ -339,8 +338,8 @@ pub fn copy(from: &Path, to: &Path) -> IoResult<()> {
         })
     }
 
-    let mut reader = if_ok!(File::open(from));
-    let mut writer = if_ok!(File::create(to));
+    let mut reader = try!(File::open(from));
+    let mut writer = try!(File::create(to));
     let mut buf = [0, ..io::DEFAULT_BUF_SIZE];
 
     loop {
@@ -349,10 +348,10 @@ pub fn copy(from: &Path, to: &Path) -> IoResult<()> {
             Err(ref e) if e.kind == io::EndOfFile => { break }
             Err(e) => return Err(e)
         };
-        if_ok!(writer.write(buf.slice_to(amt)));
+        try!(writer.write(buf.slice_to(amt)));
     }
 
-    chmod(to, if_ok!(from.stat()).perm)
+    chmod(to, try!(from.stat()).perm)
 }
 
 /// Changes the permission mode bits found on a file or a directory. This
@@ -361,7 +360,7 @@ pub fn copy(from: &Path, to: &Path) -> IoResult<()> {
 /// # Example
 ///
 /// ```rust
-/// # #[allow(unused_must_use)];
+/// # #![allow(unused_must_use)]
 /// use std::io;
 /// use std::io::fs;
 ///
@@ -413,7 +412,7 @@ pub fn readlink(path: &Path) -> IoResult<Path> {
 /// # Example
 ///
 /// ```rust
-/// # #[allow(unused_must_use)];
+/// # #![allow(unused_must_use)]
 /// use std::io;
 /// use std::io::fs;
 ///
@@ -434,7 +433,7 @@ pub fn mkdir(path: &Path, mode: FilePermission) -> IoResult<()> {
 /// # Example
 ///
 /// ```rust
-/// # #[allow(unused_must_use)];
+/// # #![allow(unused_must_use)]
 /// use std::io::fs;
 ///
 /// let p = Path::new("/some/dir");
@@ -460,10 +459,10 @@ pub fn rmdir(path: &Path) -> IoResult<()> {
 /// // one possible implementation of fs::walk_dir only visiting files
 /// fn visit_dirs(dir: &Path, cb: |&Path|) -> io::IoResult<()> {
 ///     if dir.is_dir() {
-///         let contents = if_ok!(fs::readdir(dir));
+///         let contents = try!(fs::readdir(dir));
 ///         for entry in contents.iter() {
 ///             if entry.is_dir() {
-///                 if_ok!(visit_dirs(entry, |p| cb(p)));
+///                 try!(visit_dirs(entry, |p| cb(p)));
 ///             } else {
 ///                 cb(entry);
 ///             }
@@ -480,7 +479,7 @@ pub fn rmdir(path: &Path) -> IoResult<()> {
 /// Will return an error if the provided `from` doesn't exist, the process lacks
 /// permissions to view the contents or if the `path` points at a non-directory
 /// file
-pub fn readdir(path: &Path) -> IoResult<~[Path]> {
+pub fn readdir(path: &Path) -> IoResult<Vec<Path>> {
     LocalIo::maybe_raise(|io| {
         io.fs_readdir(&path.to_c_str(), 0)
     })
@@ -488,19 +487,20 @@ pub fn readdir(path: &Path) -> IoResult<~[Path]> {
 
 /// Returns an iterator which will recursively walk the directory structure
 /// rooted at `path`. The path given will not be iterated over, and this will
-/// perform iteration in a top-down order.
+/// perform iteration in some top-down order.  The contents of unreadable
+/// subdirectories are ignored.
 pub fn walk_dir(path: &Path) -> IoResult<Directories> {
-    Ok(Directories { stack: if_ok!(readdir(path)) })
+    Ok(Directories { stack: try!(readdir(path)) })
 }
 
 /// An iterator which walks over a directory
 pub struct Directories {
-    priv stack: ~[Path],
+    stack: Vec<Path>,
 }
 
 impl Iterator<Path> for Directories {
     fn next(&mut self) -> Option<Path> {
-        match self.stack.shift() {
+        match self.stack.pop() {
             Some(path) => {
                 if path.is_dir() {
                     match readdir(&path) {
@@ -528,10 +528,25 @@ pub fn mkdir_recursive(path: &Path, mode: FilePermission) -> IoResult<()> {
     if path.is_dir() {
         return Ok(())
     }
-    if path.filename().is_some() {
-        if_ok!(mkdir_recursive(&path.dir_path(), mode));
+
+    let mut comps = path.components();
+    let mut curpath = path.root_path().unwrap_or(Path::new("."));
+
+    for c in comps {
+        curpath.push(c);
+
+        match mkdir(&curpath, mode) {
+            Err(mkdir_err) => {
+                // already exists ?
+                if try!(stat(&curpath)).kind != io::TypeDirectory {
+                    return Err(mkdir_err);
+                }
+            }
+            Ok(()) => ()
+        }
     }
-    mkdir(path, mode)
+
+    Ok(())
 }
 
 /// Removes a directory at this path, after removing all its contents. Use
@@ -542,16 +557,47 @@ pub fn mkdir_recursive(path: &Path, mode: FilePermission) -> IoResult<()> {
 /// This function will return an `Err` value if an error happens. See
 /// `file::unlink` and `fs::readdir` for possible error conditions.
 pub fn rmdir_recursive(path: &Path) -> IoResult<()> {
-    let children = if_ok!(readdir(path));
-    for child in children.iter() {
-        if child.is_dir() {
-            if_ok!(rmdir_recursive(child));
-        } else {
-            if_ok!(unlink(child));
+    let mut rm_stack = Vec::new();
+    rm_stack.push(path.clone());
+
+    while !rm_stack.is_empty() {
+        let children = try!(readdir(rm_stack.last().unwrap()));
+        let mut has_child_dir = false;
+
+        // delete all regular files in the way and push subdirs
+        // on the stack
+        for child in children.move_iter() {
+            // FIXME(#12795) we should use lstat in all cases
+            let child_type = match cfg!(windows) {
+                true => try!(stat(&child)).kind,
+                false => try!(lstat(&child)).kind
+            };
+
+            if child_type == io::TypeDirectory {
+                rm_stack.push(child);
+                has_child_dir = true;
+            } else {
+                // we can carry on safely if the file is already gone
+                // (eg: deleted by someone else since readdir)
+                match unlink(&child) {
+                    Ok(()) => (),
+                    Err(ref e) if e.kind == io::FileNotFound => (),
+                    Err(e) => return Err(e)
+                }
+            }
+        }
+
+        // if no subdir was found, let's pop and delete
+        if !has_child_dir {
+            match rmdir(&rm_stack.pop().unwrap()) {
+                Ok(()) => (),
+                Err(ref e) if e.kind == io::FileNotFound => (),
+                Err(e) => return Err(e)
+            }
         }
     }
-    // Directory should now be empty
-    rmdir(path)
+
+    Ok(())
 }
 
 /// Changes the timestamps for a file's last modification and access time.
@@ -602,18 +648,21 @@ impl Seek for File {
 impl path::Path {
     /// Get information on the file, directory, etc at this path.
     ///
-    /// Consult the `file::stat` documentation for more info.
+    /// Consult the `fs::stat` documentation for more info.
     ///
     /// This call preserves identical runtime/error semantics with `file::stat`.
     pub fn stat(&self) -> IoResult<FileStat> { stat(self) }
 
+    /// Get information on the file, directory, etc at this path, not following
+    /// symlinks.
+    ///
+    /// Consult the `fs::lstat` documentation for more info.
+    ///
+    /// This call preserves identical runtime/error semantics with `file::lstat`.
+    pub fn lstat(&self) -> IoResult<FileStat> { lstat(self) }
+
     /// Boolean value indicator whether the underlying file exists on the local
-    /// filesystem. This will return true if the path points to either a
-    /// directory or a file.
-    ///
-    /// # Error
-    ///
-    /// Will not raise a condition
+    /// filesystem. Returns false in exactly the cases where `fs::stat` fails.
     pub fn exists(&self) -> bool {
         self.stat().is_ok()
     }
@@ -621,11 +670,7 @@ impl path::Path {
     /// Whether the underlying implementation (be it a file path, or something
     /// else) points at a "regular file" on the FS. Will return false for paths
     /// to non-existent locations or directories or other non-regular files
-    /// (named pipes, etc).
-    ///
-    /// # Error
-    ///
-    /// Will not raise a condition
+    /// (named pipes, etc). Follows links when making this determination.
     pub fn is_file(&self) -> bool {
         match self.stat() {
             Ok(s) => s.kind == io::TypeFile,
@@ -633,14 +678,11 @@ impl path::Path {
         }
     }
 
-    /// Whether the underlying implementation (be it a file path,
-    /// or something else) is pointing at a directory in the underlying FS.
-    /// Will return false for paths to non-existent locations or if the item is
-    /// not a directory (eg files, named pipes, links, etc)
-    ///
-    /// # Error
-    ///
-    /// Will not raise a condition
+    /// Whether the underlying implementation (be it a file path, or something
+    /// else) is pointing at a directory in the underlying FS. Will return
+    /// false for paths to non-existent locations or if the item is not a
+    /// directory (eg files, named pipes, etc). Follows links when making this
+    /// determination.
     pub fn is_dir(&self) -> bool {
         match self.stat() {
             Ok(s) => s.kind == io::TypeDirectory,
@@ -659,10 +701,17 @@ mod test {
     use io::fs::{File, rmdir, mkdir, readdir, rmdir_recursive,
                  mkdir_recursive, copy, unlink, stat, symlink, link,
                  readlink, chmod, lstat, change_file_times};
-    use util;
     use path::Path;
     use io;
     use ops::Drop;
+    use str::StrSlice;
+
+    macro_rules! check( ($e:expr) => (
+        match $e {
+            Ok(t) => t,
+            Err(e) => fail!("{} failed with: {}", stringify!($e), e),
+        }
+    ) )
 
     struct TempDir(Path);
 
@@ -683,7 +732,7 @@ mod test {
             // Gee, seeing how we're testing the fs module I sure hope that we
             // at least implement this correctly!
             let TempDir(ref p) = *self;
-            io::fs::rmdir_recursive(p).unwrap();
+            check!(io::fs::rmdir_recursive(p));
         }
     }
 
@@ -691,7 +740,7 @@ mod test {
         use os;
         use rand;
         let ret = os::tmpdir().join(format!("rust-{}", rand::random::<u32>()));
-        io::fs::mkdir(&ret, io::UserRWX).unwrap();
+        check!(io::fs::mkdir(&ret, io::UserRWX));
         TempDir(ret)
     }
 
@@ -701,18 +750,18 @@ mod test {
         let filename = &tmpdir.join("file_rt_io_file_test.txt");
         {
             let mut write_stream = File::open_mode(filename, Open, ReadWrite);
-            write_stream.write(message.as_bytes()).unwrap();
+            check!(write_stream.write(message.as_bytes()));
         }
         {
             let mut read_stream = File::open_mode(filename, Open, Read);
             let mut read_buf = [0, .. 1028];
-            let read_str = match read_stream.read(read_buf).unwrap() {
+            let read_str = match check!(read_stream.read(read_buf)) {
                 -1|0 => fail!("shouldn't happen"),
-                n => str::from_utf8_owned(read_buf.slice_to(n).to_owned()).unwrap()
+                n => str::from_utf8(read_buf.slice_to(n).to_owned()).unwrap().to_owned()
             };
             assert_eq!(read_str, message.to_owned());
         }
-        unlink(filename).unwrap();
+        check!(unlink(filename));
     })
 
     iotest!(fn invalid_path_raises() {
@@ -735,20 +784,20 @@ mod test {
         let filename = &tmpdir.join("file_rt_io_file_test_positional.txt");
         {
             let mut rw_stream = File::open_mode(filename, Open, ReadWrite);
-            rw_stream.write(message.as_bytes()).unwrap();
+            check!(rw_stream.write(message.as_bytes()));
         }
         {
             let mut read_stream = File::open_mode(filename, Open, Read);
             {
                 let read_buf = read_mem.mut_slice(0, 4);
-                read_stream.read(read_buf).unwrap();
+                check!(read_stream.read(read_buf));
             }
             {
                 let read_buf = read_mem.mut_slice(4, 8);
-                read_stream.read(read_buf).unwrap();
+                check!(read_stream.read(read_buf));
             }
         }
-        unlink(filename).unwrap();
+        check!(unlink(filename));
         let read_str = str::from_utf8(read_mem).unwrap();
         assert_eq!(read_str, message);
     })
@@ -763,16 +812,16 @@ mod test {
         let filename = &tmpdir.join("file_rt_io_file_test_seeking.txt");
         {
             let mut rw_stream = File::open_mode(filename, Open, ReadWrite);
-            rw_stream.write(message.as_bytes()).unwrap();
+            check!(rw_stream.write(message.as_bytes()));
         }
         {
             let mut read_stream = File::open_mode(filename, Open, Read);
-            read_stream.seek(set_cursor as i64, SeekSet).unwrap();
-            tell_pos_pre_read = read_stream.tell().unwrap();
-            read_stream.read(read_mem).unwrap();
-            tell_pos_post_read = read_stream.tell().unwrap();
+            check!(read_stream.seek(set_cursor as i64, SeekSet));
+            tell_pos_pre_read = check!(read_stream.tell());
+            check!(read_stream.read(read_mem));
+            tell_pos_post_read = check!(read_stream.tell());
         }
-        unlink(filename).unwrap();
+        check!(unlink(filename));
         let read_str = str::from_utf8(read_mem).unwrap();
         assert_eq!(read_str, message.slice(4, 8));
         assert_eq!(tell_pos_pre_read, set_cursor);
@@ -789,15 +838,15 @@ mod test {
         let filename = &tmpdir.join("file_rt_io_file_test_seek_and_write.txt");
         {
             let mut rw_stream = File::open_mode(filename, Open, ReadWrite);
-            rw_stream.write(initial_msg.as_bytes()).unwrap();
-            rw_stream.seek(seek_idx as i64, SeekSet).unwrap();
-            rw_stream.write(overwrite_msg.as_bytes()).unwrap();
+            check!(rw_stream.write(initial_msg.as_bytes()));
+            check!(rw_stream.seek(seek_idx as i64, SeekSet));
+            check!(rw_stream.write(overwrite_msg.as_bytes()));
         }
         {
             let mut read_stream = File::open_mode(filename, Open, Read);
-            read_stream.read(read_mem).unwrap();
+            check!(read_stream.read(read_mem));
         }
-        unlink(filename).unwrap();
+        check!(unlink(filename));
         let read_str = str::from_utf8(read_mem).unwrap();
         assert!(read_str == final_msg.to_owned());
     })
@@ -813,24 +862,24 @@ mod test {
         let filename = &tmpdir.join("file_rt_io_file_test_seek_shakedown.txt");
         {
             let mut rw_stream = File::open_mode(filename, Open, ReadWrite);
-            rw_stream.write(initial_msg.as_bytes()).unwrap();
+            check!(rw_stream.write(initial_msg.as_bytes()));
         }
         {
             let mut read_stream = File::open_mode(filename, Open, Read);
 
-            read_stream.seek(-4, SeekEnd).unwrap();
-            read_stream.read(read_mem).unwrap();
+            check!(read_stream.seek(-4, SeekEnd));
+            check!(read_stream.read(read_mem));
             assert_eq!(str::from_utf8(read_mem).unwrap(), chunk_three);
 
-            read_stream.seek(-9, SeekCur).unwrap();
-            read_stream.read(read_mem).unwrap();
+            check!(read_stream.seek(-9, SeekCur));
+            check!(read_stream.read(read_mem));
             assert_eq!(str::from_utf8(read_mem).unwrap(), chunk_two);
 
-            read_stream.seek(0, SeekSet).unwrap();
-            read_stream.read(read_mem).unwrap();
+            check!(read_stream.seek(0, SeekSet));
+            check!(read_stream.read(read_mem));
             assert_eq!(str::from_utf8(read_mem).unwrap(), chunk_one);
         }
-        unlink(filename).unwrap();
+        check!(unlink(filename));
     })
 
     iotest!(fn file_test_stat_is_correct_on_is_file() {
@@ -841,34 +890,38 @@ mod test {
             let msg = "hw";
             fs.write(msg.as_bytes()).unwrap();
         }
-        let stat_res = stat(filename).unwrap();
-        assert_eq!(stat_res.kind, io::TypeFile);
-        unlink(filename).unwrap();
+        let stat_res_fn = check!(stat(filename));
+        assert_eq!(stat_res_fn.kind, io::TypeFile);
+        let stat_res_meth = check!(filename.stat());
+        assert_eq!(stat_res_meth.kind, io::TypeFile);
+        check!(unlink(filename));
     })
 
     iotest!(fn file_test_stat_is_correct_on_is_dir() {
         let tmpdir = tmpdir();
         let filename = &tmpdir.join("file_stat_correct_on_is_dir");
-        mkdir(filename, io::UserRWX).unwrap();
-        let stat_res = filename.stat().unwrap();
-        assert!(stat_res.kind == io::TypeDirectory);
-        rmdir(filename).unwrap();
+        check!(mkdir(filename, io::UserRWX));
+        let stat_res_fn = check!(stat(filename));
+        assert!(stat_res_fn.kind == io::TypeDirectory);
+        let stat_res_meth = check!(filename.stat());
+        assert!(stat_res_meth.kind == io::TypeDirectory);
+        check!(rmdir(filename));
     })
 
     iotest!(fn file_test_fileinfo_false_when_checking_is_file_on_a_directory() {
         let tmpdir = tmpdir();
         let dir = &tmpdir.join("fileinfo_false_on_dir");
-        mkdir(dir, io::UserRWX).unwrap();
+        check!(mkdir(dir, io::UserRWX));
         assert!(dir.is_file() == false);
-        rmdir(dir).unwrap();
+        check!(rmdir(dir));
     })
 
     iotest!(fn file_test_fileinfo_check_exists_before_and_after_file_creation() {
         let tmpdir = tmpdir();
         let file = &tmpdir.join("fileinfo_check_exists_b_and_a.txt");
-        File::create(file).write(bytes!("foo")).unwrap();
+        check!(File::create(file).write(bytes!("foo")));
         assert!(file.exists());
-        unlink(file).unwrap();
+        check!(unlink(file));
         assert!(!file.exists());
     })
 
@@ -876,10 +929,10 @@ mod test {
         let tmpdir = tmpdir();
         let dir = &tmpdir.join("before_and_after_dir");
         assert!(!dir.exists());
-        mkdir(dir, io::UserRWX).unwrap();
+        check!(mkdir(dir, io::UserRWX));
         assert!(dir.exists());
         assert!(dir.is_dir());
-        rmdir(dir).unwrap();
+        check!(rmdir(dir));
         assert!(!dir.exists());
     })
 
@@ -887,21 +940,21 @@ mod test {
         use std::str;
         let tmpdir = tmpdir();
         let dir = &tmpdir.join("di_readdir");
-        mkdir(dir, io::UserRWX).unwrap();
+        check!(mkdir(dir, io::UserRWX));
         let prefix = "foo";
         for n in range(0,3) {
             let f = dir.join(format!("{}.txt", n));
-            let mut w = File::create(&f).unwrap();
+            let mut w = check!(File::create(&f));
             let msg_str = (prefix + n.to_str().to_owned()).to_owned();
             let msg = msg_str.as_bytes();
-            w.write(msg).unwrap();
+            check!(w.write(msg));
         }
-        let files = readdir(dir).unwrap();
+        let files = check!(readdir(dir));
         let mut mem = [0u8, .. 4];
         for f in files.iter() {
             {
                 let n = f.filestem_str();
-                File::open(f).read(mem).unwrap();
+                check!(File::open(f).read(mem));
                 let read_str = str::from_utf8(mem).unwrap();
                 let expected = match n {
                     None|Some("") => fail!("really shouldn't happen.."),
@@ -909,13 +962,65 @@ mod test {
                 };
                 assert_eq!(expected.as_slice(), read_str);
             }
-            unlink(f).unwrap();
+            check!(unlink(f));
         }
-        rmdir(dir).unwrap();
+        check!(rmdir(dir));
+    })
+
+    iotest!(fn file_test_walk_dir() {
+        let tmpdir = tmpdir();
+        let dir = &tmpdir.join("walk_dir");
+        check!(mkdir(dir, io::UserRWX));
+
+        let dir1 = &dir.join("01/02/03");
+        check!(mkdir_recursive(dir1, io::UserRWX));
+        check!(File::create(&dir1.join("04")));
+
+        let dir2 = &dir.join("11/12/13");
+        check!(mkdir_recursive(dir2, io::UserRWX));
+        check!(File::create(&dir2.join("14")));
+
+        let mut files = check!(walk_dir(dir));
+        let mut cur = [0u8, .. 2];
+        for f in files {
+            let stem = f.filestem_str().unwrap();
+            let root = stem[0] - ('0' as u8);
+            let name = stem[1] - ('0' as u8);
+            assert!(cur[root as uint] < name);
+            cur[root as uint] = name;
+        }
+
+        check!(rmdir_recursive(dir));
+    })
+
+    iotest!(fn recursive_mkdir() {
+        let tmpdir = tmpdir();
+        let dir = tmpdir.join("d1/d2");
+        check!(mkdir_recursive(&dir, io::UserRWX));
+        assert!(dir.is_dir())
     })
 
     iotest!(fn recursive_mkdir_slash() {
-        mkdir_recursive(&Path::new("/"), io::UserRWX).unwrap();
+        check!(mkdir_recursive(&Path::new("/"), io::UserRWX));
+    })
+
+    // FIXME(#12795) depends on lstat to work on windows
+    #[cfg(not(windows))]
+    iotest!(fn recursive_rmdir() {
+        let tmpdir = tmpdir();
+        let d1 = tmpdir.join("d1");
+        let dt = d1.join("t");
+        let dtt = dt.join("t");
+        let d2 = tmpdir.join("d2");
+        let canary = d2.join("do_not_delete");
+        check!(mkdir_recursive(&dtt, io::UserRWX));
+        check!(mkdir_recursive(&d2, io::UserRWX));
+        check!(File::create(&canary).write(bytes!("foo")));
+        check!(symlink(&d2, &dt.join("d2")));
+        check!(rmdir_recursive(&d1));
+
+        assert!(!d1.is_dir());
+        assert!(canary.exists());
     })
 
     iotest!(fn unicode_path_is_dir() {
@@ -926,12 +1031,12 @@ mod test {
 
         let mut dirpath = tmpdir.path().clone();
         dirpath.push(format!("test-가一ー你好"));
-        mkdir(&dirpath, io::UserRWX).unwrap();
+        check!(mkdir(&dirpath, io::UserRWX));
         assert!(dirpath.is_dir());
 
         let mut filepath = dirpath;
         filepath.push("unicode-file-\uac00\u4e00\u30fc\u4f60\u597d.rs");
-        File::create(&filepath).unwrap(); // ignore return; touch only
+        check!(File::create(&filepath)); // ignore return; touch only
         assert!(!filepath.is_dir());
         assert!(filepath.exists());
     })
@@ -943,7 +1048,7 @@ mod test {
         let tmpdir = tmpdir();
         let unicode = tmpdir.path();
         let unicode = unicode.join(format!("test-각丁ー再见"));
-        mkdir(&unicode, io::UserRWX).unwrap();
+        check!(mkdir(&unicode, io::UserRWX));
         assert!(unicode.exists());
         assert!(!Path::new("test/unicode-bogus-path-각丁ー再见").exists());
     })
@@ -965,19 +1070,19 @@ mod test {
         let input = tmpdir.join("in.txt");
         let out = tmpdir.join("out.txt");
 
-        File::create(&input).write(bytes!("hello")).unwrap();
-        copy(&input, &out).unwrap();
-        let contents = File::open(&out).read_to_end().unwrap();
+        check!(File::create(&input).write(bytes!("hello")));
+        check!(copy(&input, &out));
+        let contents = check!(File::open(&out).read_to_end());
         assert_eq!(contents.as_slice(), bytes!("hello"));
 
-        assert_eq!(input.stat().unwrap().perm, out.stat().unwrap().perm);
+        assert_eq!(check!(input.stat()).perm, check!(out.stat()).perm);
     })
 
     iotest!(fn copy_file_dst_dir() {
         let tmpdir = tmpdir();
         let out = tmpdir.join("out");
 
-        File::create(&out).unwrap();
+        check!(File::create(&out));
         match copy(&out, tmpdir.path()) {
             Ok(..) => fail!(), Err(..) => {}
         }
@@ -988,12 +1093,12 @@ mod test {
         let input = tmpdir.join("in");
         let output = tmpdir.join("out");
 
-        File::create(&input).write("foo".as_bytes()).unwrap();
-        File::create(&output).write("bar".as_bytes()).unwrap();
-        copy(&input, &output).unwrap();
+        check!(File::create(&input).write("foo".as_bytes()));
+        check!(File::create(&output).write("bar".as_bytes()));
+        check!(copy(&input, &output));
 
-        assert_eq!(File::open(&output).read_to_end().unwrap(),
-                   (bytes!("foo")).to_owned());
+        assert_eq!(check!(File::open(&output).read_to_end()),
+                   (Vec::from_slice(bytes!("foo"))));
     })
 
     iotest!(fn copy_file_src_dir() {
@@ -1011,13 +1116,13 @@ mod test {
         let input = tmpdir.join("in.txt");
         let out = tmpdir.join("out.txt");
 
-        File::create(&input).unwrap();
-        chmod(&input, io::UserRead).unwrap();
-        copy(&input, &out).unwrap();
-        assert!(out.stat().unwrap().perm & io::UserWrite == 0);
+        check!(File::create(&input));
+        check!(chmod(&input, io::UserRead));
+        check!(copy(&input, &out));
+        assert!(check!(out.stat()).perm & io::UserWrite == 0);
 
-        chmod(&input, io::UserFile).unwrap();
-        chmod(&out, io::UserFile).unwrap();
+        check!(chmod(&input, io::UserFile));
+        check!(chmod(&out, io::UserFile));
     })
 
     #[cfg(not(windows))] // FIXME(#10264) operation not permitted?
@@ -1026,22 +1131,23 @@ mod test {
         let input = tmpdir.join("in.txt");
         let out = tmpdir.join("out.txt");
 
-        File::create(&input).write("foobar".as_bytes()).unwrap();
-        symlink(&input, &out).unwrap();
+        check!(File::create(&input).write("foobar".as_bytes()));
+        check!(symlink(&input, &out));
         if cfg!(not(windows)) {
-            assert_eq!(lstat(&out).unwrap().kind, io::TypeSymlink);
+            assert_eq!(check!(lstat(&out)).kind, io::TypeSymlink);
+            assert_eq!(check!(out.lstat()).kind, io::TypeSymlink);
         }
-        assert_eq!(stat(&out).unwrap().size, stat(&input).unwrap().size);
-        assert_eq!(File::open(&out).read_to_end().unwrap(),
-                   (bytes!("foobar")).to_owned());
+        assert_eq!(check!(stat(&out)).size, check!(stat(&input)).size);
+        assert_eq!(check!(File::open(&out).read_to_end()),
+                   (Vec::from_slice(bytes!("foobar"))));
     })
 
     #[cfg(not(windows))] // apparently windows doesn't like symlinks
     iotest!(fn symlink_noexist() {
         let tmpdir = tmpdir();
         // symlinks can point to things that don't exist
-        symlink(&tmpdir.join("foo"), &tmpdir.join("bar")).unwrap();
-        assert!(readlink(&tmpdir.join("bar")).unwrap() == tmpdir.join("foo"));
+        check!(symlink(&tmpdir.join("foo"), &tmpdir.join("bar")));
+        assert!(check!(readlink(&tmpdir.join("bar"))) == tmpdir.join("foo"));
     })
 
     iotest!(fn readlink_not_symlink() {
@@ -1057,15 +1163,18 @@ mod test {
         let input = tmpdir.join("in.txt");
         let out = tmpdir.join("out.txt");
 
-        File::create(&input).write("foobar".as_bytes()).unwrap();
-        link(&input, &out).unwrap();
+        check!(File::create(&input).write("foobar".as_bytes()));
+        check!(link(&input, &out));
         if cfg!(not(windows)) {
-            assert_eq!(lstat(&out).unwrap().kind, io::TypeFile);
-            assert_eq!(stat(&out).unwrap().unstable.nlink, 2);
+            assert_eq!(check!(lstat(&out)).kind, io::TypeFile);
+            assert_eq!(check!(out.lstat()).kind, io::TypeFile);
+            assert_eq!(check!(stat(&out)).unstable.nlink, 2);
+            assert_eq!(check!(out.stat()).unstable.nlink, 2);
         }
-        assert_eq!(stat(&out).unwrap().size, stat(&input).unwrap().size);
-        assert_eq!(File::open(&out).read_to_end().unwrap(),
-                   (bytes!("foobar")).to_owned());
+        assert_eq!(check!(stat(&out)).size, check!(stat(&input)).size);
+        assert_eq!(check!(stat(&out)).size, check!(input.stat()).size);
+        assert_eq!(check!(File::open(&out).read_to_end()),
+                   (Vec::from_slice(bytes!("foobar"))));
 
         // can't link to yourself
         match link(&input, &input) {
@@ -1083,29 +1192,29 @@ mod test {
         let tmpdir = tmpdir();
         let file = tmpdir.join("in.txt");
 
-        File::create(&file).unwrap();
-        assert!(stat(&file).unwrap().perm & io::UserWrite == io::UserWrite);
-        chmod(&file, io::UserRead).unwrap();
-        assert!(stat(&file).unwrap().perm & io::UserWrite == 0);
+        check!(File::create(&file));
+        assert!(check!(stat(&file)).perm & io::UserWrite == io::UserWrite);
+        check!(chmod(&file, io::UserRead));
+        assert!(check!(stat(&file)).perm & io::UserWrite == 0);
 
         match chmod(&tmpdir.join("foo"), io::UserRWX) {
             Ok(..) => fail!("wanted a failure"),
             Err(..) => {}
         }
 
-        chmod(&file, io::UserFile).unwrap();
+        check!(chmod(&file, io::UserFile));
     })
 
     iotest!(fn sync_doesnt_kill_anything() {
         let tmpdir = tmpdir();
         let path = tmpdir.join("in.txt");
 
-        let mut file = File::open_mode(&path, io::Open, io::ReadWrite).unwrap();
-        file.fsync().unwrap();
-        file.datasync().unwrap();
-        file.write(bytes!("foo")).unwrap();
-        file.fsync().unwrap();
-        file.datasync().unwrap();
+        let mut file = check!(File::open_mode(&path, io::Open, io::ReadWrite));
+        check!(file.fsync());
+        check!(file.datasync());
+        check!(file.write(bytes!("foo")));
+        check!(file.fsync());
+        check!(file.datasync());
         drop(file);
     })
 
@@ -1113,30 +1222,30 @@ mod test {
         let tmpdir = tmpdir();
         let path = tmpdir.join("in.txt");
 
-        let mut file = File::open_mode(&path, io::Open, io::ReadWrite).unwrap();
-        file.write(bytes!("foo")).unwrap();
-        file.fsync().unwrap();
+        let mut file = check!(File::open_mode(&path, io::Open, io::ReadWrite));
+        check!(file.write(bytes!("foo")));
+        check!(file.fsync());
 
         // Do some simple things with truncation
-        assert_eq!(stat(&path).unwrap().size, 3);
-        file.truncate(10).unwrap();
-        assert_eq!(stat(&path).unwrap().size, 10);
-        file.write(bytes!("bar")).unwrap();
-        file.fsync().unwrap();
-        assert_eq!(stat(&path).unwrap().size, 10);
-        assert_eq!(File::open(&path).read_to_end().unwrap(),
-                   (bytes!("foobar", 0, 0, 0, 0)).to_owned());
+        assert_eq!(check!(stat(&path)).size, 3);
+        check!(file.truncate(10));
+        assert_eq!(check!(stat(&path)).size, 10);
+        check!(file.write(bytes!("bar")));
+        check!(file.fsync());
+        assert_eq!(check!(stat(&path)).size, 10);
+        assert_eq!(check!(File::open(&path).read_to_end()),
+                   (Vec::from_slice(bytes!("foobar", 0, 0, 0, 0))));
 
         // Truncate to a smaller length, don't seek, and then write something.
         // Ensure that the intermediate zeroes are all filled in (we're seeked
         // past the end of the file).
-        file.truncate(2).unwrap();
-        assert_eq!(stat(&path).unwrap().size, 2);
-        file.write(bytes!("wut")).unwrap();
-        file.fsync().unwrap();
-        assert_eq!(stat(&path).unwrap().size, 9);
-        assert_eq!(File::open(&path).read_to_end().unwrap(),
-                   (bytes!("fo", 0, 0, 0, 0, "wut")).to_owned());
+        check!(file.truncate(2));
+        assert_eq!(check!(stat(&path)).size, 2);
+        check!(file.write(bytes!("wut")));
+        check!(file.fsync());
+        assert_eq!(check!(stat(&path)).size, 9);
+        assert_eq!(check!(File::open(&path).read_to_end()),
+                   (Vec::from_slice(bytes!("fo", 0, 0, 0, 0, "wut"))));
         drop(file);
     })
 
@@ -1146,46 +1255,49 @@ mod test {
         match File::open_mode(&tmpdir.join("a"), io::Open, io::Read) {
             Ok(..) => fail!(), Err(..) => {}
         }
-        File::open_mode(&tmpdir.join("b"), io::Open, io::Write).unwrap();
-        File::open_mode(&tmpdir.join("c"), io::Open, io::ReadWrite).unwrap();
-        File::open_mode(&tmpdir.join("d"), io::Append, io::Write).unwrap();
-        File::open_mode(&tmpdir.join("e"), io::Append, io::ReadWrite).unwrap();
-        File::open_mode(&tmpdir.join("f"), io::Truncate, io::Write).unwrap();
-        File::open_mode(&tmpdir.join("g"), io::Truncate, io::ReadWrite).unwrap();
+        check!(File::open_mode(&tmpdir.join("b"), io::Open, io::Write));
+        check!(File::open_mode(&tmpdir.join("c"), io::Open, io::ReadWrite));
+        check!(File::open_mode(&tmpdir.join("d"), io::Append, io::Write));
+        check!(File::open_mode(&tmpdir.join("e"), io::Append, io::ReadWrite));
+        check!(File::open_mode(&tmpdir.join("f"), io::Truncate, io::Write));
+        check!(File::open_mode(&tmpdir.join("g"), io::Truncate, io::ReadWrite));
 
-        File::create(&tmpdir.join("h")).write("foo".as_bytes()).unwrap();
-        File::open_mode(&tmpdir.join("h"), io::Open, io::Read).unwrap();
+        check!(File::create(&tmpdir.join("h")).write("foo".as_bytes()));
+        check!(File::open_mode(&tmpdir.join("h"), io::Open, io::Read));
         {
-            let mut f = File::open_mode(&tmpdir.join("h"), io::Open,
-                                        io::Read).unwrap();
+            let mut f = check!(File::open_mode(&tmpdir.join("h"), io::Open,
+                                               io::Read));
             match f.write("wut".as_bytes()) {
                 Ok(..) => fail!(), Err(..) => {}
             }
         }
-        assert_eq!(stat(&tmpdir.join("h")).unwrap().size, 3);
+        assert!(check!(stat(&tmpdir.join("h"))).size == 3,
+                "write/stat failed");
         {
-            let mut f = File::open_mode(&tmpdir.join("h"), io::Append,
-                                        io::Write).unwrap();
-            f.write("bar".as_bytes()).unwrap();
+            let mut f = check!(File::open_mode(&tmpdir.join("h"), io::Append,
+                                               io::Write));
+            check!(f.write("bar".as_bytes()));
         }
-        assert_eq!(stat(&tmpdir.join("h")).unwrap().size, 6);
+        assert!(check!(stat(&tmpdir.join("h"))).size == 6,
+                "append didn't append");
         {
-            let mut f = File::open_mode(&tmpdir.join("h"), io::Truncate,
-                                        io::Write).unwrap();
-            f.write("bar".as_bytes()).unwrap();
+            let mut f = check!(File::open_mode(&tmpdir.join("h"), io::Truncate,
+                                               io::Write));
+            check!(f.write("bar".as_bytes()));
         }
-        assert_eq!(stat(&tmpdir.join("h")).unwrap().size, 3);
+        assert!(check!(stat(&tmpdir.join("h"))).size == 3,
+                "truncate didn't truncate");
     })
 
     #[test]
     fn utime() {
         let tmpdir = tmpdir();
         let path = tmpdir.join("a");
-        File::create(&path).unwrap();
+        check!(File::create(&path));
 
-        change_file_times(&path, 1000, 2000).unwrap();
-        assert_eq!(path.stat().unwrap().accessed, 1000);
-        assert_eq!(path.stat().unwrap().modified, 2000);
+        check!(change_file_times(&path, 1000, 2000));
+        assert_eq!(check!(path.stat()).accessed, 1000);
+        assert_eq!(check!(path.stat()).modified, 2000);
     }
 
     #[test]
@@ -1197,4 +1309,17 @@ mod test {
             Err(..) => {}
         }
     }
+
+    iotest!(fn binary_file() {
+        use rand::{StdRng, Rng};
+
+        let mut bytes = [0, ..1024];
+        StdRng::new().unwrap().fill_bytes(bytes);
+
+        let tmpdir = tmpdir();
+
+        check!(File::create(&tmpdir.join("test")).write(bytes));
+        let actual = check!(File::open(&tmpdir.join("test")).read_to_end());
+        assert!(actual.as_slice() == bytes);
+    })
 }

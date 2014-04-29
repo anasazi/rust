@@ -9,7 +9,7 @@
 // except according to those terms.
 
 use std::cast;
-use std::libc::{c_int, c_void};
+use libc::c_void;
 
 use uvll;
 use super::{Loop, UvHandle};
@@ -19,11 +19,11 @@ pub struct IdleWatcher {
     handle: *uvll::uv_idle_t,
     idle_flag: bool,
     closed: bool,
-    callback: ~Callback,
+    callback: ~Callback:Send,
 }
 
 impl IdleWatcher {
-    pub fn new(loop_: &mut Loop, cb: ~Callback) -> ~IdleWatcher {
+    pub fn new(loop_: &mut Loop, cb: ~Callback:Send) -> ~IdleWatcher {
         let handle = UvHandle::alloc(None::<IdleWatcher>, uvll::UV_IDLE);
         assert_eq!(unsafe {
             uvll::uv_idle_init(loop_.handle, handle)
@@ -46,8 +46,7 @@ impl IdleWatcher {
             assert_eq!(uvll::uv_idle_start(handle, onetime_cb), 0)
         }
 
-        extern fn onetime_cb(handle: *uvll::uv_idle_t, status: c_int) {
-            assert_eq!(status, 0);
+        extern fn onetime_cb(handle: *uvll::uv_idle_t) {
             unsafe {
                 let data = uvll::get_data_for_uv_handle(handle);
                 let f: ~proc() = cast::transmute(data);
@@ -82,8 +81,7 @@ impl UvHandle<uvll::uv_idle_t> for IdleWatcher {
     fn uv_handle(&self) -> *uvll::uv_idle_t { self.handle }
 }
 
-extern fn idle_cb(handle: *uvll::uv_idle_t, status: c_int) {
-    assert_eq!(status, 0);
+extern fn idle_cb(handle: *uvll::uv_idle_t) {
     let idle: &mut IdleWatcher = unsafe { UvHandle::from_uv_handle(&handle) };
     idle.callback.call();
 }
@@ -113,11 +111,13 @@ mod test {
         fn call(&mut self) {
             let task = match *self {
                 MyCallback(ref rc, n) => {
-                    let mut slot = rc.borrow().borrow_mut();
-                    match *slot.get() {
+                    match *rc.borrow_mut().deref_mut() {
                         (ref mut task, ref mut val) => {
                             *val = n;
-                            task.take_unwrap()
+                            match task.take() {
+                                Some(t) => t,
+                                None => return
+                            }
                         }
                     }
                 }
@@ -137,8 +137,7 @@ mod test {
     fn sleep(chan: &Chan) -> uint {
         let task: ~Task = Local::take();
         task.deschedule(1, |task| {
-            let mut slot = chan.borrow().borrow_mut();
-            match *slot.get() {
+            match *chan.borrow_mut().deref_mut() {
                 (ref mut slot, _) => {
                     assert!(slot.is_none());
                     *slot = Some(task);
@@ -147,8 +146,7 @@ mod test {
             Ok(())
         });
 
-        let slot = chan.borrow().borrow();
-        match *slot.get() { (_, n) => n }
+        match *chan.borrow() { (_, n) => n }
     }
 
     #[test]
@@ -165,6 +163,18 @@ mod test {
 
     #[test] #[should_fail]
     fn smoke_fail() {
+        // By default, the test harness is capturing our stderr output through a
+        // channel. This means that when we start failing and "print" our error
+        // message, we could be switched to running on another test. The
+        // IdleWatcher assumes that we're already running on the same task, so
+        // it can cause serious problems and internal race conditions.
+        //
+        // To fix this bug, we just set our stderr to a null writer which will
+        // never reschedule us, so we're guaranteed to stay on the same
+        // task/event loop.
+        use std::io;
+        drop(io::stdio::set_stderr(~io::util::NullWriter));
+
         let (mut idle, _chan) = mk(1);
         idle.resume();
         fail!();

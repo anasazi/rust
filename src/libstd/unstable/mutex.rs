@@ -8,83 +8,253 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! A native mutex and condition variable type
+//! A native mutex and condition variable type.
 //!
 //! This module contains bindings to the platform's native mutex/condition
-//! variable primitives. It provides a single type, `Mutex`, which can be
-//! statically initialized via the `MUTEX_INIT` value. This object serves as both a
-//! mutex and a condition variable simultaneously.
+//! variable primitives. It provides two types: `StaticNativeMutex`, which can
+//! be statically initialized via the `NATIVE_MUTEX_INIT` value, and a simple
+//! wrapper `NativeMutex` that has a destructor to clean up after itself. These
+//! objects serve as both mutexes and condition variables simultaneously.
 //!
-//! The lock is lazily initialized, but it can only be unsafely destroyed. A
-//! statically initialized lock doesn't necessarily have a time at which it can
-//! get deallocated. For this reason, there is no `Drop` implementation of the
-//! mutex, but rather the `destroy()` method must be invoked manually if
-//! destruction of the mutex is desired.
+//! The static lock is lazily initialized, but it can only be unsafely
+//! destroyed. A statically initialized lock doesn't necessarily have a time at
+//! which it can get deallocated. For this reason, there is no `Drop`
+//! implementation of the static mutex, but rather the `destroy()` method must
+//! be invoked manually if destruction of the mutex is desired.
 //!
-//! It is not recommended to use this type for idiomatic rust use. This type is
-//! appropriate where no other options are available, but other rust concurrency
-//! primitives should be used before this type.
+//! The non-static `NativeMutex` type does have a destructor, but cannot be
+//! statically initialized.
+//!
+//! It is not recommended to use this type for idiomatic rust use. These types
+//! are appropriate where no other options are available, but other rust
+//! concurrency primitives should be used before them: the `sync` crate defines
+//! `StaticMutex` and `Mutex` types.
 //!
 //! # Example
 //!
-//!     use std::unstable::mutex::{Mutex, MUTEX_INIT};
+//! ```rust
+//! use std::unstable::mutex::{NativeMutex, StaticNativeMutex, NATIVE_MUTEX_INIT};
 //!
-//!     // Use a statically initialized mutex
-//!     static mut lock: Mutex = MUTEX_INIT;
+//! // Use a statically initialized mutex
+//! static mut LOCK: StaticNativeMutex = NATIVE_MUTEX_INIT;
 //!
-//!     unsafe {
-//!         lock.lock();
-//!         lock.unlock();
-//!     }
+//! unsafe {
+//!     let _guard = LOCK.lock();
+//! } // automatically unlocked here
 //!
-//!     // Use a normally initialized mutex
-//!     let mut lock = Mutex::new();
-//!     unsafe {
-//!         lock.lock();
-//!         lock.unlock();
-//!         lock.destroy();
-//!     }
+//! // Use a normally initialized mutex
+//! unsafe {
+//!     let mut lock = NativeMutex::new();
+//!
+//!     {
+//!         let _guard = lock.lock();
+//!     } // unlocked here
+//!
+//!     // sometimes the RAII guard isn't appropriate
+//!     lock.lock_noguard();
+//!     lock.unlock_noguard();
+//! } // `lock` is deallocated here
+//! ```
 
-#[allow(non_camel_case_types)];
+#![allow(non_camel_case_types)]
 
-pub struct Mutex {
-    priv inner: imp::Mutex,
+use option::{Option, None, Some};
+use ops::Drop;
+
+/// A native mutex suitable for storing in statics (that is, it has
+/// the `destroy` method rather than a destructor).
+///
+/// Prefer the `NativeMutex` type where possible, since that does not
+/// require manual deallocation.
+pub struct StaticNativeMutex {
+    inner: imp::Mutex,
 }
 
-pub static MUTEX_INIT: Mutex = Mutex {
+/// A native mutex with a destructor for clean-up.
+///
+/// See `StaticNativeMutex` for a version that is suitable for storing in
+/// statics.
+pub struct NativeMutex {
+    inner: StaticNativeMutex
+}
+
+/// Automatically unlocks the mutex that it was created from on
+/// destruction.
+///
+/// Using this makes lock-based code resilient to unwinding/task
+/// failure, because the lock will be automatically unlocked even
+/// then.
+#[must_use]
+pub struct LockGuard<'a> {
+    lock: &'a StaticNativeMutex
+}
+
+pub static NATIVE_MUTEX_INIT: StaticNativeMutex = StaticNativeMutex {
     inner: imp::MUTEX_INIT,
 };
 
-impl Mutex {
-    /// Creates a new mutex
-    pub unsafe fn new() -> Mutex {
-        Mutex { inner: imp::Mutex::new() }
+impl StaticNativeMutex {
+    /// Creates a new mutex.
+    ///
+    /// Note that a mutex created in this way needs to be explicit
+    /// freed with a call to `destroy` or it will leak.
+    pub unsafe fn new() -> StaticNativeMutex {
+        StaticNativeMutex { inner: imp::Mutex::new() }
     }
 
     /// Acquires this lock. This assumes that the current thread does not
     /// already hold the lock.
-    pub unsafe fn lock(&mut self) { self.inner.lock() }
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::unstable::mutex::{StaticNativeMutex, NATIVE_MUTEX_INIT};
+    /// static mut LOCK: StaticNativeMutex = NATIVE_MUTEX_INIT;
+    /// unsafe {
+    ///     let _guard = LOCK.lock();
+    ///     // critical section...
+    /// } // automatically unlocked in `_guard`'s destructor
+    /// ```
+    pub unsafe fn lock<'a>(&'a self) -> LockGuard<'a> {
+        self.inner.lock();
 
-    /// Attempts to acquire the lock. The value returned is whether the lock was
-    /// acquired or not
-    pub unsafe fn trylock(&mut self) -> bool { self.inner.trylock() }
+        LockGuard { lock: self }
+    }
+
+    /// Attempts to acquire the lock. The value returned is `Some` if
+    /// the attempt succeeded.
+    pub unsafe fn trylock<'a>(&'a self) -> Option<LockGuard<'a>> {
+        if self.inner.trylock() {
+            Some(LockGuard { lock: self })
+        } else {
+            None
+        }
+    }
+
+    /// Acquire the lock without creating a `LockGuard`.
+    ///
+    /// These needs to be paired with a call to `.unlock_noguard`. Prefer using
+    /// `.lock`.
+    pub unsafe fn lock_noguard(&self) { self.inner.lock() }
+
+    /// Attempts to acquire the lock without creating a
+    /// `LockGuard`. The value returned is whether the lock was
+    /// acquired or not.
+    ///
+    /// If `true` is returned, this needs to be paired with a call to
+    /// `.unlock_noguard`. Prefer using `.trylock`.
+    pub unsafe fn trylock_noguard(&self) -> bool {
+        self.inner.trylock()
+    }
 
     /// Unlocks the lock. This assumes that the current thread already holds the
     /// lock.
-    pub unsafe fn unlock(&mut self) { self.inner.unlock() }
+    pub unsafe fn unlock_noguard(&self) { self.inner.unlock() }
 
     /// Block on the internal condition variable.
     ///
-    /// This function assumes that the lock is already held
-    pub unsafe fn wait(&mut self) { self.inner.wait() }
+    /// This function assumes that the lock is already held. Prefer
+    /// using `LockGuard.wait` since that guarantees that the lock is
+    /// held.
+    pub unsafe fn wait_noguard(&self) { self.inner.wait() }
 
     /// Signals a thread in `wait` to wake up
-    pub unsafe fn signal(&mut self) { self.inner.signal() }
+    pub unsafe fn signal_noguard(&self) { self.inner.signal() }
 
     /// This function is especially unsafe because there are no guarantees made
     /// that no other thread is currently holding the lock or waiting on the
     /// condition variable contained inside.
-    pub unsafe fn destroy(&mut self) { self.inner.destroy() }
+    pub unsafe fn destroy(&self) { self.inner.destroy() }
+}
+
+impl NativeMutex {
+    /// Creates a new mutex.
+    ///
+    /// The user must be careful to ensure the mutex is not locked when its is
+    /// being destroyed.
+    pub unsafe fn new() -> NativeMutex {
+        NativeMutex { inner: StaticNativeMutex::new() }
+    }
+
+    /// Acquires this lock. This assumes that the current thread does not
+    /// already hold the lock.
+    ///
+    /// # Example
+    /// ```rust
+    /// use std::unstable::mutex::NativeMutex;
+    /// unsafe {
+    ///     let mut lock = NativeMutex::new();
+    ///
+    ///     {
+    ///         let _guard = lock.lock();
+    ///         // critical section...
+    ///     } // automatically unlocked in `_guard`'s destructor
+    /// }
+    /// ```
+    pub unsafe fn lock<'a>(&'a self) -> LockGuard<'a> {
+        self.inner.lock()
+    }
+
+    /// Attempts to acquire the lock. The value returned is `Some` if
+    /// the attempt succeeded.
+    pub unsafe fn trylock<'a>(&'a self) -> Option<LockGuard<'a>> {
+        self.inner.trylock()
+    }
+
+    /// Acquire the lock without creating a `LockGuard`.
+    ///
+    /// These needs to be paired with a call to `.unlock_noguard`. Prefer using
+    /// `.lock`.
+    pub unsafe fn lock_noguard(&self) { self.inner.lock_noguard() }
+
+    /// Attempts to acquire the lock without creating a
+    /// `LockGuard`. The value returned is whether the lock was
+    /// acquired or not.
+    ///
+    /// If `true` is returned, this needs to be paired with a call to
+    /// `.unlock_noguard`. Prefer using `.trylock`.
+    pub unsafe fn trylock_noguard(&self) -> bool {
+        self.inner.trylock_noguard()
+    }
+
+    /// Unlocks the lock. This assumes that the current thread already holds the
+    /// lock.
+    pub unsafe fn unlock_noguard(&self) { self.inner.unlock_noguard() }
+
+    /// Block on the internal condition variable.
+    ///
+    /// This function assumes that the lock is already held. Prefer
+    /// using `LockGuard.wait` since that guarantees that the lock is
+    /// held.
+    pub unsafe fn wait_noguard(&self) { self.inner.wait_noguard() }
+
+    /// Signals a thread in `wait` to wake up
+    pub unsafe fn signal_noguard(&self) { self.inner.signal_noguard() }
+}
+
+impl Drop for NativeMutex {
+    fn drop(&mut self) {
+        unsafe {self.inner.destroy()}
+    }
+}
+
+impl<'a> LockGuard<'a> {
+    /// Block on the internal condition variable.
+    pub unsafe fn wait(&self) {
+        self.lock.wait_noguard()
+    }
+
+    /// Signals a thread in `wait` to wake up.
+    pub unsafe fn signal(&self) {
+        self.lock.signal_noguard()
+    }
+}
+
+#[unsafe_destructor]
+impl<'a> Drop for LockGuard<'a> {
+    fn drop(&mut self) {
+        unsafe {self.lock.unlock_noguard()}
+    }
 }
 
 #[cfg(unix)]
@@ -92,7 +262,9 @@ mod imp {
     use libc;
     use self::os::{PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER,
                    pthread_mutex_t, pthread_cond_t};
-    use unstable::intrinsics;
+    use mem;
+    use ty::Unsafe;
+    use kinds::marker;
 
     type pthread_mutexattr_t = libc::c_void;
     type pthread_condattr_t = libc::c_void;
@@ -153,13 +325,21 @@ mod imp {
         static __SIZEOF_PTHREAD_MUTEX_T: uint = 40 - 8;
         #[cfg(target_arch = "x86")]
         static __SIZEOF_PTHREAD_MUTEX_T: uint = 24 - 8;
+        #[cfg(target_arch = "arm")]
+        static __SIZEOF_PTHREAD_MUTEX_T: uint = 24 - 8;
+        #[cfg(target_arch = "mips")]
+        static __SIZEOF_PTHREAD_MUTEX_T: uint = 24 - 8;
         #[cfg(target_arch = "x86_64")]
         static __SIZEOF_PTHREAD_COND_T: uint = 48 - 8;
         #[cfg(target_arch = "x86")]
         static __SIZEOF_PTHREAD_COND_T: uint = 48 - 8;
+        #[cfg(target_arch = "arm")]
+        static __SIZEOF_PTHREAD_COND_T: uint = 48 - 8;
+        #[cfg(target_arch = "mips")]
+        static __SIZEOF_PTHREAD_COND_T: uint = 48 - 8;
 
         pub struct pthread_mutex_t {
-            __align: libc::c_long,
+            __align: libc::c_longlong,
             size: [u8, ..__SIZEOF_PTHREAD_MUTEX_T],
         }
         pub struct pthread_cond_t {
@@ -192,40 +372,46 @@ mod imp {
     }
 
     pub struct Mutex {
-        priv lock: pthread_mutex_t,
-        priv cond: pthread_cond_t,
+        lock: Unsafe<pthread_mutex_t>,
+        cond: Unsafe<pthread_cond_t>,
     }
 
     pub static MUTEX_INIT: Mutex = Mutex {
-        lock: PTHREAD_MUTEX_INITIALIZER,
-        cond: PTHREAD_COND_INITIALIZER,
+        lock: Unsafe {
+            value: PTHREAD_MUTEX_INITIALIZER,
+            marker1: marker::InvariantType,
+        },
+        cond: Unsafe {
+            value: PTHREAD_COND_INITIALIZER,
+            marker1: marker::InvariantType,
+        },
     };
 
     impl Mutex {
         pub unsafe fn new() -> Mutex {
-            let mut m = Mutex {
-                lock: intrinsics::init(),
-                cond: intrinsics::init(),
+            let m = Mutex {
+                lock: Unsafe::new(mem::init()),
+                cond: Unsafe::new(mem::init()),
             };
 
-            pthread_mutex_init(&mut m.lock, 0 as *libc::c_void);
-            pthread_cond_init(&mut m.cond, 0 as *libc::c_void);
+            pthread_mutex_init(m.lock.get(), 0 as *libc::c_void);
+            pthread_cond_init(m.cond.get(), 0 as *libc::c_void);
 
             return m;
         }
 
-        pub unsafe fn lock(&mut self) { pthread_mutex_lock(&mut self.lock); }
-        pub unsafe fn unlock(&mut self) { pthread_mutex_unlock(&mut self.lock); }
-        pub unsafe fn signal(&mut self) { pthread_cond_signal(&mut self.cond); }
-        pub unsafe fn wait(&mut self) {
-            pthread_cond_wait(&mut self.cond, &mut self.lock);
+        pub unsafe fn lock(&self) { pthread_mutex_lock(self.lock.get()); }
+        pub unsafe fn unlock(&self) { pthread_mutex_unlock(self.lock.get()); }
+        pub unsafe fn signal(&self) { pthread_cond_signal(self.cond.get()); }
+        pub unsafe fn wait(&self) {
+            pthread_cond_wait(self.cond.get(), self.lock.get());
         }
-        pub unsafe fn trylock(&mut self) -> bool {
-            pthread_mutex_trylock(&mut self.lock) == 0
+        pub unsafe fn trylock(&self) -> bool {
+            pthread_mutex_trylock(self.lock.get()) == 0
         }
-        pub unsafe fn destroy(&mut self) {
-            pthread_mutex_destroy(&mut self.lock);
-            pthread_cond_destroy(&mut self.cond);
+        pub unsafe fn destroy(&self) {
+            pthread_mutex_destroy(self.lock.get());
+            pthread_cond_destroy(self.cond.get());
         }
     }
 
@@ -258,11 +444,13 @@ mod imp {
     static SPIN_COUNT: DWORD = 4000;
     #[cfg(target_arch = "x86")]
     static CRIT_SECTION_SIZE: uint = 24;
+    #[cfg(target_arch = "x86_64")]
+    static CRIT_SECTION_SIZE: uint = 40;
 
     pub struct Mutex {
         // pointers for the lock/cond handles, atomically updated
-        priv lock: atomics::AtomicUint,
-        priv cond: atomics::AtomicUint,
+        lock: atomics::AtomicUint,
+        cond: atomics::AtomicUint,
     }
 
     pub static MUTEX_INIT: Mutex = Mutex {
@@ -277,37 +465,37 @@ mod imp {
                 cond: atomics::AtomicUint::new(init_cond()),
             }
         }
-        pub unsafe fn lock(&mut self) {
+        pub unsafe fn lock(&self) {
             EnterCriticalSection(self.getlock() as LPCRITICAL_SECTION)
         }
-        pub unsafe fn trylock(&mut self) -> bool {
+        pub unsafe fn trylock(&self) -> bool {
             TryEnterCriticalSection(self.getlock() as LPCRITICAL_SECTION) != 0
         }
-        pub unsafe fn unlock(&mut self) {
+        pub unsafe fn unlock(&self) {
             LeaveCriticalSection(self.getlock() as LPCRITICAL_SECTION)
         }
 
-        pub unsafe fn wait(&mut self) {
+        pub unsafe fn wait(&self) {
             self.unlock();
             WaitForSingleObject(self.getcond() as HANDLE, libc::INFINITE);
             self.lock();
         }
 
-        pub unsafe fn signal(&mut self) {
+        pub unsafe fn signal(&self) {
             assert!(SetEvent(self.getcond() as HANDLE) != 0);
         }
 
         /// This function is especially unsafe because there are no guarantees made
         /// that no other thread is currently holding the lock or waiting on the
         /// condition variable contained inside.
-        pub unsafe fn destroy(&mut self) {
+        pub unsafe fn destroy(&self) {
             let lock = self.lock.swap(0, atomics::SeqCst);
             let cond = self.cond.swap(0, atomics::SeqCst);
             if lock != 0 { free_lock(lock) }
             if cond != 0 { free_cond(cond) }
         }
 
-        unsafe fn getlock(&mut self) -> *mut c_void {
+        unsafe fn getlock(&self) -> *mut c_void {
             match self.lock.load(atomics::SeqCst) {
                 0 => {}
                 n => return n as *mut c_void
@@ -321,7 +509,7 @@ mod imp {
             return self.lock.load(atomics::SeqCst) as *mut c_void;
         }
 
-        unsafe fn getcond(&mut self) -> *mut c_void {
+        unsafe fn getcond(&self) -> *mut c_void {
             match self.cond.load(atomics::SeqCst) {
                 0 => {}
                 n => return n as *mut c_void
@@ -378,31 +566,56 @@ mod imp {
 mod test {
     use prelude::*;
 
-    use super::{Mutex, MUTEX_INIT};
+    use mem::drop;
+    use super::{StaticNativeMutex, NATIVE_MUTEX_INIT};
     use rt::thread::Thread;
-    use task;
 
     #[test]
-    fn somke_lock() {
-        static mut lock: Mutex = MUTEX_INIT;
+    fn smoke_lock() {
+        static mut lock: StaticNativeMutex = NATIVE_MUTEX_INIT;
         unsafe {
-            lock.lock();
-            lock.unlock();
+            let _guard = lock.lock();
         }
     }
 
     #[test]
-    fn somke_cond() {
-        static mut lock: Mutex = MUTEX_INIT;
+    fn smoke_cond() {
+        static mut lock: StaticNativeMutex = NATIVE_MUTEX_INIT;
         unsafe {
-            lock.lock();
+            let guard = lock.lock();
             let t = Thread::start(proc() {
-                lock.lock();
-                lock.signal();
-                lock.unlock();
+                let guard = lock.lock();
+                guard.signal();
             });
-            lock.wait();
-            lock.unlock();
+            guard.wait();
+            drop(guard);
+
+            t.join();
+        }
+    }
+
+    #[test]
+    fn smoke_lock_noguard() {
+        static mut lock: StaticNativeMutex = NATIVE_MUTEX_INIT;
+        unsafe {
+            lock.lock_noguard();
+            lock.unlock_noguard();
+        }
+    }
+
+    #[test]
+    fn smoke_cond_noguard() {
+        static mut lock: StaticNativeMutex = NATIVE_MUTEX_INIT;
+        unsafe {
+            lock.lock_noguard();
+            let t = Thread::start(proc() {
+                lock.lock_noguard();
+                lock.signal_noguard();
+                lock.unlock_noguard();
+            });
+            lock.wait_noguard();
+            lock.unlock_noguard();
+
             t.join();
         }
     }
@@ -410,7 +623,7 @@ mod test {
     #[test]
     fn destroy_immediately() {
         unsafe {
-            let mut m = Mutex::new();
+            let m = StaticNativeMutex::new();
             m.destroy();
         }
     }

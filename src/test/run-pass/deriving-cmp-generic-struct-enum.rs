@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(struct_variant)];
+#![feature(struct_variant)]
 
 #[deriving(Eq, TotalEq, Ord, TotalOrd)]
 enum ES<T> {
@@ -34,9 +34,6 @@ pub fn main() {
             // Eq
             assert_eq!(*es1 == *es2, eq);
             assert_eq!(*es1 != *es2, !eq);
-
-            // TotalEq
-            assert_eq!(es1.equals(es2), eq);
 
             // Ord
             assert_eq!(*es1 < *es2, lt);

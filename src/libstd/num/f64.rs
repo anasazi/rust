@@ -10,99 +10,72 @@
 
 //! Operations and constants for 64-bits floats (`f64` type)
 
-#[allow(missing_doc)];
+#![allow(missing_doc)]
 
 use prelude::*;
 
-use cmath;
+use cast;
 use default::Default;
-use libc::{c_double, c_int};
+use from_str::FromStr;
+use libc::{c_int};
 use num::{FPCategory, FPNaN, FPInfinite , FPZero, FPSubnormal, FPNormal};
 use num::{Zero, One, Bounded, strconv};
 use num;
-use to_str;
-use unstable::intrinsics;
+use intrinsics;
 
-pub use cmp::{min, max};
+#[allow(dead_code)]
+mod cmath {
+    use libc::{c_double, c_int};
 
-macro_rules! delegate(
-    (
-        $(
-            fn $name:ident(
-                $(
-                    $arg:ident : $arg_ty:ty
-                ),*
-            ) -> $rv:ty = $bound_name:path
-        ),*
-    ) => (
-        $(
-            #[inline]
-            pub fn $name($( $arg : $arg_ty ),*) -> $rv {
-                unsafe {
-                    $bound_name($( $arg ),*)
-                }
-            }
-        )*
-    )
-)
+    #[link_name = "m"]
+    extern {
+        pub fn acos(n: c_double) -> c_double;
+        pub fn asin(n: c_double) -> c_double;
+        pub fn atan(n: c_double) -> c_double;
+        pub fn atan2(a: c_double, b: c_double) -> c_double;
+        pub fn cbrt(n: c_double) -> c_double;
+        pub fn cosh(n: c_double) -> c_double;
+        pub fn erf(n: c_double) -> c_double;
+        pub fn erfc(n: c_double) -> c_double;
+        pub fn expm1(n: c_double) -> c_double;
+        pub fn fdim(a: c_double, b: c_double) -> c_double;
+        pub fn fmax(a: c_double, b: c_double) -> c_double;
+        pub fn fmin(a: c_double, b: c_double) -> c_double;
+        pub fn fmod(a: c_double, b: c_double) -> c_double;
+        pub fn nextafter(x: c_double, y: c_double) -> c_double;
+        pub fn frexp(n: c_double, value: &mut c_int) -> c_double;
+        pub fn hypot(x: c_double, y: c_double) -> c_double;
+        pub fn ldexp(x: c_double, n: c_int) -> c_double;
+        pub fn logb(n: c_double) -> c_double;
+        pub fn log1p(n: c_double) -> c_double;
+        pub fn ilogb(n: c_double) -> c_int;
+        pub fn modf(n: c_double, iptr: &mut c_double) -> c_double;
+        pub fn sinh(n: c_double) -> c_double;
+        pub fn tan(n: c_double) -> c_double;
+        pub fn tanh(n: c_double) -> c_double;
+        pub fn tgamma(n: c_double) -> c_double;
 
-delegate!(
-    // intrinsics
-    fn abs(n: f64) -> f64 = intrinsics::fabsf64,
-    fn cos(n: f64) -> f64 = intrinsics::cosf64,
-    fn exp(n: f64) -> f64 = intrinsics::expf64,
-    fn exp2(n: f64) -> f64 = intrinsics::exp2f64,
-    fn floor(x: f64) -> f64 = intrinsics::floorf64,
-    fn ln(n: f64) -> f64 = intrinsics::logf64,
-    fn log10(n: f64) -> f64 = intrinsics::log10f64,
-    fn log2(n: f64) -> f64 = intrinsics::log2f64,
-    fn mul_add(a: f64, b: f64, c: f64) -> f64 = intrinsics::fmaf64,
-    fn pow(n: f64, e: f64) -> f64 = intrinsics::powf64,
-    // fn powi(n: f64, e: c_int) -> f64 = intrinsics::powif64,
-    fn sin(n: f64) -> f64 = intrinsics::sinf64,
-    fn sqrt(n: f64) -> f64 = intrinsics::sqrtf64,
+        // These are commonly only available for doubles
 
-    // LLVM 3.3 required to use intrinsics for these four
-    fn ceil(n: c_double) -> c_double = cmath::c_double::ceil,
-    fn trunc(n: c_double) -> c_double = cmath::c_double::trunc,
-    /*
-    fn ceil(n: f64) -> f64 = intrinsics::ceilf64,
-    fn trunc(n: f64) -> f64 = intrinsics::truncf64,
-    fn rint(n: c_double) -> c_double = intrinsics::rintf64,
-    fn nearbyint(n: c_double) -> c_double = intrinsics::nearbyintf64,
-    */
+        pub fn j0(n: c_double) -> c_double;
+        pub fn j1(n: c_double) -> c_double;
+        pub fn jn(i: c_int, n: c_double) -> c_double;
 
-    // cmath
-    fn acos(n: c_double) -> c_double = cmath::c_double::acos,
-    fn asin(n: c_double) -> c_double = cmath::c_double::asin,
-    fn atan(n: c_double) -> c_double = cmath::c_double::atan,
-    fn atan2(a: c_double, b: c_double) -> c_double = cmath::c_double::atan2,
-    fn cbrt(n: c_double) -> c_double = cmath::c_double::cbrt,
-    fn copysign(x: c_double, y: c_double) -> c_double = cmath::c_double::copysign,
-    fn cosh(n: c_double) -> c_double = cmath::c_double::cosh,
-    // fn erf(n: c_double) -> c_double = cmath::c_double::erf,
-    // fn erfc(n: c_double) -> c_double = cmath::c_double::erfc,
-    fn exp_m1(n: c_double) -> c_double = cmath::c_double::exp_m1,
-    fn abs_sub(a: c_double, b: c_double) -> c_double = cmath::c_double::abs_sub,
-    fn next_after(x: c_double, y: c_double) -> c_double = cmath::c_double::next_after,
-    fn frexp(n: c_double, value: &mut c_int) -> c_double = cmath::c_double::frexp,
-    fn hypot(x: c_double, y: c_double) -> c_double = cmath::c_double::hypot,
-    fn ldexp(x: c_double, n: c_int) -> c_double = cmath::c_double::ldexp,
-    // fn log_radix(n: c_double) -> c_double = cmath::c_double::log_radix,
-    fn ln_1p(n: c_double) -> c_double = cmath::c_double::ln_1p,
-    // fn ilog_radix(n: c_double) -> c_int = cmath::c_double::ilog_radix,
-    // fn modf(n: c_double, iptr: &mut c_double) -> c_double = cmath::c_double::modf,
-    fn round(n: c_double) -> c_double = cmath::c_double::round,
-    // fn ldexp_radix(n: c_double, i: c_int) -> c_double = cmath::c_double::ldexp_radix,
-    fn sinh(n: c_double) -> c_double = cmath::c_double::sinh,
-    fn tan(n: c_double) -> c_double = cmath::c_double::tan,
-    fn tanh(n: c_double) -> c_double = cmath::c_double::tanh
-)
+        pub fn y0(n: c_double) -> c_double;
+        pub fn y1(n: c_double) -> c_double;
+        pub fn yn(i: c_int, n: c_double) -> c_double;
 
-// FIXME (#1433): obtain these in a different way
+        #[cfg(unix)]
+        pub fn lgamma_r(n: c_double, sign: &mut c_int) -> c_double;
+        #[cfg(windows)]
+        #[link_name="__lgamma_r"]
+        pub fn lgamma_r(n: c_double, sign: &mut c_int) -> c_double;
+    }
+}
 
-// FIXME(#11621): These constants should be deprecated once CTFE is implemented
-// in favour of calling their respective functions in `Bounded` and `Float`.
+// FIXME(#5527): These constants should be deprecated once associated
+// constants are implemented in favour of referencing the respective
+// members of `Bounded` and `Float`.
 
 pub static RADIX: uint = 2u;
 
@@ -111,7 +84,11 @@ pub static DIGITS: uint = 15u;
 
 pub static EPSILON: f64 = 2.2204460492503131e-16_f64;
 
-pub static MIN_VALUE: f64 = 2.2250738585072014e-308_f64;
+/// Smallest finite f64 value
+pub static MIN_VALUE: f64 = -1.7976931348623157e+308_f64;
+/// Smallest positive, normalized f64 value
+pub static MIN_POS_VALUE: f64 = 2.2250738585072014e-308_f64;
+/// Largest finite f64 value
 pub static MAX_VALUE: f64 = 1.7976931348623157e+308_f64;
 
 pub static MIN_EXP: int = -1021;
@@ -126,24 +103,34 @@ pub static INFINITY: f64 = 1.0_f64/0.0_f64;
 
 pub static NEG_INFINITY: f64 = -1.0_f64/0.0_f64;
 
-// FIXME (#1999): add is_normal, is_subnormal, and fpclassify
-
-/* Module: consts */
+/// Various useful constants.
 pub mod consts {
-    // FIXME (requires Issue #1433 to fix): replace with mathematical
-    // constants from cmath.
+    // FIXME: replace with mathematical constants from cmath.
 
-    // FIXME(#11621): These constants should be deprecated once CTFE is
-    // implemented in favour of calling their respective functions in `Real`.
+    // FIXME(#5527): These constants should be deprecated once associated
+    // constants are implemented in favour of referencing the respective members
+    // of `Float`.
 
     /// Archimedes' constant
     pub static PI: f64 = 3.14159265358979323846264338327950288_f64;
 
+    /// pi * 2.0
+    pub static PI_2: f64 = 6.28318530717958647692528676655900576_f64;
+
     /// pi/2.0
     pub static FRAC_PI_2: f64 = 1.57079632679489661923132169163975144_f64;
 
+    /// pi/3.0
+    pub static FRAC_PI_3: f64 = 1.04719755119659774615421446109316763_f64;
+
     /// pi/4.0
     pub static FRAC_PI_4: f64 = 0.785398163397448309615660845819875721_f64;
+
+    /// pi/6.0
+    pub static FRAC_PI_6: f64 = 0.52359877559829887307710723054658381_f64;
+
+    /// pi/8.0
+    pub static FRAC_PI_8: f64 = 0.39269908169872415480783042290993786_f64;
 
     /// 1.0/pi
     pub static FRAC_1_PI: f64 = 0.318309886183790671537767526745028724_f64;
@@ -196,42 +183,6 @@ impl Ord for f64 {
     fn gt(&self, other: &f64) -> bool { (*self) > (*other) }
 }
 
-impl Orderable for f64 {
-    /// Returns `NAN` if either of the numbers are `NAN`.
-    #[inline]
-    fn min(&self, other: &f64) -> f64 {
-        match () {
-            _ if self.is_nan()  => *self,
-            _ if other.is_nan() => *other,
-            _ if *self < *other => *self,
-            _                   => *other,
-        }
-    }
-
-    /// Returns `NAN` if either of the numbers are `NAN`.
-    #[inline]
-    fn max(&self, other: &f64) -> f64 {
-        match () {
-            _ if self.is_nan()  => *self,
-            _ if other.is_nan() => *other,
-            _ if *self > *other => *self,
-            _                   => *other,
-        }
-    }
-
-    /// Returns the number constrained within the range `mn <= self <= mx`.
-    /// If any of the numbers are `NAN` then `NAN` is returned.
-    #[inline]
-    fn clamp(&self, mn: &f64, mx: &f64) -> f64 {
-        match () {
-            _ if self.is_nan()   => *self,
-            _ if !(*self <= *mx) => *mx,
-            _ if !(*self >= *mn) => *mn,
-            _                    => *self,
-        }
-    }
-}
-
 impl Default for f64 {
     #[inline]
     fn default() -> f64 { 0.0 }
@@ -274,7 +225,9 @@ impl Div<f64,f64> for f64 {
 #[cfg(not(test))]
 impl Rem<f64,f64> for f64 {
     #[inline]
-    fn rem(&self, other: &f64) -> f64 { *self % *other }
+    fn rem(&self, other: &f64) -> f64 {
+        unsafe { cmath::fmod(*self, *other) }
+    }
 }
 #[cfg(not(test))]
 impl Neg<f64> for f64 {
@@ -285,12 +238,16 @@ impl Neg<f64> for f64 {
 impl Signed for f64 {
     /// Computes the absolute value. Returns `NAN` if the number is `NAN`.
     #[inline]
-    fn abs(&self) -> f64 { abs(*self) }
+    fn abs(&self) -> f64 {
+        unsafe { intrinsics::fabsf64(*self) }
+    }
 
     /// The positive difference of two numbers. Returns `0.0` if the number is less than or
     /// equal to `other`, otherwise the difference between`self` and `other` is returned.
     #[inline]
-    fn abs_sub(&self, other: &f64) -> f64 { abs_sub(*self, *other) }
+    fn abs_sub(&self, other: &f64) -> f64 {
+        unsafe { cmath::fdim(*self, *other) }
+    }
 
     /// # Returns
     ///
@@ -299,7 +256,9 @@ impl Signed for f64 {
     /// - `NAN` if the number is NaN
     #[inline]
     fn signum(&self) -> f64 {
-        if self.is_nan() { NAN } else { copysign(1.0, *self) }
+        if self.is_nan() { NAN } else {
+            unsafe { intrinsics::copysignf64(1.0, *self) }
+        }
     }
 
     /// Returns `true` if the number is positive, including `+0.0` and `INFINITY`
@@ -311,22 +270,159 @@ impl Signed for f64 {
     fn is_negative(&self) -> bool { *self < 0.0 || (1.0 / *self) == NEG_INFINITY }
 }
 
-impl Round for f64 {
+impl Bounded for f64 {
+    // NOTE: this is the smallest non-infinite f32 value, *not* MIN_VALUE
+    #[inline]
+    fn min_value() -> f64 { -MAX_VALUE }
+
+    #[inline]
+    fn max_value() -> f64 { MAX_VALUE }
+}
+
+impl Primitive for f64 {}
+
+impl Float for f64 {
+    #[inline]
+    fn nan() -> f64 { NAN }
+
+    #[inline]
+    fn infinity() -> f64 { INFINITY }
+
+    #[inline]
+    fn neg_infinity() -> f64 { NEG_INFINITY }
+
+    #[inline]
+    fn neg_zero() -> f64 { -0.0 }
+
+    /// Returns `true` if the number is NaN
+    #[inline]
+    fn is_nan(self) -> bool { self != self }
+
+    /// Returns `true` if the number is infinite
+    #[inline]
+    fn is_infinite(self) -> bool {
+        self == Float::infinity() || self == Float::neg_infinity()
+    }
+
+    /// Returns `true` if the number is neither infinite or NaN
+    #[inline]
+    fn is_finite(self) -> bool {
+        !(self.is_nan() || self.is_infinite())
+    }
+
+    /// Returns `true` if the number is neither zero, infinite, subnormal or NaN
+    #[inline]
+    fn is_normal(self) -> bool {
+        self.classify() == FPNormal
+    }
+
+    /// Returns the floating point category of the number. If only one property
+    /// is going to be tested, it is generally faster to use the specific
+    /// predicate instead.
+    fn classify(self) -> FPCategory {
+        static EXP_MASK: u64 = 0x7ff0000000000000;
+        static MAN_MASK: u64 = 0x000fffffffffffff;
+
+        let bits: u64 = unsafe { cast::transmute(self) };
+        match (bits & MAN_MASK, bits & EXP_MASK) {
+            (0, 0)        => FPZero,
+            (_, 0)        => FPSubnormal,
+            (0, EXP_MASK) => FPInfinite,
+            (_, EXP_MASK) => FPNaN,
+            _             => FPNormal,
+        }
+    }
+
+    #[inline]
+    fn mantissa_digits(_: Option<f64>) -> uint { MANTISSA_DIGITS }
+
+    #[inline]
+    fn digits(_: Option<f64>) -> uint { DIGITS }
+
+    #[inline]
+    fn epsilon() -> f64 { EPSILON }
+
+    #[inline]
+    fn min_exp(_: Option<f64>) -> int { MIN_EXP }
+
+    #[inline]
+    fn max_exp(_: Option<f64>) -> int { MAX_EXP }
+
+    #[inline]
+    fn min_10_exp(_: Option<f64>) -> int { MIN_10_EXP }
+
+    #[inline]
+    fn max_10_exp(_: Option<f64>) -> int { MAX_10_EXP }
+
+    #[inline]
+    fn min_pos_value(_: Option<f64>) -> f64 { MIN_POS_VALUE }
+
+    /// Constructs a floating point number by multiplying `x` by 2 raised to the
+    /// power of `exp`
+    #[inline]
+    fn ldexp(x: f64, exp: int) -> f64 {
+        unsafe { cmath::ldexp(x, exp as c_int) }
+    }
+
+    /// Breaks the number into a normalized fraction and a base-2 exponent,
+    /// satisfying:
+    ///
+    /// - `self = x * pow(2, exp)`
+    /// - `0.5 <= abs(x) < 1.0`
+    #[inline]
+    fn frexp(self) -> (f64, int) {
+        unsafe {
+            let mut exp = 0;
+            let x = cmath::frexp(self, &mut exp);
+            (x, exp as int)
+        }
+    }
+
+    /// Returns the mantissa, exponent and sign as integers.
+    fn integer_decode(self) -> (u64, i16, i8) {
+        let bits: u64 = unsafe { cast::transmute(self) };
+        let sign: i8 = if bits >> 63 == 0 { 1 } else { -1 };
+        let mut exponent: i16 = ((bits >> 52) & 0x7ff) as i16;
+        let mantissa = if exponent == 0 {
+            (bits & 0xfffffffffffff) << 1
+        } else {
+            (bits & 0xfffffffffffff) | 0x10000000000000
+        };
+        // Exponent bias + mantissa shift
+        exponent -= 1023 + 52;
+        (mantissa, exponent, sign)
+    }
+
+    /// Returns the next representable floating-point value in the direction of
+    /// `other`.
+    #[inline]
+    fn next_after(self, other: f64) -> f64 {
+        unsafe { cmath::nextafter(self, other) }
+    }
+
     /// Round half-way cases toward `NEG_INFINITY`
     #[inline]
-    fn floor(&self) -> f64 { floor(*self) }
+    fn floor(self) -> f64 {
+        unsafe { intrinsics::floorf64(self) }
+    }
 
     /// Round half-way cases toward `INFINITY`
     #[inline]
-    fn ceil(&self) -> f64 { ceil(*self) }
+    fn ceil(self) -> f64 {
+        unsafe { intrinsics::ceilf64(self) }
+    }
 
     /// Round half-way cases away from `0.0`
     #[inline]
-    fn round(&self) -> f64 { round(*self) }
+    fn round(self) -> f64 {
+        unsafe { intrinsics::roundf64(self) }
+    }
 
     /// The integer part of the number (rounds towards `0.0`)
     #[inline]
-    fn trunc(&self) -> f64 { trunc(*self) }
+    fn trunc(self) -> f64 {
+        unsafe { intrinsics::truncf64(self) }
+    }
 
     /// The fractional part of the number, satisfying:
     ///
@@ -335,156 +431,229 @@ impl Round for f64 {
     /// assert!(x == x.trunc() + x.fract())
     /// ```
     #[inline]
-    fn fract(&self) -> f64 { *self - self.trunc() }
-}
+    fn fract(self) -> f64 { self - self.trunc() }
 
-impl Real for f64 {
-    /// Archimedes' constant
     #[inline]
-    fn pi() -> f64 { 3.14159265358979323846264338327950288 }
+    fn max(self, other: f64) -> f64 {
+        unsafe { cmath::fmax(self, other) }
+    }
 
-    /// 2.0 * pi
     #[inline]
-    fn two_pi() -> f64 { 6.28318530717958647692528676655900576 }
+    fn min(self, other: f64) -> f64 {
+        unsafe { cmath::fmin(self, other) }
+    }
 
-    /// pi / 2.0
+    /// Fused multiply-add. Computes `(self * a) + b` with only one rounding
+    /// error. This produces a more accurate result with better performance than
+    /// a separate multiplication operation followed by an add.
     #[inline]
-    fn frac_pi_2() -> f64 { 1.57079632679489661923132169163975144 }
-
-    /// pi / 3.0
-    #[inline]
-    fn frac_pi_3() -> f64 { 1.04719755119659774615421446109316763 }
-
-    /// pi / 4.0
-    #[inline]
-    fn frac_pi_4() -> f64 { 0.785398163397448309615660845819875721 }
-
-    /// pi / 6.0
-    #[inline]
-    fn frac_pi_6() -> f64 { 0.52359877559829887307710723054658381 }
-
-    /// pi / 8.0
-    #[inline]
-    fn frac_pi_8() -> f64 { 0.39269908169872415480783042290993786 }
-
-    /// 1.0 / pi
-    #[inline]
-    fn frac_1_pi() -> f64 { 0.318309886183790671537767526745028724 }
-
-    /// 2.0 / pi
-    #[inline]
-    fn frac_2_pi() -> f64 { 0.636619772367581343075535053490057448 }
-
-    /// 2.0 / sqrt(pi)
-    #[inline]
-    fn frac_2_sqrtpi() -> f64 { 1.12837916709551257389615890312154517 }
-
-    /// sqrt(2.0)
-    #[inline]
-    fn sqrt2() -> f64 { 1.41421356237309504880168872420969808 }
-
-    /// 1.0 / sqrt(2.0)
-    #[inline]
-    fn frac_1_sqrt2() -> f64 { 0.707106781186547524400844362104849039 }
-
-    /// Euler's number
-    #[inline]
-    fn e() -> f64 { 2.71828182845904523536028747135266250 }
-
-    /// log2(e)
-    #[inline]
-    fn log2_e() -> f64 { 1.44269504088896340735992468100189214 }
-
-    /// log10(e)
-    #[inline]
-    fn log10_e() -> f64 { 0.434294481903251827651128918916605082 }
-
-    /// ln(2.0)
-    #[inline]
-    fn ln_2() -> f64 { 0.693147180559945309417232121458176568 }
-
-    /// ln(10.0)
-    #[inline]
-    fn ln_10() -> f64 { 2.30258509299404568401799145468436421 }
+    fn mul_add(self, a: f64, b: f64) -> f64 {
+        unsafe { intrinsics::fmaf64(self, a, b) }
+    }
 
     /// The reciprocal (multiplicative inverse) of the number
     #[inline]
-    fn recip(&self) -> f64 { 1.0 / *self }
+    fn recip(self) -> f64 { 1.0 / self }
 
     #[inline]
-    fn powf(&self, n: &f64) -> f64 { pow(*self, *n) }
+    fn powf(self, n: f64) -> f64 {
+        unsafe { intrinsics::powf64(self, n) }
+    }
 
     #[inline]
-    fn sqrt(&self) -> f64 { sqrt(*self) }
+    fn powi(self, n: i32) -> f64 {
+        unsafe { intrinsics::powif64(self, n) }
+    }
+
+    /// sqrt(2.0)
+    #[inline]
+    fn sqrt2() -> f64 { consts::SQRT2 }
+
+    /// 1.0 / sqrt(2.0)
+    #[inline]
+    fn frac_1_sqrt2() -> f64 { consts::FRAC_1_SQRT2 }
 
     #[inline]
-    fn rsqrt(&self) -> f64 { self.sqrt().recip() }
+    fn sqrt(self) -> f64 {
+        unsafe { intrinsics::sqrtf64(self) }
+    }
 
     #[inline]
-    fn cbrt(&self) -> f64 { cbrt(*self) }
+    fn rsqrt(self) -> f64 { self.sqrt().recip() }
 
     #[inline]
-    fn hypot(&self, other: &f64) -> f64 { hypot(*self, *other) }
+    fn cbrt(self) -> f64 {
+        unsafe { cmath::cbrt(self) }
+    }
 
     #[inline]
-    fn sin(&self) -> f64 { sin(*self) }
+    fn hypot(self, other: f64) -> f64 {
+        unsafe { cmath::hypot(self, other) }
+    }
+
+    /// Archimedes' constant
+    #[inline]
+    fn pi() -> f64 { consts::PI }
+
+    /// 2.0 * pi
+    #[inline]
+    fn two_pi() -> f64 { consts::PI_2 }
+
+    /// pi / 2.0
+    #[inline]
+    fn frac_pi_2() -> f64 { consts::FRAC_PI_2 }
+
+    /// pi / 3.0
+    #[inline]
+    fn frac_pi_3() -> f64 { consts::FRAC_PI_3 }
+
+    /// pi / 4.0
+    #[inline]
+    fn frac_pi_4() -> f64 { consts::FRAC_PI_4 }
+
+    /// pi / 6.0
+    #[inline]
+    fn frac_pi_6() -> f64 { consts::FRAC_PI_6 }
+
+    /// pi / 8.0
+    #[inline]
+    fn frac_pi_8() -> f64 { consts::FRAC_PI_8 }
+
+    /// 1.0 / pi
+    #[inline]
+    fn frac_1_pi() -> f64 { consts::FRAC_1_PI }
+
+    /// 2.0 / pi
+    #[inline]
+    fn frac_2_pi() -> f64 { consts::FRAC_2_PI }
+
+    /// 2.0 / sqrt(pi)
+    #[inline]
+    fn frac_2_sqrtpi() -> f64 { consts::FRAC_2_SQRTPI }
 
     #[inline]
-    fn cos(&self) -> f64 { cos(*self) }
+    fn sin(self) -> f64 {
+        unsafe { intrinsics::sinf64(self) }
+    }
 
     #[inline]
-    fn tan(&self) -> f64 { tan(*self) }
+    fn cos(self) -> f64 {
+        unsafe { intrinsics::cosf64(self) }
+    }
 
     #[inline]
-    fn asin(&self) -> f64 { asin(*self) }
+    fn tan(self) -> f64 {
+        unsafe { cmath::tan(self) }
+    }
 
     #[inline]
-    fn acos(&self) -> f64 { acos(*self) }
+    fn asin(self) -> f64 {
+        unsafe { cmath::asin(self) }
+    }
 
     #[inline]
-    fn atan(&self) -> f64 { atan(*self) }
+    fn acos(self) -> f64 {
+        unsafe { cmath::acos(self) }
+    }
 
     #[inline]
-    fn atan2(&self, other: &f64) -> f64 { atan2(*self, *other) }
+    fn atan(self) -> f64 {
+        unsafe { cmath::atan(self) }
+    }
+
+    #[inline]
+    fn atan2(self, other: f64) -> f64 {
+        unsafe { cmath::atan2(self, other) }
+    }
 
     /// Simultaneously computes the sine and cosine of the number
     #[inline]
-    fn sin_cos(&self) -> (f64, f64) {
+    fn sin_cos(self) -> (f64, f64) {
         (self.sin(), self.cos())
     }
 
+    /// Euler's number
+    #[inline]
+    fn e() -> f64 { consts::E }
+
+    /// log2(e)
+    #[inline]
+    fn log2_e() -> f64 { consts::LOG2_E }
+
+    /// log10(e)
+    #[inline]
+    fn log10_e() -> f64 { consts::LOG10_E }
+
+    /// ln(2.0)
+    #[inline]
+    fn ln_2() -> f64 { consts::LN_2 }
+
+    /// ln(10.0)
+    #[inline]
+    fn ln_10() -> f64 { consts::LN_10 }
+
     /// Returns the exponential of the number
     #[inline]
-    fn exp(&self) -> f64 { exp(*self) }
+    fn exp(self) -> f64 {
+        unsafe { intrinsics::expf64(self) }
+    }
 
     /// Returns 2 raised to the power of the number
     #[inline]
-    fn exp2(&self) -> f64 { exp2(*self) }
+    fn exp2(self) -> f64 {
+        unsafe { intrinsics::exp2f64(self) }
+    }
+
+    /// Returns the exponential of the number, minus `1`, in a way that is
+    /// accurate even if the number is close to zero
+    #[inline]
+    fn exp_m1(self) -> f64 {
+        unsafe { cmath::expm1(self) }
+    }
 
     /// Returns the natural logarithm of the number
     #[inline]
-    fn ln(&self) -> f64 { ln(*self) }
+    fn ln(self) -> f64 {
+        unsafe { intrinsics::logf64(self) }
+    }
 
     /// Returns the logarithm of the number with respect to an arbitrary base
     #[inline]
-    fn log(&self, base: &f64) -> f64 { self.ln() / base.ln() }
+    fn log(self, base: f64) -> f64 { self.ln() / base.ln() }
 
     /// Returns the base 2 logarithm of the number
     #[inline]
-    fn log2(&self) -> f64 { log2(*self) }
+    fn log2(self) -> f64 {
+        unsafe { intrinsics::log2f64(self) }
+    }
 
     /// Returns the base 10 logarithm of the number
     #[inline]
-    fn log10(&self) -> f64 { log10(*self) }
+    fn log10(self) -> f64 {
+        unsafe { intrinsics::log10f64(self) }
+    }
+
+    /// Returns the natural logarithm of the number plus `1` (`ln(1+n)`) more
+    /// accurately than if the operations were performed separately
+    #[inline]
+    fn ln_1p(self) -> f64 {
+        unsafe { cmath::log1p(self) }
+    }
 
     #[inline]
-    fn sinh(&self) -> f64 { sinh(*self) }
+    fn sinh(self) -> f64 {
+        unsafe { cmath::sinh(self) }
+    }
 
     #[inline]
-    fn cosh(&self) -> f64 { cosh(*self) }
+    fn cosh(self) -> f64 {
+        unsafe { cmath::cosh(self) }
+    }
 
     #[inline]
-    fn tanh(&self) -> f64 { tanh(*self) }
+    fn tanh(self) -> f64 {
+        unsafe { cmath::tanh(self) }
+    }
 
     /// Inverse hyperbolic sine
     ///
@@ -494,8 +663,8 @@ impl Real for f64 {
     /// - `self` if `self` is `0.0`, `-0.0`, `INFINITY`, or `NEG_INFINITY`
     /// - `NAN` if `self` is `NAN`
     #[inline]
-    fn asinh(&self) -> f64 {
-        match *self {
+    fn asinh(self) -> f64 {
+        match self {
             NEG_INFINITY => NEG_INFINITY,
             x => (x + ((x * x) + 1.0).sqrt()).ln(),
         }
@@ -509,8 +678,8 @@ impl Real for f64 {
     /// - `INFINITY` if `self` is `INFINITY`
     /// - `NAN` if `self` is `NAN` or `self < 1.0` (including `NEG_INFINITY`)
     #[inline]
-    fn acosh(&self) -> f64 {
-        match *self {
+    fn acosh(self) -> f64 {
+        match self {
             x if x < 1.0 => Float::nan(),
             x => (x + ((x * x) - 1.0).sqrt()).ln(),
         }
@@ -527,162 +696,19 @@ impl Real for f64 {
     /// - `NAN` if the `self` is `NAN` or outside the domain of `-1.0 <= self <= 1.0`
     ///   (including `INFINITY` and `NEG_INFINITY`)
     #[inline]
-    fn atanh(&self) -> f64 {
-        0.5 * ((2.0 * *self) / (1.0 - *self)).ln_1p()
+    fn atanh(self) -> f64 {
+        0.5 * ((2.0 * self) / (1.0 - self)).ln_1p()
     }
 
     /// Converts to degrees, assuming the number is in radians
     #[inline]
-    fn to_degrees(&self) -> f64 { *self * (180.0f64 / Real::pi()) }
+    fn to_degrees(self) -> f64 { self * (180.0f64 / Float::pi()) }
 
     /// Converts to radians, assuming the number is in degrees
     #[inline]
-    fn to_radians(&self) -> f64 {
-        let value: f64 = Real::pi();
-        *self * (value / 180.0)
-    }
-}
-
-impl Bounded for f64 {
-    #[inline]
-    fn min_value() -> f64 { 2.2250738585072014e-308 }
-
-    #[inline]
-    fn max_value() -> f64 { 1.7976931348623157e+308 }
-}
-
-impl Primitive for f64 {}
-
-impl Float for f64 {
-    #[inline]
-    fn nan() -> f64 { 0.0 / 0.0 }
-
-    #[inline]
-    fn infinity() -> f64 { 1.0 / 0.0 }
-
-    #[inline]
-    fn neg_infinity() -> f64 { -1.0 / 0.0 }
-
-    #[inline]
-    fn neg_zero() -> f64 { -0.0 }
-
-    /// Returns `true` if the number is NaN
-    #[inline]
-    fn is_nan(&self) -> bool { *self != *self }
-
-    /// Returns `true` if the number is infinite
-    #[inline]
-    fn is_infinite(&self) -> bool {
-        *self == Float::infinity() || *self == Float::neg_infinity()
-    }
-
-    /// Returns `true` if the number is neither infinite or NaN
-    #[inline]
-    fn is_finite(&self) -> bool {
-        !(self.is_nan() || self.is_infinite())
-    }
-
-    /// Returns `true` if the number is neither zero, infinite, subnormal or NaN
-    #[inline]
-    fn is_normal(&self) -> bool {
-        self.classify() == FPNormal
-    }
-
-    /// Returns the floating point category of the number. If only one property is going to
-    /// be tested, it is generally faster to use the specific predicate instead.
-    fn classify(&self) -> FPCategory {
-        static EXP_MASK: u64 = 0x7ff0000000000000;
-        static MAN_MASK: u64 = 0x000fffffffffffff;
-
-        match (
-            unsafe { ::cast::transmute::<f64,u64>(*self) } & MAN_MASK,
-            unsafe { ::cast::transmute::<f64,u64>(*self) } & EXP_MASK,
-        ) {
-            (0, 0)        => FPZero,
-            (_, 0)        => FPSubnormal,
-            (0, EXP_MASK) => FPInfinite,
-            (_, EXP_MASK) => FPNaN,
-            _             => FPNormal,
-        }
-    }
-
-    #[inline]
-    fn mantissa_digits(_: Option<f64>) -> uint { 53 }
-
-    #[inline]
-    fn digits(_: Option<f64>) -> uint { 15 }
-
-    #[inline]
-    fn epsilon() -> f64 { 2.2204460492503131e-16 }
-
-    #[inline]
-    fn min_exp(_: Option<f64>) -> int { -1021 }
-
-    #[inline]
-    fn max_exp(_: Option<f64>) -> int { 1024 }
-
-    #[inline]
-    fn min_10_exp(_: Option<f64>) -> int { -307 }
-
-    #[inline]
-    fn max_10_exp(_: Option<f64>) -> int { 308 }
-
-    /// Constructs a floating point number by multiplying `x` by 2 raised to the power of `exp`
-    #[inline]
-    fn ldexp(x: f64, exp: int) -> f64 {
-        ldexp(x, exp as c_int)
-    }
-
-    /// Breaks the number into a normalized fraction and a base-2 exponent, satisfying:
-    ///
-    /// - `self = x * pow(2, exp)`
-    /// - `0.5 <= abs(x) < 1.0`
-    #[inline]
-    fn frexp(&self) -> (f64, int) {
-        let mut exp = 0;
-        let x = frexp(*self, &mut exp);
-        (x, exp as int)
-    }
-
-    /// Returns the exponential of the number, minus `1`, in a way that is accurate
-    /// even if the number is close to zero
-    #[inline]
-    fn exp_m1(&self) -> f64 { exp_m1(*self) }
-
-    /// Returns the natural logarithm of the number plus `1` (`ln(1+n)`) more accurately
-    /// than if the operations were performed separately
-    #[inline]
-    fn ln_1p(&self) -> f64 { ln_1p(*self) }
-
-    /// Fused multiply-add. Computes `(self * a) + b` with only one rounding error. This
-    /// produces a more accurate result with better performance than a separate multiplication
-    /// operation followed by an add.
-    #[inline]
-    fn mul_add(&self, a: f64, b: f64) -> f64 {
-        mul_add(*self, a, b)
-    }
-
-    /// Returns the next representable floating-point value in the direction of `other`
-    #[inline]
-    fn next_after(&self, other: f64) -> f64 {
-        next_after(*self, other)
-    }
-
-    /// Returns the mantissa, exponent and sign as integers.
-    fn integer_decode(&self) -> (u64, i16, i8) {
-        let bits: u64 = unsafe {
-            ::cast::transmute(*self)
-        };
-        let sign: i8 = if bits >> 63 == 0 { 1 } else { -1 };
-        let mut exponent: i16 = ((bits >> 52) & 0x7ff) as i16;
-        let mantissa = if exponent == 0 {
-            (bits & 0xfffffffffffff) << 1
-        } else {
-            (bits & 0xfffffffffffff) | 0x10000000000000
-        };
-        // Exponent bias + mantissa shift
-        exponent -= 1023 + 52;
-        (mantissa, exponent, sign)
+    fn to_radians(self) -> f64 {
+        let value: f64 = Float::pi();
+        self * (value / 180.0)
     }
 }
 
@@ -783,11 +809,6 @@ pub fn to_str_exp_digits(num: f64, dig: uint, upper: bool) -> ~str {
     let (r, _) = strconv::float_to_str_common(
         num, 10u, true, strconv::SignNeg, strconv::DigMax(dig), strconv::ExpDec, upper);
     r
-}
-
-impl to_str::ToStr for f64 {
-    #[inline]
-    fn to_str(&self) -> ~str { to_str_digits(*self, 8) }
 }
 
 impl num::ToStrRadix for f64 {
@@ -905,46 +926,24 @@ impl num::FromStrRadix for f64 {
 #[cfg(test)]
 mod tests {
     use f64::*;
-    use prelude::*;
-
     use num::*;
     use num;
 
     #[test]
+    fn test_min_nan() {
+        assert_eq!(NAN.min(2.0), 2.0);
+        assert_eq!(2.0f64.min(NAN), 2.0);
+    }
+
+    #[test]
+    fn test_max_nan() {
+        assert_eq!(NAN.max(2.0), 2.0);
+        assert_eq!(2.0f64.max(NAN), 2.0);
+    }
+
+    #[test]
     fn test_num() {
         num::test_num(10f64, 2f64);
-    }
-
-    #[test]
-    fn test_min() {
-        assert_eq!(1f64.min(&2f64), 1f64);
-        assert_eq!(2f64.min(&1f64), 1f64);
-
-        let nan: f64 = Float::nan();
-        assert!(1f64.min(&nan).is_nan());
-        assert!(nan.min(&1f64).is_nan());
-    }
-
-    #[test]
-    fn test_max() {
-        assert_eq!(1f64.max(&2f64), 2f64);
-        assert_eq!(2f64.max(&1f64), 2f64);
-
-        let nan: f64 = Float::nan();
-        assert!(1f64.max(&nan).is_nan());
-        assert!(nan.max(&1f64).is_nan());
-    }
-
-    #[test]
-    fn test_clamp() {
-        assert_eq!(1f64.clamp(&2f64, &4f64), 2f64);
-        assert_eq!(8f64.clamp(&2f64, &4f64), 4f64);
-        assert_eq!(3f64.clamp(&2f64, &4f64), 3f64);
-
-        let nan: f64 = Float::nan();
-        assert!(3f64.clamp(&nan, &4f64).is_nan());
-        assert!(3f64.clamp(&2f64, &nan).is_nan());
-        assert!(nan.clamp(&2f64, &4f64).is_nan());
     }
 
     #[test]
@@ -1068,23 +1067,23 @@ mod tests {
 
     #[test]
     fn test_real_consts() {
-        let pi: f64 = Real::pi();
-        let two_pi: f64 = Real::two_pi();
-        let frac_pi_2: f64 = Real::frac_pi_2();
-        let frac_pi_3: f64 = Real::frac_pi_3();
-        let frac_pi_4: f64 = Real::frac_pi_4();
-        let frac_pi_6: f64 = Real::frac_pi_6();
-        let frac_pi_8: f64 = Real::frac_pi_8();
-        let frac_1_pi: f64 = Real::frac_1_pi();
-        let frac_2_pi: f64 = Real::frac_2_pi();
-        let frac_2_sqrtpi: f64 = Real::frac_2_sqrtpi();
-        let sqrt2: f64 = Real::sqrt2();
-        let frac_1_sqrt2: f64 = Real::frac_1_sqrt2();
-        let e: f64 = Real::e();
-        let log2_e: f64 = Real::log2_e();
-        let log10_e: f64 = Real::log10_e();
-        let ln_2: f64 = Real::ln_2();
-        let ln_10: f64 = Real::ln_10();
+        let pi: f64 = Float::pi();
+        let two_pi: f64 = Float::two_pi();
+        let frac_pi_2: f64 = Float::frac_pi_2();
+        let frac_pi_3: f64 = Float::frac_pi_3();
+        let frac_pi_4: f64 = Float::frac_pi_4();
+        let frac_pi_6: f64 = Float::frac_pi_6();
+        let frac_pi_8: f64 = Float::frac_pi_8();
+        let frac_1_pi: f64 = Float::frac_1_pi();
+        let frac_2_pi: f64 = Float::frac_2_pi();
+        let frac_2_sqrtpi: f64 = Float::frac_2_sqrtpi();
+        let sqrt2: f64 = Float::sqrt2();
+        let frac_1_sqrt2: f64 = Float::frac_1_sqrt2();
+        let e: f64 = Float::e();
+        let log2_e: f64 = Float::log2_e();
+        let log10_e: f64 = Float::log10_e();
+        let ln_2: f64 = Float::ln_2();
+        let ln_10: f64 = Float::ln_10();
 
         assert_approx_eq!(two_pi, 2.0 * pi);
         assert_approx_eq!(frac_pi_2, pi / 2f64);
@@ -1127,7 +1126,7 @@ mod tests {
         assert_eq!(0f64.abs_sub(&INFINITY), 0f64);
     }
 
-    #[test] #[ignore(cfg(windows))] // FIXME #8663
+    #[test]
     fn test_abs_sub_nowin() {
         assert!(NAN.abs_sub(&-1f64).is_nan());
         assert!(1f64.abs_sub(&NAN).is_nan());
@@ -1253,7 +1252,7 @@ mod tests {
     fn test_integer_decode() {
         assert_eq!(3.14159265359f64.integer_decode(), (7074237752028906u64, -51i16, 1i8));
         assert_eq!((-8573.5918555f64).integer_decode(), (4713381968463931u64, -39i16, -1i8));
-        assert_eq!(2f64.powf(&100.0).integer_decode(), (4503599627370496u64, 48i16, 1i8));
+        assert_eq!(2f64.powf(100.0).integer_decode(), (4503599627370496u64, 48i16, 1i8));
         assert_eq!(0f64.integer_decode(), (0u64, -1075i16, 1i8));
         assert_eq!((-0f64).integer_decode(), (0u64, -1075i16, -1i8));
         assert_eq!(INFINITY.integer_decode(), (4503599627370496u64, 972i16, 1i8));

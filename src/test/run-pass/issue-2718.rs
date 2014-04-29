@@ -1,6 +1,5 @@
-// xfail-fast
 
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -17,8 +16,8 @@ pub mod pipes {
     use super::Task;
     use std::cast::{forget, transmute};
     use std::cast;
+    use std::mem::{replace, swap};
     use std::task;
-    use std::util;
 
     pub struct Stuff<T> {
         state: state,
@@ -26,7 +25,7 @@ pub mod pipes {
         payload: Option<T>
     }
 
-    #[deriving(Eq)]
+    #[deriving(Eq, Show)]
     #[repr(int)]
     pub enum state {
         empty,
@@ -111,7 +110,7 @@ pub mod pipes {
             match old_state {
               empty | blocked => { task::deschedule(); }
               full => {
-                let payload = util::replace(&mut p.payload, None);
+                let payload = replace(&mut p.payload, None);
                 return Some(payload.unwrap())
               }
               terminated => {
@@ -167,7 +166,7 @@ pub mod pipes {
                 if self.p != None {
                     let self_p: &mut Option<*packet<T>> =
                         cast::transmute(&self.p);
-                    let p = util::replace(self_p, None);
+                    let p = replace(self_p, None);
                     sender_terminate(p.unwrap())
                 }
             }
@@ -176,7 +175,7 @@ pub mod pipes {
 
     impl<T:Send> send_packet<T> {
         pub fn unwrap(&mut self) -> *packet<T> {
-            util::replace(&mut self.p, None).unwrap()
+            replace(&mut self.p, None).unwrap()
         }
     }
 
@@ -197,7 +196,7 @@ pub mod pipes {
                 if self.p != None {
                     let self_p: &mut Option<*packet<T>> =
                         cast::transmute(&self.p);
-                    let p = util::replace(self_p, None);
+                    let p = replace(self_p, None);
                     receiver_terminate(p.unwrap())
                 }
             }
@@ -206,7 +205,7 @@ pub mod pipes {
 
     impl<T:Send> recv_packet<T> {
         pub fn unwrap(&mut self) -> *packet<T> {
-            util::replace(&mut self.p, None).unwrap()
+            replace(&mut self.p, None).unwrap()
         }
     }
 
@@ -296,16 +295,16 @@ pub mod pingpong {
 
 fn client(chan: pingpong::client::ping) {
     let chan = pingpong::client::do_ping(chan);
-    error!("Sent ping");
+    println!("Sent ping");
     let (_chan, _data) = pingpong::client::do_pong(chan);
-    error!("Received pong");
+    println!("Received pong");
 }
 
 fn server(chan: pingpong::server::ping) {
     let (chan, _data) = pingpong::server::do_ping(chan);
-    error!("Received ping");
+    println!("Received ping");
     let _chan = pingpong::server::do_pong(chan);
-    error!("Sent pong");
+    println!("Sent pong");
 }
 
 pub fn main() {

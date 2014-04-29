@@ -37,7 +37,7 @@
 #
 #   DEPS_<crate>
 #	These lists are the dependencies of the <crate> that is to be built.
-#	Rust dependencies are listed bare (i.e. std, extra, green) and native
+#	Rust dependencies are listed bare (i.e. std, green) and native
 #	dependencies have a "native:" prefix (i.e. native:sundown). All deps
 #	will be built before the crate itself is built.
 #
@@ -49,29 +49,47 @@
 # automatically generated for all stage/host/target combinations.
 ################################################################################
 
-TARGET_CRATES := std extra green rustuv native flate arena glob term semver uuid
-HOST_CRATES := syntax rustc rustdoc
+TARGET_CRATES := libc std green rustuv native flate arena glob term semver \
+                 uuid serialize sync getopts collections num test time rand \
+		 workcache url log regex
+HOST_CRATES := syntax rustc rustdoc fourcc hexfloat regex_macros
 CRATES := $(TARGET_CRATES) $(HOST_CRATES)
 TOOLS := compiletest rustdoc rustc
 
-DEPS_std := native:rustrt
-DEPS_extra := std term
-DEPS_green := std
+DEPS_std := libc native:rustrt native:compiler-rt native:backtrace
+DEPS_green := std rand native:context_switch
 DEPS_rustuv := std native:uv native:uv_support
 DEPS_native := std
-DEPS_syntax := std extra term
-DEPS_rustc := syntax native:rustllvm flate arena
-DEPS_rustdoc := rustc native:sundown
+DEPS_syntax := std term serialize collections log
+DEPS_rustc := syntax native:rustllvm flate arena serialize sync getopts \
+              collections time log
+DEPS_rustdoc := rustc native:sundown serialize sync getopts collections \
+                test time
 DEPS_flate := std native:miniz
-DEPS_arena := std extra
+DEPS_arena := std collections
 DEPS_glob := std
-DEPS_term := std
+DEPS_serialize := std collections log
+DEPS_term := std collections
 DEPS_semver := std
-DEPS_uuid := std extra
+DEPS_uuid := std serialize rand
+DEPS_sync := std
+DEPS_getopts := std
+DEPS_collections := std rand
+DEPS_fourcc := syntax std
+DEPS_hexfloat := syntax std
+DEPS_num := std rand
+DEPS_test := std collections getopts serialize term time
+DEPS_time := std serialize
+DEPS_rand := std
+DEPS_url := std collections
+DEPS_workcache := std serialize collections log
+DEPS_log := std sync
+DEPS_regex := std collections
+DEPS_regex_macros = syntax std regex
 
-TOOL_DEPS_compiletest := extra green rustuv
-TOOL_DEPS_rustdoc := rustdoc green rustuv
-TOOL_DEPS_rustc := rustc green rustuv
+TOOL_DEPS_compiletest := test green rustuv getopts
+TOOL_DEPS_rustdoc := rustdoc native
+TOOL_DEPS_rustc := rustc native
 TOOL_SOURCE_compiletest := $(S)src/compiletest/compiletest.rs
 TOOL_SOURCE_rustdoc := $(S)src/driver/driver.rs
 TOOL_SOURCE_rustc := $(S)src/driver/driver.rs
@@ -81,6 +99,7 @@ TOOL_SOURCE_rustc := $(S)src/driver/driver.rs
 ################################################################################
 
 DOC_CRATES := $(filter-out rustc, $(filter-out syntax, $(CRATES)))
+COMPILER_DOC_CRATES := rustc syntax
 
 # This macro creates some simple definitions for each crate being built, just
 # some munging of all of the parameters above.
@@ -88,8 +107,7 @@ DOC_CRATES := $(filter-out rustc, $(filter-out syntax, $(CRATES)))
 # $(1) is the crate to generate variables for
 define RUST_CRATE
 CRATEFILE_$(1) := $$(S)src/lib$(1)/lib.rs
-RSINPUTS_$(1) := $$(wildcard $$(addprefix $(S)src/lib$(1), \
-				*.rs */*.rs */*/*.rs */*/*/*.rs))
+RSINPUTS_$(1) := $$(call rwildcard,$(S)src/lib$(1)/,*.rs)
 RUST_DEPS_$(1) := $$(filter-out native:%,$$(DEPS_$(1)))
 NATIVE_DEPS_$(1) := $$(patsubst native:%,%,$$(filter native:%,$$(DEPS_$(1))))
 endef
@@ -100,8 +118,7 @@ $(foreach crate,$(CRATES),$(eval $(call RUST_CRATE,$(crate))))
 #
 # $(1) is the crate to generate variables for
 define RUST_TOOL
-TOOL_INPUTS_$(1) := $$(wildcard $$(addprefix $(S)$$(dir $$(TOOL_SOURCE_$(1))), \
-				*.rs */*.rs */*/*.rs */*/*/*.rs))
+TOOL_INPUTS_$(1) := $$(call rwildcard,$$(dir $$(TOOL_SOURCE_$(1))),*.rs)
 endef
 
 $(foreach crate,$(TOOLS),$(eval $(call RUST_TOOL,$(crate))))

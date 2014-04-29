@@ -8,15 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn foo(c: ~[int]) {
+
+fn foo(c: Vec<int> ) {
     let a: int = 5;
-    let mut b: ~[int] = ~[];
+    let mut b: Vec<int> = Vec::new();
 
 
     match none::<int> {
         some::<int>(_) => {
             for _i in c.iter() {
-                info!("{:?}", a);
+                println!("{:?}", a);
                 let a = 17;
                 b.push(a);
             }
@@ -27,4 +28,4 @@ fn foo(c: ~[int]) {
 
 enum t<T> { none, some(T), }
 
-pub fn main() { let x = 10; let x = x + 20; assert!((x == 30)); foo(~[]); }
+pub fn main() { let x = 10; let x = x + 20; assert!((x == 30)); foo(Vec::new()); }

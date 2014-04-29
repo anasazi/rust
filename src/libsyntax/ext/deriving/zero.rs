@@ -13,58 +13,63 @@ use codemap::Span;
 use ext::base::ExtCtxt;
 use ext::build::AstBuilder;
 use ext::deriving::generic::*;
+use parse::token::InternedString;
 
-pub fn expand_deriving_zero(cx: &ExtCtxt,
+pub fn expand_deriving_zero(cx: &mut ExtCtxt,
                             span: Span,
                             mitem: @MetaItem,
-                            in_items: ~[@Item])
-    -> ~[@Item] {
+                            item: @Item,
+                            push: |@Item|) {
+    let inline = cx.meta_word(span, InternedString::new("inline"));
+    let attrs = vec!(cx.attribute(span, inline));
     let trait_def = TraitDef {
-        cx: cx, span: span,
-
-        path: Path::new(~["std", "num", "Zero"]),
-        additional_bounds: ~[],
+        span: span,
+        attributes: Vec::new(),
+        path: Path::new(vec!("std", "num", "Zero")),
+        additional_bounds: Vec::new(),
         generics: LifetimeBounds::empty(),
-        methods: ~[
+        methods: vec!(
             MethodDef {
                 name: "zero",
                 generics: LifetimeBounds::empty(),
                 explicit_self: None,
-                args: ~[],
+                args: Vec::new(),
                 ret_ty: Self,
-                inline: true,
+                attributes: attrs.clone(),
                 const_nonmatching: false,
-                combine_substructure: zero_substructure
+                combine_substructure: combine_substructure(|a, b, c| {
+                    zero_substructure(a, b, c)
+                })
             },
             MethodDef {
                 name: "is_zero",
                 generics: LifetimeBounds::empty(),
                 explicit_self: borrowed_explicit_self(),
-                args: ~[],
-                ret_ty: Literal(Path::new(~["bool"])),
-                inline: true,
+                args: Vec::new(),
+                ret_ty: Literal(Path::new(vec!("bool"))),
+                attributes: attrs,
                 const_nonmatching: false,
-                combine_substructure: |cx, span, substr| {
+                combine_substructure: combine_substructure(|cx, span, substr| {
                     cs_and(|cx, span, _, _| cx.span_bug(span,
                                                         "Non-matching enum \
                                                          variant in \
                                                          deriving(Zero)"),
                            cx, span, substr)
-                }
+                })
             }
-        ]
+        )
     };
-    trait_def.expand(mitem, in_items)
+    trait_def.expand(cx, mitem, item, push)
 }
 
-fn zero_substructure(cx: &ExtCtxt, trait_span: Span, substr: &Substructure) -> @Expr {
-    let zero_ident = ~[
+fn zero_substructure(cx: &mut ExtCtxt, trait_span: Span, substr: &Substructure) -> @Expr {
+    let zero_ident = vec!(
         cx.ident_of("std"),
         cx.ident_of("num"),
         cx.ident_of("Zero"),
         cx.ident_of("zero")
-    ];
-    let zero_call = |span| cx.expr_call_global(span, zero_ident.clone(), ~[]);
+    );
+    let zero_call = |span| cx.expr_call_global(span, zero_ident.clone(), Vec::new());
 
     return match *substr.fields {
         StaticStruct(_, ref summary) => {
@@ -73,14 +78,14 @@ fn zero_substructure(cx: &ExtCtxt, trait_span: Span, substr: &Substructure) -> @
                     if fields.is_empty() {
                         cx.expr_ident(trait_span, substr.type_ident)
                     } else {
-                        let exprs = fields.map(|sp| zero_call(*sp));
+                        let exprs = fields.iter().map(|sp| zero_call(*sp)).collect();
                         cx.expr_call_ident(trait_span, substr.type_ident, exprs)
                     }
                 }
                 Named(ref fields) => {
-                    let zero_fields = fields.map(|&(ident, span)| {
+                    let zero_fields = fields.iter().map(|&(ident, span)| {
                         cx.field_imm(span, ident, zero_call(span))
-                    });
+                    }).collect();
                     cx.expr_struct_ident(trait_span, substr.type_ident, zero_fields)
                 }
             }

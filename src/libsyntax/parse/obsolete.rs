@@ -22,15 +22,12 @@ use codemap::{Span, respan};
 use parse::parser::Parser;
 use parse::token;
 
-use std::to_bytes;
-
 /// The specific types of unsupported syntax
-#[deriving(Eq)]
+#[deriving(Eq, TotalEq, Hash)]
 pub enum ObsoleteSyntax {
     ObsoleteSwap,
     ObsoleteUnsafeBlock,
     ObsoleteBareFnType,
-    ObsoleteNamedExternModule,
     ObsoleteMultipleLocalDecl,
     ObsoleteUnsafeExternFn,
     ObsoleteTraitFuncVisibility,
@@ -39,20 +36,10 @@ pub enum ObsoleteSyntax {
     ObsoleteEnumWildcard,
     ObsoleteStructWildcard,
     ObsoleteVecDotDotWildcard,
-    ObsoleteBoxedClosure,
-    ObsoleteClosureType,
     ObsoleteMultipleImport,
-    ObsoleteExternModAttributesInParens,
     ObsoleteManagedPattern,
     ObsoleteManagedString,
     ObsoleteManagedVec,
-}
-
-impl to_bytes::IterBytes for ObsoleteSyntax {
-    #[inline]
-    fn iter_bytes(&self, lsb0: bool, f: to_bytes::Cb) -> bool {
-        (*self as uint).iter_bytes(lsb0, f)
-    }
 }
 
 pub trait ParserObsoleteMethods {
@@ -70,13 +57,13 @@ pub trait ParserObsoleteMethods {
     fn eat_obsolete_ident(&mut self, ident: &str) -> bool;
 }
 
-impl ParserObsoleteMethods for Parser {
+impl<'a> ParserObsoleteMethods for Parser<'a> {
     /// Reports an obsolete syntax non-fatal error.
     fn obsolete(&mut self, sp: Span, kind: ObsoleteSyntax) {
         let (kind_str, desc) = match kind {
             ObsoleteSwap => (
                 "swap",
-                "Use std::util::{swap, replace} instead"
+                "use std::mem::{swap, replace} instead"
             ),
             ObsoleteUnsafeBlock => (
                 "non-standalone unsafe block",
@@ -85,11 +72,6 @@ impl ParserObsoleteMethods for Parser {
             ObsoleteBareFnType => (
                 "bare function type",
                 "use `|A| -> B` or `extern fn(A) -> B` instead"
-            ),
-            ObsoleteNamedExternModule => (
-                "named external module",
-                "instead of `extern mod foo { ... }`, write `mod foo { \
-                 extern { ... } }`"
             ),
             ObsoleteMultipleLocalDecl => (
                 "declaration of multiple locals at once",
@@ -127,24 +109,9 @@ impl ParserObsoleteMethods for Parser {
                 "vec slice wildcard",
                 "use `..` instead of `.._` for matching slices"
             ),
-            ObsoleteBoxedClosure => (
-                "managed or owned closure",
-                "managed closures have been removed and owned closures are \
-                 now written `proc()`"
-            ),
-            ObsoleteClosureType => (
-                "closure type",
-                "closures are now written `|A| -> B` rather than `&fn(A) -> \
-                 B`."
-            ),
             ObsoleteMultipleImport => (
                 "multiple imports",
                 "only one import is allowed per `use` statement"
-            ),
-            ObsoleteExternModAttributesInParens => (
-                "`extern mod` with linkage attribute list",
-                "use `extern mod foo = \"bar\";` instead of \
-                `extern mod foo (name = \"bar\")`"
             ),
             ObsoleteManagedPattern => (
                 "managed pointer pattern",
@@ -187,8 +154,7 @@ impl ParserObsoleteMethods for Parser {
     fn is_obsolete_ident(&mut self, ident: &str) -> bool {
         match self.token {
             token::IDENT(sid, _) => {
-                let interned_string = token::get_ident(sid.name);
-                interned_string.equiv(&ident)
+                token::get_ident(sid).equiv(&ident)
             }
             _ => false
         }

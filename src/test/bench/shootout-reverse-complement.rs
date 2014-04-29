@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,7 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-android doesn't terminate?
+// ignore-android doesn't terminate?
+// ignore-pretty
 
 use std::iter::range_step;
 use std::io::{stdin, stdout, File};
@@ -28,8 +29,8 @@ fn make_complements() -> [u8, ..256] {
     }
     let lower = 'A' as u8 - 'a' as u8;
     for &(from, to) in transforms.iter() {
-        complements[from as u8] = to as u8;
-        complements[from as u8 - lower] = to as u8;
+        complements[from as uint] = to as u8;
+        complements[(from as u8 - lower) as uint] = to as u8;
     }
     complements
 }
@@ -43,7 +44,7 @@ fn main() {
     };
     let mut data = data.unwrap();
 
-    for seq in data.mut_split(|c| *c == '>' as u8) {
+    for seq in data.as_mut_slice().mut_split(|c| *c == '>' as u8) {
         // skip header and last \n
         let begin = match seq.iter().position(|c| *c == '\n' as u8) {
             None => continue,
@@ -69,14 +70,15 @@ fn main() {
         loop {
             match (it.next(), it.next_back()) {
                 (Some(front), Some(back)) => {
-                    let tmp = complements[*front];
-                    *front = complements[*back];
+                    let tmp = complements[*front as uint];
+                    *front = complements[*back as uint];
                     *back = tmp;
                 }
+                (Some(last), None) => *last = complements[*last as uint], // last element
                 _ => break // vector exhausted.
             }
         }
     }
 
-    stdout().write(data);
+    stdout().write(data.as_slice()).unwrap();
 }

@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,10 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-fast
 
 use std::cmp;
 
+#[deriving(Show)]
 enum cat_type { tuxedo, tabby, tortoiseshell }
 
 impl cmp::Eq for cat_type {
@@ -38,11 +38,11 @@ impl<T> cat<T> {
 
     pub fn eat(&mut self) -> bool {
         if self.how_hungry > 0 {
-            error!("OM NOM NOM");
+            println!("OM NOM NOM");
             self.how_hungry -= 2;
             return true;
         } else {
-            error!("Not hungry!");
+            println!("Not hungry!");
             return false;
         }
     }
@@ -106,7 +106,7 @@ impl<T> cat<T> {
 impl<T> cat<T> {
     fn meow(&mut self) {
         self.meows += 1;
-        error!("Meow {}", self.meows);
+        println!("Meow {}", self.meows);
         if self.meows % 5 == 0 {
             self.how_hungry += 1;
         }
@@ -114,9 +114,9 @@ impl<T> cat<T> {
 }
 
 pub fn main() {
-    let mut nyan: cat<~str> = cat::new(0, 2, ~"nyan");
+    let mut nyan: cat<~str> = cat::new(0, 2, "nyan".to_owned());
     for _ in range(1u, 5) { nyan.speak(); }
-    assert!(*nyan.find(&1).unwrap() == ~"nyan");
+    assert!(*nyan.find(&1).unwrap() == "nyan".to_owned());
     assert_eq!(nyan.find(&10), None);
     let mut spotty: cat<cat_type> = cat::new(2, 57, tuxedo);
     for _ in range(0u, 6) { spotty.speak(); }

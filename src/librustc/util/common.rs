@@ -8,14 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![allow(non_camel_case_types)]
 
 use syntax::ast;
-use syntax::codemap::{Span};
 use syntax::visit;
 use syntax::visit::Visitor;
 
 use std::local_data;
-use extra;
+
+use time;
 
 pub fn time<T, U>(do_it: bool, what: &str, u: U, f: |U| -> T) -> T {
     local_data_key!(depth: uint);
@@ -24,9 +25,9 @@ pub fn time<T, U>(do_it: bool, what: &str, u: U, f: |U| -> T) -> T {
     let old = local_data::get(depth, |d| d.map(|a| *a).unwrap_or(0));
     local_data::set(depth, old + 1);
 
-    let start = extra::time::precise_time_s();
+    let start = time::precise_time_s();
     let rv = f(u);
-    let end = extra::time::precise_time_s();
+    let end = time::precise_time_s();
 
     println!("{}time: {:3.3f} s\t{}", "  ".repeat(old), end - start, what);
     local_data::set(depth, old);
@@ -62,14 +63,8 @@ pub fn indenter() -> _indenter {
     _indenter(())
 }
 
-pub fn field_expr(f: ast::Field) -> @ast::Expr { return f.expr; }
-
-pub fn field_exprs(fields: ~[ast::Field]) -> ~[@ast::Expr] {
-    fields.map(|f| f.expr)
-}
-
 struct LoopQueryVisitor<'a> {
-    p: 'a |&ast::Expr_| -> bool,
+    p: |&ast::Expr_|: 'a -> bool,
     flag: bool,
 }
 
@@ -97,7 +92,7 @@ pub fn loop_query(b: &ast::Block, p: |&ast::Expr_| -> bool) -> bool {
 }
 
 struct BlockQueryVisitor<'a> {
-    p: 'a |&ast::Expr| -> bool,
+    p: |&ast::Expr|: 'a -> bool,
     flag: bool,
 }
 
@@ -118,16 +113,3 @@ pub fn block_query(b: ast::P<ast::Block>, p: |&ast::Expr| -> bool) -> bool {
     visit::walk_block(&mut v, b, ());
     return v.flag;
 }
-
-pub fn local_rhs_span(l: &ast::Local, def: Span) -> Span {
-    match l.init {
-      Some(i) => return i.span,
-      _ => return def
-    }
-}
-
-pub fn pluralize(n: uint, s: ~str) -> ~str {
-    if n == 1 { s }
-    else { format!("{}s", s) }
-}
-

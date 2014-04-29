@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,17 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-fast aux-build
 // aux-build:lint_stability.rs
 
-#[feature(globs)];
-#[deny(unstable)];
-#[deny(deprecated)];
-#[deny(experimental)];
-#[allow(dead_code)];
+#![feature(globs)]
+#![deny(unstable)]
+#![deny(deprecated)]
+#![deny(experimental)]
+#![allow(dead_code)]
 
 mod cross_crate {
-    extern mod lint_stability;
+    extern crate lint_stability;
     use self::lint_stability::*;
 
     fn test() {

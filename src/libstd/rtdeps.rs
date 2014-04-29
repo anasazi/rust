@@ -23,14 +23,12 @@ extern {}
 // and binutils 2.22+ won't add them automatically
 #[cfg(target_os = "linux")]
 #[link(name = "dl")]
-#[link(name = "m")]
 #[link(name = "pthread")]
 extern {}
 
 #[cfg(target_os = "android")]
 #[link(name = "dl")]
 #[link(name = "log")]
-#[link(name = "m")]
 extern {}
 
 #[cfg(target_os = "freebsd")]
@@ -39,5 +37,5 @@ extern {}
 extern {}
 
 #[cfg(target_os = "macos")]
-#[link(name = "pthread")]
+#[link(name = "System")]
 extern {}

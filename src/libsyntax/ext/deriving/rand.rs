@@ -14,57 +14,58 @@ use codemap::Span;
 use ext::base::ExtCtxt;
 use ext::build::{AstBuilder};
 use ext::deriving::generic::*;
-use opt_vec;
 
-pub fn expand_deriving_rand(cx: &ExtCtxt,
+pub fn expand_deriving_rand(cx: &mut ExtCtxt,
                             span: Span,
                             mitem: @MetaItem,
-                            in_items: ~[@Item])
-    -> ~[@Item] {
+                            item: @Item,
+                            push: |@Item|) {
     let trait_def = TraitDef {
-        cx: cx, span: span,
-
-        path: Path::new(~["std", "rand", "Rand"]),
-        additional_bounds: ~[],
+        span: span,
+        attributes: Vec::new(),
+        path: Path::new(vec!("rand", "Rand")),
+        additional_bounds: Vec::new(),
         generics: LifetimeBounds::empty(),
-        methods: ~[
+        methods: vec!(
             MethodDef {
                 name: "rand",
                 generics: LifetimeBounds {
-                    lifetimes: ~[],
-                    bounds: ~[("R",
-                               ~[ Path::new(~["std", "rand", "Rng"]) ])]
+                    lifetimes: Vec::new(),
+                    bounds: vec!(("R",
+                                  ast::StaticSize,
+                                  vec!( Path::new(vec!("rand", "Rng")) )))
                 },
                 explicit_self: None,
-                args: ~[
+                args: vec!(
                     Ptr(~Literal(Path::new_local("R")),
                         Borrowed(None, ast::MutMutable))
-                ],
+                ),
                 ret_ty: Self,
-                inline: false,
+                attributes: Vec::new(),
                 const_nonmatching: false,
-                combine_substructure: rand_substructure
+                combine_substructure: combine_substructure(|a, b, c| {
+                    rand_substructure(a, b, c)
+                })
             }
-        ]
+        )
     };
-    trait_def.expand(mitem, in_items)
+    trait_def.expand(cx, mitem, item, push)
 }
 
-fn rand_substructure(cx: &ExtCtxt, trait_span: Span, substr: &Substructure) -> @Expr {
+fn rand_substructure(cx: &mut ExtCtxt, trait_span: Span, substr: &Substructure) -> @Expr {
     let rng = match substr.nonself_args {
-        [rng] => ~[ rng ],
+        [rng] => vec!( rng ),
         _ => cx.bug("Incorrect number of arguments to `rand` in `deriving(Rand)`")
     };
-    let rand_ident = ~[
-        cx.ident_of("std"),
+    let rand_ident = vec!(
         cx.ident_of("rand"),
         cx.ident_of("Rand"),
         cx.ident_of("rand")
-    ];
-    let rand_call = |span| {
+    );
+    let rand_call = |cx: &mut ExtCtxt, span| {
         cx.expr_call_global(span,
                             rand_ident.clone(),
-                            ~[ rng[0] ])
+                            vec!( *rng.get(0) ))
     };
 
     return match *substr.fields {
@@ -83,14 +84,14 @@ fn rand_substructure(cx: &ExtCtxt, trait_span: Span, substr: &Substructure) -> @
             let rand_name = cx.path_all(trait_span,
                                         true,
                                         rand_ident.clone(),
-                                        opt_vec::Empty,
-                                        ~[]);
+                                        Vec::new(),
+                                        Vec::new());
             let rand_name = cx.expr_path(rand_name);
 
-            // ::std::rand::Rand::rand(rng)
+            // ::rand::Rand::rand(rng)
             let rv_call = cx.expr_call(trait_span,
                                        rand_name,
-                                       ~[ rng[0] ]);
+                                       vec!( *rng.get(0) ));
 
             // need to specify the uint-ness of the random number
             let uint_ty = cx.ty_ident(trait_span, cx.ident_of("uint"));
@@ -112,41 +113,41 @@ fn rand_substructure(cx: &ExtCtxt, trait_span: Span, substr: &Substructure) -> @
                 let i_expr = cx.expr_uint(v_span, i);
                 let pat = cx.pat_lit(v_span, i_expr);
 
-                cx.arm(v_span,
-                       ~[ pat ],
-                       rand_thing(cx, v_span, ident, summary, |sp| rand_call(sp)))
-            }).collect::<~[ast::Arm]>();
+                let thing = rand_thing(cx, v_span, ident, summary, |cx, sp| rand_call(cx, sp));
+                cx.arm(v_span, vec!( pat ), thing)
+            }).collect::<Vec<ast::Arm> >();
 
             // _ => {} at the end. Should never occur
             arms.push(cx.arm_unreachable(trait_span));
 
             let match_expr = cx.expr_match(trait_span, rand_variant, arms);
 
-            let block = cx.block(trait_span, ~[ let_statement ], Some(match_expr));
+            let block = cx.block(trait_span, vec!( let_statement ), Some(match_expr));
             cx.expr_block(block)
         }
         _ => cx.bug("Non-static method in `deriving(Rand)`")
     };
 
-    fn rand_thing(cx: &ExtCtxt,
+    fn rand_thing(cx: &mut ExtCtxt,
                   trait_span: Span,
                   ctor_ident: Ident,
                   summary: &StaticFields,
-                  rand_call: |Span| -> @Expr)
+                  rand_call: |&mut ExtCtxt, Span| -> @Expr)
                   -> @Expr {
         match *summary {
             Unnamed(ref fields) => {
                 if fields.is_empty() {
                     cx.expr_ident(trait_span, ctor_ident)
                 } else {
-                    let exprs = fields.map(|span| rand_call(*span));
+                    let exprs = fields.iter().map(|span| rand_call(cx, *span)).collect();
                     cx.expr_call_ident(trait_span, ctor_ident, exprs)
                 }
             }
             Named(ref fields) => {
-                let rand_fields = fields.map(|&(ident, span)| {
-                    cx.field_imm(span, ident, rand_call(span))
-                });
+                let rand_fields = fields.iter().map(|&(ident, span)| {
+                    let e = rand_call(cx, span);
+                    cx.field_imm(span, ident, e)
+                }).collect();
                 cx.expr_struct_ident(trait_span, ctor_ident, rand_fields)
             }
         }

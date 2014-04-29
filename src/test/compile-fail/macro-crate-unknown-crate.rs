@@ -8,9 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(phase)];
+#![feature(phase)]
 
 #[phase(syntax)]
-extern mod doesnt_exist; //~ ERROR can't find crate
+extern crate doesnt_exist; //~ ERROR can't find crate
 
 fn main() {}

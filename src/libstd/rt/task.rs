@@ -17,10 +17,11 @@ use any::AnyOwnExt;
 use cast;
 use cleanup;
 use clone::Clone;
+use comm::Sender;
 use io::Writer;
 use iter::{Iterator, Take};
+use kinds::Send;
 use local_data;
-use logging::Logger;
 use ops::Drop;
 use option::{Option, Some, None};
 use prelude::drop;
@@ -30,7 +31,7 @@ use rt::local::Local;
 use rt::local_heap::LocalHeap;
 use rt::rtio::LocalIo;
 use rt::unwind::Unwinder;
-use send_str::SendStr;
+use str::SendStr;
 use sync::arc::UnsafeArc;
 use sync::atomics::{AtomicUint, SeqCst};
 use task::{TaskResult, TaskOpts};
@@ -42,23 +43,22 @@ use unstable::finally::Finally;
 /// in the struct. This contains a pointer to another struct that holds
 /// the type-specific state.
 pub struct Task {
-    heap: LocalHeap,
-    gc: GarbageCollector,
-    storage: LocalStorage,
-    unwinder: Unwinder,
-    death: Death,
-    destroyed: bool,
-    name: Option<SendStr>,
+    pub heap: LocalHeap,
+    pub gc: GarbageCollector,
+    pub storage: LocalStorage,
+    pub unwinder: Unwinder,
+    pub death: Death,
+    pub destroyed: bool,
+    pub name: Option<SendStr>,
 
-    logger: Option<~Logger>,
-    stdout: Option<~Writer>,
-    stderr: Option<~Writer>,
+    pub stdout: Option<~Writer:Send>,
+    pub stderr: Option<~Writer:Send>,
 
-    priv imp: Option<~Runtime>,
+    imp: Option<~Runtime:Send>,
 }
 
 pub struct GarbageCollector;
-pub struct LocalStorage(Option<local_data::Map>);
+pub struct LocalStorage(pub Option<local_data::Map>);
 
 /// A handle to a blocked task. Usually this means having the ~Task pointer by
 /// ownership, but if the task is killable, a killer can steal it at any time.
@@ -67,15 +67,21 @@ pub enum BlockedTask {
     Shared(UnsafeArc<AtomicUint>),
 }
 
+pub enum DeathAction {
+    /// Action to be done with the exit code. If set, also makes the task wait
+    /// until all its watched children exit before collecting the status.
+    Execute(proc(TaskResult):Send),
+    /// A channel to send the result of the task on when the task exits
+    SendMessage(Sender<TaskResult>),
+}
+
 /// Per-task state related to task death, killing, failure, etc.
 pub struct Death {
-    // Action to be done with the exit code. If set, also makes the task wait
-    // until all its watched children exit before collecting the status.
-    on_exit: Option<proc(TaskResult)>,
+    pub on_exit: Option<DeathAction>,
 }
 
 pub struct BlockedTasks {
-    priv inner: UnsafeArc<AtomicUint>,
+    inner: UnsafeArc<AtomicUint>,
 }
 
 impl Task {
@@ -88,7 +94,6 @@ impl Task {
             death: Death::new(),
             destroyed: false,
             name: None,
-            logger: None,
             stdout: None,
             stderr: None,
             imp: None,
@@ -104,7 +109,7 @@ impl Task {
     /// This function is *not* meant to be abused as a "try/catch" block. This
     /// is meant to be used at the absolute boundaries of a task's lifetime, and
     /// only for that purpose.
-    pub fn run(~self, f: ||) -> ~Task {
+    pub fn run(~self, mut f: ||) -> ~Task {
         // Need to put ourselves into TLS, but also need access to the unwinder.
         // Unsafely get a handle to the task so we can continue to use it after
         // putting it in tls (so we can invoke the unwinder).
@@ -122,11 +127,9 @@ impl Task {
                 #[allow(unused_must_use)]
                 fn close_outputs() {
                     let mut task = Local::borrow(None::<Task>);
-                    let logger = task.get().logger.take();
-                    let stderr = task.get().stderr.take();
-                    let stdout = task.get().stdout.take();
+                    let stderr = task.stderr.take();
+                    let stdout = task.stdout.take();
                     drop(task);
-                    drop(logger); // loggers are responsible for flushing
                     match stdout { Some(mut w) => { w.flush(); }, None => {} }
                     match stderr { Some(mut w) => { w.flush(); }, None => {} }
                 }
@@ -156,8 +159,7 @@ impl Task {
                 // be intertwined, and miraculously work for now...
                 let mut task = Local::borrow(None::<Task>);
                 let storage_map = {
-                    let task = task.get();
-                    let LocalStorage(ref mut optmap) = task.storage;
+                    let &LocalStorage(ref mut optmap) = &mut task.storage;
                     optmap.take()
                 };
                 drop(task);
@@ -193,7 +195,7 @@ impl Task {
     /// Inserts a runtime object into this task, transferring ownership to the
     /// task. It is illegal to replace a previous runtime object in this task
     /// with this argument.
-    pub fn put_runtime(&mut self, ops: ~Runtime) {
+    pub fn put_runtime(&mut self, ops: ~Runtime:Send) {
         assert!(self.imp.is_none());
         self.imp = Some(ops);
     }
@@ -223,7 +225,7 @@ impl Task {
                 Ok(t) => Some(t),
                 Err(t) => {
                     let (_, obj): (uint, uint) = cast::transmute(t);
-                    let obj: ~Runtime = cast::transmute((vtable, obj));
+                    let obj: ~Runtime:Send = cast::transmute((vtable, obj));
                     self.put_runtime(obj);
                     None
                 }
@@ -233,7 +235,7 @@ impl Task {
 
     /// Spawns a sibling to this task. The newly spawned task is configured with
     /// the `opts` structure and will run `f` as the body of its code.
-    pub fn spawn_sibling(mut ~self, opts: TaskOpts, f: proc()) {
+    pub fn spawn_sibling(mut ~self, opts: TaskOpts, f: proc():Send) {
         let ops = self.imp.take_unwrap();
         ops.spawn_sibling(self, opts, f)
     }
@@ -247,7 +249,7 @@ impl Task {
         ops.deschedule(amt, self, f)
     }
 
-    /// Wakes up a previously blocked task, optionally specifiying whether the
+    /// Wakes up a previously blocked task, optionally specifying whether the
     /// current task can accept a change in scheduling. This function can only
     /// be called on tasks that were previously blocked in `deschedule`.
     pub fn reawaken(mut ~self) {
@@ -329,8 +331,7 @@ impl BlockedTask {
     }
 
     /// Converts one blocked task handle to a list of many handles to the same.
-    pub fn make_selectable(self, num_handles: uint) -> Take<BlockedTasks>
-    {
+    pub fn make_selectable(self, num_handles: uint) -> Take<BlockedTasks> {
         let arc = match self {
             Owned(task) => {
                 let flag = unsafe { AtomicUint::new(cast::transmute(task)) };
@@ -381,7 +382,8 @@ impl Death {
     /// Collect failure exit codes from children and propagate them to a parent.
     pub fn collect_failure(&mut self, result: TaskResult) {
         match self.on_exit.take() {
-            Some(f) => f(result),
+            Some(Execute(f)) => f(result),
+            Some(SendMessage(ch)) => { let _ = ch.send_opt(result); }
             None => {}
         }
     }
@@ -411,11 +413,11 @@ mod test {
     fn tls() {
         use local_data;
         local_data_key!(key: @~str)
-        local_data::set(key, @~"data");
-        assert!(*local_data::get(key, |k| k.map(|k| *k)).unwrap() == ~"data");
+        local_data::set(key, @"data".to_owned());
+        assert!(*local_data::get(key, |k| k.map(|k| *k)).unwrap() == "data".to_owned());
         local_data_key!(key2: @~str)
-        local_data::set(key2, @~"data");
-        assert!(*local_data::get(key2, |k| k.map(|k| *k)).unwrap() == ~"data");
+        local_data::set(key2, @"data".to_owned());
+        assert!(*local_data::get(key2, |k| k.map(|k| *k)).unwrap() == "data".to_owned());
     }
 
     #[test]
@@ -430,8 +432,8 @@ mod test {
 
     #[test]
     fn rng() {
-        use rand::{rng, Rng};
-        let mut r = rng();
+        use rand::{StdRng, Rng};
+        let mut r = StdRng::new().unwrap();
         let _ = r.next_u32();
     }
 
@@ -442,16 +444,16 @@ mod test {
 
     #[test]
     fn comm_stream() {
-        let (port, chan) = Chan::new();
-        chan.send(10);
-        assert!(port.recv() == 10);
+        let (tx, rx) = channel();
+        tx.send(10);
+        assert!(rx.recv() == 10);
     }
 
     #[test]
     fn comm_shared_chan() {
-        let (port, chan) = SharedChan::new();
-        chan.send(10);
-        assert!(port.recv() == 10);
+        let (tx, rx) = channel();
+        tx.send(10);
+        assert!(rx.recv() == 10);
     }
 
     #[test]
@@ -468,7 +470,7 @@ mod test {
 
         {
             let mut a = a.borrow_mut();
-            a.get().next = Some(b);
+            a.next = Some(b);
         }
     }
 

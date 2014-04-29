@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(managed_boxes)];
+#![feature(managed_boxes)]
 
 use std::cell::Cell;
 
@@ -41,7 +41,7 @@ fn main() {
         // Can't do this copy
         let x = ~~~A {y: r(i)};
         let _z = x.clone(); //~ ERROR failed to find an implementation
-        info!("{:?}", x);
+        println!("{:?}", x);
     }
-    error!("{:?}", *i);
+    println!("{:?}", *i);
 }

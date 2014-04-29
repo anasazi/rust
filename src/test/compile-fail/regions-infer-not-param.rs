@@ -14,20 +14,20 @@ struct direct<'a> {
 
 struct indirect1 {
     // Here the lifetime parameter of direct is bound by the fn()
-    g: 'static |direct|
+    g: |direct|: 'static
 }
 
 struct indirect2<'a> {
     // But here it is set to 'a
-    g: 'static |direct<'a>|
+    g: |direct<'a>|: 'static
 }
 
 fn take_direct(p: direct) -> direct { p } //~ ERROR mismatched types
-//~^ ERROR cannot infer an appropriate lifetime
+//~^ ERROR cannot infer
 
 fn take_indirect1(p: indirect1) -> indirect1 { p }
 
 fn take_indirect2(p: indirect2) -> indirect2 { p } //~ ERROR mismatched types
-//~^ ERROR cannot infer an appropriate lifetime
+//~^ ERROR cannot infer
 
 fn main() {}

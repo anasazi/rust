@@ -17,21 +17,24 @@ use syntax::ast;
 use syntax::ast::{Ident, NodeId};
 
 pub struct Module {
-    name: Option<Ident>,
-    attrs: ~[ast::Attribute],
-    where: Span,
-    structs: ~[Struct],
-    enums: ~[Enum],
-    fns: ~[Function],
-    mods: ~[Module],
-    id: NodeId,
-    typedefs: ~[Typedef],
-    statics: ~[Static],
-    traits: ~[Trait],
-    vis: ast::Visibility,
-    impls: ~[Impl],
-    foreigns: ~[ast::ForeignMod],
-    view_items: ~[ast::ViewItem],
+    pub name: Option<Ident>,
+    pub attrs: Vec<ast::Attribute>,
+    pub where_outer: Span,
+    pub where_inner: Span,
+    pub structs: Vec<Struct>,
+    pub enums: Vec<Enum>,
+    pub fns: Vec<Function>,
+    pub mods: Vec<Module>,
+    pub id: NodeId,
+    pub typedefs: Vec<Typedef>,
+    pub statics: Vec<Static>,
+    pub traits: Vec<Trait>,
+    pub vis: ast::Visibility,
+    pub impls: Vec<Impl>,
+    pub foreigns: Vec<ast::ForeignMod>,
+    pub view_items: Vec<ast::ViewItem>,
+    pub macros: Vec<Macro>,
+    pub is_crate: bool,
 }
 
 impl Module {
@@ -39,24 +42,27 @@ impl Module {
         Module {
             name       : name,
             id: 0,
-            vis: ast::Private,
-            where: syntax::codemap::DUMMY_SP,
-            attrs      : ~[],
-            structs    : ~[],
-            enums      : ~[],
-            fns        : ~[],
-            mods       : ~[],
-            typedefs   : ~[],
-            statics    : ~[],
-            traits     : ~[],
-            impls      : ~[],
-            view_items : ~[],
-            foreigns   : ~[],
+            vis: ast::Inherited,
+            where_outer: syntax::codemap::DUMMY_SP,
+            where_inner: syntax::codemap::DUMMY_SP,
+            attrs      : Vec::new(),
+            structs    : Vec::new(),
+            enums      : Vec::new(),
+            fns        : Vec::new(),
+            mods       : Vec::new(),
+            typedefs   : Vec::new(),
+            statics    : Vec::new(),
+            traits     : Vec::new(),
+            impls      : Vec::new(),
+            view_items : Vec::new(),
+            foreigns   : Vec::new(),
+            macros     : Vec::new(),
+            is_crate   : false,
         }
     }
 }
 
-#[deriving(ToStr, Clone, Encodable, Decodable)]
+#[deriving(Show, Clone, Encodable, Decodable)]
 pub enum StructType {
     /// A normal struct
     Plain,
@@ -74,87 +80,94 @@ pub enum TypeBound {
 }
 
 pub struct Struct {
-    vis: ast::Visibility,
-    id: NodeId,
-    struct_type: StructType,
-    name: Ident,
-    generics: ast::Generics,
-    attrs: ~[ast::Attribute],
-    fields: ~[ast::StructField],
-    where: Span,
+    pub vis: ast::Visibility,
+    pub id: NodeId,
+    pub struct_type: StructType,
+    pub name: Ident,
+    pub generics: ast::Generics,
+    pub attrs: Vec<ast::Attribute>,
+    pub fields: Vec<ast::StructField>,
+    pub where: Span,
 }
 
 pub struct Enum {
-    vis: ast::Visibility,
-    variants: ~[Variant],
-    generics: ast::Generics,
-    attrs: ~[ast::Attribute],
-    id: NodeId,
-    where: Span,
-    name: Ident,
+    pub vis: ast::Visibility,
+    pub variants: Vec<Variant>,
+    pub generics: ast::Generics,
+    pub attrs: Vec<ast::Attribute>,
+    pub id: NodeId,
+    pub where: Span,
+    pub name: Ident,
 }
 
 pub struct Variant {
-    name: Ident,
-    attrs: ~[ast::Attribute],
-    kind: ast::VariantKind,
-    id: ast::NodeId,
-    vis: ast::Visibility,
-    where: Span,
+    pub name: Ident,
+    pub attrs: Vec<ast::Attribute>,
+    pub kind: ast::VariantKind,
+    pub id: ast::NodeId,
+    pub vis: ast::Visibility,
+    pub where: Span,
 }
 
 pub struct Function {
-    decl: ast::FnDecl,
-    attrs: ~[ast::Attribute],
-    id: NodeId,
-    name: Ident,
-    vis: ast::Visibility,
-    purity: ast::Purity,
-    where: Span,
-    generics: ast::Generics,
+    pub decl: ast::FnDecl,
+    pub attrs: Vec<ast::Attribute>,
+    pub id: NodeId,
+    pub name: Ident,
+    pub vis: ast::Visibility,
+    pub fn_style: ast::FnStyle,
+    pub where: Span,
+    pub generics: ast::Generics,
 }
 
 pub struct Typedef {
-    ty: ast::P<ast::Ty>,
-    gen: ast::Generics,
-    name: Ident,
-    id: ast::NodeId,
-    attrs: ~[ast::Attribute],
-    where: Span,
-    vis: ast::Visibility,
+    pub ty: ast::P<ast::Ty>,
+    pub gen: ast::Generics,
+    pub name: Ident,
+    pub id: ast::NodeId,
+    pub attrs: Vec<ast::Attribute>,
+    pub where: Span,
+    pub vis: ast::Visibility,
 }
 
 pub struct Static {
-    type_: ast::P<ast::Ty>,
-    mutability: ast::Mutability,
-    expr: @ast::Expr,
-    name: Ident,
-    attrs: ~[ast::Attribute],
-    vis: ast::Visibility,
-    id: ast::NodeId,
-    where: Span,
+    pub type_: ast::P<ast::Ty>,
+    pub mutability: ast::Mutability,
+    pub expr: @ast::Expr,
+    pub name: Ident,
+    pub attrs: Vec<ast::Attribute>,
+    pub vis: ast::Visibility,
+    pub id: ast::NodeId,
+    pub where: Span,
 }
 
 pub struct Trait {
-    name: Ident,
-    methods: ~[ast::TraitMethod], //should be TraitMethod
-    generics: ast::Generics,
-    parents: ~[ast::TraitRef],
-    attrs: ~[ast::Attribute],
-    id: ast::NodeId,
-    where: Span,
-    vis: ast::Visibility,
+    pub name: Ident,
+    pub methods: Vec<ast::TraitMethod>, //should be TraitMethod
+    pub generics: ast::Generics,
+    pub parents: Vec<ast::TraitRef>,
+    pub attrs: Vec<ast::Attribute>,
+    pub id: ast::NodeId,
+    pub where: Span,
+    pub vis: ast::Visibility,
 }
 
 pub struct Impl {
-    generics: ast::Generics,
-    trait_: Option<ast::TraitRef>,
-    for_: ast::P<ast::Ty>,
-    methods: ~[@ast::Method],
-    attrs: ~[ast::Attribute],
-    where: Span,
-    vis: ast::Visibility,
-    id: ast::NodeId,
+    pub generics: ast::Generics,
+    pub trait_: Option<ast::TraitRef>,
+    pub for_: ast::P<ast::Ty>,
+    pub methods: Vec<@ast::Method>,
+    pub attrs: Vec<ast::Attribute>,
+    pub where: Span,
+    pub vis: ast::Visibility,
+    pub id: ast::NodeId,
+}
+
+pub struct Macro {
+    pub name: Ident,
+    pub id: ast::NodeId,
+    pub attrs: Vec<ast::Attribute>,
+    pub where: Span,
 }
 
 pub fn struct_type_from_def(sd: &ast::StructDef) -> StructType {

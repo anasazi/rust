@@ -8,16 +8,18 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-fast
-// xfail-android (FIXME #11419)
+// ignore-android (FIXME #11419)
 // exec-env:RUST_LOG=info
 
-#[no_uv];
-extern mod native;
+#![feature(phase)]
+
+#[phase(syntax, link)]
+extern crate log;
+extern crate native;
 
 use std::fmt;
-use std::io::{PortReader, ChanWriter};
-use std::logging::{set_logger, Logger};
+use std::io::{ChanReader, ChanWriter};
+use log::{set_logger, Logger};
 
 struct MyWriter(ChanWriter);
 
@@ -36,12 +38,12 @@ fn start(argc: int, argv: **u8) -> int {
 }
 
 fn main() {
-    let (p, c) = Chan::new();
-    let (mut r, w) = (PortReader::new(p), ChanWriter::new(c));
+    let (tx, rx) = channel();
+    let (mut r, w) = (ChanReader::new(rx), ChanWriter::new(tx));
     spawn(proc() {
-        set_logger(~MyWriter(w) as ~Logger);
+        set_logger(~MyWriter(w) as ~Logger:Send);
         debug!("debug");
         info!("info");
     });
-    assert_eq!(r.read_to_str().unwrap(), ~"info\n");
+    assert_eq!(r.read_to_str().unwrap(), "info\n".to_owned());
 }

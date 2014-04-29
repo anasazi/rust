@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(managed_boxes)];
+#![feature(managed_boxes)]
 
 struct point { x: int, y: int }
 
@@ -32,8 +32,8 @@ fn a() {
     p.impurem();
 
     // But in this case we do not honor the loan:
-    p.blockm(|| {
-        p.x = 10; //~ ERROR cannot assign
+    p.blockm(|| { //~ ERROR cannot borrow `p` as mutable
+        p.x = 10;
     })
 }
 

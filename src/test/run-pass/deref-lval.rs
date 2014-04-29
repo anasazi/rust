@@ -8,12 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(managed_boxes)];
+#![feature(managed_boxes)]
 
 use std::cell::Cell;
 
 pub fn main() {
     let x = @Cell::new(5);
     x.set(1000);
-    info!("{:?}", x.get());
+    println!("{:?}", x.get());
 }

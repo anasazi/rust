@@ -11,13 +11,16 @@ snappy includes a C interface (documented in
 The following is a minimal example of calling a foreign function which will
 compile if snappy is installed:
 
-~~~~ {.ignore}
-use std::libc::size_t;
+~~~~
+extern crate libc;
+use libc::size_t;
 
 #[link(name = "snappy")]
+# #[cfg(ignore_this)]
 extern {
     fn snappy_max_compressed_length(source_length: size_t) -> size_t;
 }
+# unsafe fn snappy_max_compressed_length(a: size_t) -> size_t { a }
 
 fn main() {
     let x = unsafe { snappy_max_compressed_length(100) };
@@ -44,7 +47,8 @@ keeping the binding correct at runtime.
 The `extern` block can be extended to cover the entire snappy API:
 
 ~~~~ {.ignore}
-use std::libc::{c_int, size_t};
+extern crate libc;
+use libc::{c_int, size_t};
 
 #[link(name = "snappy")]
 extern {
@@ -71,12 +75,16 @@ The raw C API needs to be wrapped to provide memory safety and make use of highe
 like vectors. A library can choose to expose only the safe, high-level interface and hide the unsafe
 internal details.
 
-Wrapping the functions which expect buffers involves using the `vec::raw` module to manipulate Rust
+Wrapping the functions which expect buffers involves using the `slice::raw` module to manipulate Rust
 vectors as pointers to memory. Rust's vectors are guaranteed to be a contiguous block of memory. The
 length is number of elements currently contained, and the capacity is the total size in elements of
 the allocated memory. The length is less than or equal to the capacity.
 
-~~~~ {.ignore}
+~~~~
+# extern crate libc;
+# use libc::{c_int, size_t};
+# unsafe fn snappy_validate_compressed_buffer(_: *u8, _: size_t) -> c_int { 0 }
+# fn main() {}
 pub fn validate_compressed_buffer(src: &[u8]) -> bool {
     unsafe {
         snappy_validate_compressed_buffer(src.as_ptr(), src.len() as size_t) == 0
@@ -96,14 +104,20 @@ required capacity to hold the compressed output. The vector can then be passed t
 `snappy_compress` function as an output parameter. An output parameter is also passed to retrieve
 the true length after compression for setting the length.
 
-~~~~ {.ignore}
-pub fn compress(src: &[u8]) -> ~[u8] {
+~~~~
+# extern crate libc;
+# use libc::{size_t, c_int};
+# unsafe fn snappy_compress(a: *u8, b: size_t, c: *mut u8,
+#                           d: *mut size_t) -> c_int { 0 }
+# unsafe fn snappy_max_compressed_length(a: size_t) -> size_t { a }
+# fn main() {}
+pub fn compress(src: &[u8]) -> Vec<u8> {
     unsafe {
         let srclen = src.len() as size_t;
         let psrc = src.as_ptr();
 
         let mut dstlen = snappy_max_compressed_length(srclen);
-        let mut dst = vec::with_capacity(dstlen as uint);
+        let mut dst = Vec::with_capacity(dstlen as uint);
         let pdst = dst.as_mut_ptr();
 
         snappy_compress(psrc, srclen, pdst, &mut dstlen);
@@ -116,8 +130,18 @@ pub fn compress(src: &[u8]) -> ~[u8] {
 Decompression is similar, because snappy stores the uncompressed size as part of the compression
 format and `snappy_uncompressed_length` will retrieve the exact buffer size required.
 
-~~~~ {.ignore}
-pub fn uncompress(src: &[u8]) -> Option<~[u8]> {
+~~~~
+# extern crate libc;
+# use libc::{size_t, c_int};
+# unsafe fn snappy_uncompress(compressed: *u8,
+#                             compressed_length: size_t,
+#                             uncompressed: *mut u8,
+#                             uncompressed_length: *mut size_t) -> c_int { 0 }
+# unsafe fn snappy_uncompressed_length(compressed: *u8,
+#                                      compressed_length: size_t,
+#                                      result: *mut size_t) -> c_int { 0 }
+# fn main() {}
+pub fn uncompress(src: &[u8]) -> Option<Vec<u8>> {
     unsafe {
         let srclen = src.len() as size_t;
         let psrc = src.as_ptr();
@@ -125,7 +149,7 @@ pub fn uncompress(src: &[u8]) -> Option<~[u8]> {
         let mut dstlen: size_t = 0;
         snappy_uncompressed_length(psrc, srclen, &mut dstlen);
 
-        let mut dst = vec::with_capacity(dstlen as uint);
+        let mut dst = Vec::with_capacity(dstlen as uint);
         let pdst = dst.as_mut_ptr();
 
         if snappy_uncompress(psrc, srclen, pdst, &mut dstlen) == 0 {
@@ -170,85 +194,6 @@ Foreign libraries often hand off ownership of resources to the calling code.
 When this occurs, we must use Rust's destructors to provide safety and guarantee
 the release of these resources (especially in the case of failure).
 
-As an example, we give a reimplementation of owned boxes by wrapping `malloc`
-and `free`:
-
-~~~~
-use std::cast;
-use std::libc::{c_void, size_t, malloc, free};
-use std::ptr;
-use std::unstable::intrinsics;
-
-// Define a wrapper around the handle returned by the foreign code.
-// Unique<T> has the same semantics as ~T
-pub struct Unique<T> {
-    // It contains a single raw, mutable pointer to the object in question.
-    priv ptr: *mut T
-}
-
-// Implement methods for creating and using the values in the box.
-// NB: For simplicity and correctness, we require that T has kind Send
-// (owned boxes relax this restriction, and can contain managed (GC) boxes).
-// This is because, as implemented, the garbage collector would not know
-// about any shared boxes stored in the malloc'd region of memory.
-impl<T: Send> Unique<T> {
-    pub fn new(value: T) -> Unique<T> {
-        unsafe {
-            let ptr = malloc(std::mem::size_of::<T>() as size_t) as *mut T;
-            assert!(!ptr::is_null(ptr));
-            // `*ptr` is uninitialized, and `*ptr = value` would attempt to destroy it
-            // move_val_init moves a value into this memory without
-            // attempting to drop the original value.
-            intrinsics::move_val_init(&mut *ptr, value);
-            Unique{ptr: ptr}
-        }
-    }
-
-    // the 'r lifetime results in the same semantics as `&*x` with ~T
-    pub fn borrow<'r>(&'r self) -> &'r T {
-        unsafe { cast::copy_lifetime(self, &*self.ptr) }
-    }
-
-    // the 'r lifetime results in the same semantics as `&mut *x` with ~T
-    pub fn borrow_mut<'r>(&'r mut self) -> &'r mut T {
-        unsafe { cast::copy_mut_lifetime(self, &mut *self.ptr) }
-    }
-}
-
-// The key ingredient for safety, we associate a destructor with
-// Unique<T>, making the struct manage the raw pointer: when the
-// struct goes out of scope, it will automatically free the raw pointer.
-// NB: This is an unsafe destructor, because rustc will not normally
-// allow destructors to be associated with parametrized types, due to
-// bad interaction with managed boxes. (With the Send restriction,
-// we don't have this problem.)
-#[unsafe_destructor]
-impl<T: Send> Drop for Unique<T> {
-    fn drop(&mut self) {
-        unsafe {
-            let x = intrinsics::uninit(); // dummy value to swap in
-            // We need to move the object out of the box, so that
-            // the destructor is called (at the end of this scope.)
-            ptr::replace_ptr(self.ptr, x);
-            free(self.ptr as *mut c_void)
-        }
-    }
-}
-
-// A comparison between the built-in ~ and this reimplementation
-fn main() {
-    {
-        let mut x = ~5;
-        *x = 10;
-    } // `x` is freed here
-
-    {
-        let mut y = Unique::new(5);
-        *y.borrow_mut() = 10;
-    } // `y` is freed here
-}
-~~~~
-
 # Callbacks from C code to Rust functions
 
 Some external libraries require the usage of callbacks to report back their
@@ -263,16 +208,20 @@ to the C library and afterwards be invoked from there.
 A basic example is:
 
 Rust code:
-~~~~ {.ignore}
+
+~~~~
 extern fn callback(a:i32) {
     println!("I'm called from C with value {0}", a);
 }
 
 #[link(name = "extlib")]
+# #[cfg(ignore)]
 extern {
-   fn register_callback(cb: extern "C" fn(i32)) -> i32;
+   fn register_callback(cb: extern fn(i32)) -> i32;
    fn trigger_callback();
 }
+# unsafe fn register_callback(cb: extern fn(i32)) -> i32 { 0 }
+# unsafe fn trigger_callback() { }
 
 fn main() {
     unsafe {
@@ -283,7 +232,8 @@ fn main() {
 ~~~~
 
 C code:
-~~~~ {.ignore}
+
+~~~~ {.notrust}
 typedef void (*rust_callback)(int32_t);
 rust_callback cb;
 
@@ -306,7 +256,7 @@ which would call back to `callback()` in Rust.
 The former example showed how a global function can be called from C code.
 However it is often desired that the callback is targetted to a special
 Rust object. This could be the object that represents the wrapper for the
-respective C object. 
+respective C object.
 
 This can be achieved by passing an unsafe pointer to the object down to the
 C library. The C library can then include the pointer to the Rust object in
@@ -314,39 +264,47 @@ the notification. This will allow the callback to unsafely access the
 referenced Rust object.
 
 Rust code:
-~~~~ {.ignore}
+
+~~~~
 
 struct RustObject {
     a: i32,
     // other members
 }
 
-extern fn callback(target: *RustObject, a:i32) {
+extern fn callback(target: *mut RustObject, a:i32) {
     println!("I'm called from C with value {0}", a);
-    (*target).a = a; // Update the value in RustObject with the value received from the callback
+    unsafe {
+        // Update the value in RustObject with the value received from the callback
+        (*target).a = a;
+    }
 }
 
 #[link(name = "extlib")]
+# #[cfg(ignore)]
 extern {
-   fn register_callback(target: *RustObject, cb: extern "C" fn(*RustObject, i32)) -> i32;
+   fn register_callback(target: *mut RustObject,
+                        cb: extern fn(*mut RustObject, i32)) -> i32;
    fn trigger_callback();
 }
+# unsafe fn register_callback(a: *mut RustObject,
+#                             b: extern fn(*mut RustObject, i32)) -> i32 { 0 }
+# unsafe fn trigger_callback() {}
 
 fn main() {
     // Create the object that will be referenced in the callback
-    let rust_object = ~RustObject{a: 5, ...};
-     
+    let mut rust_object = ~RustObject{ a: 5 };
+
     unsafe {
-        // Gets a raw pointer to the object
-        let target_addr:*RustObject = ptr::to_unsafe_ptr(rust_object);
-        register_callback(target_addr, callback);
-        trigger_callback(); // Triggers the callback
+        register_callback(&mut *rust_object, callback);
+        trigger_callback();
     }
 }
 ~~~~
 
 C code:
-~~~~ {.ignore}
+
+~~~~ {.notrust}
 typedef void (*rust_callback)(int32_t);
 void* cb_target;
 rust_callback cb;
@@ -379,9 +337,9 @@ Besides classical synchronization mechanisms like mutexes, one possibility in
 Rust is to use channels (in `std::comm`) to forward data from the C thread
 that invoked the callback into a Rust task.
 
-If an asychronous callback targets a special object in the Rust address space
-it is also absolutely necessary that no more callbacks are performed by the 
-C library after the respective Rust object gets destroyed. 
+If an asynchronous callback targets a special object in the Rust address space
+it is also absolutely necessary that no more callbacks are performed by the
+C library after the respective Rust object gets destroyed.
 This can be achieved by unregistering the callback in the object's
 destructor and designing the library in a way that guarantees that no
 callback will be performed after unregistration.
@@ -476,13 +434,15 @@ Foreign APIs often export a global variable which could do something like track
 global state. In order to access these variables, you declare them in `extern`
 blocks with the `static` keyword:
 
-~~~{.ignore}
-use std::libc;
+~~~
+extern crate libc;
 
 #[link(name = "readline")]
+# #[cfg(ignore)]
 extern {
     static rl_readline_version: libc::c_int;
 }
+# static rl_readline_version: libc::c_int = 0;
 
 fn main() {
     println!("You have readline version {} installed.",
@@ -494,21 +454,23 @@ Alternatively, you may need to alter global state provided by a foreign
 interface. To do this, statics can be declared with `mut` so rust can mutate
 them.
 
-~~~{.ignore}
-use std::libc;
+~~~
+extern crate libc;
 use std::ptr;
 
 #[link(name = "readline")]
+# #[cfg(ignore)]
 extern {
     static mut rl_prompt: *libc::c_char;
 }
+# static mut rl_prompt: *libc::c_char = 0 as *libc::c_char;
 
 fn main() {
-    do "[my-awesome-shell] $".as_c_str |buf| {
+    "[my-awesome-shell] $".with_c_str(|buf| {
         unsafe { rl_prompt = buf; }
         // get a line, process it
         unsafe { rl_prompt = ptr::null(); }
-    }
+    });
 }
 ~~~
 
@@ -519,11 +481,15 @@ calling foreign functions. Some foreign functions, most notably the Windows API,
 conventions. Rust provides a way to tell the compiler which convention to use:
 
 ~~~~
+extern crate libc;
+
 #[cfg(target_os = "win32", target_arch = "x86")]
-#[link_name = "kernel32"]
+#[link(name = "kernel32")]
 extern "stdcall" {
-    fn SetEnvironmentVariableA(n: *u8, v: *u8) -> std::libc::c_int;
+    fn SetEnvironmentVariableA(n: *u8, v: *u8) -> libc::c_int;
 }
+
+# fn main() { }
 ~~~~
 
 This applies to the entire `extern` block. The list of supported ABI constraints
@@ -565,3 +531,16 @@ NUL-terminated string for interoperability with C, you should use the `c_str::to
 
 The standard library includes type aliases and function definitions for the C standard library in
 the `libc` module, and Rust links against `libc` and `libm` by default.
+
+# The "nullable pointer optimization"
+
+Certain types are defined to not be `null`. This includes references (`&T`,
+`&mut T`), owning pointers (`~T`), and function pointers (`extern "abi"
+fn()`). When interfacing with C, pointers that might be null are often used.
+As a special case, a generic `enum` that contains exactly two variants, one of
+which contains no data and the other containing a single field, is eligible
+for the "nullable pointer optimization". When such an enum is instantiated
+with one of the non-nullable types, it is represented as a single pointer,
+and the non-data variant is represented as the null pointer. So
+`Option<extern "C" fn(c_int) -> c_int>` is how one represents a nullable
+function pointer using the C ABI.

@@ -14,13 +14,15 @@
 
 use cast;
 use iter::Iterator;
+use kinds::Send;
+use mem;
 use option::{Some, None};
 use ptr::RawPtr;
 use unstable::sync::Exclusive;
-use util;
-use vec::OwnedVector;
+use slice::OwnedVector;
+use vec::Vec;
 
-type Queue = Exclusive<~[proc()]>;
+type Queue = Exclusive<Vec<proc():Send>>;
 
 // You'll note that these variables are *not* atomic, and this is done on
 // purpose. This module is designed to have init() called *once* in a
@@ -34,12 +36,12 @@ pub fn init() {
     unsafe {
         rtassert!(!RUNNING);
         rtassert!(QUEUE.is_null());
-        let state: ~Queue = ~Exclusive::new(~[]);
+        let state: ~Queue = ~Exclusive::new(vec!());
         QUEUE = cast::transmute(state);
     }
 }
 
-pub fn push(f: proc()) {
+pub fn push(f: proc():Send) {
     unsafe {
         rtassert!(!RUNNING);
         rtassert!(!QUEUE.is_null());
@@ -60,7 +62,7 @@ pub fn run() {
         QUEUE = 0 as *mut Queue;
         let mut vec = None;
         state.with(|arr| {
-            vec = Some(util::replace(arr, ~[]));
+            vec = Some(mem::replace(arr, vec!()));
         });
         vec.take_unwrap()
     };

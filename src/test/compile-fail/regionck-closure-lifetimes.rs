@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn env<'a>(_: &'a uint, blk: |p: 'a |||) {
+fn env<'a>(_: &'a uint, blk: |p: ||: 'a|) {
     // Test that the closure here cannot be assigned
     // the lifetime `'a`, which outlives the current
     // block.
@@ -18,10 +18,10 @@ fn env<'a>(_: &'a uint, blk: |p: 'a |||) {
 
     let mut state = 0;
     let statep = &mut state;
-    blk(|| *statep = 1); //~ ERROR cannot infer an appropriate lifetime
+    blk(|| *statep = 1); //~ ERROR cannot infer
 }
 
-fn no_env_no_for<'a>(_: &'a uint, blk: |p: 'a |||) {
+fn no_env_no_for<'a>(_: &'a uint, blk: |p: |||: 'a) {
     // Test that a closure with no free variables CAN
     // outlive the block in which it is created.
     //
@@ -40,7 +40,7 @@ fn repeating_loop() {
     let state = 0;
 
     loop {
-        closure = || state; //~ ERROR cannot infer an appropriate lifetime
+        closure = || state; //~ ERROR cannot infer
         break;
     }
 
@@ -56,7 +56,7 @@ fn repeating_while() {
     let state = 0;
 
     while true {
-        closure = || state; //~ ERROR cannot infer an appropriate lifetime
+        closure = || state; //~ ERROR cannot infer
         break;
     }
 

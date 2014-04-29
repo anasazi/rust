@@ -32,7 +32,7 @@ impl InferStr for ty::t {
 impl InferStr for FnSig {
     fn inf_str(&self, cx: &InferCtxt) -> ~str {
         format!("({}) -> {}",
-             self.inputs.map(|a| a.inf_str(cx)).connect(", "),
+             self.inputs.iter().map(|a| a.inf_str(cx)).collect::<Vec<~str>>().connect(", "),
              self.output.inf_str(cx))
     }
 }
@@ -53,7 +53,7 @@ impl<V:InferStr> InferStr for Bound<V> {
     fn inf_str(&self, cx: &InferCtxt) -> ~str {
         match *self {
           Some(ref v) => v.inf_str(cx),
-          None => ~"none"
+          None => "none".to_owned()
         }
     }
 }
@@ -70,8 +70,7 @@ impl<V:Vid + ToStr,T:InferStr> InferStr for VarValue<V, T> {
     fn inf_str(&self, cx: &InferCtxt) -> ~str {
         match *self {
           Redirect(ref vid) => format!("Redirect({})", vid.to_str()),
-          Root(ref pt, rk) => format!("Root({}, {})", pt.inf_str(cx),
-                               rk.to_str_radix(10u))
+          Root(ref pt, rk) => format!("Root({}, {})", pt.inf_str(cx), rk)
         }
     }
 }

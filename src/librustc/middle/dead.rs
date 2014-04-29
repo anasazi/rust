@@ -16,8 +16,9 @@ use middle::lint::{allow, contains_lint, DeadCode};
 use middle::privacy;
 use middle::ty;
 use middle::typeck;
+use util::nodemap::NodeSet;
 
-use std::hashmap::HashSet;
+use collections::HashSet;
 use syntax::ast;
 use syntax::ast_map;
 use syntax::ast_util::{local_def, def_id_of_def, is_local};
@@ -33,12 +34,12 @@ pub static DEAD_CODE_LINT_STR: &'static str = "dead_code";
 // explored. For example, if it's a live NodeItem that is a
 // function, then we should explore its block to check for codes that
 // may need to be marked as live.
-fn should_explore(tcx: ty::ctxt, def_id: ast::DefId) -> bool {
+fn should_explore(tcx: &ty::ctxt, def_id: ast::DefId) -> bool {
     if !is_local(def_id) {
         return false;
     }
 
-    match tcx.items.find(def_id.node) {
+    match tcx.map.find(def_id.node) {
         Some(ast_map::NodeItem(..))
         | Some(ast_map::NodeMethod(..))
         | Some(ast_map::NodeForeignItem(..))
@@ -47,20 +48,17 @@ fn should_explore(tcx: ty::ctxt, def_id: ast::DefId) -> bool {
     }
 }
 
-struct MarkSymbolVisitor {
-    worklist: ~[ast::NodeId],
-    method_map: typeck::method_map,
-    tcx: ty::ctxt,
+struct MarkSymbolVisitor<'a> {
+    worklist: Vec<ast::NodeId>,
+    tcx: &'a ty::ctxt,
     live_symbols: ~HashSet<ast::NodeId>,
 }
 
-impl MarkSymbolVisitor {
-    fn new(tcx: ty::ctxt,
-           method_map: typeck::method_map,
-           worklist: ~[ast::NodeId]) -> MarkSymbolVisitor {
+impl<'a> MarkSymbolVisitor<'a> {
+    fn new(tcx: &'a ty::ctxt,
+           worklist: Vec<ast::NodeId>) -> MarkSymbolVisitor<'a> {
         MarkSymbolVisitor {
             worklist: worklist,
-            method_map: method_map,
             tcx: tcx,
             live_symbols: ~HashSet::new(),
         }
@@ -74,8 +72,7 @@ impl MarkSymbolVisitor {
     }
 
     fn lookup_and_handle_definition(&mut self, id: &ast::NodeId) {
-        let def_map = self.tcx.def_map.borrow();
-        let def = match def_map.get().find(id) {
+        let def = match self.tcx.def_map.borrow().find(id) {
             Some(&def) => def,
             None => return
         };
@@ -90,24 +87,24 @@ impl MarkSymbolVisitor {
         }
     }
 
-    fn lookup_and_handle_method(&mut self, id: &ast::NodeId,
+    fn lookup_and_handle_method(&mut self, id: ast::NodeId,
                                 span: codemap::Span) {
-        let method_map = self.method_map.borrow();
-        match method_map.get().find(id) {
-            Some(&typeck::method_map_entry { origin, .. }) => {
-                match origin {
-                    typeck::method_static(def_id) => {
+        let method_call = typeck::MethodCall::expr(id);
+        match self.tcx.method_map.borrow().find(&method_call) {
+            Some(method) => {
+                match method.origin {
+                    typeck::MethodStatic(def_id) => {
                         match ty::provided_source(self.tcx, def_id) {
                             Some(p_did) => self.check_def_id(p_did),
                             None => self.check_def_id(def_id)
                         }
                     }
-                    typeck::method_param(typeck::method_param {
+                    typeck::MethodParam(typeck::MethodParam {
                         trait_id: trait_id,
                         method_num: index,
                         ..
                     })
-                    | typeck::method_object(typeck::method_object {
+                    | typeck::MethodObject(typeck::MethodObject {
                         trait_id: trait_id,
                         method_num: index,
                         ..
@@ -135,7 +132,7 @@ impl MarkSymbolVisitor {
             }
             scanned.insert(id);
 
-            match self.tcx.items.find(id) {
+            match self.tcx.map.find(id) {
                 Some(ref node) => {
                     self.live_symbols.insert(id);
                     self.visit_node(node);
@@ -147,7 +144,7 @@ impl MarkSymbolVisitor {
 
     fn visit_node(&mut self, node: &ast_map::Node) {
         match *node {
-            ast_map::NodeItem(item, _) => {
+            ast_map::NodeItem(item) => {
                 match item.node {
                     ast::ItemFn(..)
                     | ast::ItemTy(..)
@@ -159,13 +156,13 @@ impl MarkSymbolVisitor {
                     _ => ()
                 }
             }
-            ast_map::NodeTraitMethod(trait_method, _, _) => {
+            ast_map::NodeTraitMethod(trait_method) => {
                 visit::walk_trait_method(self, trait_method, ());
             }
-            ast_map::NodeMethod(method, _, _) => {
+            ast_map::NodeMethod(method) => {
                 visit::walk_block(self, method.body, ());
             }
-            ast_map::NodeForeignItem(foreign_item, _, _, _) => {
+            ast_map::NodeForeignItem(foreign_item) => {
                 visit::walk_foreign_item(self, foreign_item, ());
             }
             _ => ()
@@ -173,12 +170,12 @@ impl MarkSymbolVisitor {
     }
 }
 
-impl Visitor<()> for MarkSymbolVisitor {
+impl<'a> Visitor<()> for MarkSymbolVisitor<'a> {
 
     fn visit_expr(&mut self, expr: &ast::Expr, _: ()) {
         match expr.node {
             ast::ExprMethodCall(..) => {
-                self.lookup_and_handle_method(&expr.id, expr.span);
+                self.lookup_and_handle_method(expr.id, expr.span);
             }
             _ => ()
         }
@@ -199,7 +196,7 @@ impl Visitor<()> for MarkSymbolVisitor {
 
 fn has_allow_dead_code_or_lang_attr(attrs: &[ast::Attribute]) -> bool {
     contains_lint(attrs, allow, DEAD_CODE_LINT_STR)
-    || attr::contains_name(attrs, "lang")
+    || attr::contains_name(attrs.as_slice(), "lang")
 }
 
 // This visitor seeds items that
@@ -216,12 +213,12 @@ fn has_allow_dead_code_or_lang_attr(attrs: &[ast::Attribute]) -> bool {
 //   2) We are not sure to be live or not
 //     * Implementation of a trait method
 struct LifeSeeder {
-    worklist: ~[ast::NodeId],
+    worklist: Vec<ast::NodeId> ,
 }
 
 impl Visitor<()> for LifeSeeder {
     fn visit_item(&mut self, item: &ast::Item, _: ()) {
-        if has_allow_dead_code_or_lang_attr(item.attrs) {
+        if has_allow_dead_code_or_lang_attr(item.attrs.as_slice()) {
             self.worklist.push(item.id);
         }
         match item.node {
@@ -241,7 +238,7 @@ impl Visitor<()> for LifeSeeder {
         // Check for method here because methods are not ast::Item
         match *fk {
             visit::FkMethod(_, _, method) => {
-                if has_allow_dead_code_or_lang_attr(method.attrs) {
+                if has_allow_dead_code_or_lang_attr(method.attrs.as_slice()) {
                     self.worklist.push(id);
                 }
             }
@@ -251,11 +248,11 @@ impl Visitor<()> for LifeSeeder {
     }
 }
 
-fn create_and_seed_worklist(tcx: ty::ctxt,
+fn create_and_seed_worklist(tcx: &ty::ctxt,
                             exported_items: &privacy::ExportedItems,
-                            reachable_symbols: &HashSet<ast::NodeId>,
-                            crate: &ast::Crate) -> ~[ast::NodeId] {
-    let mut worklist = ~[];
+                            reachable_symbols: &NodeSet,
+                            krate: &ast::Crate) -> Vec<ast::NodeId> {
+    let mut worklist = Vec::new();
 
     // Preferably, we would only need to seed the worklist with reachable
     // symbols. However, since the set of reachable symbols differs
@@ -270,29 +267,28 @@ fn create_and_seed_worklist(tcx: ty::ctxt,
     }
 
     // Seed entry point
-    match tcx.sess.entry_fn.get() {
+    match *tcx.sess.entry_fn.borrow() {
         Some((id, _)) => worklist.push(id),
         None => ()
     }
 
-    // Seed implemeneted trait methods
+    // Seed implemented trait methods
     let mut life_seeder = LifeSeeder {
         worklist: worklist
     };
-    visit::walk_crate(&mut life_seeder, crate, ());
+    visit::walk_crate(&mut life_seeder, krate, ());
 
     return life_seeder.worklist;
 }
 
-fn find_live(tcx: ty::ctxt,
-             method_map: typeck::method_map,
+fn find_live(tcx: &ty::ctxt,
              exported_items: &privacy::ExportedItems,
-             reachable_symbols: &HashSet<ast::NodeId>,
-             crate: &ast::Crate)
+             reachable_symbols: &NodeSet,
+             krate: &ast::Crate)
              -> ~HashSet<ast::NodeId> {
     let worklist = create_and_seed_worklist(tcx, exported_items,
-                                            reachable_symbols, crate);
-    let mut symbol_visitor = MarkSymbolVisitor::new(tcx, method_map, worklist);
+                                            reachable_symbols, krate);
+    let mut symbol_visitor = MarkSymbolVisitor::new(tcx, worklist);
     symbol_visitor.mark_live_symbols();
     symbol_visitor.live_symbols
 }
@@ -314,12 +310,12 @@ fn get_struct_ctor_id(item: &ast::Item) -> Option<ast::NodeId> {
     }
 }
 
-struct DeadVisitor {
-    tcx: ty::ctxt,
+struct DeadVisitor<'a> {
+    tcx: &'a ty::ctxt,
     live_symbols: ~HashSet<ast::NodeId>,
 }
 
-impl DeadVisitor {
+impl<'a> DeadVisitor<'a> {
     // id := node id of an item's definition.
     // ctor_id := `Some` if the item is a struct_ctor (tuple struct),
     //            `None` otherwise.
@@ -340,15 +336,13 @@ impl DeadVisitor {
         // This is done to handle the case where, for example, the static
         // method of a private type is used, but the type itself is never
         // called directly.
-        let def_id = local_def(id);
-        let inherent_impls = self.tcx.inherent_impls.borrow();
-        match inherent_impls.get().find(&def_id) {
+        let impl_methods = self.tcx.impl_methods.borrow();
+        match self.tcx.inherent_impls.borrow().find(&local_def(id)) {
             None => (),
-            Some(ref impl_list) => {
-                let impl_list = impl_list.borrow();
-                for impl_ in impl_list.get().iter() {
-                    for method in impl_.methods.iter() {
-                        if self.live_symbols.contains(&method.def_id.node) {
+            Some(impl_list) => {
+                for impl_did in impl_list.borrow().iter() {
+                    for method_did in impl_methods.get(impl_did).iter() {
+                        if self.live_symbols.contains(&method_did.node) {
                             return true;
                         }
                     }
@@ -359,26 +353,25 @@ impl DeadVisitor {
     }
 
     fn warn_dead_code(&mut self, id: ast::NodeId,
-                      span: codemap::Span, ident: &ast::Ident) {
-        let string = token::get_ident(ident.name);
+                      span: codemap::Span, ident: ast::Ident) {
         self.tcx.sess.add_lint(DeadCode, id, span,
                                format!("code is never used: `{}`",
-                                       string.get()));
+                                       token::get_ident(ident)));
     }
 }
 
-impl Visitor<()> for DeadVisitor {
+impl<'a> Visitor<()> for DeadVisitor<'a> {
     fn visit_item(&mut self, item: &ast::Item, _: ()) {
         let ctor_id = get_struct_ctor_id(item);
         if !self.symbol_is_live(item.id, ctor_id) && should_warn(item) {
-            self.warn_dead_code(item.id, item.span, &item.ident);
+            self.warn_dead_code(item.id, item.span, item.ident);
         }
         visit::walk_item(self, item, ());
     }
 
     fn visit_foreign_item(&mut self, fi: &ast::ForeignItem, _: ()) {
         if !self.symbol_is_live(fi.id, None) {
-            self.warn_dead_code(fi.id, fi.span, &fi.ident);
+            self.warn_dead_code(fi.id, fi.span, fi.ident);
         }
         visit::walk_foreign_item(self, fi, ());
     }
@@ -391,7 +384,7 @@ impl Visitor<()> for DeadVisitor {
             visit::FkMethod(..) => {
                 let ident = visit::name_of_fn(fk);
                 if !self.symbol_is_live(id, None) {
-                    self.warn_dead_code(id, span, &ident);
+                    self.warn_dead_code(id, span, ident);
                 }
             }
             _ => ()
@@ -408,13 +401,12 @@ impl Visitor<()> for DeadVisitor {
     }
 }
 
-pub fn check_crate(tcx: ty::ctxt,
-                   method_map: typeck::method_map,
+pub fn check_crate(tcx: &ty::ctxt,
                    exported_items: &privacy::ExportedItems,
-                   reachable_symbols: &HashSet<ast::NodeId>,
-                   crate: &ast::Crate) {
-    let live_symbols = find_live(tcx, method_map, exported_items,
-                                 reachable_symbols, crate);
+                   reachable_symbols: &NodeSet,
+                   krate: &ast::Crate) {
+    let live_symbols = find_live(tcx, exported_items,
+                                 reachable_symbols, krate);
     let mut visitor = DeadVisitor { tcx: tcx, live_symbols: live_symbols };
-    visit::walk_crate(&mut visitor, crate, ());
+    visit::walk_crate(&mut visitor, krate, ());
 }

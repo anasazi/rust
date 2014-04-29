@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -11,12 +11,12 @@
 // These are attributes of the implicit crate. Really this just needs to parse
 // for completeness since .rs files linked from .rc files support this
 // notation to specify their module's attributes
-#[attr1 = "val"];
-#[attr2 = "val"];
-#[attr3];
-#[attr4(attr5)];
+#![attr1 = "val"]
+#![attr2 = "val"]
+#![attr3]
+#![attr4(attr5)]
 
-#[crate_id="extra#0.1"];
+#![crate_id="foobar#0.1"]
 
 // These are attributes of the following mod
 #[attr1 = "val"]
@@ -113,14 +113,14 @@ mod test_stmt_multi_attr_outer {
 mod test_attr_inner {
     pub mod m {
         // This is an attribute of mod m
-        #[attr = "val"];
+        #![attr = "val"]
     }
 }
 
 mod test_attr_inner_then_outer {
     pub mod m {
         // This is an attribute of mod m
-        #[attr = "val"];
+        #![attr = "val"]
         // This is an attribute of fn f
         #[attr = "val"]
         fn f() { }
@@ -130,8 +130,8 @@ mod test_attr_inner_then_outer {
 mod test_attr_inner_then_outer_multi {
     pub mod m {
         // This is an attribute of mod m
-        #[attr1 = "val"];
-        #[attr2 = "val"];
+        #![attr1 = "val"]
+        #![attr2 = "val"]
         // This is an attribute of fn f
         #[attr1 = "val"]
         #[attr2 = "val"]
@@ -140,8 +140,6 @@ mod test_attr_inner_then_outer_multi {
 }
 
 mod test_distinguish_syntax_ext {
-    extern mod extra;
-
     pub fn f() {
         format!("test{}", "s");
         #[attr = "val"]
@@ -159,10 +157,10 @@ mod test_other_forms {
 
 mod test_foreign_items {
     pub mod rustrt {
-        use std::libc;
+        extern crate libc;
 
         extern {
-            #[attr];
+            #![attr]
 
             #[attr]
             fn rust_get_test_int() -> libc::intptr_t;
@@ -173,20 +171,20 @@ mod test_foreign_items {
 
 // FIXME #623 - these aren't supported yet
 /*mod test_literals {
-    #[str = "s"];
-    #[char = 'c'];
-    #[int = 100];
-    #[uint = 100u];
-    #[mach_int = 100u32];
-    #[float = 1.0];
-    #[mach_float = 1.0f32];
-    #[nil = ()];
-    #[bool = true];
+    #![str = "s"]
+    #![char = 'c']
+    #![int = 100]
+    #![uint = 100u]
+    #![mach_int = 100u32]
+    #![float = 1.0]
+    #![mach_float = 1.0f32]
+    #![nil = ()]
+    #![bool = true]
     mod m {}
 }*/
 
 fn test_fn_inner() {
-    #[inner_fn_attr];
+    #![inner_fn_attr]
 }
 
 pub fn main() { }

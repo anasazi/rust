@@ -10,7 +10,7 @@
 
 // error-pattern:fail
 
-#[feature(managed_boxes)];
+#![feature(managed_boxes)]
 
 use std::cast;
 
@@ -43,6 +43,6 @@ fn main() {
         cast::forget(i1);
         let x = @r(i1p);
         failfn();
-        error!("{:?}", x);
+        println!("{:?}", x);
     }
 }

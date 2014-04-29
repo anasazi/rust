@@ -9,7 +9,6 @@
 // except according to those terms.
 
 use std::cast;
-use std::libc::c_int;
 use std::rt::rtio::{Callback, RemoteCallback};
 use std::unstable::sync::Exclusive;
 
@@ -27,12 +26,12 @@ pub struct AsyncWatcher {
 }
 
 struct Payload {
-    callback: ~Callback,
+    callback: ~Callback:Send,
     exit_flag: Exclusive<bool>,
 }
 
 impl AsyncWatcher {
-    pub fn new(loop_: &mut Loop, cb: ~Callback) -> AsyncWatcher {
+    pub fn new(loop_: &mut Loop, cb: ~Callback:Send) -> AsyncWatcher {
         let handle = UvHandle::alloc(None::<AsyncWatcher>, uvll::UV_ASYNC);
         assert_eq!(unsafe {
             uvll::uv_async_init(loop_.handle, handle, async_cb)
@@ -54,8 +53,7 @@ impl UvHandle<uvll::uv_async_t> for AsyncWatcher {
     }
 }
 
-extern fn async_cb(handle: *uvll::uv_async_t, status: c_int) {
-    assert!(status == 0);
+extern fn async_cb(handle: *uvll::uv_async_t) {
     let payload: &mut Payload = unsafe {
         cast::transmute(uvll::get_data_for_uv_handle(handle))
     };
@@ -135,7 +133,7 @@ mod test_remote {
     // actually trigger what they say they will.
     #[test]
     fn smoke_test() {
-        struct MyCallback(Option<Chan<int>>);
+        struct MyCallback(Option<Sender<int>>);
         impl Callback for MyCallback {
             fn call(&mut self) {
                 // this can get called more than once, but we only want to send
@@ -147,17 +145,16 @@ mod test_remote {
             }
         }
 
-        let (port, chan) = Chan::new();
-        let cb = ~MyCallback(Some(chan));
-        let watcher = AsyncWatcher::new(&mut local_loop().loop_,
-                                        cb as ~Callback);
+        let (tx, rx) = channel();
+        let cb = ~MyCallback(Some(tx));
+        let watcher = AsyncWatcher::new(&mut local_loop().loop_, cb);
 
         let thread = Thread::start(proc() {
             let mut watcher = watcher;
             watcher.fire();
         });
 
-        assert_eq!(port.recv(), 1);
+        assert_eq!(rx.recv(), 1);
         thread.join();
     }
 }

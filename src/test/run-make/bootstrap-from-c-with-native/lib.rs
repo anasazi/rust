@@ -8,11 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[crate_id="boot#0.1"];
-#[crate_type="dylib"];
-#[no_uv];
+#![crate_id="boot#0.1"]
+#![crate_type="dylib"]
 
-extern mod native;
+extern crate native;
 
 #[no_mangle] // this needs to get called from C
 pub extern "C" fn foo(argc: int, argv: **u8) -> int {

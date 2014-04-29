@@ -16,7 +16,7 @@
 //! enabled.
 //!
 //! Features are enabled in programs via the crate-level attributes of
-//! #[feature(...)] with a comma-separated list of features.
+//! #![feature(...)] with a comma-separated list of features.
 
 use middle::lint;
 
@@ -29,6 +29,8 @@ use syntax::visit::Visitor;
 use syntax::parse::token;
 
 use driver::session::Session;
+
+use std::cell::Cell;
 
 /// This is a list of all known features since the beginning of time. This list
 /// can never shrink, it may only be expanded (in order to prevent old programs
@@ -47,8 +49,15 @@ static KNOWN_FEATURES: &'static [(&'static str, Status)] = &[
     ("macro_registrar", Active),
     ("log_syntax", Active),
     ("trace_macros", Active),
+    ("concat_idents", Active),
+
     ("simd", Active),
     ("default_type_params", Active),
+    ("quote", Active),
+    ("linkage", Active),
+    ("struct_inherit", Active),
+
+    ("quad_precision_float", Active),
 
     // These are used to test this portion of the compiler, they don't actually
     // mean anything
@@ -68,16 +77,31 @@ enum Status {
     Accepted,
 }
 
-struct Context {
-    features: ~[&'static str],
-    sess: Session,
+/// A set of features to be used by later passes.
+pub struct Features {
+    pub default_type_params: Cell<bool>,
+    pub quad_precision_float: Cell<bool>
 }
 
-impl Context {
+impl Features {
+    pub fn new() -> Features {
+        Features {
+            default_type_params: Cell::new(false),
+            quad_precision_float: Cell::new(false)
+        }
+    }
+}
+
+struct Context<'a> {
+    features: Vec<&'static str>,
+    sess: &'a Session,
+}
+
+impl<'a> Context<'a> {
     fn gate_feature(&self, feature: &str, span: Span, explain: &str) {
         if !self.has_feature(feature) {
             self.sess.span_err(span, explain);
-            self.sess.span_note(span, format!("add \\#[feature({})] to the \
+            self.sess.span_note(span, format!("add \\#![feature({})] to the \
                                                   crate attributes to enable",
                                                  feature));
         }
@@ -96,12 +120,9 @@ impl Context {
     }
 }
 
-impl Visitor<()> for Context {
+impl<'a> Visitor<()> for Context<'a> {
     fn visit_ident(&mut self, sp: Span, id: ast::Ident, _: ()) {
-        let string = token::get_ident(id.name);
-        let s = string.get();
-
-        if !s.is_ascii() {
+        if !token::get_ident(id).get().is_ascii() {
             self.gate_feature("non_ascii_idents", sp,
                               "non-ascii idents are not fully supported.");
         }
@@ -109,19 +130,17 @@ impl Visitor<()> for Context {
 
     fn visit_view_item(&mut self, i: &ast::ViewItem, _: ()) {
         match i.node {
-            ast::ViewItemUse(ref paths) => {
-                for path in paths.iter() {
-                    match path.node {
-                        ast::ViewPathGlob(..) => {
-                            self.gate_feature("globs", path.span,
-                                              "glob import statements are \
-                                               experimental and possibly buggy");
-                        }
-                        _ => {}
+            ast::ViewItemUse(ref path) => {
+                match path.node {
+                    ast::ViewPathGlob(..) => {
+                        self.gate_feature("globs", path.span,
+                                          "glob import statements are \
+                                           experimental and possibly buggy");
                     }
+                    _ => {}
                 }
             }
-            ast::ViewItemExternMod(..) => {
+            ast::ViewItemExternCrate(..) => {
                 for attr in i.attrs.iter() {
                     if attr.name().get() == "phase"{
                         self.gate_feature("phase", attr.span,
@@ -158,7 +177,7 @@ impl Visitor<()> for Context {
             }
 
             ast::ItemForeignMod(..) => {
-                if attr::contains_name(i.attrs, "link_args") {
+                if attr::contains_name(i.attrs.as_slice(), "link_args") {
                     self.gate_feature("link_args", i.span,
                                       "the `link_args` attribute is not portable \
                                        across platforms, it is recommended to \
@@ -167,17 +186,28 @@ impl Visitor<()> for Context {
             }
 
             ast::ItemFn(..) => {
-                if attr::contains_name(i.attrs, "macro_registrar") {
+                if attr::contains_name(i.attrs.as_slice(), "macro_registrar") {
                     self.gate_feature("macro_registrar", i.span,
                                       "cross-crate macro exports are \
                                        experimental and possibly buggy");
                 }
             }
 
-            ast::ItemStruct(..) => {
-                if attr::contains_name(i.attrs, "simd") {
+            ast::ItemStruct(struct_definition, _) => {
+                if attr::contains_name(i.attrs.as_slice(), "simd") {
                     self.gate_feature("simd", i.span,
                                       "SIMD types are experimental and possibly buggy");
+                }
+                match struct_definition.super_struct {
+                    Some(ref path) => self.gate_feature("struct_inherit", path.span,
+                                                        "struct inheritance is experimental \
+                                                         and possibly buggy"),
+                    None => {}
+                }
+                if struct_definition.is_virtual {
+                    self.gate_feature("struct_inherit", i.span,
+                                      "struct inheritance (`virtual` keyword) is \
+                                       experimental and possibly buggy");
                 }
             }
 
@@ -189,31 +219,62 @@ impl Visitor<()> for Context {
 
     fn visit_mac(&mut self, macro: &ast::Mac, _: ()) {
         let ast::MacInvocTT(ref path, _, _) = macro.node;
+        let id = path.segments.last().unwrap().identifier;
+        let quotes = ["quote_tokens", "quote_expr", "quote_ty",
+                      "quote_item", "quote_pat", "quote_stmt"];
+        let msg = " is not stable enough for use and are subject to change";
 
-        if path.segments.last().unwrap().identifier == self.sess.ident_of("macro_rules") {
+
+        if id == token::str_to_ident("macro_rules") {
             self.gate_feature("macro_rules", path.span, "macro definitions are \
                 not stable enough for use and are subject to change");
         }
 
-        else if path.segments.last().unwrap().identifier == self.sess.ident_of("asm") {
+        else if id == token::str_to_ident("asm") {
             self.gate_feature("asm", path.span, "inline assembly is not \
                 stable enough for use and is subject to change");
         }
 
-        else if path.segments.last().unwrap().identifier == self.sess.ident_of("log_syntax") {
+        else if id == token::str_to_ident("log_syntax") {
             self.gate_feature("log_syntax", path.span, "`log_syntax!` is not \
                 stable enough for use and is subject to change");
         }
-        else if path.segments.last().unwrap().identifier == self.sess.ident_of("trace_macros") {
+
+        else if id == token::str_to_ident("trace_macros") {
             self.gate_feature("trace_macros", path.span, "`trace_macros` is not \
                 stable enough for use and is subject to change");
         }
+
+        else if id == token::str_to_ident("concat_idents") {
+            self.gate_feature("concat_idents", path.span, "`concat_idents` is not \
+                stable enough for use and is subject to change");
+        }
+
+        else {
+            for &quote in quotes.iter() {
+                if id == token::str_to_ident(quote) {
+                  self.gate_feature("quote", path.span, quote + msg);
+                }
+            }
+        }
+    }
+
+    fn visit_foreign_item(&mut self, i: &ast::ForeignItem, _: ()) {
+        match i.node {
+            ast::ForeignItemFn(..) | ast::ForeignItemStatic(..) => {
+                if attr::contains_name(i.attrs.as_slice(), "linkage") {
+                    self.gate_feature("linkage", i.span,
+                                      "the `linkage` attribute is experimental \
+                                       and not portable across platforms")
+                }
+            }
+        }
+        visit::walk_foreign_item(self, i, ())
     }
 
     fn visit_ty(&mut self, t: &ast::Ty, _: ()) {
         match t.node {
-            ast::TyClosure(closure) if closure.onceness == ast::Once &&
-                    closure.sigil != ast::OwnedSigil => {
+            ast::TyClosure(closure, _) if closure.onceness == ast::Once => {
                 self.gate_feature("once_fns", t.span,
                                   "once functions are \
                                    experimental and likely to be removed");
@@ -228,7 +289,7 @@ impl Visitor<()> for Context {
 
     fn visit_expr(&mut self, e: &ast::Expr, _: ()) {
         match e.node {
-            ast::ExprUnary(_, ast::UnBox, _) => {
+            ast::ExprUnary(ast::UnBox, _) => {
                 self.gate_box(e.span);
             }
             _ => {}
@@ -251,13 +312,13 @@ impl Visitor<()> for Context {
     }
 }
 
-pub fn check_crate(sess: Session, crate: &ast::Crate) {
+pub fn check_crate(sess: &Session, krate: &ast::Crate) {
     let mut cx = Context {
-        features: ~[],
+        features: Vec::new(),
         sess: sess,
     };
 
-    for attr in crate.attrs.iter() {
+    for attr in krate.attrs.iter() {
         if !attr.name().equiv(&("feature")) {
             continue
         }
@@ -265,7 +326,7 @@ pub fn check_crate(sess: Session, crate: &ast::Crate) {
         match attr.meta_item_list() {
             None => {
                 sess.span_err(attr.span, "malformed feature attribute, \
-                                          expected #[feature(...)]");
+                                          expected #![feature(...)]");
             }
             Some(list) => {
                 for &mi in list.iter() {
@@ -292,7 +353,7 @@ pub fn check_crate(sess: Session, crate: &ast::Crate) {
                             sess.add_lint(lint::UnknownFeatures,
                                           ast::CRATE_NODE_ID,
                                           mi.span,
-                                          ~"unknown feature");
+                                          "unknown feature".to_owned());
                         }
                     }
                 }
@@ -300,7 +361,10 @@ pub fn check_crate(sess: Session, crate: &ast::Crate) {
         }
     }
 
-    visit::walk_crate(&mut cx, crate, ());
+    visit::walk_crate(&mut cx, krate, ());
 
     sess.abort_if_errors();
+
+    sess.features.default_type_params.set(cx.has_feature("default_type_params"));
+    sess.features.quad_precision_float.set(cx.has_feature("quad_precision_float"));
 }

@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(managed_boxes)];
+#![feature(managed_boxes)]
 
 trait noisy {
   fn speak(&mut self) -> int;
@@ -22,7 +22,7 @@ struct dog {
 
 impl dog {
     fn bark(&mut self) -> int {
-      info!("Woof {} {}", self.barks, self.volume);
+      println!("Woof {} {}", self.barks, self.volume);
       self.barks += 1u;
       if self.barks % 3u == 0u {
           self.volume += 1;
@@ -30,7 +30,7 @@ impl dog {
       if self.barks % 10u == 0u {
           self.volume -= 2;
       }
-      info!("Grrr {} {}", self.barks, self.volume);
+      println!("Grrr {} {}", self.barks, self.volume);
       self.volume
     }
 }
@@ -70,7 +70,7 @@ impl cat {
 
 impl cat {
     fn meow(&mut self) -> uint {
-        info!("Meow");
+        println!("Meow");
         self.meows += 1u;
         if self.meows % 5u == 0u {
             self.how_hungry += 1;
@@ -93,7 +93,7 @@ fn annoy_neighbors(critter: &mut noisy) {
 }
 
 pub fn main() {
-  let mut nyan: cat = cat(0u, 2, ~"nyan");
+  let mut nyan: cat = cat(0u, 2, "nyan".to_owned());
   let mut whitefang: dog = dog();
   annoy_neighbors(&mut nyan);
   annoy_neighbors(&mut whitefang);

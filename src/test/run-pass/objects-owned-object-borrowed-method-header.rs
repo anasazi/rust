@@ -1,6 +1,6 @@
-// xfail-pretty
+// ignore-pretty
 
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -10,7 +10,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(managed_boxes)];
+#![feature(managed_boxes)]
+
 
 // Test invoked `&self` methods on owned objects where the values
 // closed over contain managed values. This implies that the ~ boxes
@@ -31,13 +32,13 @@ impl FooTrait for BarStruct {
 }
 
 pub fn main() {
-    let foos: ~[ ~FooTrait: ] = ~[
+    let foos: Vec<~FooTrait:> = vec!(
         ~BarStruct{ x: @0 } as ~FooTrait:,
         ~BarStruct{ x: @1 } as ~FooTrait:,
         ~BarStruct{ x: @2 } as ~FooTrait:
-    ];
+    );
 
     for i in range(0u, foos.len()) {
-        assert_eq!(i, foos[i].foo());
+        assert_eq!(i, foos.get(i).foo());
     }
 }

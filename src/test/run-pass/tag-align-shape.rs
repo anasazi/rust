@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,7 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-fast: check-fast screws up repr paths
 
 enum a_tag {
     a_tag(u64)
@@ -22,6 +21,6 @@ struct t_rec {
 pub fn main() {
     let x = t_rec {c8: 22u8, t: a_tag(44u64)};
     let y = format!("{:?}", x);
-    info!("y = {}", y);
-    assert_eq!(y, ~"t_rec{c8: 22u8, t: a_tag(44u64)}");
+    println!("y = {}", y);
+    assert_eq!(y, "t_rec{c8: 22u8, t: a_tag(44u64)}".to_owned());
 }

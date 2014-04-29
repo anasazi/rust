@@ -8,15 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(managed_boxes)];
+#![feature(managed_boxes)]
+
 
 // error-pattern:fail
 
-fn fold_local() -> @~[int]{
-    @~[0,0,0,0,0,0]
+fn fold_local() -> @Vec<int> {
+    @vec!(0,0,0,0,0,0)
 }
 
-fn fold_remote() -> @~[int]{
+fn fold_remote() -> @Vec<int> {
     fail!();
 }
 

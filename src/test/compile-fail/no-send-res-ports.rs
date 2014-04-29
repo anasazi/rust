@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(managed_boxes)];
+#![feature(managed_boxes)]
 
 use std::task;
 
@@ -34,6 +34,6 @@ fn main() {
 
     task::spawn(proc() {
         let y = x;   //~ ERROR does not fulfill `Send`
-        error!("{:?}", y);
+        println!("{:?}", y);
     });
 }

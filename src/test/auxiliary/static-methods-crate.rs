@@ -8,8 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[crate_id="static_methods_crate#0.1"];
-#[crate_type = "lib"];
+#![crate_id="static_methods_crate#0.1"]
+#![crate_type = "lib"]
 
 use std::int;
 
@@ -25,9 +25,9 @@ impl read for int {
 
 impl read for bool {
     fn readMaybe(s: ~str) -> Option<bool> {
-        match s {
-          ~"true" => Some(true),
-          ~"false" => Some(false),
+        match s.as_slice() {
+          "true" => Some(true),
+          "false" => Some(false),
           _ => None
         }
     }

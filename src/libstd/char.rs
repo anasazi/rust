@@ -8,17 +8,31 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Unicode characters manipulation (`char` type)
+//! Character manipulation (`char` type, Unicode Scalar Value)
+//!
+//! This module  provides the `Char` trait, as well as its implementation
+//! for the primitive `char` type, in order to allow basic character manipulation.
+//!
+//! A `char` actually represents a
+//! *[Unicode Scalar Value](http://www.unicode.org/glossary/#unicode_scalar_value)*,
+//! as it can contain any Unicode code point except high-surrogate and
+//! low-surrogate code points.
+//!
+//! As such, only values in the ranges \[0x0,0xD7FF\] and \[0xE000,0x10FFFF\]
+//! (inclusive) are allowed. A `char` can always be safely cast to a `u32`;
+//! however the converse is not always true due to the above range limits
+//! and, as such, should be performed via the `from_u32` function..
+
 
 use cast::transmute;
 use option::{None, Option, Some};
 use iter::{Iterator, range_step};
 use str::StrSlice;
-use unicode::{derived_property, property, general_category, decompose};
-use to_str::ToStr;
-use str;
+use unicode::{derived_property, property, general_category, decompose, conversions};
 
-#[cfg(test)] use str::OwnedStr;
+#[cfg(test)] use str::Str;
+#[cfg(test)] use strbuf::StrBuf;
+#[cfg(test)] use slice::ImmutableVector;
 
 #[cfg(not(test))] use cmp::{Eq, Ord};
 #[cfg(not(test))] use default::Default;
@@ -68,7 +82,8 @@ static TAG_FOUR_B: uint = 240u;
 /// The highest valid code point
 pub static MAX: char = '\U0010ffff';
 
-/// Convert from `u32` to a character.
+/// Converts from `u32` to a `char`
+#[inline]
 pub fn from_u32(i: u32) -> Option<char> {
     // catch out-of-bounds and surrogates
     if (i > MAX as u32) || (i >= 0xD800 && i <= 0xDFFF) {
@@ -78,31 +93,44 @@ pub fn from_u32(i: u32) -> Option<char> {
     }
 }
 
-/// Returns whether the specified character is considered a unicode alphabetic
-/// character
+/// Returns whether the specified `char` is considered a Unicode alphabetic
+/// code point
 pub fn is_alphabetic(c: char) -> bool   { derived_property::Alphabetic(c) }
-#[allow(missing_doc)]
+
+/// Returns whether the specified `char` satisfies the 'XID_Start' Unicode property
+///
+/// 'XID_Start' is a Unicode Derived Property specified in
+/// [UAX #31](http://unicode.org/reports/tr31/#NFKC_Modifications),
+/// mostly similar to ID_Start but modified for closure under NFKx.
 pub fn is_XID_start(c: char) -> bool    { derived_property::XID_Start(c) }
-#[allow(missing_doc)]
+
+/// Returns whether the specified `char` satisfies the 'XID_Continue' Unicode property
+///
+/// 'XID_Continue' is a Unicode Derived Property specified in
+/// [UAX #31](http://unicode.org/reports/tr31/#NFKC_Modifications),
+/// mostly similar to 'ID_Continue' but modified for closure under NFKx.
 pub fn is_XID_continue(c: char) -> bool { derived_property::XID_Continue(c) }
 
 ///
-/// Indicates whether a character is in lower case, defined
-/// in terms of the Unicode Derived Core Property 'Lowercase'.
+/// Indicates whether a `char` is in lower case
+///
+/// This is defined according to the terms of the Unicode Derived Core Property 'Lowercase'.
 ///
 #[inline]
 pub fn is_lowercase(c: char) -> bool { derived_property::Lowercase(c) }
 
 ///
-/// Indicates whether a character is in upper case, defined
-/// in terms of the Unicode Derived Core Property 'Uppercase'.
+/// Indicates whether a `char` is in upper case
+///
+/// This is defined according to the terms of the Unicode Derived Core Property 'Uppercase'.
 ///
 #[inline]
 pub fn is_uppercase(c: char) -> bool { derived_property::Uppercase(c) }
 
 ///
-/// Indicates whether a character is whitespace. Whitespace is defined in
-/// terms of the Unicode Property 'White_Space'.
+/// Indicates whether a `char` is whitespace
+///
+/// Whitespace is defined in terms of the Unicode Property 'White_Space'.
 ///
 #[inline]
 pub fn is_whitespace(c: char) -> bool {
@@ -113,9 +141,10 @@ pub fn is_whitespace(c: char) -> bool {
 }
 
 ///
-/// Indicates whether a character is alphanumeric. Alphanumericness is
-/// defined in terms of the Unicode General Categories 'Nd', 'Nl', 'No'
-/// and the Derived Core Property 'Alphabetic'.
+/// Indicates whether a `char` is alphanumeric
+///
+/// Alphanumericness is defined in terms of the Unicode General Categories
+/// 'Nd', 'Nl', 'No' and the Derived Core Property 'Alphabetic'.
 ///
 #[inline]
 pub fn is_alphanumeric(c: char) -> bool {
@@ -126,14 +155,15 @@ pub fn is_alphanumeric(c: char) -> bool {
 }
 
 ///
-/// Indicates whether a character is a control character. Control
-/// characters are defined in terms of the Unicode General Category
+/// Indicates whether a `char` is a control code point
+///
+/// Control code points are defined in terms of the Unicode General Category
 /// 'Cc'.
 ///
 #[inline]
 pub fn is_control(c: char) -> bool { general_category::Cc(c) }
 
-/// Indicates whether the character is numeric (Nd, Nl, or No)
+/// Indicates whether the `char` is numeric (Nd, Nl, or No)
 #[inline]
 pub fn is_digit(c: char) -> bool {
     general_category::Nd(c)
@@ -142,7 +172,8 @@ pub fn is_digit(c: char) -> bool {
 }
 
 ///
-/// Checks if a character parses as a numeric digit in the given radix.
+/// Checks if a `char` parses as a numeric digit in the given radix
+///
 /// Compared to `is_digit()`, this function only recognizes the
 /// characters `0-9`, `a-z` and `A-Z`.
 ///
@@ -168,13 +199,13 @@ pub fn is_digit_radix(c: char, radix: uint) -> bool {
 }
 
 ///
-/// Convert a char to the corresponding digit.
+/// Converts a `char` to the corresponding digit
 ///
 /// # Return value
 ///
 /// If `c` is between '0' and '9', the corresponding value
 /// between 0 and 9. If `c` is 'a' or 'A', 10. If `c` is
-/// 'b' or 'B', 11, etc. Returns none if the char does not
+/// 'b' or 'B', 11, etc. Returns none if the `char` does not
 /// refer to a digit in the given radix.
 ///
 /// # Failure
@@ -196,8 +227,40 @@ pub fn to_digit(c: char, radix: uint) -> Option<uint> {
     else { None }
 }
 
+/// Convert a char to its uppercase equivalent
 ///
-/// Converts a number to the character representing it.
+/// The case-folding performed is the common or simple mapping:
+/// it maps one unicode codepoint (one char in Rust) to its uppercase equivalent according
+/// to the Unicode database at ftp://ftp.unicode.org/Public/UNIDATA/UnicodeData.txt
+/// The additional SpecialCasing.txt is not considered here, as it expands to multiple
+/// codepoints in some cases.
+///
+/// A full reference can be found here
+/// http://www.unicode.org/versions/Unicode4.0.0/ch03.pdf#G33992
+///
+/// # Return value
+///
+/// Returns the char itself if no conversion was made
+#[inline]
+pub fn to_uppercase(c: char) -> char {
+    conversions::to_upper(c)
+}
+
+/// Convert a char to its lowercase equivalent
+///
+/// The case-folding performed is the common or simple mapping
+/// see `to_uppercase` for references and more information
+///
+/// # Return value
+///
+/// Returns the char itself if no conversion if possible
+#[inline]
+pub fn to_lowercase(c: char) -> char {
+    conversions::to_lower(c)
+}
+
+///
+/// Converts a number to the character representing it
 ///
 /// # Return value
 ///
@@ -255,7 +318,7 @@ fn decompose_hangul(s: char, f: |char|) {
     }
 }
 
-/// Returns the canonical decomposition of a character.
+/// Returns the canonical decomposition of a character
 pub fn decompose_canonical(c: char, f: |char|) {
     if (c as uint) < S_BASE || (c as uint) >= (S_BASE + S_COUNT) {
         decompose::canonical(c, f);
@@ -264,7 +327,7 @@ pub fn decompose_canonical(c: char, f: |char|) {
     }
 }
 
-/// Returns the compatibility decomposition of a character.
+/// Returns the compatibility decomposition of a character
 pub fn decompose_compatible(c: char, f: |char|) {
     if (c as uint) < S_BASE || (c as uint) >= (S_BASE + S_COUNT) {
         decompose::compatibility(c, f);
@@ -274,7 +337,7 @@ pub fn decompose_compatible(c: char, f: |char|) {
 }
 
 ///
-/// Return the hexadecimal unicode escape of a char.
+/// Returns the hexadecimal Unicode escape of a `char`
 ///
 /// The rules are as follows:
 ///
@@ -302,7 +365,7 @@ pub fn escape_unicode(c: char, f: |char|) {
 }
 
 ///
-/// Return a 'default' ASCII and C++11-like char-literal escape of a char.
+/// Returns a 'default' ASCII and C++11-like literal escape of a `char`
 ///
 /// The default is chosen with a bias toward producing literals that are
 /// legal in a variety of languages, including C++11 and similar C-family
@@ -326,7 +389,7 @@ pub fn escape_default(c: char, f: |char|) {
     }
 }
 
-/// Returns the amount of bytes this character would need if encoded in utf8
+/// Returns the amount of bytes this `char` would need if encoded in UTF-8
 pub fn len_utf8_bytes(c: char) -> uint {
     static MAX_ONE_B:   uint = 128u;
     static MAX_TWO_B:   uint = 2048u;
@@ -343,36 +406,174 @@ pub fn len_utf8_bytes(c: char) -> uint {
     }
 }
 
-impl ToStr for char {
-    #[inline]
-    fn to_str(&self) -> ~str {
-        str::from_char(*self)
-    }
-}
-
-#[allow(missing_doc)]
+/// Useful functions for Unicode characters.
 pub trait Char {
+    /// Returns whether the specified character is considered a Unicode
+    /// alphabetic code point.
     fn is_alphabetic(&self) -> bool;
+
+    /// Returns whether the specified character satisfies the 'XID_Start'
+    /// Unicode property.
+    ///
+    /// 'XID_Start' is a Unicode Derived Property specified in
+    /// [UAX #31](http://unicode.org/reports/tr31/#NFKC_Modifications),
+    /// mostly similar to ID_Start but modified for closure under NFKx.
     fn is_XID_start(&self) -> bool;
+
+    /// Returns whether the specified `char` satisfies the 'XID_Continue'
+    /// Unicode property.
+    ///
+    /// 'XID_Continue' is a Unicode Derived Property specified in
+    /// [UAX #31](http://unicode.org/reports/tr31/#NFKC_Modifications),
+    /// mostly similar to 'ID_Continue' but modified for closure under NFKx.
     fn is_XID_continue(&self) -> bool;
+
+
+    /// Indicates whether a character is in lowercase.
+    ///
+    /// This is defined according to the terms of the Unicode Derived Core
+    /// Property `Lowercase`.
     fn is_lowercase(&self) -> bool;
+
+    /// Indicates whether a character is in uppercase.
+    ///
+    /// This is defined according to the terms of the Unicode Derived Core
+    /// Property `Uppercase`.
     fn is_uppercase(&self) -> bool;
+
+    /// Indicates whether a character is whitespace.
+    ///
+    /// Whitespace is defined in terms of the Unicode Property `White_Space`.
     fn is_whitespace(&self) -> bool;
+
+    /// Indicates whether a character is alphanumeric.
+    ///
+    /// Alphanumericness is defined in terms of the Unicode General Categories
+    /// 'Nd', 'Nl', 'No' and the Derived Core Property 'Alphabetic'.
     fn is_alphanumeric(&self) -> bool;
+
+    /// Indicates whether a character is a control code point.
+    ///
+    /// Control code points are defined in terms of the Unicode General
+    /// Category `Cc`.
     fn is_control(&self) -> bool;
+
+    /// Indicates whether the character is numeric (Nd, Nl, or No).
     fn is_digit(&self) -> bool;
+
+    /// Checks if a `char` parses as a numeric digit in the given radix.
+    ///
+    /// Compared to `is_digit()`, this function only recognizes the characters
+    /// `0-9`, `a-z` and `A-Z`.
+    ///
+    /// # Return value
+    ///
+    /// Returns `true` if `c` is a valid digit under `radix`, and `false`
+    /// otherwise.
+    ///
+    /// # Failure
+    ///
+    /// Fails if given a radix > 36.
     fn is_digit_radix(&self, radix: uint) -> bool;
+
+    /// Converts a character to the corresponding digit.
+    ///
+    /// # Return value
+    ///
+    /// If `c` is between '0' and '9', the corresponding value between 0 and
+    /// 9. If `c` is 'a' or 'A', 10. If `c` is 'b' or 'B', 11, etc. Returns
+    /// none if the character does not refer to a digit in the given radix.
+    ///
+    /// # Failure
+    ///
+    /// Fails if given a radix outside the range [0..36].
     fn to_digit(&self, radix: uint) -> Option<uint>;
+
+    /// Converts a character to its lowercase equivalent.
+    ///
+    /// The case-folding performed is the common or simple mapping. See
+    /// `to_uppercase()` for references and more information.
+    ///
+    /// # Return value
+    ///
+    /// Returns the lowercase equivalent of the character, or the character
+    /// itself if no conversion is possible.
+    fn to_lowercase(&self) -> char;
+
+    /// Converts a character to its uppercase equivalent.
+    ///
+    /// The case-folding performed is the common or simple mapping: it maps
+    /// one unicode codepoint (one character in Rust) to its uppercase
+    /// equivalent according to the Unicode database [1]. The additional
+    /// `SpecialCasing.txt` is not considered here, as it expands to multiple
+    /// codepoints in some cases.
+    ///
+    /// A full reference can be found here [2].
+    ///
+    /// # Return value
+    ///
+    /// Returns the uppercase equivalent of the character, or the character
+    /// itself if no conversion was made.
+    ///
+    /// [1]: ftp://ftp.unicode.org/Public/UNIDATA/UnicodeData.txt
+    ///
+    /// [2]: http://www.unicode.org/versions/Unicode4.0.0/ch03.pdf#G33992
+    fn to_uppercase(&self) -> char;
+
+    /// Converts a number to the character representing it.
+    ///
+    /// # Return value
+    ///
+    /// Returns `Some(char)` if `num` represents one digit under `radix`,
+    /// using one character of `0-9` or `a-z`, or `None` if it doesn't.
+    ///
+    /// # Failure
+    ///
+    /// Fails if given a radix > 36.
     fn from_digit(num: uint, radix: uint) -> Option<char>;
+
+    /// Returns the hexadecimal Unicode escape of a character.
+    ///
+    /// The rules are as follows:
+    ///
+    /// * Characters in [0,0xff] get 2-digit escapes: `\\xNN`
+    /// * Characters in [0x100,0xffff] get 4-digit escapes: `\\uNNNN`.
+    /// * Characters above 0x10000 get 8-digit escapes: `\\UNNNNNNNN`.
     fn escape_unicode(&self, f: |char|);
+
+    /// Returns a 'default' ASCII and C++11-like literal escape of a
+    /// character.
+    ///
+    /// The default is chosen with a bias toward producing literals that are
+    /// legal in a variety of languages, including C++11 and similar C-family
+    /// languages. The exact rules are:
+    ///
+    /// * Tab, CR and LF are escaped as '\t', '\r' and '\n' respectively.
+    /// * Single-quote, double-quote and backslash chars are backslash-
+    ///   escaped.
+    /// * Any other chars in the range [0x20,0x7e] are not escaped.
+    /// * Any other chars are given hex unicode escapes; see `escape_unicode`.
     fn escape_default(&self, f: |char|);
+
+    /// Returns the amount of bytes this character would need if encoded in
+    /// UTF-8.
     fn len_utf8_bytes(&self) -> uint;
 
-    /// Encodes this character as utf-8 into the provided byte-buffer. The
-    /// buffer must be at least 4 bytes long or a runtime failure will occur.
+    /// Encodes this character as UTF-8 into the provided byte buffer.
     ///
-    /// This will then return the number of characters written to the slice.
+    /// The buffer must be at least 4 bytes long or a runtime failure may
+    /// occur.
+    ///
+    /// This will then return the number of bytes written to the slice.
     fn encode_utf8(&self, dst: &mut [u8]) -> uint;
+
+    /// Encodes this character as UTF-16 into the provided `u16` buffer.
+    ///
+    /// The buffer must be at least 2 elements long or a runtime failure may
+    /// occur.
+    ///
+    /// This will then return the number of `u16`s written to the slice.
+    fn encode_utf16(&self, dst: &mut [u16]) -> uint;
 }
 
 impl Char for char {
@@ -398,6 +599,10 @@ impl Char for char {
 
     fn to_digit(&self, radix: uint) -> Option<uint> { to_digit(*self, radix) }
 
+    fn to_lowercase(&self) -> char { to_lowercase(*self) }
+
+    fn to_uppercase(&self) -> char { to_uppercase(*self) }
+
     fn from_digit(num: uint, radix: uint) -> Option<char> { from_digit(num, radix) }
 
     fn escape_unicode(&self, f: |char|) { escape_unicode(*self, f) }
@@ -406,7 +611,7 @@ impl Char for char {
 
     fn len_utf8_bytes(&self) -> uint { len_utf8_bytes(*self) }
 
-    fn encode_utf8<'a>(&self, dst: &'a mut [u8]) -> uint {
+    fn encode_utf8(&self, dst: &mut [u8]) -> uint {
         let code = *self as uint;
         if code < MAX_ONE_B {
             dst[0] = code as u8;
@@ -426,6 +631,24 @@ impl Char for char {
             dst[2] = (code >> 6u & 63u | TAG_CONT) as u8;
             dst[3] = (code & 63u | TAG_CONT) as u8;
             return 4;
+        }
+    }
+
+    fn encode_utf16(&self, dst: &mut [u16]) -> uint {
+        let mut ch = *self as uint;
+        if (ch & 0xFFFF_u) == ch {
+            // The BMP falls through (assuming non-surrogate, as it
+            // should)
+            assert!(ch <= 0xD7FF_u || ch >= 0xE000_u);
+            dst[0] = ch as u16;
+            1
+        } else {
+            // Supplementary planes break into surrogates.
+            assert!(ch >= 0x1_0000_u && ch <= 0x10_FFFF_u);
+            ch -= 0x1_0000_u;
+            dst[0] = 0xD800_u16 | ((ch >> 10) as u16);
+            dst[1] = 0xDC00_u16 | ((ch as u16) & 0x3FF_u16);
+            2
         }
     }
 }
@@ -494,6 +717,39 @@ fn test_to_digit() {
 }
 
 #[test]
+fn test_to_lowercase() {
+    assert_eq!('A'.to_lowercase(), 'a');
+    assert_eq!('Ö'.to_lowercase(), 'ö');
+    assert_eq!('ß'.to_lowercase(), 'ß');
+    assert_eq!('Ü'.to_lowercase(), 'ü');
+    assert_eq!('💩'.to_lowercase(), '💩');
+    assert_eq!('Σ'.to_lowercase(), 'σ');
+    assert_eq!('Τ'.to_lowercase(), 'τ');
+    assert_eq!('Ι'.to_lowercase(), 'ι');
+    assert_eq!('Γ'.to_lowercase(), 'γ');
+    assert_eq!('Μ'.to_lowercase(), 'μ');
+    assert_eq!('Α'.to_lowercase(), 'α');
+    assert_eq!('Σ'.to_lowercase(), 'σ');
+}
+
+#[test]
+fn test_to_uppercase() {
+    assert_eq!('a'.to_uppercase(), 'A');
+    assert_eq!('ö'.to_uppercase(), 'Ö');
+    assert_eq!('ß'.to_uppercase(), 'ß'); // not ẞ: Latin capital letter sharp s
+    assert_eq!('ü'.to_uppercase(), 'Ü');
+    assert_eq!('💩'.to_uppercase(), '💩');
+
+    assert_eq!('σ'.to_uppercase(), 'Σ');
+    assert_eq!('τ'.to_uppercase(), 'Τ');
+    assert_eq!('ι'.to_uppercase(), 'Ι');
+    assert_eq!('γ'.to_uppercase(), 'Γ');
+    assert_eq!('μ'.to_uppercase(), 'Μ');
+    assert_eq!('α'.to_uppercase(), 'Α');
+    assert_eq!('ς'.to_uppercase(), 'Σ');
+}
+
+#[test]
 fn test_is_control() {
     assert!('\u0000'.is_control());
     assert!('\u0003'.is_control());
@@ -519,42 +775,71 @@ fn test_is_digit() {
 #[test]
 fn test_escape_default() {
     fn string(c: char) -> ~str {
-        let mut result = ~"";
+        let mut result = StrBuf::new();
         escape_default(c, |c| { result.push_char(c); });
-        return result;
+        return result.into_owned();
     }
-    assert_eq!(string('\n'), ~"\\n");
-    assert_eq!(string('\r'), ~"\\r");
-    assert_eq!(string('\''), ~"\\'");
-    assert_eq!(string('"'), ~"\\\"");
-    assert_eq!(string(' '), ~" ");
-    assert_eq!(string('a'), ~"a");
-    assert_eq!(string('~'), ~"~");
-    assert_eq!(string('\x00'), ~"\\x00");
-    assert_eq!(string('\x1f'), ~"\\x1f");
-    assert_eq!(string('\x7f'), ~"\\x7f");
-    assert_eq!(string('\xff'), ~"\\xff");
-    assert_eq!(string('\u011b'), ~"\\u011b");
-    assert_eq!(string('\U0001d4b6'), ~"\\U0001d4b6");
+    assert_eq!(string('\n'), "\\n".to_owned());
+    assert_eq!(string('\r'), "\\r".to_owned());
+    assert_eq!(string('\''), "\\'".to_owned());
+    assert_eq!(string('"'), "\\\"".to_owned());
+    assert_eq!(string(' '), " ".to_owned());
+    assert_eq!(string('a'), "a".to_owned());
+    assert_eq!(string('~'), "~".to_owned());
+    assert_eq!(string('\x00'), "\\x00".to_owned());
+    assert_eq!(string('\x1f'), "\\x1f".to_owned());
+    assert_eq!(string('\x7f'), "\\x7f".to_owned());
+    assert_eq!(string('\xff'), "\\xff".to_owned());
+    assert_eq!(string('\u011b'), "\\u011b".to_owned());
+    assert_eq!(string('\U0001d4b6'), "\\U0001d4b6".to_owned());
 }
 
 #[test]
 fn test_escape_unicode() {
     fn string(c: char) -> ~str {
-        let mut result = ~"";
+        let mut result = StrBuf::new();
         escape_unicode(c, |c| { result.push_char(c); });
-        return result;
+        return result.into_owned();
     }
-    assert_eq!(string('\x00'), ~"\\x00");
-    assert_eq!(string('\n'), ~"\\x0a");
-    assert_eq!(string(' '), ~"\\x20");
-    assert_eq!(string('a'), ~"\\x61");
-    assert_eq!(string('\u011b'), ~"\\u011b");
-    assert_eq!(string('\U0001d4b6'), ~"\\U0001d4b6");
+    assert_eq!(string('\x00'), "\\x00".to_owned());
+    assert_eq!(string('\n'), "\\x0a".to_owned());
+    assert_eq!(string(' '), "\\x20".to_owned());
+    assert_eq!(string('a'), "\\x61".to_owned());
+    assert_eq!(string('\u011b'), "\\u011b".to_owned());
+    assert_eq!(string('\U0001d4b6'), "\\U0001d4b6".to_owned());
 }
 
 #[test]
 fn test_to_str() {
+    use to_str::ToStr;
     let s = 't'.to_str();
-    assert_eq!(s, ~"t");
+    assert_eq!(s, "t".to_owned());
+}
+
+#[test]
+fn test_encode_utf8() {
+    fn check(input: char, expect: &[u8]) {
+        let mut buf = [0u8, ..4];
+        let n = input.encode_utf8(buf /* as mut slice! */);
+        assert_eq!(buf.slice_to(n), expect);
+    }
+
+    check('x', [0x78]);
+    check('\u00e9', [0xc3, 0xa9]);
+    check('\ua66e', [0xea, 0x99, 0xae]);
+    check('\U0001f4a9', [0xf0, 0x9f, 0x92, 0xa9]);
+}
+
+#[test]
+fn test_encode_utf16() {
+    fn check(input: char, expect: &[u16]) {
+        let mut buf = [0u16, ..2];
+        let n = input.encode_utf16(buf /* as mut slice! */);
+        assert_eq!(buf.slice_to(n), expect);
+    }
+
+    check('x', [0x0078]);
+    check('\u00e9', [0x00e9]);
+    check('\ua66e', [0xa66e]);
+    check('\U0001f4a9', [0xd83d, 0xdca9]);
 }

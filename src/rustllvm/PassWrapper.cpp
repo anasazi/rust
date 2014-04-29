@@ -75,13 +75,15 @@ LLVMRustCreateTargetMachine(const char *triple,
     const llvm::Target *TheTarget = TargetRegistry::lookupTarget(Trip.getTriple(),
                                                                  Error);
     if (TheTarget == NULL) {
-        LLVMRustError = Error.c_str();
+        LLVMRustSetLastError(Error.c_str());
         return NULL;
     }
 
     TargetOptions Options;
     Options.NoFramePointerElim = NoFramePointerElim;
+#if LLVM_VERSION_MINOR < 5
     Options.EnableSegmentedStacks = EnableSegmentedStacks;
+#endif
     Options.FloatABIType = FloatABI::Default;
     Options.UseSoftFloat = UseSoftFloat;
     if (UseSoftFloat) {
@@ -111,7 +113,11 @@ LLVMRustAddAnalysisPasses(LLVMTargetMachineRef TM,
                           LLVMPassManagerRef PMR,
                           LLVMModuleRef M) {
     PassManagerBase *PM = unwrap(PMR);
+#if LLVM_VERSION_MINOR >= 5
+    PM->add(new DataLayoutPass(unwrap(M)));
+#else
     PM->add(new DataLayout(unwrap(M)));
+#endif
     unwrap(TM)->addAnalysisPasses(*PM);
 }
 
@@ -166,9 +172,13 @@ LLVMRustWriteOutputFile(LLVMTargetMachineRef Target,
   PassManager *PM = unwrap<PassManager>(PMR);
 
   std::string ErrorInfo;
-  raw_fd_ostream OS(path, ErrorInfo, sys::fs::F_Binary);
+#if LLVM_VERSION_MINOR >= 4
+  raw_fd_ostream OS(path, ErrorInfo, sys::fs::F_None);
+#else
+  raw_fd_ostream OS(path, ErrorInfo, raw_fd_ostream::F_Binary);
+#endif
   if (ErrorInfo != "") {
-    LLVMRustError = ErrorInfo.c_str();
+    LLVMRustSetLastError(ErrorInfo.c_str());
     return false;
   }
   formatted_raw_ostream FOS(OS);
@@ -184,9 +194,21 @@ LLVMRustPrintModule(LLVMPassManagerRef PMR,
                     const char* path) {
   PassManager *PM = unwrap<PassManager>(PMR);
   std::string ErrorInfo;
-  raw_fd_ostream OS(path, ErrorInfo, sys::fs::F_Binary);
+
+#if LLVM_VERSION_MINOR >= 4
+  raw_fd_ostream OS(path, ErrorInfo, sys::fs::F_None);
+#else
+  raw_fd_ostream OS(path, ErrorInfo, raw_fd_ostream::F_Binary);
+#endif
+
   formatted_raw_ostream FOS(OS);
+
+#if LLVM_VERSION_MINOR >= 5
   PM->add(createPrintModulePass(FOS));
+#else
+  PM->add(createPrintModulePass(&FOS));
+#endif
+
   PM->run(*unwrap(M));
 }
 

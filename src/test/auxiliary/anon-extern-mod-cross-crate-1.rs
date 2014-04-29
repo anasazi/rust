@@ -8,9 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[crate_id="anonexternmod#0.1"];
+#![crate_id="anonexternmod#0.1"]
 
-use std::libc;
+extern crate libc;
 
 #[link(name="rustrt")]
 extern {

@@ -9,65 +9,83 @@
 // except according to those terms.
 
 use std::os;
-use std::run;
 use std::str;
-use std::io::process::ProcessExit;
+use std::io::process::{ProcessExit, Process, ProcessConfig, ProcessOutput};
 
 #[cfg(target_os = "win32")]
-fn target_env(lib_path: &str, prog: &str) -> ~[(~str,~str)] {
-
-    let mut env = os::env();
+fn target_env(lib_path: &str, prog: &str) -> Vec<(~str, ~str)> {
+    let env = os::env();
 
     // Make sure we include the aux directory in the path
     assert!(prog.ends_with(".exe"));
     let aux_path = prog.slice(0u, prog.len() - 4u).to_owned() + ".libaux";
 
-    env = env.map(|pair| {
-        let (k,v) = (*pair).clone();
-        if k == ~"PATH" { (~"PATH", v + ";" + lib_path + ";" + aux_path) }
-        else { (k,v) }
-    });
+    let mut new_env: Vec<_> = env.move_iter().map(|(k, v)| {
+        let new_v = if "PATH" == k {
+            format!("{};{};{}", v, lib_path, aux_path)
+        } else {
+            v
+        };
+        (k, new_v)
+    }).collect();
     if prog.ends_with("rustc.exe") {
-        env.push((~"RUST_THREADS", ~"1"));
+        new_env.push(("RUST_THREADS".to_owned(), "1".to_owned()));
     }
-    return env;
+    return new_env;
 }
 
 #[cfg(target_os = "linux")]
 #[cfg(target_os = "macos")]
 #[cfg(target_os = "freebsd")]
-fn target_env(_lib_path: &str, _prog: &str) -> ~[(~str,~str)] {
-    os::env()
+fn target_env(lib_path: &str, prog: &str) -> Vec<(~str,~str)> {
+    // Make sure we include the aux directory in the path
+    let aux_path = prog + ".libaux";
+
+    let mut env: Vec<(~str,~str)> = os::env().move_iter().collect();
+    let var = if cfg!(target_os = "macos") {
+        "DYLD_LIBRARY_PATH"
+    } else {
+        "LD_LIBRARY_PATH"
+    };
+    let prev = match env.iter().position(|&(ref k, _)| k.as_slice() == var) {
+        Some(i) => env.remove(i).unwrap().val1(),
+        None => "".to_owned(),
+    };
+    env.push((var.to_owned(), if prev.is_empty() {
+        lib_path + ":" + aux_path
+    } else {
+        lib_path + ":" + aux_path + ":" + prev
+    }));
+    return env;
 }
 
-pub struct Result {status: ProcessExit, out: ~str, err: ~str}
+pub struct Result {pub status: ProcessExit, pub out: ~str, pub err: ~str}
 
 pub fn run(lib_path: &str,
            prog: &str,
            args: &[~str],
-           env: ~[(~str, ~str)],
+           env: Vec<(~str, ~str)> ,
            input: Option<~str>) -> Option<Result> {
 
-    let env = env + target_env(lib_path, prog);
-    let mut opt_process = run::Process::new(prog, args, run::ProcessOptions {
-        env: Some(env),
-        dir: None,
-        in_fd: None,
-        out_fd: None,
-        err_fd: None
+    let env = env.clone().append(target_env(lib_path, prog).as_slice());
+    let mut opt_process = Process::configure(ProcessConfig {
+        program: prog,
+        args: args,
+        env: Some(env.as_slice()),
+        .. ProcessConfig::new()
     });
 
     match opt_process {
         Ok(ref mut process) => {
             for input in input.iter() {
-                process.input().write(input.as_bytes()).unwrap();
+                process.stdin.get_mut_ref().write(input.as_bytes()).unwrap();
             }
-            let run::ProcessOutput { status, output, error } = process.finish_with_output();
+            let ProcessOutput { status, output, error } = process.wait_with_output();
 
             Some(Result {
                 status: status,
-                out: str::from_utf8_owned(output).unwrap(),
-                err: str::from_utf8_owned(error).unwrap()
+                out: str::from_utf8(output.as_slice()).unwrap().to_owned(),
+                err: str::from_utf8(error.as_slice()).unwrap().to_owned()
             })
         },
         Err(..) => None
@@ -77,22 +95,21 @@ pub fn run(lib_path: &str,
 pub fn run_background(lib_path: &str,
            prog: &str,
            args: &[~str],
-           env: ~[(~str, ~str)],
-           input: Option<~str>) -> Option<run::Process> {
+           env: Vec<(~str, ~str)> ,
+           input: Option<~str>) -> Option<Process> {
 
-    let env = env + target_env(lib_path, prog);
-    let opt_process = run::Process::new(prog, args, run::ProcessOptions {
-        env: Some(env),
-        dir: None,
-        in_fd: None,
-        out_fd: None,
-        err_fd: None
+    let env = env.clone().append(target_env(lib_path, prog).as_slice());
+    let opt_process = Process::configure(ProcessConfig {
+        program: prog,
+        args: args,
+        env: Some(env.as_slice()),
+        .. ProcessConfig::new()
     });
 
     match opt_process {
         Ok(mut process) => {
             for input in input.iter() {
-                process.input().write(input.as_bytes()).unwrap();
+                process.stdin.get_mut_ref().write(input.as_bytes()).unwrap();
             }
 
             Some(process)

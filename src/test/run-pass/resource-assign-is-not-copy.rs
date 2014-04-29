@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(managed_boxes)];
+#![feature(managed_boxes)]
 
 use std::cell::Cell;
 
@@ -36,7 +36,7 @@ pub fn main() {
         let a = r(i);
         let b = (a, 10);
         let (c, _d) = b;
-        info!("{:?}", c);
+        println!("{:?}", c);
     }
     assert_eq!(i.get(), 1);
 }

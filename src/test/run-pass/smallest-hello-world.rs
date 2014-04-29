@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,33 +8,25 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-test - FIXME(#8538) some kind of problem linking induced by extern "C" fns that I do not understand
-// xfail-fast - check-fast doesn't like this
+// ignore-android
 
-// Smallest hello world with no runtime
+// Smallest "hello world" with a libc runtime
 
-#[no_std];
+#![no_std]
 
-// This is an unfortunate thing to have to do on linux :(
-#[cfg(target_os = "linux")]
-#[doc(hidden)]
-pub mod linkhack {
-    #[link_args="-lrustrt -lrt"]
-    extern {}
-}
+extern crate libc;
 
-extern {
-    fn puts(s: *u8);
-}
+extern { fn puts(s: *u8); }
+extern "rust-intrinsic" { fn transmute<T, U>(t: T) -> U; }
 
-extern "rust-intrinsic" {
-    fn transmute<T, U>(t: T) -> U;
-}
+#[no_mangle]
+pub extern fn rust_stack_exhausted() {}
 
 #[start]
-pub fn main(_: int, _: **u8, _: *u8) -> int {
+#[no_split_stack]
+fn main(_: int, _: **u8) -> int {
     unsafe {
-        let (ptr, _): (*u8, uint) = transmute("Hello!");
+        let (ptr, _): (*u8, uint) = transmute("Hello!\0");
         puts(ptr);
     }
     return 0;

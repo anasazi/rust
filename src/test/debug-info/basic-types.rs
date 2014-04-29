@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -14,9 +14,9 @@
 // about UTF-32 character encoding and will print a rust char as only
 // its numerical value.
 
-// xfail-android: FIXME(#10381)
+// ignore-android: FIXME(#10381)
 
-// compile-flags:-Z extra-debug-info
+// compile-flags:-g
 // debugger:rbreak zzz
 // debugger:run
 // debugger:finish
@@ -49,7 +49,7 @@
 // debugger:print f64
 // check:$14 = 3.5
 
-#[allow(unused_variable)];
+#![allow(unused_variable)]
 
 fn main() {
     let b: bool = false;

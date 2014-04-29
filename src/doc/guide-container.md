@@ -22,10 +22,10 @@ just unique keys without a corresponding value. The `Map` and `Set` traits in
 
 The standard library provides three owned map/set types:
 
-* `std::hashmap::HashMap` and `std::hashmap::HashSet`, requiring the keys to
+* `collections::HashMap` and `collections::HashSet`, requiring the keys to
   implement `Eq` and `Hash`
-* `std::trie::TrieMap` and `std::trie::TrieSet`, requiring the keys to be `uint`
-* `extra::treemap::TreeMap` and `extra::treemap::TreeSet`, requiring the keys
+* `collections::TrieMap` and `collections::TrieSet`, requiring the keys to be `uint`
+* `collections::TreeMap` and `collections::TreeSet`, requiring the keys
   to implement `TotalOrd`
 
 These maps do not use managed pointers so they can be sent between tasks as
@@ -38,15 +38,15 @@ order.
 Each `HashMap` instance has a random 128-bit key to use with a keyed hash,
 making the order of a set of keys in a given hash table randomized. Rust
 provides a [SipHash](https://131002.net/siphash/) implementation for any type
-implementing the `IterBytes` trait.
+implementing the `Hash` trait.
 
 ## Double-ended queues
 
-The `extra::ringbuf` module implements a double-ended queue with `O(1)`
+The `collections::ringbuf` module implements a double-ended queue with `O(1)`
 amortized inserts and removals from both ends of the container. It also has
 `O(1)` indexing like a vector. The contained elements are not required to be
 copyable, and the queue will be sendable if the contained type is sendable.
-Its interface `Deque` is defined in `extra::collections`.
+Its interface `Deque` is defined in `collections`.
 
 The `extra::dlist` module implements a double-ended linked list, also
 implementing the `Deque` trait, with `O(1)` removals and inserts at either end,
@@ -54,7 +54,7 @@ and `O(1)` concatenation.
 
 ## Priority queues
 
-The `extra::priority_queue` module implements a queue ordered by a key.  The
+The `collections::priority_queue` module implements a queue ordered by a key.  The
 contained elements are not required to be copyable, and the queue will be
 sendable if the contained type is sendable.
 
@@ -181,19 +181,25 @@ never call its underlying iterator again once `None` has been returned:
 ~~~
 let xs = [1,2,3,4,5];
 let mut calls = 0;
-let it = xs.iter().scan((), |_, x| {
-    calls += 1;
-    if *x < 3 { Some(x) } else { None }});
-// the iterator will only yield 1 and 2 before returning None
-// If we were to call it 5 times, calls would end up as 5, despite only 2 values
-// being yielded (and therefore 3 unique calls being made). The fuse() adaptor
-// can fix this.
-let mut it = it.fuse();
-it.next();
-it.next();
-it.next();
-it.next();
-it.next();
+
+{
+    let it = xs.iter().scan((), |_, x| {
+        calls += 1;
+        if *x < 3 { Some(x) } else { None }});
+
+    // the iterator will only yield 1 and 2 before returning None
+    // If we were to call it 5 times, calls would end up as 5, despite
+    // only 2 values being yielded (and therefore 3 unique calls being
+    // made). The fuse() adaptor can fix this.
+
+    let mut it = it.fuse();
+    it.next();
+    it.next();
+    it.next();
+    it.next();
+    it.next();
+}
+
 assert_eq!(calls, 3);
 ~~~
 
@@ -272,7 +278,7 @@ vectors is as follows:
 
 ~~~ {.ignore}
 impl<A> FromIterator<A> for ~[A] {
-    pub fn from_iterator<T: Iterator<A>>(iterator: &mut T) -> ~[A] {
+    pub fn from_iter<T: Iterator<A>>(iterator: &mut T) -> ~[A] {
         let (lower, _) = iterator.size_hint();
         let mut xs = with_capacity(lower);
         for x in iterator {
@@ -378,7 +384,7 @@ the trailing underscore is a workaround for issue #5898 and will be removed.
 ~~~
 let mut ys = [1, 2, 3, 4, 5];
 ys.mut_iter().reverse_();
-assert_eq!(ys, [5, 4, 3, 2, 1]);
+assert!(ys == [5, 4, 3, 2, 1]);
 ~~~
 
 ## Random-access iterators

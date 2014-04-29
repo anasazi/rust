@@ -22,12 +22,12 @@ err() {
 need_ok() {
     if [ $? -ne 0 ]
     then
-        err $1
+        err "$1"
     fi
 }
 
 need_cmd() {
-    if which $1 >/dev/null 2>&1
+    if command -v $1 >/dev/null 2>&1
     then msg "found $1"
     else err "need $1"
     fi
@@ -83,7 +83,7 @@ probe() {
     local T
     for P
     do
-        T=$(which $P 2>&1)
+        T=$(command -v $P 2>&1)
         if [ $? -eq 0 ]
         then
             VER0=$($P --version 2>/dev/null | head -1 \
@@ -274,6 +274,12 @@ case $CFG_OSTYPE in
     MINGW32*)
         CFG_OSTYPE=pc-mingw32
         ;;
+
+    MINGW64*)
+        # msys2, MSYSTEM=MINGW64
+        CFG_OSTYPE=w64-mingw32
+        ;;
+
 # Thad's Cygwin identifers below
 
 #   Vista 32 bit
@@ -340,7 +346,7 @@ DEFAULT_BUILD="${CFG_CPUTYPE}-${CFG_OSTYPE}"
 
 CFG_SRC_DIR="$(cd $(dirname $0) && pwd)/"
 CFG_BUILD_DIR="$(pwd)/"
-CFG_SELF=${CFG_SRC_DIR}$(basename $0)
+CFG_SELF="$0"
 CFG_CONFIGURE_ARGS="$@"
 
 OPTIONS=""
@@ -382,7 +388,10 @@ opt ccache 0 "invoke gcc/clang via ccache to reuse object files between builds"
 opt local-rust 0 "use an installed rustc rather than downloading a snapshot"
 opt pax-flags 0 "apply PaX flags to rustc binaries (required for GRSecurity/PaX-patched kernels)"
 opt inject-std-version 1 "inject the current compiler version of libstd into programs"
+opt llvm-static-stdcpp 0 "statically link to libstdc++ for LLVM"
 opt rpath 1 "build rpaths into rustc itself"
+opt nightly 0 "build nightly packages"
+opt verify-install 1 "verify installed binaries work"
 valopt prefix "/usr/local" "set installation prefix"
 valopt local-rust-root "/usr/local" "set prefix for local rust binary"
 valopt llvm-root "" "set LLVM root"
@@ -401,20 +410,16 @@ valopt infodir "${CFG_PREFIX}/share/info" "install additional info"
 valopt mandir "${CFG_PREFIX}/share/man" "install man pages in PATH"
 
 # On windows we just store the libraries in the bin directory because
-# there's no rpath
+# there's no rpath. This is where the build system itself puts libraries;
+# --libdir is used to configure the installation directory.
 # FIXME: Thise needs to parameterized over target triples. Do it in platform.mk
 CFG_LIBDIR_RELATIVE=lib
-if [ "$CFG_OSTYPE" = "pc-mingw32" ]
+if [ "$CFG_OSTYPE" = "pc-mingw32" ] || [ "$CFG_OSTYPE" = "w64-mingw32" ]
 then
     CFG_LIBDIR_RELATIVE=bin
 fi
 
 valopt libdir "${CFG_PREFIX}/${CFG_LIBDIR_RELATIVE}" "install libraries"
-valopt rustlibdir "rustlib" "subdirectory name for rustc's libraries"
-
-# Validate Options
-step_msg "validating $CFG_SELF args"
-validate_opt
 
 if [ $HELP -eq 1 ]
 then
@@ -422,6 +427,9 @@ then
     exit 0
 fi
 
+# Validate Options
+step_msg "validating $CFG_SELF args"
+validate_opt
 
 step_msg "looking for build programs"
 
@@ -455,9 +463,8 @@ probe CFG_ISCC             iscc
 probe CFG_LLNEXTGEN        LLnextgen
 probe CFG_PANDOC           pandoc
 probe CFG_PDFLATEX         pdflatex
-probe CFG_XETEX            xetex
-probe CFG_LUATEX           luatex
-probe CFG_NODE             nodejs node
+probe CFG_XELATEX          xelatex
+probe CFG_LUALATEX         lualatex
 probe CFG_GDB              gdb
 if [ "$CFG_OSTYPE" = "unknown-linux-gnu" ]
 then
@@ -533,7 +540,7 @@ then
 fi
 
 BIN_SUF=
-if [ $CFG_OSTYPE = "pc-mingw32" ]
+if [ "$CFG_OSTYPE" = "pc-mingw32" ] || [ "$CFG_OSTYPE" = "w64-mingw32" ]
 then
     BIN_SUF=.exe
 fi
@@ -573,26 +580,32 @@ then
         CFG_ENABLE_CLANG=1
         putvar CFG_ENABLE_CLANG
     else
-        # on OS X, with xcode 5 and newer, certain developers may have
-        # cc, gcc and g++ point to a  mixture of clang and gcc
-        # if so, this will create very strange build errors
-        # this last stanza is to detect some such problems and save the future rust
-        # contributor some time solving that issue.
-        # this detection could be generalized to other OSes aside from OS X
-        # but the issue seems most likely to happen on OS X
+        if [ $("$CFG_GCC" --version 2>&1 | grep -c ' 4\.[0-6]') -ne 0 ]; then
+            step_msg "older GCC found, using clang instead"
+            CFG_ENABLE_CLANG=1
+            putvar CFG_ENABLE_CLANG
+        else
+            # on OS X, with xcode 5 and newer, certain developers may have
+            # cc, gcc and g++ point to a  mixture of clang and gcc
+            # if so, this will create very strange build errors
+            # this last stanza is to detect some such problems and save the future rust
+            # contributor some time solving that issue.
+            # this detection could be generalized to other OSes aside from OS X
+            # but the issue seems most likely to happen on OS X
 
-        chk_cc () {
-            $1 --version 2> /dev/null | grep -q $2
-        }
-        # check that gcc, cc and g++ all point to the same compiler.
-        # note that for xcode 5, g++ points to clang, not clang++
-        if !((chk_cc gcc clang  && chk_cc g++ clang) ||
-            (chk_cc gcc gcc  &&( chk_cc g++ g++ || chk g++ gcc))) then
-            err "the gcc and g++ in your path point to different compilers.
-Check which versions are in your path with  cc --version and g++ --version.
-To resolve this problem, either fix your PATH  or run configure with --enable-clang"
+            chk_cc () {
+                $1 --version 2> /dev/null | grep -q $2
+            }
+            # check that gcc, cc and g++ all point to the same compiler.
+            # note that for xcode 5, g++ points to clang, not clang++
+            if !((chk_cc gcc clang  && chk_cc g++ clang) ||
+                (chk_cc gcc gcc  &&( chk_cc g++ g++ || chk g++ gcc))) then
+                err "the gcc and g++ in your path point to different compilers.
+    Check which versions are in your path with  cc --version and g++ --version.
+    To resolve this problem, either fix your PATH  or run configure with --enable-clang"
+            fi
+
         fi
-
     fi
 fi
 
@@ -604,7 +617,7 @@ then
     LLVM_VERSION=$($LLVM_CONFIG --version)
 
     case $LLVM_VERSION in
-        (3.[2-4]svn|3.[2-4])
+        (3.[2-5]*)
             msg "found ok version of LLVM: $LLVM_VERSION"
             ;;
         (*)
@@ -626,7 +639,7 @@ then
                       | cut -d ' ' -f 2)
 
     case $CFG_CLANG_VERSION in
-        (3.0svn | 3.0 | 3.1* | 3.2* | 3.3* | 3.4* )
+        (3.0svn | 3.0 | 3.1* | 3.2* | 3.3* | 3.4* | 3.5* )
         step_msg "found ok version of CLANG: $CFG_CLANG_VERSION"
         CFG_C_COMPILER="clang"
         ;;
@@ -728,7 +741,7 @@ step_msg "making directories"
 
 for i in \
     doc doc/std doc/extra \
-    dl tmp
+    dl tmp dist
 do
     make_dir $i
 done
@@ -779,10 +792,10 @@ do
             make_dir $h/stage$i/test
 
             # target bin dir
-            make_dir $h/stage$i/$CFG_LIBDIR_RELATIVE/$CFG_RUSTLIBDIR/$t/bin
+            make_dir $h/stage$i/$CFG_LIBDIR_RELATIVE/rustlib/$t/bin
 
             # target lib dir
-            make_dir $h/stage$i/$CFG_LIBDIR_RELATIVE/$CFG_RUSTLIBDIR/$t/lib
+            make_dir $h/stage$i/$CFG_LIBDIR_RELATIVE/rustlib/$t/lib
         done
     done
 
@@ -803,7 +816,6 @@ do
     make_dir $h/test/doc-guide-pointers
     make_dir $h/test/doc-guide-container
     make_dir $h/test/doc-guide-tasks
-    make_dir $h/test/doc-guide-conditions
     make_dir $h/test/doc-complement-cheatsheet
     make_dir $h/test/doc-rust
 done
@@ -916,10 +928,6 @@ do
         LLVM_OPTS="$LLVM_OPTS --disable-terminfo"
         # Try to have LLVM pull in as few dependencies as possible (#9397)
         LLVM_OPTS="$LLVM_OPTS --disable-zlib --disable-libffi"
-        # LLVM says it needs a "new" clang/gcc, but we seem to get by ok with
-        # older versions on the bots. Get by for a little longer by asking it to
-        # not do version detection
-        LLVM_OPTS="$LLVM_OPTS --disable-compiler-version-checks"
 
         # Use win32 native thread/lock apis instead of pthread wrapper.
         # (llvm's configure tries to find pthread first, so we have to disable it explicitly.)
@@ -937,6 +945,7 @@ do
 
             LLVM_CXX_64="ccache clang++ -Qunused-arguments"
             LLVM_CC_64="ccache clang -Qunused-arguments"
+            LLVM_OPTS="$LLVM_OPTS --enable-libcpp"
             ;;
             ("clang")
             LLVM_CXX_32="clang++ -m32 -Qunused-arguments"
@@ -944,6 +953,7 @@ do
 
             LLVM_CXX_64="clang++ -Qunused-arguments"
             LLVM_CC_64="clang -Qunused-arguments"
+            LLVM_OPTS="$LLVM_OPTS --enable-libcpp"
             ;;
             ("ccache gcc")
             LLVM_CXX_32="ccache g++ -m32"
@@ -1042,7 +1052,6 @@ putvar CFG_HOST
 putvar CFG_TARGET
 putvar CFG_C_COMPILER
 putvar CFG_LIBDIR
-putvar CFG_RUSTLIBDIR
 putvar CFG_LIBDIR_RELATIVE
 putvar CFG_DISABLE_MANAGE_SUBMODULES
 putvar CFG_ANDROID_CROSS_PATH
@@ -1069,12 +1078,6 @@ if [ ! -z $BAD_PANDOC ]
 then
     CFG_PANDOC=
     putvar CFG_PANDOC
-fi
-
-if head -n 1 ${CFG_SRC_DIR}src/snapshots.txt | grep -q '^T'
-then
-    CFG_IN_TRANSITION=1
-    putvar CFG_IN_TRANSITION
 fi
 
 # Valgrind is only reliable on Linux. On Windows it doesn't work at all, and
@@ -1109,3 +1112,5 @@ rm -f config.tmp
 touch config.stamp
 
 step_msg "complete"
+msg "run \`make help\`"
+msg

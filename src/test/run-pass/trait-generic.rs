@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// xfail-fast
+
 
 trait to_str {
     fn to_string(&self) -> ~str;
@@ -20,33 +20,34 @@ impl to_str for ~str {
     fn to_string(&self) -> ~str { self.clone() }
 }
 impl to_str for () {
-    fn to_string(&self) -> ~str { ~"()" }
+    fn to_string(&self) -> ~str { "()".to_owned() }
 }
 
 trait map<T> {
-    fn map<U>(&self, f: |&T| -> U) -> ~[U];
+    fn map<U>(&self, f: |&T| -> U) -> Vec<U> ;
 }
-impl<T> map<T> for ~[T] {
-    fn map<U>(&self, f: |&T| -> U) -> ~[U] {
-        let mut r = ~[];
+impl<T> map<T> for Vec<T> {
+    fn map<U>(&self, f: |&T| -> U) -> Vec<U> {
+        let mut r = Vec::new();
         // FIXME: #7355 generates bad code with VecIterator
         for i in range(0u, self.len()) {
-            r.push(f(&self[i]));
+            r.push(f(self.get(i)));
         }
         r
     }
 }
 
-fn foo<U, T: map<U>>(x: T) -> ~[~str] {
-    x.map(|_e| ~"hi" )
+fn foo<U, T: map<U>>(x: T) -> Vec<~str> {
+    x.map(|_e| "hi".to_owned() )
 }
-fn bar<U:to_str,T:map<U>>(x: T) -> ~[~str] {
+fn bar<U:to_str,T:map<U>>(x: T) -> Vec<~str> {
     x.map(|_e| _e.to_string() )
 }
 
 pub fn main() {
-    assert_eq!(foo(~[1]), ~[~"hi"]);
-    assert_eq!(bar::<int, ~[int]>(~[4, 5]), ~[~"4", ~"5"]);
-    assert_eq!(bar::<~str, ~[~str]>(~[~"x", ~"y"]), ~[~"x", ~"y"]);
-    assert_eq!(bar::<(), ~[()]>(~[()]), ~[~"()"]);
+    assert_eq!(foo(vec!(1)), vec!("hi".to_owned()));
+    assert_eq!(bar::<int, Vec<int> >(vec!(4, 5)), vec!("4".to_owned(), "5".to_owned()));
+    assert_eq!(bar::<~str, Vec<~str> >(vec!("x".to_owned(), "y".to_owned())),
+               vec!("x".to_owned(), "y".to_owned()));
+    assert_eq!(bar::<(), Vec<()>>(vec!(())), vec!("()".to_owned()));
 }

@@ -1,19 +1,30 @@
+// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// file at the top-level directory of this distribution and at
+// http://rust-lang.org/COPYRIGHT.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
+
 struct Foo {
     string: ~str
 }
 
 pub fn main() {
-    let x = ~[
-        Foo { string: ~"foo" },
-        Foo { string: ~"bar" },
-        Foo { string: ~"baz" }
+    let x = [
+        Foo { string: "foo".to_owned() },
+        Foo { string: "bar".to_owned() },
+        Foo { string: "baz".to_owned() }
     ];
     match x {
         [ref first, ..tail] => {
-            assert!(first.string == ~"foo");
+            assert!(first.string == "foo".to_owned());
             assert_eq!(tail.len(), 2);
-            assert!(tail[0].string == ~"bar");
-            assert!(tail[1].string == ~"baz");
+            assert!(tail[0].string == "bar".to_owned());
+            assert!(tail[1].string == "baz".to_owned());
 
             match tail {
                 [Foo { .. }, _, Foo { .. }, .. _tail] => {
@@ -27,9 +38,6 @@ pub fn main() {
                     unreachable!();
                 }
             }
-        }
-        _ => {
-            unreachable!();
         }
     }
 }

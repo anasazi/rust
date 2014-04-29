@@ -1,16 +1,23 @@
-// xfail-test
+// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// file at the top-level directory of this distribution and at
+// http://rust-lang.org/COPYRIGHT.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
 
-extern mod extra;
+// ignore-android see #10393 #13206
+// ignore-pretty
 
-use std::cast::transmute;
-use std::i32::range;
-use std::libc::{STDIN_FILENO, c_int, fdopen, fgets, fileno, fopen, fstat};
-use std::libc::{stat, strlen};
-use std::ptr::null;
-use std::unstable::intrinsics::init;
-use std::vec::{reverse};
+extern crate sync;
 
-static LINE_LEN: uint = 80;
+use std::strbuf::StrBuf;
+use std::slice;
+use sync::Arc;
+use sync::Future;
+
 static TABLE: [u8, ..4] = [ 'A' as u8, 'C' as u8, 'G' as u8, 'T' as u8 ];
 static TABLE_SIZE: uint = 2 << 16;
 
@@ -24,42 +31,37 @@ static OCCURRENCES: [&'static str, ..5] = [
 
 // Code implementation
 
-#[deriving(Eq, Ord)]
+#[deriving(Eq, Ord, TotalOrd, TotalEq)]
 struct Code(u64);
 
 impl Code {
     fn hash(&self) -> u64 {
-        **self
+        let Code(ret) = *self;
+        return ret;
     }
 
-    #[inline(always)]
     fn push_char(&self, c: u8) -> Code {
-        Code((**self << 2) + (pack_symbol(c) as u64))
+        Code((self.hash() << 2) + (pack_symbol(c) as u64))
     }
 
-    fn rotate(&self, c: u8, frame: i32) -> Code {
-        Code(*self.push_char(c) & ((1u64 << (2 * (frame as u64))) - 1))
+    fn rotate(&self, c: u8, frame: uint) -> Code {
+        Code(self.push_char(c).hash() & ((1u64 << (2 * frame)) - 1))
     }
 
     fn pack(string: &str) -> Code {
-        let mut code = Code(0u64);
-        for i in range(0u, string.len()) {
-            code = code.push_char(string[i]);
-        }
-        code
+        string.bytes().fold(Code(0u64), |a, b| a.push_char(b))
     }
 
-    // FIXME: Inefficient.
-    fn unpack(&self, frame: i32) -> ~str {
-        let mut key = **self;
-        let mut result = ~[];
+    fn unpack(&self, frame: uint) -> StrBuf {
+        let mut key = self.hash();
+        let mut result = Vec::new();
         for _ in range(0, frame) {
             result.push(unpack_symbol((key as u8) & 3));
             key >>= 2;
         }
 
-        reverse(result);
-        str::from_utf8_owned(result).unwrap()
+        result.reverse();
+        StrBuf::from_utf8(result).unwrap()
     }
 }
 
@@ -81,26 +83,31 @@ struct PrintCallback(&'static str);
 
 impl TableCallback for PrintCallback {
     fn f(&self, entry: &mut Entry) {
-        println!("{}\t{}", entry.count as int, **self);
+        let PrintCallback(s) = *self;
+        println!("{}\t{}", entry.count as int, s);
     }
 }
 
 struct Entry {
     code: Code,
-    count: i32,
+    count: uint,
     next: Option<~Entry>,
 }
 
 struct Table {
-    count: i32,
-    items: [Option<~Entry>, ..TABLE_SIZE]
+    count: uint,
+    items: Vec<Option<~Entry>> }
+
+struct Items<'a> {
+    cur: Option<&'a Entry>,
+    items: slice::Items<'a, Option<~Entry>>,
 }
 
 impl Table {
     fn new() -> Table {
         Table {
             count: 0,
-            items: [ None, ..TABLE_SIZE ],
+            items: Vec::from_fn(TABLE_SIZE, |_| None),
         }
     }
 
@@ -127,23 +134,23 @@ impl Table {
     }
 
     fn lookup<C:TableCallback>(&mut self, key: Code, c: C) {
-        let index = *key % (TABLE_SIZE as u64);
+        let index = key.hash() % (TABLE_SIZE as u64);
 
         {
-            if self.items[index].is_none() {
+            if self.items.get(index as uint).is_none() {
                 let mut entry = ~Entry {
                     code: key,
                     count: 0,
                     next: None,
                 };
                 c.f(entry);
-                self.items[index] = Some(entry);
+                *self.items.get_mut(index as uint) = Some(entry);
                 return;
             }
         }
 
         {
-            let mut entry = &mut *self.items[index].get_mut_ref();
+            let entry = &mut *self.items.get_mut(index as uint).get_mut_ref();
             if entry.code == key {
                 c.f(*entry);
                 return;
@@ -153,154 +160,131 @@ impl Table {
         }
     }
 
-    fn each(&self, f: |entry: &Entry| -> bool) {
-        for self.items.each |item| {
-            match *item {
-                None => {}
-                Some(ref item) => {
-                    let mut item: &Entry = *item;
-                    loop {
-                        if !f(item) {
-                            return;
-                        }
+    fn iter<'a>(&'a self) -> Items<'a> {
+        Items { cur: None, items: self.items.iter() }
+    }
+}
 
-                        match item.next {
-                            None => break,
-                            Some(ref next_item) => item = &**next_item,
-                        }
+impl<'a> Iterator<&'a Entry> for Items<'a> {
+    fn next(&mut self) -> Option<&'a Entry> {
+        let ret = match self.cur {
+            None => {
+                let i;
+                loop {
+                    match self.items.next() {
+                        None => return None,
+                        Some(&None) => {}
+                        Some(&Some(ref a)) => { i = &**a; break }
                     }
                 }
-            };
+                self.cur = Some(&*i);
+                &*i
+            }
+            Some(c) => c
+        };
+        match ret.next {
+            None => { self.cur = None; }
+            Some(ref next) => { self.cur = Some(&**next); }
         }
+        return Some(ret);
     }
 }
 
 // Main program
 
 fn pack_symbol(c: u8) -> u8 {
-    match c {
-        'a' as u8 | 'A' as u8 => 0,
-        'c' as u8 | 'C' as u8 => 1,
-        'g' as u8 | 'G' as u8 => 2,
-        't' as u8 | 'T' as u8 => 3,
-        _ => fail!(c.to_str())
+    match c as char {
+        'A' => 0,
+        'C' => 1,
+        'G' => 2,
+        'T' => 3,
+        _ => fail!("{}", c as char),
     }
 }
 
 fn unpack_symbol(c: u8) -> u8 {
-    TABLE[c]
+    TABLE[c as uint]
 }
 
-fn next_char<'a>(mut buf: &'a [u8]) -> &'a [u8] {
-    loop {
-        buf = buf.slice(1, buf.len());
-        if buf.len() == 0 {
-            break;
-        }
-        if buf[0] != (' ' as u8) && buf[0] != ('\t' as u8) &&
-                buf[0] != ('\n' as u8) && buf[0] != 0 {
-            break;
-        }
-    }
-    buf
-}
-
-#[inline(never)]
-fn read_stdin() -> ~[u8] {
-    unsafe {
-        let mode = "r";
-        //let stdin = fdopen(STDIN_FILENO as c_int, transmute(&mode[0]));
-        let path = "knucleotide-input.txt";
-        let stdin = fopen(transmute(&path[0]), transmute(&mode[0]));
-
-        let mut st: stat = init();
-        fstat(fileno(stdin), &mut st);
-        let mut buf = vec::from_elem(st.st_size as uint, 0);
-
-        let header = ">THREE".as_bytes();
-
-        {
-            let mut window: &mut [u8] = buf;
-            loop {
-                fgets(transmute(&mut window[0]), LINE_LEN as c_int, stdin);
-
-                {
-                    if window.slice(0, 6) == header {
-                        break;
-                    }
-                }
-            }
-
-            while fgets(transmute(&mut window[0]),
-                        LINE_LEN as c_int,
-                        stdin) != null() {
-                window = window.mut_slice(strlen(transmute(&window[0])) as uint, window.len());
-            }
-        }
-
-        buf
-    }
-}
-
-fn generate_frequencies(frequencies: &mut Table,
-                        mut input: &[u8],
-                        frame: i32) {
+fn generate_frequencies(mut input: &[u8], frame: uint) -> Table {
+    let mut frequencies = Table::new();
+    if input.len() < frame { return frequencies; }
     let mut code = Code(0);
 
     // Pull first frame.
     for _ in range(0, frame) {
         code = code.push_char(input[0]);
-        input = next_char(input);
+        input = input.slice_from(1);
     }
     frequencies.lookup(code, BumpCallback);
 
     while input.len() != 0 && input[0] != ('>' as u8) {
         code = code.rotate(input[0], frame);
         frequencies.lookup(code, BumpCallback);
-        input = next_char(input);
+        input = input.slice_from(1);
     }
+    frequencies
 }
 
-fn print_frequencies(frequencies: &Table, frame: i32) {
-    let mut vector = ~[];
-    for frequencies.each |entry| {
-        vector.push((entry.code, entry.count));
+fn print_frequencies(frequencies: &Table, frame: uint) {
+    let mut vector = Vec::new();
+    for entry in frequencies.iter() {
+        vector.push((entry.count, entry.code));
     }
-    vector.sort();
+    vector.as_mut_slice().sort();
 
     let mut total_count = 0;
-    for vector.each |&(_, count)| {
+    for &(count, _) in vector.iter() {
         total_count += count;
     }
 
-    for vector.each |&(key, count)| {
+    for &(count, key) in vector.iter().rev() {
         println!("{} {:.3f}",
-                 key.unpack(frame),
-                 (count as float * 100.0) / (total_count as float));
+                 key.unpack(frame).as_slice(),
+                 (count as f32 * 100.0) / (total_count as f32));
     }
+    println!("");
 }
 
 fn print_occurrences(frequencies: &mut Table, occurrence: &'static str) {
     frequencies.lookup(Code::pack(occurrence), PrintCallback(occurrence))
 }
 
+fn get_sequence<R: Buffer>(r: &mut R, key: &str) -> Vec<u8> {
+    let mut res = Vec::new();
+    for l in r.lines().map(|l| l.ok().unwrap())
+        .skip_while(|l| key != l.slice_to(key.len())).skip(1)
+    {
+        res.push_all(l.trim().as_bytes());
+    }
+    for b in res.mut_iter() {
+        *b = b.to_ascii().to_upper().to_byte();
+    }
+    res
+}
+
 fn main() {
-    let input = read_stdin();
+    let input = if std::os::getenv("RUST_BENCH").is_some() {
+        let fd = std::io::File::open(&Path::new("shootout-k-nucleotide.data"));
+        get_sequence(&mut std::io::BufferedReader::new(fd), ">THREE")
+    } else {
+        get_sequence(&mut std::io::stdin(), ">THREE")
+    };
+    let input = Arc::new(input);
 
-    let mut frequencies = ~Table::new();
-    generate_frequencies(frequencies, input, 1);
-    print_frequencies(frequencies, 1);
+    let nb_freqs: Vec<(uint, Future<Table>)> = range(1u, 3).map(|i| {
+        let input = input.clone();
+        (i, Future::spawn(proc() generate_frequencies(input.as_slice(), i)))
+    }).collect();
+    let occ_freqs: Vec<Future<Table>> = OCCURRENCES.iter().map(|&occ| {
+        let input = input.clone();
+        Future::spawn(proc() generate_frequencies(input.as_slice(), occ.len()))
+    }).collect();
 
-    *frequencies = Table::new();
-    generate_frequencies(frequencies, input, 2);
-    print_frequencies(frequencies, 2);
-
-    for range(0, 5) |i| {
-        let occurrence = OCCURRENCES[i];
-        *frequencies = Table::new();
-        generate_frequencies(frequencies,
-                             input,
-                             occurrence.len() as i32);
-        print_occurrences(frequencies, occurrence);
+    for (i, freq) in nb_freqs.move_iter() {
+        print_frequencies(&freq.unwrap(), i);
+    }
+    for (&occ, freq) in OCCURRENCES.iter().zip(occ_freqs.move_iter()) {
+        print_occurrences(&mut freq.unwrap(), occ);
     }
 }

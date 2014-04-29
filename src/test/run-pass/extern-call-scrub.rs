@@ -12,11 +12,11 @@
 // make sure the stack pointers are maintained properly in both
 // directions
 
-use std::libc;
+extern crate libc;
 use std::task;
 
 mod rustrt {
-    use std::libc;
+    extern crate libc;
 
     #[link(name = "rustrt")]
     extern {
@@ -36,7 +36,7 @@ extern fn cb(data: libc::uintptr_t) -> libc::uintptr_t {
 
 fn count(n: uint) -> uint {
     unsafe {
-        info!("n = {}", n);
+        println!("n = {}", n);
         rustrt::rust_dbg_call(cb, n)
     }
 }
@@ -46,7 +46,7 @@ pub fn main() {
     // has a large stack)
     task::spawn(proc() {
         let result = count(12u);
-        info!("result = {}", result);
+        println!("result = {}", result);
         assert_eq!(result, 2048u);
     });
 }

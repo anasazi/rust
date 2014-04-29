@@ -1,6 +1,6 @@
-// xfail-pretty
+// ignore-pretty
 
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -11,13 +11,12 @@
 // except according to those terms.
 
 // Tests that a heterogeneous list of existential types can be put inside an Arc
-// and shared between tasks as long as all types fulfill Freeze+Send.
+// and shared between tasks as long as all types fulfill Send.
 
-// xfail-fast
 
-extern mod extra;
+extern crate sync;
 
-use extra::arc;
+use sync::Arc;
 use std::task;
 
 trait Pet {
@@ -61,44 +60,44 @@ impl Pet for Goldfyshe {
 }
 
 pub fn main() {
-    let catte = Catte { num_whiskers: 7, name: ~"alonzo_church" };
-    let dogge1 = Dogge { bark_decibels: 100, tricks_known: 42, name: ~"alan_turing" };
-    let dogge2 = Dogge { bark_decibels: 55,  tricks_known: 11, name: ~"albert_einstein" };
-    let fishe = Goldfyshe { swim_speed: 998, name: ~"alec_guinness" };
-    let arc = arc::Arc::new(~[~catte  as ~Pet:Freeze+Send,
-                         ~dogge1 as ~Pet:Freeze+Send,
-                         ~fishe  as ~Pet:Freeze+Send,
-                         ~dogge2 as ~Pet:Freeze+Send]);
-    let (p1,c1) = Chan::new();
+    let catte = Catte { num_whiskers: 7, name: "alonzo_church".to_owned() };
+    let dogge1 = Dogge { bark_decibels: 100, tricks_known: 42, name: "alan_turing".to_owned() };
+    let dogge2 = Dogge { bark_decibels: 55,  tricks_known: 11, name: "albert_einstein".to_owned() };
+    let fishe = Goldfyshe { swim_speed: 998, name: "alec_guinness".to_owned() };
+    let arc = Arc::new(vec!(~catte  as ~Pet:Share+Send,
+                         ~dogge1 as ~Pet:Share+Send,
+                         ~fishe  as ~Pet:Share+Send,
+                         ~dogge2 as ~Pet:Share+Send));
+    let (tx1, rx1) = channel();
     let arc1 = arc.clone();
-    task::spawn(proc() { check_legs(arc1); c1.send(()); });
-    let (p2,c2) = Chan::new();
+    task::spawn(proc() { check_legs(arc1); tx1.send(()); });
+    let (tx2, rx2) = channel();
     let arc2 = arc.clone();
-    task::spawn(proc() { check_names(arc2); c2.send(()); });
-    let (p3,c3) = Chan::new();
+    task::spawn(proc() { check_names(arc2); tx2.send(()); });
+    let (tx3, rx3) = channel();
     let arc3 = arc.clone();
-    task::spawn(proc() { check_pedigree(arc3); c3.send(()); });
-    p1.recv();
-    p2.recv();
-    p3.recv();
+    task::spawn(proc() { check_pedigree(arc3); tx3.send(()); });
+    rx1.recv();
+    rx2.recv();
+    rx3.recv();
 }
 
-fn check_legs(arc: arc::Arc<~[~Pet:Freeze+Send]>) {
+fn check_legs(arc: Arc<Vec<~Pet:Share+Send>>) {
     let mut legs = 0;
-    for pet in arc.get().iter() {
+    for pet in arc.iter() {
         legs += pet.num_legs();
     }
     assert!(legs == 12);
 }
-fn check_names(arc: arc::Arc<~[~Pet:Freeze+Send]>) {
-    for pet in arc.get().iter() {
+fn check_names(arc: Arc<Vec<~Pet:Share+Send>>) {
+    for pet in arc.iter() {
         pet.name(|name| {
             assert!(name[0] == 'a' as u8 && name[1] == 'l' as u8);
         })
     }
 }
-fn check_pedigree(arc: arc::Arc<~[~Pet:Freeze+Send]>) {
-    for pet in arc.get().iter() {
+fn check_pedigree(arc: Arc<Vec<~Pet:Share+Send>>) {
+    for pet in arc.iter() {
         assert!(pet.of_good_pedigree());
     }
 }

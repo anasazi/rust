@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(managed_boxes)];
+#![feature(managed_boxes)]
 
 fn foo(x: &uint) -> uint {
     *x
@@ -17,6 +17,6 @@ fn foo(x: &uint) -> uint {
 pub fn main() {
     let p = @22u;
     let r = foo(p);
-    info!("r={}", r);
+    println!("r={}", r);
     assert_eq!(r, 22u);
 }

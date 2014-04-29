@@ -10,13 +10,13 @@
 
 // When denying at the crate level, be sure to not get random warnings from the
 // injected intrinsics by the compiler.
-#[feature(struct_variant)];
-#[feature(globs)];
-#[deny(missing_doc)];
-#[allow(dead_code)];
+#![feature(struct_variant)]
+#![feature(globs)]
+#![deny(missing_doc)]
+#![allow(dead_code)]
 
 //! Some garbage docs for the crate here
-#[doc="More garbage"];
+#![doc="More garbage"]
 
 struct Foo {
     a: int,
@@ -24,14 +24,14 @@ struct Foo {
 }
 
 pub struct PubFoo { //~ ERROR: missing documentation
-    a: int,      //~ ERROR: missing documentation
-    priv b: int,
+    pub a: int,      //~ ERROR: missing documentation
+    b: int,
 }
 
 #[allow(missing_doc)]
 pub struct PubFoo2 {
-    a: int,
-    c: int,
+    pub a: int,
+    pub c: int,
 }
 
 mod module_no_dox {}
@@ -106,11 +106,9 @@ enum Baz {
 
 pub enum PubBaz { //~ ERROR: missing documentation
     PubBazA { //~ ERROR: missing documentation
-        a: int, //~ ERROR: missing documentation
-        priv b: int
+        pub a: int, //~ ERROR: missing documentation
+        b: int
     },
-
-    priv PubBazB
 }
 
 /// dox
@@ -118,19 +116,17 @@ pub enum PubBaz2 {
     /// dox
     PubBaz2A {
         /// dox
-        a: int,
-        priv b: int
+        pub a: int,
+        b: int
     },
-    priv PubBaz2B
 }
 
 #[allow(missing_doc)]
 pub enum PubBaz3 {
     PubBaz3A {
-        a: int,
-        priv b: int
+        pub a: int,
+        b: int
     },
-    priv PubBaz3B
 }
 
 #[doc(hidden)]

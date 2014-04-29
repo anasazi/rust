@@ -17,11 +17,14 @@ getaddrinfo()
 
 */
 
+#![allow(missing_doc)]
+
+use iter::Iterator;
 use io::IoResult;
 use io::net::ip::{SocketAddr, IpAddr};
 use option::{Option, Some, None};
 use rt::rtio::{IoFactory, LocalIo};
-use vec::ImmutableVector;
+use slice::OwnedVector;
 
 /// Hints to the types of sockets that are desired when looking up hosts
 pub enum SocketType {
@@ -54,24 +57,24 @@ pub enum Protocol {
 /// For details on these fields, see their corresponding definitions via
 /// `man -s 3 getaddrinfo`
 pub struct Hint {
-    family: uint,
-    socktype: Option<SocketType>,
-    protocol: Option<Protocol>,
-    flags: uint,
+    pub family: uint,
+    pub socktype: Option<SocketType>,
+    pub protocol: Option<Protocol>,
+    pub flags: uint,
 }
 
 pub struct Info {
-    address: SocketAddr,
-    family: uint,
-    socktype: Option<SocketType>,
-    protocol: Option<Protocol>,
-    flags: uint,
+    pub address: SocketAddr,
+    pub family: uint,
+    pub socktype: Option<SocketType>,
+    pub protocol: Option<Protocol>,
+    pub flags: uint,
 }
 
 /// Easy name resolution. Given a hostname, returns the list of IP addresses for
 /// that hostname.
 pub fn get_host_addresses(host: &str) -> IoResult<~[IpAddr]> {
-    lookup(Some(host), None, None).map(|a| a.map(|i| i.address.ip))
+    lookup(Some(host), None, None).map(|a| a.move_iter().map(|i| i.address.ip).collect())
 }
 
 /// Full-fleged resolution. This function will perform a synchronous call to

@@ -35,22 +35,31 @@ fn main() {
       (_, a) => {}
       (b, b) => {}
     }
-    match ~[Some(42), None, Some(21)] { //~ ERROR non-exhaustive patterns: vectors of length 0 not covered
+    let vec = vec!(Some(42), None, Some(21));
+    let vec: &[Option<int>] = vec.as_slice();
+    match vec {
+        //~^ ERROR non-exhaustive patterns: vectors of length 0 not covered
         [Some(..), None, ..tail] => {}
         [Some(..), Some(..), ..tail] => {}
         [None] => {}
     }
-    match ~[1] {
+    let vec = vec!(1);
+    let vec: &[int] = vec.as_slice();
+    match vec {
         [_, ..tail] => (),
         [] => ()
     }
-    match ~[0.5] { //~ ERROR non-exhaustive patterns: vectors of length 4 not covered
+    let vec = vec!(0.5);
+    let vec: &[f32] = vec.as_slice();
+    match vec { //~ ERROR non-exhaustive patterns: vectors of length 4 not covered
         [0.1, 0.2, 0.3] => (),
         [0.1, 0.2] => (),
         [0.1] => (),
         [] => ()
     }
-    match ~[Some(42), None, Some(21)] {
+    let vec = vec!(Some(42), None, Some(21));
+    let vec: &[Option<int>] = vec.as_slice();
+    match vec {
         [Some(..), None, ..tail] => {}
         [Some(..), Some(..), ..tail] => {}
         [None, None, ..tail] => {}

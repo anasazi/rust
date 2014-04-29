@@ -11,16 +11,17 @@
 //! A small module implementing a simple "runtime" used for bootstrapping a rust
 //! scheduler pool and then interacting with it.
 
+use std::any::Any;
 use std::cast;
 use std::rt::Runtime;
 use std::rt::local::Local;
 use std::rt::rtio;
 use std::rt::task::{Task, BlockedTask};
 use std::task::TaskOpts;
-use std::unstable::sync::LittleLock;
+use std::unstable::mutex::NativeMutex;
 
 struct SimpleTask {
-    lock: LittleLock,
+    lock: NativeMutex,
     awoken: bool,
 }
 
@@ -33,13 +34,13 @@ impl Runtime for SimpleTask {
 
         let me = &mut *self as *mut SimpleTask;
         let cur_dupe = &*cur_task as *Task;
-        cur_task.put_runtime(self as ~Runtime);
+        cur_task.put_runtime(self);
         let task = BlockedTask::block(cur_task);
 
         // See libnative/task.rs for what's going on here with the `awoken`
         // field and the while loop around wait()
         unsafe {
-            let mut guard = (*me).lock.lock();
+            let guard = (*me).lock.lock();
             (*me).awoken = false;
             match f(task) {
                 Ok(()) => {
@@ -56,12 +57,12 @@ impl Runtime for SimpleTask {
     }
     fn reawaken(mut ~self, mut to_wake: ~Task) {
         let me = &mut *self as *mut SimpleTask;
-        to_wake.put_runtime(self as ~Runtime);
+        to_wake.put_runtime(self);
         unsafe {
             cast::forget(to_wake);
-            let _l = (*me).lock.lock();
+            let guard = (*me).lock.lock();
             (*me).awoken = true;
-            (*me).lock.signal();
+            guard.signal();
         }
     }
 
@@ -71,7 +72,7 @@ impl Runtime for SimpleTask {
     // feet and running.
     fn yield_now(~self, _cur_task: ~Task) { fail!() }
     fn maybe_yield(~self, _cur_task: ~Task) { fail!() }
-    fn spawn_sibling(~self, _cur_task: ~Task, _opts: TaskOpts, _f: proc()) {
+    fn spawn_sibling(~self, _cur_task: ~Task, _opts: TaskOpts, _f: proc():Send) {
         fail!()
     }
     fn local_io<'a>(&'a mut self) -> Option<rtio::LocalIo<'a>> { None }
@@ -83,8 +84,8 @@ impl Runtime for SimpleTask {
 pub fn task() -> ~Task {
     let mut task = ~Task::new();
     task.put_runtime(~SimpleTask {
-        lock: LittleLock::new(),
+        lock: unsafe {NativeMutex::new()},
         awoken: false,
-    } as ~Runtime);
+    });
     return task;
 }

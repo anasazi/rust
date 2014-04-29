@@ -8,10 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[allow(unused_variable)];
-#[deny(dead_code)];
+#![allow(unused_variable)]
+#![allow(non_camel_case_types)]
+#![deny(dead_code)]
 
-#[crate_type="lib"];
+#![crate_type="lib"]
+
+extern crate libc;
 
 struct Foo; //~ ERROR: code is never used
 impl Foo {
@@ -45,7 +48,7 @@ pub fn pub_fn() {
 }
 
 mod blah {
-    use std::libc::size_t;
+    use libc::size_t;
     // not warned because it's used in the parameter of `free` and return of
     // `malloc` below, which are also used.
     enum c_void {}

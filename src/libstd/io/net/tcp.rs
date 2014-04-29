@@ -8,32 +8,96 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+//! TCP network connections
+//!
+//! This module contains the ability to open a TCP stream to a socket address,
+//! as well as creating a socket server to accept incoming connections. The
+//! destination and binding addresses can either be an IPv4 or IPv6 address.
+//!
+//! A TCP connection implements the `Reader` and `Writer` traits, while the TCP
+//! listener (socket server) implements the `Listener` and `Acceptor` traits.
+
+use clone::Clone;
+use io::IoResult;
 use io::net::ip::SocketAddr;
-use io::{Reader, Writer, Listener, Acceptor, IoResult};
+use io::{Reader, Writer, Listener, Acceptor};
+use kinds::Send;
+use option::{None, Some, Option};
 use rt::rtio::{IoFactory, LocalIo, RtioSocket, RtioTcpListener};
 use rt::rtio::{RtioTcpAcceptor, RtioTcpStream};
 
+/// A structure which represents a TCP stream between a local socket and a
+/// remote socket.
+///
+/// # Example
+///
+/// ```rust
+/// # #![allow(unused_must_use)]
+/// use std::io::net::tcp::TcpStream;
+/// use std::io::net::ip::{Ipv4Addr, SocketAddr};
+///
+/// let addr = SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 34254 };
+/// let mut stream = TcpStream::connect(addr);
+///
+/// stream.write([1]);
+/// let mut buf = [0];
+/// stream.read(buf);
+/// drop(stream); // close the connection
+/// ```
 pub struct TcpStream {
-    priv obj: ~RtioTcpStream
+    obj: ~RtioTcpStream:Send
 }
 
 impl TcpStream {
-    fn new(s: ~RtioTcpStream) -> TcpStream {
+    fn new(s: ~RtioTcpStream:Send) -> TcpStream {
         TcpStream { obj: s }
     }
 
+    /// Creates a TCP connection to a remote socket address.
+    ///
+    /// If no error is encountered, then `Ok(stream)` is returned.
     pub fn connect(addr: SocketAddr) -> IoResult<TcpStream> {
         LocalIo::maybe_raise(|io| {
-            io.tcp_connect(addr).map(TcpStream::new)
+            io.tcp_connect(addr, None).map(TcpStream::new)
         })
     }
 
+    /// Creates a TCP connection to a remote socket address, timing out after
+    /// the specified number of milliseconds.
+    ///
+    /// This is the same as the `connect` method, except that if the timeout
+    /// specified (in milliseconds) elapses before a connection is made an error
+    /// will be returned. The error's kind will be `TimedOut`.
+    #[experimental = "the timeout argument may eventually change types"]
+    pub fn connect_timeout(addr: SocketAddr,
+                           timeout_ms: u64) -> IoResult<TcpStream> {
+        LocalIo::maybe_raise(|io| {
+            io.tcp_connect(addr, Some(timeout_ms)).map(TcpStream::new)
+        })
+    }
+
+    /// Returns the socket address of the remote peer of this TCP connection.
     pub fn peer_name(&mut self) -> IoResult<SocketAddr> {
         self.obj.peer_name()
     }
 
+    /// Returns the socket address of the local half of this TCP connection.
     pub fn socket_name(&mut self) -> IoResult<SocketAddr> {
         self.obj.socket_name()
+    }
+}
+
+impl Clone for TcpStream {
+    /// Creates a new handle to this TCP stream, allowing for simultaneous reads
+    /// and writes of this connection.
+    ///
+    /// The underlying TCP stream will not be closed until all handles to the
+    /// stream have been deallocated. All handles will also follow the same
+    /// stream, but two concurrent reads will not receive the same data.
+    /// Instead, the first read will receive the first packet received, and the
+    /// second read will receive the second packet.
+    fn clone(&self) -> TcpStream {
+        TcpStream { obj: self.obj.clone() }
     }
 }
 
@@ -45,17 +109,63 @@ impl Writer for TcpStream {
     fn write(&mut self, buf: &[u8]) -> IoResult<()> { self.obj.write(buf) }
 }
 
+/// A structure representing a socket server. This listener is used to create a
+/// `TcpAcceptor` which can be used to accept sockets on a local port.
+///
+/// # Example
+///
+/// ```rust
+/// # fn main() { }
+/// # fn foo() {
+/// # #![allow(dead_code)]
+/// use std::io::{TcpListener, TcpStream};
+/// use std::io::net::ip::{Ipv4Addr, SocketAddr};
+/// use std::io::{Acceptor, Listener};
+///
+/// let addr = SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 80 };
+/// let listener = TcpListener::bind(addr);
+///
+/// // bind the listener to the specified address
+/// let mut acceptor = listener.listen();
+///
+/// fn handle_client(mut stream: TcpStream) {
+///     // ...
+/// # &mut stream; // silence unused mutability/variable warning
+/// }
+/// // accept connections and process them, spawning a new tasks for each one
+/// for stream in acceptor.incoming() {
+///     match stream {
+///         Err(e) => { /* connection failed */ }
+///         Ok(stream) => spawn(proc() {
+///             // connection succeeded
+///             handle_client(stream)
+///         })
+///     }
+/// }
+///
+/// // close the socket server
+/// drop(acceptor);
+/// # }
+/// ```
 pub struct TcpListener {
-    priv obj: ~RtioTcpListener
+    obj: ~RtioTcpListener:Send
 }
 
 impl TcpListener {
+    /// Creates a new `TcpListener` which will be bound to the specified local
+    /// socket address. This listener is not ready for accepting connections,
+    /// `listen` must be called on it before that's possible.
+    ///
+    /// Binding with a port number of 0 will request that the OS assigns a port
+    /// to this listener. The port allocated can be queried via the
+    /// `socket_name` function.
     pub fn bind(addr: SocketAddr) -> IoResult<TcpListener> {
         LocalIo::maybe_raise(|io| {
             io.tcp_bind(addr).map(|l| TcpListener { obj: l })
         })
     }
 
+    /// Returns the local socket address of this listener.
     pub fn socket_name(&mut self) -> IoResult<SocketAddr> {
         self.obj.socket_name()
     }
@@ -67,8 +177,61 @@ impl Listener<TcpStream, TcpAcceptor> for TcpListener {
     }
 }
 
+/// The accepting half of a TCP socket server. This structure is created through
+/// a `TcpListener`'s `listen` method, and this object can be used to accept new
+/// `TcpStream` instances.
 pub struct TcpAcceptor {
-    priv obj: ~RtioTcpAcceptor
+    obj: ~RtioTcpAcceptor:Send
+}
+
+impl TcpAcceptor {
+    /// Prevents blocking on all future accepts after `ms` milliseconds have
+    /// elapsed.
+    ///
+    /// This function is used to set a deadline after which this acceptor will
+    /// time out accepting any connections. The argument is the relative
+    /// distance, in milliseconds, to a point in the future after which all
+    /// accepts will fail.
+    ///
+    /// If the argument specified is `None`, then any previously registered
+    /// timeout is cleared.
+    ///
+    /// A timeout of `0` can be used to "poll" this acceptor to see if it has
+    /// any pending connections. All pending connections will be accepted,
+    /// regardless of whether the timeout has expired or not (the accept will
+    /// not block in this case).
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # #![allow(experimental)]
+    /// use std::io::net::tcp::TcpListener;
+    /// use std::io::net::ip::{SocketAddr, Ipv4Addr};
+    /// use std::io::{Listener, Acceptor, TimedOut};
+    ///
+    /// let addr = SocketAddr { ip: Ipv4Addr(127, 0, 0, 1), port: 8482 };
+    /// let mut a = TcpListener::bind(addr).listen().unwrap();
+    ///
+    /// // After 100ms have passed, all accepts will fail
+    /// a.set_timeout(Some(100));
+    ///
+    /// match a.accept() {
+    ///     Ok(..) => println!("accepted a socket"),
+    ///     Err(ref e) if e.kind == TimedOut => { println!("timed out!"); }
+    ///     Err(e) => println!("err: {}", e),
+    /// }
+    ///
+    /// // Reset the timeout and try again
+    /// a.set_timeout(Some(100));
+    /// let socket = a.accept();
+    ///
+    /// // Clear the timeout and block indefinitely waiting for a connection
+    /// a.set_timeout(None);
+    /// let socket = a.accept();
+    /// ```
+    #[experimental = "the type of the argument and name of this function are \
+                      subject to change"]
+    pub fn set_timeout(&mut self, ms: Option<u64>) { self.obj.set_timeout(ms); }
 }
 
 impl Acceptor<TcpStream> for TcpAcceptor {
@@ -78,6 +241,7 @@ impl Acceptor<TcpStream> for TcpAcceptor {
 }
 
 #[cfg(test)]
+#[allow(experimental)]
 mod test {
     use super::*;
     use io::net::ip::SocketAddr;
@@ -103,16 +267,13 @@ mod test {
 
     iotest!(fn smoke_test_ip4() {
         let addr = next_test_ip4();
-        let (port, chan) = Chan::new();
+        let mut acceptor = TcpListener::bind(addr).listen();
 
         spawn(proc() {
-            port.recv();
             let mut stream = TcpStream::connect(addr);
             stream.write([99]).unwrap();
         });
 
-        let mut acceptor = TcpListener::bind(addr).listen();
-        chan.send(());
         let mut stream = acceptor.accept();
         let mut buf = [0];
         stream.read(buf).unwrap();
@@ -121,16 +282,13 @@ mod test {
 
     iotest!(fn smoke_test_ip6() {
         let addr = next_test_ip6();
-        let (port, chan) = Chan::new();
+        let mut acceptor = TcpListener::bind(addr).listen();
 
         spawn(proc() {
-            port.recv();
             let mut stream = TcpStream::connect(addr);
             stream.write([99]).unwrap();
         });
 
-        let mut acceptor = TcpListener::bind(addr).listen();
-        chan.send(());
         let mut stream = acceptor.accept();
         let mut buf = [0];
         stream.read(buf).unwrap();
@@ -139,16 +297,13 @@ mod test {
 
     iotest!(fn read_eof_ip4() {
         let addr = next_test_ip4();
-        let (port, chan) = Chan::new();
+        let mut acceptor = TcpListener::bind(addr).listen();
 
         spawn(proc() {
-            port.recv();
             let _stream = TcpStream::connect(addr);
             // Close
         });
 
-        let mut acceptor = TcpListener::bind(addr).listen();
-        chan.send(());
         let mut stream = acceptor.accept();
         let mut buf = [0];
         let nread = stream.read(buf);
@@ -157,16 +312,13 @@ mod test {
 
     iotest!(fn read_eof_ip6() {
         let addr = next_test_ip6();
-        let (port, chan) = Chan::new();
+        let mut acceptor = TcpListener::bind(addr).listen();
 
         spawn(proc() {
-            port.recv();
             let _stream = TcpStream::connect(addr);
             // Close
         });
 
-        let mut acceptor = TcpListener::bind(addr).listen();
-        chan.send(());
         let mut stream = acceptor.accept();
         let mut buf = [0];
         let nread = stream.read(buf);
@@ -175,16 +327,13 @@ mod test {
 
     iotest!(fn read_eof_twice_ip4() {
         let addr = next_test_ip4();
-        let (port, chan) = Chan::new();
+        let mut acceptor = TcpListener::bind(addr).listen();
 
         spawn(proc() {
-            port.recv();
             let _stream = TcpStream::connect(addr);
             // Close
         });
 
-        let mut acceptor = TcpListener::bind(addr).listen();
-        chan.send(());
         let mut stream = acceptor.accept();
         let mut buf = [0];
         let nread = stream.read(buf);
@@ -201,16 +350,13 @@ mod test {
 
     iotest!(fn read_eof_twice_ip6() {
         let addr = next_test_ip6();
-        let (port, chan) = Chan::new();
+        let mut acceptor = TcpListener::bind(addr).listen();
 
         spawn(proc() {
-            port.recv();
             let _stream = TcpStream::connect(addr);
             // Close
         });
 
-        let mut acceptor = TcpListener::bind(addr).listen();
-        chan.send(());
         let mut stream = acceptor.accept();
         let mut buf = [0];
         let nread = stream.read(buf);
@@ -227,16 +373,13 @@ mod test {
 
     iotest!(fn write_close_ip4() {
         let addr = next_test_ip4();
-        let (port, chan) = Chan::new();
+        let mut acceptor = TcpListener::bind(addr).listen();
 
         spawn(proc() {
-            port.recv();
             let _stream = TcpStream::connect(addr);
             // Close
         });
 
-        let mut acceptor = TcpListener::bind(addr).listen();
-        chan.send(());
         let mut stream = acceptor.accept();
         let buf = [0];
         loop {
@@ -255,16 +398,13 @@ mod test {
 
     iotest!(fn write_close_ip6() {
         let addr = next_test_ip6();
-        let (port, chan) = Chan::new();
+        let mut acceptor = TcpListener::bind(addr).listen();
 
         spawn(proc() {
-            port.recv();
             let _stream = TcpStream::connect(addr);
             // Close
         });
 
-        let mut acceptor = TcpListener::bind(addr).listen();
-        chan.send(());
         let mut stream = acceptor.accept();
         let buf = [0];
         loop {
@@ -284,18 +424,15 @@ mod test {
     iotest!(fn multiple_connect_serial_ip4() {
         let addr = next_test_ip4();
         let max = 10u;
-        let (port, chan) = Chan::new();
+        let mut acceptor = TcpListener::bind(addr).listen();
 
         spawn(proc() {
-            port.recv();
             for _ in range(0, max) {
                 let mut stream = TcpStream::connect(addr);
                 stream.write([99]).unwrap();
             }
         });
 
-        let mut acceptor = TcpListener::bind(addr).listen();
-        chan.send(());
         for ref mut stream in acceptor.incoming().take(max) {
             let mut buf = [0];
             stream.read(buf).unwrap();
@@ -306,18 +443,15 @@ mod test {
     iotest!(fn multiple_connect_serial_ip6() {
         let addr = next_test_ip6();
         let max = 10u;
-        let (port, chan) = Chan::new();
+        let mut acceptor = TcpListener::bind(addr).listen();
 
         spawn(proc() {
-            port.recv();
             for _ in range(0, max) {
                 let mut stream = TcpStream::connect(addr);
                 stream.write([99]).unwrap();
             }
         });
 
-        let mut acceptor = TcpListener::bind(addr).listen();
-        chan.send(());
         for ref mut stream in acceptor.incoming().take(max) {
             let mut buf = [0];
             stream.read(buf).unwrap();
@@ -328,11 +462,10 @@ mod test {
     iotest!(fn multiple_connect_interleaved_greedy_schedule_ip4() {
         let addr = next_test_ip4();
         static MAX: int = 10;
-        let (port, chan) = Chan::new();
+        let acceptor = TcpListener::bind(addr).listen();
 
         spawn(proc() {
-            let mut acceptor = TcpListener::bind(addr).listen();
-            chan.send(());
+            let mut acceptor = acceptor;
             for (i, stream) in acceptor.incoming().enumerate().take(MAX as uint) {
                 // Start another task to handle the connection
                 spawn(proc() {
@@ -345,7 +478,6 @@ mod test {
             }
         });
 
-        port.recv();
         connect(0, addr);
 
         fn connect(i: int, addr: SocketAddr) {
@@ -365,11 +497,10 @@ mod test {
     iotest!(fn multiple_connect_interleaved_greedy_schedule_ip6() {
         let addr = next_test_ip6();
         static MAX: int = 10;
-        let (port, chan) = Chan::<()>::new();
+        let acceptor = TcpListener::bind(addr).listen();
 
         spawn(proc() {
-            let mut acceptor = TcpListener::bind(addr).listen();
-            chan.send(());
+            let mut acceptor = acceptor;
             for (i, stream) in acceptor.incoming().enumerate().take(MAX as uint) {
                 // Start another task to handle the connection
                 spawn(proc() {
@@ -382,7 +513,6 @@ mod test {
             }
         });
 
-        port.recv();
         connect(0, addr);
 
         fn connect(i: int, addr: SocketAddr) {
@@ -400,13 +530,12 @@ mod test {
     })
 
     iotest!(fn multiple_connect_interleaved_lazy_schedule_ip4() {
-        let addr = next_test_ip4();
         static MAX: int = 10;
-        let (port, chan) = Chan::new();
+        let addr = next_test_ip4();
+        let acceptor = TcpListener::bind(addr).listen();
 
         spawn(proc() {
-            let mut acceptor = TcpListener::bind(addr).listen();
-            chan.send(());
+            let mut acceptor = acceptor;
             for stream in acceptor.incoming().take(MAX as uint) {
                 // Start another task to handle the connection
                 spawn(proc() {
@@ -419,7 +548,6 @@ mod test {
             }
         });
 
-        port.recv();
         connect(0, addr);
 
         fn connect(i: int, addr: SocketAddr) {
@@ -437,13 +565,12 @@ mod test {
     })
 
     iotest!(fn multiple_connect_interleaved_lazy_schedule_ip6() {
-        let addr = next_test_ip6();
         static MAX: int = 10;
-        let (port, chan) = Chan::new();
+        let addr = next_test_ip6();
+        let acceptor = TcpListener::bind(addr).listen();
 
         spawn(proc() {
-            let mut acceptor = TcpListener::bind(addr).listen();
-            chan.send(());
+            let mut acceptor = acceptor;
             for stream in acceptor.incoming().take(MAX as uint) {
                 // Start another task to handle the connection
                 spawn(proc() {
@@ -456,7 +583,6 @@ mod test {
             }
         });
 
-        port.recv();
         connect(0, addr);
 
         fn connect(i: int, addr: SocketAddr) {
@@ -484,15 +610,12 @@ mod test {
     }
 
     pub fn peer_name(addr: SocketAddr) {
-        let (port, chan) = Chan::new();
-
+        let acceptor = TcpListener::bind(addr).listen();
         spawn(proc() {
-            let mut acceptor = TcpListener::bind(addr).listen();
-            chan.send(());
+            let mut acceptor = acceptor;
             acceptor.accept().unwrap();
         });
 
-        port.recv();
         let stream = TcpStream::connect(addr);
 
         assert!(stream.is_ok());
@@ -519,23 +642,23 @@ mod test {
 
     iotest!(fn partial_read() {
         let addr = next_test_ip4();
-        let (p, c) = Chan::new();
+        let (tx, rx) = channel();
         spawn(proc() {
             let mut srv = TcpListener::bind(addr).listen().unwrap();
-            c.send(());
+            tx.send(());
             let mut cl = srv.accept().unwrap();
             cl.write([10]).unwrap();
             let mut b = [0];
             cl.read(b).unwrap();
-            c.send(());
+            tx.send(());
         });
 
-        p.recv();
+        rx.recv();
         let mut c = TcpStream::connect(addr).unwrap();
         let mut b = [0, ..10];
         assert_eq!(c.read(b), Ok(1));
         c.write([1]).unwrap();
-        p.recv();
+        rx.recv();
     })
 
     iotest!(fn double_bind() {
@@ -552,25 +675,162 @@ mod test {
 
     iotest!(fn fast_rebind() {
         let addr = next_test_ip4();
-        let (port, chan) = Chan::new();
+        let (tx, rx) = channel();
 
         spawn(proc() {
-            port.recv();
+            rx.recv();
             let _stream = TcpStream::connect(addr).unwrap();
             // Close
-            port.recv();
+            rx.recv();
         });
 
         {
             let mut acceptor = TcpListener::bind(addr).listen();
-            chan.send(());
+            tx.send(());
             {
                 let _stream = acceptor.accept().unwrap();
                 // Close client
-                chan.send(());
+                tx.send(());
             }
             // Close listener
         }
         let _listener = TcpListener::bind(addr);
+    })
+
+    iotest!(fn tcp_clone_smoke() {
+        let addr = next_test_ip4();
+        let mut acceptor = TcpListener::bind(addr).listen();
+
+        spawn(proc() {
+            let mut s = TcpStream::connect(addr);
+            let mut buf = [0, 0];
+            assert_eq!(s.read(buf), Ok(1));
+            assert_eq!(buf[0], 1);
+            s.write([2]).unwrap();
+        });
+
+        let mut s1 = acceptor.accept().unwrap();
+        let s2 = s1.clone();
+
+        let (tx1, rx1) = channel();
+        let (tx2, rx2) = channel();
+        spawn(proc() {
+            let mut s2 = s2;
+            rx1.recv();
+            s2.write([1]).unwrap();
+            tx2.send(());
+        });
+        tx1.send(());
+        let mut buf = [0, 0];
+        assert_eq!(s1.read(buf), Ok(1));
+        rx2.recv();
+    })
+
+    iotest!(fn tcp_clone_two_read() {
+        let addr = next_test_ip6();
+        let mut acceptor = TcpListener::bind(addr).listen();
+        let (tx1, rx) = channel();
+        let tx2 = tx1.clone();
+
+        spawn(proc() {
+            let mut s = TcpStream::connect(addr);
+            s.write([1]).unwrap();
+            rx.recv();
+            s.write([2]).unwrap();
+            rx.recv();
+        });
+
+        let mut s1 = acceptor.accept().unwrap();
+        let s2 = s1.clone();
+
+        let (done, rx) = channel();
+        spawn(proc() {
+            let mut s2 = s2;
+            let mut buf = [0, 0];
+            s2.read(buf).unwrap();
+            tx2.send(());
+            done.send(());
+        });
+        let mut buf = [0, 0];
+        s1.read(buf).unwrap();
+        tx1.send(());
+
+        rx.recv();
+    })
+
+    iotest!(fn tcp_clone_two_write() {
+        let addr = next_test_ip4();
+        let mut acceptor = TcpListener::bind(addr).listen();
+
+        spawn(proc() {
+            let mut s = TcpStream::connect(addr);
+            let mut buf = [0, 1];
+            s.read(buf).unwrap();
+            s.read(buf).unwrap();
+        });
+
+        let mut s1 = acceptor.accept().unwrap();
+        let s2 = s1.clone();
+
+        let (done, rx) = channel();
+        spawn(proc() {
+            let mut s2 = s2;
+            s2.write([1]).unwrap();
+            done.send(());
+        });
+        s1.write([2]).unwrap();
+
+        rx.recv();
+    })
+
+    iotest!(fn shutdown_smoke() {
+        use rt::rtio::RtioTcpStream;
+
+        let addr = next_test_ip4();
+        let a = TcpListener::bind(addr).unwrap().listen();
+        spawn(proc() {
+            let mut a = a;
+            let mut c = a.accept().unwrap();
+            assert_eq!(c.read_to_end(), Ok(vec!()));
+            c.write([1]).unwrap();
+        });
+
+        let mut s = TcpStream::connect(addr).unwrap();
+        assert!(s.obj.close_write().is_ok());
+        assert!(s.write([1]).is_err());
+        assert_eq!(s.read_to_end(), Ok(vec!(1)));
+    })
+
+    iotest!(fn accept_timeout() {
+        let addr = next_test_ip4();
+        let mut a = TcpListener::bind(addr).unwrap().listen().unwrap();
+
+        a.set_timeout(Some(10));
+
+        // Make sure we time out once and future invocations also time out
+        let err = a.accept().err().unwrap();
+        assert_eq!(err.kind, TimedOut);
+        let err = a.accept().err().unwrap();
+        assert_eq!(err.kind, TimedOut);
+
+        // Also make sure that even though the timeout is expired that we will
+        // continue to receive any pending connections.
+        let l = TcpStream::connect(addr).unwrap();
+        for i in range(0, 1001) {
+            match a.accept() {
+                Ok(..) => break,
+                Err(ref e) if e.kind == TimedOut => {}
+                Err(e) => fail!("error: {}", e),
+            }
+            if i == 1000 { fail!("should have a pending connection") }
+        }
+        drop(l);
+
+        // Unset the timeout and make sure that this always blocks.
+        a.set_timeout(None);
+        spawn(proc() {
+            drop(TcpStream::connect(addr));
+        });
+        a.accept().unwrap();
     })
 }

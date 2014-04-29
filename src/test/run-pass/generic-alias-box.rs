@@ -8,13 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(managed_boxes)];
+#![feature(managed_boxes)]
 
 fn id<T>(t: T) -> T { return t; }
 
 pub fn main() {
     let expected = @100;
     let actual = id::<@int>(expected);
-    info!("{:?}", *actual);
+    println!("{:?}", *actual);
     assert_eq!(*expected, *actual);
 }

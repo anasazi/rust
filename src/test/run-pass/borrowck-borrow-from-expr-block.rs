@@ -8,9 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(managed_boxes)];
-
-use std::ptr;
+#![feature(managed_boxes)]
 
 fn borrow(x: &int, f: |x: &int|) {
     f(x)
@@ -18,7 +16,7 @@ fn borrow(x: &int, f: |x: &int|) {
 
 fn test1(x: @~int) {
     borrow(&*(*x).clone(), |p| {
-        let x_a = ptr::to_unsafe_ptr(&**x);
+        let x_a = &**x as *int;
         assert!((x_a as uint) != (p as *int as uint));
         assert_eq!(unsafe{*x_a}, *p);
     })

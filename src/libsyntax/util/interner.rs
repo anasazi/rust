@@ -14,23 +14,25 @@
 
 use ast::Name;
 
+use collections::HashMap;
 use std::cast;
 use std::cell::RefCell;
 use std::cmp::Equiv;
-use std::hashmap::HashMap;
+use std::fmt;
+use std::hash::Hash;
 use std::rc::Rc;
 
 pub struct Interner<T> {
-    priv map: @RefCell<HashMap<T, Name>>,
-    priv vect: @RefCell<~[T]>,
+    map: RefCell<HashMap<T, Name>>,
+    vect: RefCell<Vec<T> >,
 }
 
 // when traits can extend traits, we should extend index<Name,T> to get []
-impl<T:Eq + IterBytes + Hash + Freeze + Clone + 'static> Interner<T> {
+impl<T: TotalEq + Hash + Clone + 'static> Interner<T> {
     pub fn new() -> Interner<T> {
         Interner {
-            map: @RefCell::new(HashMap::new()),
-            vect: @RefCell::new(~[]),
+            map: RefCell::new(HashMap::new()),
+            vect: RefCell::new(Vec::new()),
         }
     }
 
@@ -44,56 +46,56 @@ impl<T:Eq + IterBytes + Hash + Freeze + Clone + 'static> Interner<T> {
 
     pub fn intern(&self, val: T) -> Name {
         let mut map = self.map.borrow_mut();
-        match map.get().find(&val) {
+        match (*map).find(&val) {
             Some(&idx) => return idx,
             None => (),
         }
 
         let mut vect = self.vect.borrow_mut();
-        let new_idx = vect.get().len() as Name;
-        map.get().insert(val.clone(), new_idx);
-        vect.get().push(val);
+        let new_idx = (*vect).len() as Name;
+        (*map).insert(val.clone(), new_idx);
+        (*vect).push(val);
         new_idx
     }
 
     pub fn gensym(&self, val: T) -> Name {
         let mut vect = self.vect.borrow_mut();
-        let new_idx = vect.get().len() as Name;
+        let new_idx = (*vect).len() as Name;
         // leave out of .map to avoid colliding
-        vect.get().push(val);
+        (*vect).push(val);
         new_idx
     }
 
     pub fn get(&self, idx: Name) -> T {
         let vect = self.vect.borrow();
-        vect.get()[idx].clone()
+        (*(*vect).get(idx as uint)).clone()
     }
 
     pub fn len(&self) -> uint {
         let vect = self.vect.borrow();
-        vect.get().len()
+        (*vect).len()
     }
 
-    pub fn find_equiv<Q:Hash + IterBytes + Equiv<T>>(&self, val: &Q)
-                                              -> Option<Name> {
+    pub fn find_equiv<Q:Hash + Equiv<T>>(&self, val: &Q) -> Option<Name> {
         let map = self.map.borrow();
-        match map.get().find_equiv(val) {
+        match (*map).find_equiv(val) {
             Some(v) => Some(*v),
             None => None,
         }
     }
-}
 
-#[deriving(Clone, Eq, IterBytes, Ord)]
-pub struct RcStr {
-    priv string: Rc<~str>,
-}
-
-impl TotalEq for RcStr {
-    fn equals(&self, other: &RcStr) -> bool {
-        self.as_slice().equals(&other.as_slice())
+    pub fn clear(&self) {
+        *self.map.borrow_mut() = HashMap::new();
+        *self.vect.borrow_mut() = Vec::new();
     }
 }
+
+#[deriving(Clone, Eq, Hash, Ord)]
+pub struct RcStr {
+    string: Rc<~str>,
+}
+
+impl TotalEq for RcStr {}
 
 impl TotalOrd for RcStr {
     fn cmp(&self, other: &RcStr) -> Ordering {
@@ -104,13 +106,20 @@ impl TotalOrd for RcStr {
 impl Str for RcStr {
     #[inline]
     fn as_slice<'a>(&'a self) -> &'a str {
-        let s: &'a str = *self.string.borrow();
+        let s: &'a str = *self.string;
         s
     }
 
     #[inline]
     fn into_owned(self) -> ~str {
-        self.string.borrow().to_owned()
+        self.string.to_owned()
+    }
+}
+
+impl fmt::Show for RcStr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use std::fmt::Show;
+        self.as_slice().fmt(f)
     }
 }
 
@@ -123,18 +132,18 @@ impl RcStr {
 }
 
 // A StrInterner differs from Interner<String> in that it accepts
-// references rather than @ ones, resulting in less allocation.
+// &str rather than RcStr, resulting in less allocation.
 pub struct StrInterner {
-    priv map: @RefCell<HashMap<RcStr, Name>>,
-    priv vect: @RefCell<~[RcStr]>,
+    map: RefCell<HashMap<RcStr, Name>>,
+    vect: RefCell<Vec<RcStr> >,
 }
 
 // when traits can extend traits, we should extend index<Name,T> to get []
 impl StrInterner {
     pub fn new() -> StrInterner {
         StrInterner {
-            map: @RefCell::new(HashMap::new()),
-            vect: @RefCell::new(~[]),
+            map: RefCell::new(HashMap::new()),
+            vect: RefCell::new(Vec::new()),
         }
     }
 
@@ -146,24 +155,22 @@ impl StrInterner {
 
     pub fn intern(&self, val: &str) -> Name {
         let mut map = self.map.borrow_mut();
-        match map.get().find_equiv(&val) {
+        match map.find_equiv(&val) {
             Some(&idx) => return idx,
             None => (),
         }
 
         let new_idx = self.len() as Name;
         let val = RcStr::new(val);
-        map.get().insert(val.clone(), new_idx);
-        let mut vect = self.vect.borrow_mut();
-        vect.get().push(val);
+        map.insert(val.clone(), new_idx);
+        self.vect.borrow_mut().push(val);
         new_idx
     }
 
     pub fn gensym(&self, val: &str) -> Name {
         let new_idx = self.len() as Name;
         // leave out of .map to avoid colliding
-        let mut vect = self.vect.borrow_mut();
-        vect.get().push(RcStr::new(val));
+        self.vect.borrow_mut().push(RcStr::new(val));
         new_idx
     }
 
@@ -181,38 +188,39 @@ impl StrInterner {
         let new_idx = self.len() as Name;
         // leave out of map to avoid colliding
         let mut vect = self.vect.borrow_mut();
-        let existing = vect.get()[idx].clone();
-        vect.get().push(existing);
+        let existing = (*vect.get(idx as uint)).clone();
+        vect.push(existing);
         new_idx
     }
 
     pub fn get(&self, idx: Name) -> RcStr {
-        let vect = self.vect.borrow();
-        vect.get()[idx].clone()
+        (*self.vect.borrow().get(idx as uint)).clone()
     }
 
     /// Returns this string with lifetime tied to the interner. Since
     /// strings may never be removed from the interner, this is safe.
     pub fn get_ref<'a>(&'a self, idx: Name) -> &'a str {
         let vect = self.vect.borrow();
-        let s: &str = vect.get()[idx].as_slice();
+        let s: &str = vect.get(idx as uint).as_slice();
         unsafe {
             cast::transmute(s)
         }
     }
 
     pub fn len(&self) -> uint {
-        let vect = self.vect.borrow();
-        vect.get().len()
+        self.vect.borrow().len()
     }
 
-    pub fn find_equiv<Q:Hash + IterBytes + Equiv<RcStr>>(&self, val: &Q)
-                                                         -> Option<Name> {
-        let map = self.map.borrow();
-        match map.get().find_equiv(val) {
+    pub fn find_equiv<Q:Hash + Equiv<RcStr>>(&self, val: &Q) -> Option<Name> {
+        match (*self.map.borrow()).find_equiv(val) {
             Some(v) => Some(*v),
             None => None,
         }
+    }
+
+    pub fn clear(&self) {
+        *self.map.borrow_mut() = HashMap::new();
+        *self.vect.borrow_mut() = Vec::new();
     }
 }
 

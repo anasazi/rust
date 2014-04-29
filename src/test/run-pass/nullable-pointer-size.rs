@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(macro_rules)];
+#![feature(macro_rules)]
 
 use std::mem;
 
@@ -41,6 +41,5 @@ pub fn main() {
     check_type!(~int);
     check_type!(@int);
     check_type!(~str);
-    check_type!(~[int]);
     check_type!(extern fn());
 }

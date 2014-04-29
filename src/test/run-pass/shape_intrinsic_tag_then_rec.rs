@@ -8,12 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[feature(managed_boxes)];
+#![feature(managed_boxes)]
 
 // Exercises a bug in the shape code that was exposed
 // on x86_64: when there is a enum embedded in an
 // interior record which is then itself interior to
 // something else, shape calculations were off.
+
 
 #[deriving(Clone)]
 enum opt_span {
@@ -40,8 +41,8 @@ type ty_ = uint;
 #[deriving(Clone)]
 struct Path_ {
     global: bool,
-    idents: ~[~str],
-    types: ~[@ty],
+    idents: Vec<~str> ,
+    types: Vec<@ty>,
 }
 
 type path = Spanned<Path_>;
@@ -56,9 +57,13 @@ struct X {
 pub fn main() {
     let sp: Span = Span {lo: 57451u, hi: 57542u, expanded_from: os_none};
     let t: @ty = @Spanned { data: 3u, span: sp };
-    let p_: Path_ = Path_ { global: true, idents: ~[~"hi"], types: ~[t] };
+    let p_: Path_ = Path_ {
+        global: true,
+        idents: vec!("hi".to_owned()),
+        types: vec!(t),
+    };
     let p: path = Spanned { data: p_, span: sp };
     let x = X { sp: sp, path: p };
-    error!("{:?}", x.path.clone());
-    error!("{:?}", x.clone());
+    println!("{:?}", x.path.clone());
+    println!("{:?}", x.clone());
 }

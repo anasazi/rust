@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -11,12 +11,12 @@
 // Issue #7580
 
 // error-pattern:fail works
-#[feature(globs)];
+#![feature(globs)]
 
 use std::*;
 
 fn main() {
-    str::with_capacity(10); // avoid an unused import message
+    str::from_byte('a' as u8); // avoid an unused import message
 
     fail!("fail works")
 }

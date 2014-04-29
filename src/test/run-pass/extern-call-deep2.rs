@@ -8,11 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::libc;
+extern crate libc;
 use std::task;
 
 mod rustrt {
-    use std::libc;
+    extern crate libc;
 
     #[link(name = "rustrt")]
     extern {
@@ -32,7 +32,7 @@ extern fn cb(data: libc::uintptr_t) -> libc::uintptr_t {
 
 fn count(n: uint) -> uint {
     unsafe {
-        info!("n = {}", n);
+        println!("n = {}", n);
         rustrt::rust_dbg_call(cb, n)
     }
 }
@@ -42,7 +42,7 @@ pub fn main() {
     // has a large stack)
     task::spawn(proc() {
         let result = count(1000u);
-        info!("result = {}", result);
+        println!("result = {}", result);
         assert_eq!(result, 1000u);
     });
 }

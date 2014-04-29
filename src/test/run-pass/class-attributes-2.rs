@@ -18,7 +18,7 @@ impl Drop for cat {
        Actually, cats don't always land on their feet when you drop them.
     */
     fn drop(&mut self) {
-        error!("{} landed on hir feet", self.name);
+        println!("{} landed on hir feet", self.name);
     }
 }
 
@@ -33,5 +33,5 @@ fn cat(name: ~str) -> cat {
 }
 
 pub fn main() {
-  let _kitty = cat(~"Spotty");
+  let _kitty = cat("Spotty".to_owned());
 }
