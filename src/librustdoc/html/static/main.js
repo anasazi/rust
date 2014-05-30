@@ -386,12 +386,16 @@
             });
         }
 
+        function escape(content) {
+            return $('<h1/>').text(content).html();
+        }
+
         function showResults(results) {
             var output, shown, query = getQuery();
 
             currentResults = query.id;
-            output = '<h1>Results for ' + query.query +
-                    (query.type ? ' (type: ' + query.type + ')' : '') + '</h1>';
+            output = '<h1>Results for ' + escape(query.query) +
+                (query.type ? ' (type: ' + escape(query.type) + ')' : '') + '</h1>';
             output += '<table class="search-results">';
 
             if (results.length > 0) {
@@ -510,9 +514,9 @@
         // `rustdoc::html::item_type::ItemType` type in Rust.
         var itemTypes = ["mod",
                          "struct",
-                         "enum",
+                         "type",
                          "fn",
-                         "typedef",
+                         "type",
                          "static",
                          "trait",
                          "impl",
@@ -649,5 +653,32 @@
     }
 
     window.initSearch = initSearch;
-}());
 
+    window.register_implementors = function(imp) {
+        var list = $('#implementors-list');
+        var libs = Object.getOwnPropertyNames(imp);
+        for (var i = 0; i < libs.length; i++) {
+            var structs = Object.getOwnPropertyNames(imp[libs[i]]);
+            for (var j = 0; j < structs.length; j++) {
+                console.log(i, structs[j]);
+                var path = rootPath + imp[libs[i]][structs[j]];
+                var klass = path.contains("type.") ? "type" : "struct";
+                var link = $('<a>').text(structs[j])
+                                   .attr('href', path)
+                                   .attr('class', klass);
+                var code = $('<code>').append(link);
+                var li = $('<li>').append(code);
+                list.append(li);
+            }
+        }
+    };
+    if (window.pending_implementors) {
+        window.register_implementors(window.pending_implementors);
+    }
+
+    // See documentaiton in html/render.rs for what this is doing.
+    var query = getQueryStringParams();
+    if (query['gotosrc']) {
+        window.location = $('#src-' + query['gotosrc']).attr('href');
+    }
+}());

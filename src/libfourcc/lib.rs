@@ -31,7 +31,7 @@ fn main() {
     let little_val = fourcc!("foo ", little);
     assert_eq!(little_val, 0x21EEFFC0u32);
 }
- ```
+```
 
 # References
 
@@ -39,13 +39,13 @@ fn main() {
 
 */
 
-#![crate_id = "fourcc#0.11-pre"]
+#![crate_id = "fourcc#0.11.0-pre"]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
 #![license = "MIT/ASL2"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-       html_root_url = "http://static.rust-lang.org/doc/master")]
+       html_root_url = "http://doc.rust-lang.org/")]
 
 #![deny(deprecated_owned_vector)]
 #![feature(macro_registrar, managed_boxes)]
@@ -66,14 +66,15 @@ use syntax::parse::token::InternedString;
 #[macro_registrar]
 pub fn macro_registrar(register: |Name, SyntaxExtension|) {
     register(token::intern("fourcc"),
-        NormalTT(~BasicMacroExpander {
+        NormalTT(box BasicMacroExpander {
             expander: expand_syntax_ext,
             span: None,
         },
         None));
 }
 
-pub fn expand_syntax_ext(cx: &mut ExtCtxt, sp: Span, tts: &[ast::TokenTree]) -> ~base::MacResult {
+pub fn expand_syntax_ext(cx: &mut ExtCtxt, sp: Span, tts: &[ast::TokenTree])
+                         -> Box<base::MacResult> {
     let (expr, endian) = parse_tts(cx, tts);
 
     let little = match endian {

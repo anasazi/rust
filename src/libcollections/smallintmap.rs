@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -15,7 +15,7 @@
 
 #![allow(missing_doc)]
 
-use std::iter::{Enumerate, FilterMap, Rev};
+use std::iter::{Enumerate, FilterMap};
 use std::mem::replace;
 use std::{vec, slice};
 
@@ -142,19 +142,6 @@ impl<V> SmallIntMap<V> {
         }
     }
 
-    /// An iterator visiting all key-value pairs in descending order by the keys.
-    /// Iterator element type is (uint, &'r V)
-    pub fn rev_iter<'r>(&'r self) -> RevEntries<'r, V> {
-        self.iter().rev()
-    }
-
-    /// An iterator visiting all key-value pairs in descending order by the keys,
-    /// with mutable references to the values
-    /// Iterator element type is (uint, &'r mut V)
-    pub fn mut_rev_iter<'r>(&'r mut self) -> RevMutEntries <'r, V> {
-        self.mut_iter().rev()
-    }
-
     /// Empties the hash map, moving all values into the specified closure
     pub fn move_iter(&mut self)
         -> FilterMap<(uint, Option<V>), (uint, V),
@@ -246,7 +233,6 @@ pub struct Entries<'a, T> {
 
 iterator!(impl Entries -> (uint, &'a T), get_ref)
 double_ended_iterator!(impl Entries -> (uint, &'a T), get_ref)
-pub type RevEntries<'a, T> = Rev<Entries<'a, T>>;
 
 pub struct MutEntries<'a, T> {
     front: uint,
@@ -256,7 +242,6 @@ pub struct MutEntries<'a, T> {
 
 iterator!(impl MutEntries -> (uint, &'a mut T), get_mut_ref)
 double_ended_iterator!(impl MutEntries -> (uint, &'a mut T), get_mut_ref)
-pub type RevMutEntries<'a, T> = Rev<MutEntries<'a, T>>;
 
 #[cfg(test)]
 mod test_map {
@@ -387,9 +372,9 @@ mod test_map {
         assert!(m.insert(10, 11));
 
         assert_eq!(m.iter().size_hint(), (0, Some(11)));
-        assert_eq!(m.rev_iter().size_hint(), (0, Some(11)));
+        assert_eq!(m.iter().rev().size_hint(), (0, Some(11)));
         assert_eq!(m.mut_iter().size_hint(), (0, Some(11)));
-        assert_eq!(m.mut_rev_iter().size_hint(), (0, Some(11)));
+        assert_eq!(m.mut_iter().rev().size_hint(), (0, Some(11)));
     }
 
     #[test]
@@ -425,7 +410,7 @@ mod test_map {
         assert!(m.insert(6, 10));
         assert!(m.insert(10, 11));
 
-        let mut it = m.rev_iter();
+        let mut it = m.iter().rev();
         assert_eq!(it.next().unwrap(), (10, &11));
         assert_eq!(it.next().unwrap(), (6, &10));
         assert_eq!(it.next().unwrap(), (3, &5));
@@ -444,7 +429,7 @@ mod test_map {
         assert!(m.insert(6, 10));
         assert!(m.insert(10, 11));
 
-        for (k, v) in m.mut_rev_iter() {
+        for (k, v) in m.mut_iter().rev() {
             *v += k as int;
         }
 
@@ -460,16 +445,16 @@ mod test_map {
     #[test]
     fn test_move_iter() {
         let mut m = SmallIntMap::new();
-        m.insert(1, ~2);
+        m.insert(1, box 2);
         let mut called = false;
         for (k, v) in m.move_iter() {
             assert!(!called);
             called = true;
             assert_eq!(k, 1);
-            assert_eq!(v, ~2);
+            assert_eq!(v, box 2);
         }
         assert!(called);
-        m.insert(2, ~1);
+        m.insert(2, box 1);
     }
 }
 

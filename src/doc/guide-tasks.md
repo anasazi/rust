@@ -48,13 +48,7 @@ concurrency at this writing:
 * [`std::task`] - All code relating to tasks and task scheduling,
 * [`std::comm`] - The message passing interface,
 * [`sync::DuplexStream`] - An extension of `pipes::stream` that allows both sending and receiving,
-* [`sync::SyncSender`] - An extension of `pipes::stream` that provides synchronous message sending,
-* [`sync::SyncReceiver`] - An extension of `pipes::stream` that acknowledges each message received,
-* [`sync::rendezvous`] - Creates a stream whose channel, upon sending a message, blocks until the
-    message is received.
 * [`sync::Arc`] - The Arc (atomically reference counted) type, for safely sharing immutable data,
-* [`sync::RWArc`] - A dual-mode Arc protected by a reader-writer lock,
-* [`sync::MutexArc`] - An Arc with mutable data protected by a blocking mutex,
 * [`sync::Semaphore`] - A counting, blocking, bounded-waiting semaphore,
 * [`sync::Mutex`] - A blocking, bounded-waiting, mutual exclusion lock with an associated
     FIFO condition variable,
@@ -70,13 +64,8 @@ concurrency at this writing:
 [`std::task`]: std/task/index.html
 [`std::comm`]: std/comm/index.html
 [`sync::DuplexStream`]: sync/struct.DuplexStream.html
-[`sync::SyncSender`]: sync/struct.SyncSender.html
-[`sync::SyncReceiver`]: sync/struct.SyncReceiver.html
-[`sync::rendezvous`]: sync/fn.rendezvous.html
 [`sync::Arc`]: sync/struct.Arc.html
-[`sync::RWArc`]: sync/struct.RWArc.html
-[`sync::MutexArc`]: sync/struct.MutexArc.html
-[`sync::Semaphore`]: sync/struct.Semaphore.html
+[`sync::Semaphore`]: sync/raw/struct.Semaphore.html
 [`sync::Mutex`]: sync/struct.Mutex.html
 [`sync::RWLock`]: sync/struct.RWLock.html
 [`sync::Barrier`]: sync/struct.Barrier.html
@@ -100,7 +89,10 @@ closure in the new task.
 fn print_message() { println!("I am running in a different task!"); }
 spawn(print_message);
 
-// Print something more profound in a different task using a lambda expression
+// Print something profound in a different task using a `proc` expression
+// The `proc` expression evaluates to an (unnamed) owned closure.
+// That closure will call `println!(...)` when the spawned task runs.
+
 spawn(proc() println!("I am also running in a different task!") );
 ~~~~
 
@@ -288,7 +280,7 @@ fn fib(n: u64) -> u64 {
 
 let mut delayed_fib = sync::Future::spawn(proc() fib(50));
 make_a_sandwich();
-println!("fib(50) = {:?}", delayed_fib.get())
+println!("fib(50) = {}", delayed_fib.get())
 # }
 ~~~
 
@@ -351,12 +343,9 @@ fn main() {
     let numbers_arc = Arc::new(numbers);
 
     for num in range(1u, 10) {
-        let (tx, rx) = channel();
-        tx.send(numbers_arc.clone());
+        let task_numbers = numbers_arc.clone();
 
         spawn(proc() {
-            let local_arc : Arc<Vec<f64>> = rx.recv();
-            let task_numbers = &*local_arc;
             println!("{}-norm = {}", num, pnorm(task_numbers.as_slice(), num));
         });
     }
@@ -377,39 +366,26 @@ let numbers_arc=Arc::new(numbers);
 # }
 ~~~
 
-and a clone of it is sent to each task
+and a unique clone is captured for each task via a procedure. This only copies the wrapper and not
+it's contents. Within the task's procedure, the captured Arc reference can be used as an immutable
+reference to the underlying vector as if it were local.
 
 ~~~
 # extern crate sync;
 # extern crate rand;
 # use sync::Arc;
+# fn pnorm(nums: &[f64], p: uint) -> f64 { 4.0 }
 # fn main() {
 # let numbers=Vec::from_fn(1000000, |_| rand::random::<f64>());
 # let numbers_arc = Arc::new(numbers);
-# let (tx, rx) = channel();
-tx.send(numbers_arc.clone());
+# let num = 4;
+let task_numbers = numbers_arc.clone();
+spawn(proc() {
+    // Capture task_numbers and use it as if it was the underlying vector
+    println!("{}-norm = {}", num, pnorm(task_numbers.as_slice(), num));
+});
 # }
 ~~~
-
-copying only the wrapper and not its contents.
-
-Each task recovers the underlying data by
-
-~~~
-# extern crate sync;
-# extern crate rand;
-# use sync::Arc;
-# fn main() {
-# let numbers=Vec::from_fn(1000000, |_| rand::random::<f64>());
-# let numbers_arc=Arc::new(numbers);
-# let (tx, rx) = channel();
-# tx.send(numbers_arc.clone());
-# let local_arc : Arc<Vec<f64>> = rx.recv();
-let task_numbers = &*local_arc;
-# }
-~~~
-
-and can use it as if it were local.
 
 The `arc` module also implements Arcs around mutable data that are not covered here.
 
@@ -487,16 +463,16 @@ Here is the function that implements the child task:
 ~~~
 extern crate sync;
 # fn main() {
-fn stringifier(channel: &sync::DuplexStream<~str, uint>) {
+fn stringifier(channel: &sync::DuplexStream<String, uint>) {
     let mut value: uint;
     loop {
         value = channel.recv();
-        channel.send(value.to_str());
+        channel.send(value.to_str().to_string());
         if value == 0 { break; }
     }
 }
 # }
-~~~~
+~~~
 
 The implementation of `DuplexStream` supports both sending and
 receiving. The `stringifier` function takes a `DuplexStream` that can
@@ -512,11 +488,11 @@ Here is the code for the parent task:
 extern crate sync;
 # use std::task::spawn;
 # use sync::DuplexStream;
-# fn stringifier(channel: &sync::DuplexStream<~str, uint>) {
+# fn stringifier(channel: &sync::DuplexStream<String, uint>) {
 #     let mut value: uint;
 #     loop {
 #         value = channel.recv();
-#         channel.send(value.to_str());
+#         channel.send(value.to_str().to_string());
 #         if value == 0u { break; }
 #     }
 # }
@@ -529,16 +505,16 @@ spawn(proc() {
 });
 
 from_child.send(22);
-assert!(from_child.recv() == "22".to_owned());
+assert!(from_child.recv().as_slice() == "22");
 
 from_child.send(23);
 from_child.send(0);
 
-assert!(from_child.recv() == "23".to_owned());
-assert!(from_child.recv() == "0".to_owned());
+assert!(from_child.recv().as_slice() == "23");
+assert!(from_child.recv().as_slice() == "0");
 
 # }
-~~~~
+~~~
 
 The parent task first calls `DuplexStream` to create a pair of bidirectional
 endpoints. It then uses `task::spawn` to create the child task, which captures

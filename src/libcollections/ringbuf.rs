@@ -1,4 +1,4 @@
-// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -14,7 +14,7 @@
 //! collections::deque::Deque`.
 
 use std::cmp;
-use std::iter::{Rev, RandomAccessIterator};
+use std::iter::RandomAccessIterator;
 
 use deque::Deque;
 
@@ -190,11 +190,6 @@ impl<T> RingBuf<T> {
         Items{index: 0, rindex: self.nelts, lo: self.lo, elts: self.elts.as_slice()}
     }
 
-    /// Back-to-front iterator.
-    pub fn rev_iter<'a>(&'a self) -> Rev<Items<'a, T>> {
-        self.iter().rev()
-    }
-
     /// Front-to-back iterator which returns mutable values.
     pub fn mut_iter<'a>(&'a mut self) -> MutItems<'a, T> {
         let start_index = raw_index(self.lo, self.elts.len(), 0);
@@ -219,11 +214,6 @@ impl<T> RingBuf<T> {
                                  remaining2: empty,
                                  nelts: self.nelts }
         }
-    }
-
-    /// Back-to-front iterator which returns mutable values.
-    pub fn mut_rev_iter<'a>(&'a mut self) -> Rev<MutItems<'a, T>> {
-        self.mut_iter().rev()
     }
 }
 
@@ -702,23 +692,23 @@ mod tests {
     #[test]
     fn test_rev_iter() {
         let mut d = RingBuf::new();
-        assert_eq!(d.rev_iter().next(), None);
+        assert_eq!(d.iter().rev().next(), None);
 
         for i in range(0, 5) {
             d.push_back(i);
         }
-        assert_eq!(d.rev_iter().collect::<Vec<&int>>().as_slice(), &[&4,&3,&2,&1,&0]);
+        assert_eq!(d.iter().rev().collect::<Vec<&int>>().as_slice(), &[&4,&3,&2,&1,&0]);
 
         for i in range(6, 9) {
             d.push_front(i);
         }
-        assert_eq!(d.rev_iter().collect::<Vec<&int>>().as_slice(), &[&4,&3,&2,&1,&0,&6,&7,&8]);
+        assert_eq!(d.iter().rev().collect::<Vec<&int>>().as_slice(), &[&4,&3,&2,&1,&0,&6,&7,&8]);
     }
 
     #[test]
     fn test_mut_rev_iter_wrap() {
         let mut d = RingBuf::with_capacity(3);
-        assert!(d.mut_rev_iter().next().is_none());
+        assert!(d.mut_iter().rev().next().is_none());
 
         d.push_back(1);
         d.push_back(2);
@@ -726,7 +716,7 @@ mod tests {
         assert_eq!(d.pop_front(), Some(1));
         d.push_back(4);
 
-        assert_eq!(d.mut_rev_iter().map(|x| *x).collect::<Vec<int>>(),
+        assert_eq!(d.mut_iter().rev().map(|x| *x).collect::<Vec<int>>(),
                    vec!(4, 3, 2));
     }
 
@@ -756,19 +746,19 @@ mod tests {
     #[test]
     fn test_mut_rev_iter() {
         let mut d = RingBuf::new();
-        assert!(d.mut_rev_iter().next().is_none());
+        assert!(d.mut_iter().rev().next().is_none());
 
         for i in range(0u, 3) {
             d.push_front(i);
         }
 
-        for (i, elt) in d.mut_rev_iter().enumerate() {
+        for (i, elt) in d.mut_iter().rev().enumerate() {
             assert_eq!(*elt, i);
             *elt = i;
         }
 
         {
-            let mut it = d.mut_rev_iter();
+            let mut it = d.mut_iter().rev();
             assert_eq!(*it.next().unwrap(), 0);
             assert_eq!(*it.next().unwrap(), 1);
             assert_eq!(*it.next().unwrap(), 2);

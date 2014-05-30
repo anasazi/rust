@@ -33,7 +33,7 @@ use middle::ty;
 use util::ppaux::{Repr, ty_to_str};
 
 use std::c_str::ToCStr;
-use std::slice;
+use std::vec;
 use std::vec::Vec;
 use libc::c_uint;
 use syntax::{ast, ast_util};
@@ -55,8 +55,9 @@ pub fn const_lit(cx: &CrateContext, e: &ast::Expr, lit: ast::Lit)
                     C_integral(Type::uint_from_ty(cx, t), i as u64, false)
                 }
                 _ => cx.sess().span_bug(lit.span,
-                        format!("integer literal has type {} (expected int or uint)",
-                                ty_to_str(cx.tcx(), lit_int_ty)))
+                        format!("integer literal has type {} (expected int \
+                                 or uint)",
+                                ty_to_str(cx.tcx(), lit_int_ty)).as_slice())
             }
         }
         ast::LitFloat(ref fs, t) => {
@@ -94,12 +95,12 @@ fn const_vec(cx: &CrateContext, e: &ast::Expr,
     let vec_ty = ty::expr_ty(cx.tcx(), e);
     let unit_ty = ty::sequence_element_type(cx.tcx(), vec_ty);
     let llunitty = type_of::type_of(cx, unit_ty);
-    let (vs, inlineable) = slice::unzip(es.iter().map(|e| const_expr(cx, *e, is_local)));
+    let (vs, inlineable) = vec::unzip(es.iter().map(|e| const_expr(cx, *e, is_local)));
     // If the vector contains enums, an LLVM array won't work.
     let v = if vs.iter().any(|vi| val_ty(*vi) != llunitty) {
-        C_struct(cx, vs, false)
+        C_struct(cx, vs.as_slice(), false)
     } else {
-        C_array(llunitty, vs)
+        C_array(llunitty, vs.as_slice())
     };
     (v, llunitty, inlineable.iter().fold(true, |a, &b| a && b))
 }
@@ -150,14 +151,14 @@ fn const_deref(cx: &CrateContext, v: ValueRef, t: ty::t, explicit: bool)
                 }
                 _ => {
                     cx.sess().bug(format!("unexpected dereferenceable type {}",
-                                          ty_to_str(cx.tcx(), t)))
+                                          ty_to_str(cx.tcx(), t)).as_slice())
                 }
             };
             (dv, mt.ty)
         }
         None => {
             cx.sess().bug(format!("can't dereference const of type {}",
-                                  ty_to_str(cx.tcx(), t)))
+                                  ty_to_str(cx.tcx(), t)).as_slice())
         }
     }
 }
@@ -206,7 +207,7 @@ pub fn const_expr(cx: &CrateContext, e: &ast::Expr, is_local: bool) -> (ValueRef
                     cx.sess()
                       .span_bug(e.span,
                                 format!("unexpected static function: {:?}",
-                                        store))
+                                        store).as_slice())
                 }
                 ty::AutoObject(..) => {
                     cx.sess()
@@ -256,11 +257,11 @@ pub fn const_expr(cx: &CrateContext, e: &ast::Expr, is_local: bool) -> (ValueRef
                                     }
                                 }
                                 _ => {
-                                    cx.sess().span_bug(e.span,
-                                                       format!("unimplemented \
-                                                                const autoref \
-                                                                {:?}",
-                                                               autoref))
+                                    cx.sess()
+                                      .span_bug(e.span,
+                                                format!("unimplemented const \
+                                                         autoref {:?}",
+                                                        autoref).as_slice())
                                 }
                             }
                         }
@@ -281,7 +282,7 @@ pub fn const_expr(cx: &CrateContext, e: &ast::Expr, is_local: bool) -> (ValueRef
         }
         cx.sess().bug(format!("const {} of type {} has size {} instead of {}",
                          e.repr(cx.tcx()), ty_to_str(cx.tcx(), ety),
-                         csize, tsize));
+                         csize, tsize).as_slice());
     }
     (llconst, inlineable)
 }
@@ -539,7 +540,7 @@ fn const_expr_unadjusted(cx: &CrateContext, e: &ast::Expr,
               };
 
               expr::with_field_tys(tcx, ety, Some(e.id), |discr, field_tys| {
-                  let (cs, inlineable) = slice::unzip(field_tys.iter().enumerate()
+                  let (cs, inlineable) = vec::unzip(field_tys.iter().enumerate()
                       .map(|(ix, &field_ty)| {
                       match fs.iter().find(|f| field_ty.ident.name == f.ident.node.name) {
                           Some(f) => const_expr(cx, (*f).expr, is_local),
@@ -554,7 +555,7 @@ fn const_expr_unadjusted(cx: &CrateContext, e: &ast::Expr,
                           }
                       }
                   }));
-                  (adt::trans_const(cx, &*repr, discr, cs),
+                  (adt::trans_const(cx, &*repr, discr, cs.as_slice()),
                    inlineable.iter().fold(true, |a, &b| a && b))
               })
           }
@@ -672,6 +673,12 @@ fn const_expr_unadjusted(cx: &CrateContext, e: &ast::Expr,
               }
           }
           ast::ExprParen(e) => { const_expr(cx, e, is_local) }
+          ast::ExprBlock(ref block) => {
+            match block.expr {
+                Some(ref expr) => const_expr(cx, &**expr, is_local),
+                None => (C_nil(cx), true)
+            }
+          }
           _ => cx.sess().span_bug(e.span,
                   "bad constant expression type in consts::const_expr")
         };

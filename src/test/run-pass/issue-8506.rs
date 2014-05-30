@@ -12,7 +12,7 @@
 
 enum Either {
     One,
-    Other(~str,~str)
+    Other(String,String)
 }
 
 static one : Either = One;

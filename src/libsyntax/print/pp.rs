@@ -62,7 +62,7 @@
  */
 
 use std::io;
-use std::strbuf::StrBuf;
+use std::string::String;
 
 #[deriving(Clone, Eq)]
 pub enum Breaks {
@@ -84,7 +84,7 @@ pub struct BeginToken {
 
 #[deriving(Clone)]
 pub enum Token {
-    String(~str, int),
+    String(String, int),
     Break(BreakToken),
     Begin(BeginToken),
     End,
@@ -109,13 +109,13 @@ impl Token {
     }
 }
 
-pub fn tok_str(t: Token) -> ~str {
+pub fn tok_str(t: Token) -> String {
     match t {
-        String(s, len) => return format!("STR({},{})", s, len),
-        Break(_) => return "BREAK".to_owned(),
-        Begin(_) => return "BEGIN".to_owned(),
-        End => return "END".to_owned(),
-        Eof => return "EOF".to_owned()
+        String(s, len) => return format!("STR({},{})", s, len).to_string(),
+        Break(_) => return "BREAK".to_string(),
+        Begin(_) => return "BEGIN".to_string(),
+        End => return "END".to_string(),
+        Eof => return "EOF".to_string()
     }
 }
 
@@ -124,23 +124,25 @@ pub fn buf_str(toks: Vec<Token>,
                left: uint,
                right: uint,
                lim: uint)
-               -> ~str {
+               -> String {
     let n = toks.len();
     assert_eq!(n, szs.len());
     let mut i = left;
     let mut l = lim;
-    let mut s = StrBuf::from_str("[");
+    let mut s = String::from_str("[");
     while i != right && l != 0u {
         l -= 1u;
         if i != left {
             s.push_str(", ");
         }
-        s.push_str(format!("{}={}", szs.get(i), tok_str(toks.get(i).clone())));
+        s.push_str(format!("{}={}",
+                           szs.get(i),
+                           tok_str(toks.get(i).clone())).as_slice());
         i += 1u;
         i %= n;
     }
     s.push_char(']');
-    return s.into_owned();
+    return s.into_string();
 }
 
 pub enum PrintStackBreak {
@@ -155,7 +157,7 @@ pub struct PrintStackElem {
 
 static SIZE_INFINITY: int = 0xffff;
 
-pub fn mk_printer(out: ~io::Writer, linewidth: uint) -> Printer {
+pub fn mk_printer(out: Box<io::Writer>, linewidth: uint) -> Printer {
     // Yes 3, it makes the ring buffers big enough to never
     // fall behind.
     let n: uint = 3 * linewidth;
@@ -262,7 +264,7 @@ pub fn mk_printer(out: ~io::Writer, linewidth: uint) -> Printer {
  * called 'print'.
  */
 pub struct Printer {
-    pub out: ~io::Writer,
+    pub out: Box<io::Writer>,
     buf_len: uint,
     margin: int, // width of lines we're constrained to
     space: int, // number of spaces left on line
@@ -585,7 +587,7 @@ impl Printer {
             assert_eq!(l, len);
             // assert!(l <= space);
             self.space -= len;
-            self.print_str(s)
+            self.print_str(s.as_slice())
           }
           Eof => {
             // Eof should never get here.
@@ -625,15 +627,15 @@ pub fn end(p: &mut Printer) -> io::IoResult<()> { p.pretty_print(End) }
 pub fn eof(p: &mut Printer) -> io::IoResult<()> { p.pretty_print(Eof) }
 
 pub fn word(p: &mut Printer, wrd: &str) -> io::IoResult<()> {
-    p.pretty_print(String(/* bad */ wrd.to_str(), wrd.len() as int))
+    p.pretty_print(String(/* bad */ wrd.to_string(), wrd.len() as int))
 }
 
 pub fn huge_word(p: &mut Printer, wrd: &str) -> io::IoResult<()> {
-    p.pretty_print(String(/* bad */ wrd.to_str(), SIZE_INFINITY))
+    p.pretty_print(String(/* bad */ wrd.to_string(), SIZE_INFINITY))
 }
 
 pub fn zero_word(p: &mut Printer, wrd: &str) -> io::IoResult<()> {
-    p.pretty_print(String(/* bad */ wrd.to_str(), 0))
+    p.pretty_print(String(/* bad */ wrd.to_string(), 0))
 }
 
 pub fn spaces(p: &mut Printer, n: uint) -> io::IoResult<()> {

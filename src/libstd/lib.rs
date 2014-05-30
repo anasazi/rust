@@ -16,13 +16,11 @@
 //!
 //! ## Intrinsic types and operations
 //!
-//! The [`ptr`](ptr/index.html), [`mem`](mem/index.html),
-//! and [`cast`](cast/index.html) modules deal with unsafe pointers,
-//! memory manipulation, and coercion.
+//! The [`ptr`](ptr/index.html) and [`mem`](mem/index.html)
+//! modules deal with unsafe pointers and memory manipulation.
 //! [`kinds`](kinds/index.html) defines the special built-in traits,
 //! and [`raw`](raw/index.html) the runtime representation of Rust types.
-//! These are some of the lowest-level building blocks of Rust
-//! abstractions.
+//! These are some of the lowest-level building blocks in Rust.
 //!
 //! ## Math on primitive types and math traits
 //!
@@ -48,10 +46,10 @@
 //! for which the [`slice`](slice/index.html) module defines many
 //! methods.
 //!
-//! UTF-8 strings, `~str` and `&str`, are built-in types, and the
-//! standard library defines methods for them on a variety of traits
-//! in the [`str`](str/index.html) module. Rust strings are immutable;
-//! use the `StrBuf` type defined in [`strbuf`](strbuf/index.html)
+//! `&str`, a UTF-8 string, is a built-in type, and the standard library
+//! defines methods for it on a variety of traits in the
+//! [`str`](str/index.html) module. Rust strings are immutable;
+//! use the `String` type defined in [`string`](string/index.html)
 //! for a mutable string builder.
 //!
 //! For converting to strings use the [`format!`](fmt/index.html)
@@ -81,7 +79,7 @@
 //! memory types, including [`atomics`](sync/atomics/index.html).
 //!
 //! Common types of I/O, including files, TCP, UPD, pipes, Unix domain sockets,
-//! timers, and process spawning, are defined in the [`io`](io/index.html).
+//! timers, and process spawning, are defined in the [`io`](io/index.html) module.
 //!
 //! Rust's I/O and concurrency depends on a small runtime interface
 //! that lives, along with its support code, in mod [`rt`](rt/index.html).
@@ -90,25 +88,27 @@
 //!
 //! ## The Rust prelude and macros
 //!
-//! Finally, the [`prelude`](prelude/index.html) defines a set of
+//! Finally, the [`prelude`](prelude/index.html) defines a
 //! common set of traits, types, and functions that are made available
 //! to all code by default. [`macros`](macros/index.html) contains
-//! all the standard macros, such as `assert!`, `fail!`, `println!`.
+//! all the standard macros, such as `assert!`, `fail!`, `println!`,
+//! and `format!`, also available to all Rust code.
 
-#![crate_id = "std#0.11-pre"]
+#![crate_id = "std#0.11.0-pre"]
 #![comment = "The Rust standard library"]
 #![license = "MIT/ASL2"]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-       html_root_url = "http://static.rust-lang.org/doc/master")]
+       html_root_url = "http://doc.rust-lang.org/")]
 #![feature(macro_rules, globs, asm, managed_boxes, thread_local, link_args,
-           simd, linkage, default_type_params, phase, concat_idents, quad_precision_float)]
+           linkage, default_type_params, phase, concat_idents, quad_precision_float)]
 
 // Don't link to std. We are std.
 #![no_std]
 
+#![allow(deprecated)]
 #![deny(missing_doc)]
 
 // When testing libstd, bring in libuv as the I/O backend so tests can print
@@ -117,20 +117,49 @@
 #[cfg(test)] extern crate rustuv;
 #[cfg(test)] extern crate native;
 #[cfg(test)] extern crate green;
+#[cfg(test)] extern crate debug;
 #[cfg(test)] #[phase(syntax, link)] extern crate log;
 
 // Make and rand accessible for benchmarking/testcases
 #[cfg(test)] extern crate rand;
 
-// we wrap some libc stuff
+extern crate alloc;
+extern crate core;
 extern crate libc;
 
 // Make std testable by not duplicating lang items. See #2912
 #[cfg(test)] extern crate realstd = "std";
-#[cfg(test)] pub use kinds = realstd::kinds;
-#[cfg(test)] pub use ops = realstd::ops;
-#[cfg(test)] pub use cmp = realstd::cmp;
-#[cfg(test)] pub use ty = realstd::ty;
+#[cfg(test)] pub use realstd::kinds;
+#[cfg(test)] pub use realstd::ops;
+#[cfg(test)] pub use realstd::cmp;
+#[cfg(test)] pub use realstd::ty;
+
+
+// NB: These reexports are in the order they should be listed in rustdoc
+
+pub use core::any;
+pub use core::bool;
+pub use core::cell;
+pub use core::char;
+pub use core::clone;
+#[cfg(not(test))] pub use core::cmp;
+pub use core::container;
+pub use core::default;
+pub use core::finally;
+pub use core::intrinsics;
+pub use core::iter;
+#[cfg(not(test))] pub use core::kinds;
+pub use core::mem;
+#[cfg(not(test))] pub use core::ops;
+pub use core::ptr;
+pub use core::raw;
+pub use core::simd;
+pub use core::tuple;
+#[cfg(not(test))] pub use core::ty;
+pub use core::result;
+
+pub use alloc::owned;
+pub use alloc::rc;
 
 // Run tests with libgreen instead of libnative.
 //
@@ -142,7 +171,10 @@ fn start(argc: int, argv: **u8) -> int {
     green::start(argc, argv, rustuv::event_loop, __test::main)
 }
 
+/* Exported macros */
+
 pub mod macros;
+pub mod bitflags;
 
 mod rtdeps;
 
@@ -172,52 +204,25 @@ pub mod prelude;
 #[path = "num/f32.rs"]   pub mod f32;
 #[path = "num/f64.rs"]   pub mod f64;
 
-pub mod unit;
-pub mod bool;
-pub mod char;
-pub mod tuple;
-
 pub mod slice;
 pub mod vec;
 pub mod str;
-pub mod strbuf;
+pub mod string;
 
 pub mod ascii;
 
-pub mod ptr;
-pub mod owned;
-mod managed;
-mod reference;
-pub mod rc;
 pub mod gc;
-
-
-/* Core language traits */
-
-#[cfg(not(test))] pub mod kinds;
-#[cfg(not(test))] pub mod ops;
-#[cfg(not(test))] pub mod cmp;
-#[cfg(not(test))] pub mod ty;
-
 
 /* Common traits */
 
 pub mod from_str;
 pub mod num;
-pub mod iter;
 pub mod to_str;
-pub mod clone;
 pub mod hash;
-pub mod container;
-pub mod default;
-pub mod any;
 
 /* Common data structures */
 
 pub mod option;
-pub mod result;
-pub mod cell;
-
 
 /* Tasks and communication */
 
@@ -234,11 +239,8 @@ pub mod c_vec;
 pub mod os;
 pub mod io;
 pub mod path;
-pub mod cast;
 pub mod fmt;
 pub mod cleanup;
-pub mod mem;
-
 
 /* Unsupported interfaces */
 
@@ -250,10 +252,6 @@ pub mod reflect;
 // Private APIs
 #[unstable]
 pub mod unstable;
-#[experimental]
-pub mod intrinsics;
-#[experimental]
-pub mod raw;
 
 /* For internal use, not exported */
 
@@ -269,20 +267,21 @@ pub mod rt;
 // can be resolved within libstd.
 #[doc(hidden)]
 mod std {
+    // mods used for deriving
     pub use clone;
     pub use cmp;
-    pub use comm;
-    pub use fmt;
     pub use hash;
-    pub use io;
-    pub use kinds;
-    pub use local_data;
-    pub use option;
-    pub use os;
-    pub use rt;
-    pub use str;
-    pub use to_str;
-    pub use ty;
-    pub use unstable;
-    pub use vec;
+
+    pub use comm; // used for select!()
+    pub use fmt; // used for any formatting strings
+    pub use io; // used for println!()
+    pub use local_data; // used for local_data_key!()
+    pub use option; // used for bitflags!()
+    pub use rt; // used for fail!()
+    pub use vec; // used for vec![]
+
+    // The test runner calls ::std::os::args() but really wants realstd
+    #[cfg(test)] pub use os = realstd::os;
+    // The test runner requires std::slice::Vector, so re-export std::slice just for it.
+    #[cfg(test)] pub use slice;
 }

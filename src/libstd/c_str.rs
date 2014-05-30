@@ -61,28 +61,28 @@ fn main() {
         unsafe { puts(c_buffer); }
     });
 }
- ```
+```
 
 */
 
-use cast;
+use clone::Clone;
+use cmp::Eq;
 use container::Container;
 use iter::{Iterator, range};
-use libc;
 use kinds::marker;
-use ops::Drop;
-use cmp::Eq;
-use clone::Clone;
+use libc;
 use mem;
+use ops::Drop;
 use option::{Option, Some, None};
 use ptr::RawPtr;
 use ptr;
-use str::StrSlice;
-use str;
+use raw::Slice;
+use rt::libc_heap::malloc_raw;
 use slice::{ImmutableVector, MutableVector};
 use slice;
-use rt::global_heap::malloc_raw;
-use raw::Slice;
+use str::StrSlice;
+use str;
+use string::String;
 
 /// The representation of a C String.
 ///
@@ -154,7 +154,7 @@ impl CString {
     /// Fails if the CString is null.
     pub fn with_mut_ref<T>(&mut self, f: |*mut libc::c_char| -> T) -> T {
         if self.buf.is_null() { fail!("CString is null!"); }
-        f(unsafe { cast::transmute_mut_unsafe(self.buf) })
+        f(self.buf as *mut libc::c_char)
     }
 
     /// Returns true if the CString is a null.
@@ -182,7 +182,7 @@ impl CString {
     pub fn as_bytes<'a>(&'a self) -> &'a [u8] {
         if self.buf.is_null() { fail!("CString is null!"); }
         unsafe {
-            cast::transmute(Slice { data: self.buf, len: self.len() + 1 })
+            mem::transmute(Slice { data: self.buf, len: self.len() + 1 })
         }
     }
 
@@ -196,7 +196,7 @@ impl CString {
     pub fn as_bytes_no_nul<'a>(&'a self) -> &'a [u8] {
         if self.buf.is_null() { fail!("CString is null!"); }
         unsafe {
-            cast::transmute(Slice { data: self.buf, len: self.len() })
+            mem::transmute(Slice { data: self.buf, len: self.len() })
         }
     }
 
@@ -293,7 +293,37 @@ pub trait ToCStr {
     }
 }
 
+// FIXME (#12938): Until DST lands, we cannot decompose &str into &
+// and str, so we cannot usefully take ToCStr arguments by reference
+// (without forcing an additional & around &str). So we are instead
+// temporarily adding an instance for ~str and String, so that we can
+// take ToCStr as owned. When DST lands, the string instances should
+// be revisted, and arguments bound by ToCStr should be passed by
+// reference.
+
 impl<'a> ToCStr for &'a str {
+    #[inline]
+    fn to_c_str(&self) -> CString {
+        self.as_bytes().to_c_str()
+    }
+
+    #[inline]
+    unsafe fn to_c_str_unchecked(&self) -> CString {
+        self.as_bytes().to_c_str_unchecked()
+    }
+
+    #[inline]
+    fn with_c_str<T>(&self, f: |*libc::c_char| -> T) -> T {
+        self.as_bytes().with_c_str(f)
+    }
+
+    #[inline]
+    unsafe fn with_c_str_unchecked<T>(&self, f: |*libc::c_char| -> T) -> T {
+        self.as_bytes().with_c_str_unchecked(f)
+    }
+}
+
+impl ToCStr for String {
     #[inline]
     fn to_c_str(&self) -> CString {
         self.as_bytes().to_c_str()
@@ -347,7 +377,7 @@ impl<'a> ToCStr for &'a [u8] {
 // Unsafe function that handles possibly copying the &[u8] into a stack array.
 unsafe fn with_c_str<T>(v: &[u8], checked: bool, f: |*libc::c_char| -> T) -> T {
     if v.len() < BUF_LEN {
-        let mut buf: [u8, .. BUF_LEN] = mem::uninit();
+        let mut buf: [u8, .. BUF_LEN] = mem::uninitialized();
         slice::bytes::copy_memory(buf, v);
         buf[v.len()] = 0;
 
@@ -639,7 +669,7 @@ mod tests {
     #[test]
     fn test_clone_noleak() {
         fn foo(f: |c: &CString|) {
-            let s = "test".to_owned();
+            let s = "test".to_string();
             let c = s.to_c_str();
             // give the closure a non-owned CString
             let mut c_ = c.with_ref(|c| unsafe { CString::new(c, false) } );

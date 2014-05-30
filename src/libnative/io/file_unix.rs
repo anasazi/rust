@@ -10,12 +10,12 @@
 
 //! Blocking posix-based file I/O
 
-use std::sync::arc::UnsafeArc;
+use alloc::arc::Arc;
+use libc::{c_int, c_void};
+use libc;
 use std::c_str::CString;
 use std::io::IoError;
 use std::io;
-use libc::{c_int, c_void};
-use libc;
 use std::mem;
 use std::rt::rtio;
 
@@ -29,7 +29,7 @@ struct Inner {
 }
 
 pub struct FileDesc {
-    inner: UnsafeArc<Inner>
+    inner: Arc<Inner>
 }
 
 impl FileDesc {
@@ -42,7 +42,7 @@ impl FileDesc {
     /// Note that all I/O operations done on this object will be *blocking*, but
     /// they do not require the runtime to be active.
     pub fn new(fd: fd_t, close_on_drop: bool) -> FileDesc {
-        FileDesc { inner: UnsafeArc::new(Inner {
+        FileDesc { inner: Arc::new(Inner {
             fd: fd,
             close_on_drop: close_on_drop
         }) }
@@ -79,11 +79,7 @@ impl FileDesc {
         }
     }
 
-    pub fn fd(&self) -> fd_t {
-        // This unsafety is fine because we're just reading off the file
-        // descriptor, no one is modifying this.
-        unsafe { (*self.inner.get()).fd }
-    }
+    pub fn fd(&self) -> fd_t { self.inner.fd }
 }
 
 impl io::Reader for FileDesc {
@@ -166,6 +162,14 @@ impl rtio::RtioFileStream for FileDesc {
             libc::ftruncate(self.fd(), offset as libc::off_t)
         }))
     }
+
+    fn fstat(&mut self) -> IoResult<io::FileStat> {
+        let mut stat: libc::stat = unsafe { mem::zeroed() };
+        match retry(|| unsafe { libc::fstat(self.fd(), &mut stat) }) {
+            0 => Ok(mkstat(&stat)),
+            _ => Err(super::last_error()),
+        }
+    }
 }
 
 impl rtio::RtioPipe for FileDesc {
@@ -175,9 +179,23 @@ impl rtio::RtioPipe for FileDesc {
     fn write(&mut self, buf: &[u8]) -> Result<(), IoError> {
         self.inner_write(buf)
     }
-    fn clone(&self) -> ~rtio::RtioPipe:Send {
-        ~FileDesc { inner: self.inner.clone() } as ~rtio::RtioPipe:Send
+    fn clone(&self) -> Box<rtio::RtioPipe:Send> {
+        box FileDesc { inner: self.inner.clone() } as Box<rtio::RtioPipe:Send>
     }
+
+    // Only supported on named pipes currently. Note that this doesn't have an
+    // impact on the std::io primitives, this is never called via
+    // std::io::PipeStream. If the functionality is exposed in the future, then
+    // these methods will need to be implemented.
+    fn close_read(&mut self) -> Result<(), IoError> {
+        Err(io::standard_error(io::InvalidInput))
+    }
+    fn close_write(&mut self) -> Result<(), IoError> {
+        Err(io::standard_error(io::InvalidInput))
+    }
+    fn set_timeout(&mut self, _t: Option<u64>) {}
+    fn set_read_timeout(&mut self, _t: Option<u64>) {}
+    fn set_write_timeout(&mut self, _t: Option<u64>) {}
 }
 
 impl rtio::RtioTTY for FileDesc {
@@ -303,6 +321,10 @@ impl rtio::RtioFileStream for CFile {
     fn truncate(&mut self, offset: i64) -> Result<(), IoError> {
         self.flush().and_then(|()| self.fd.truncate(offset))
     }
+
+    fn fstat(&mut self) -> IoResult<io::FileStat> {
+        self.flush().and_then(|()| self.fd.fstat())
+    }
 }
 
 impl Drop for CFile {
@@ -335,7 +357,7 @@ pub fn open(path: &CString, fm: io::FileMode, fa: io::FileAccess)
 
 pub fn mkdir(p: &CString, mode: io::FilePermission) -> IoResult<()> {
     super::mkerr_libc(retry(|| unsafe {
-        libc::mkdir(p.with_ref(|p| p), mode as libc::mode_t)
+        libc::mkdir(p.with_ref(|p| p), mode.bits() as libc::mode_t)
     }))
 }
 
@@ -392,7 +414,7 @@ pub fn rename(old: &CString, new: &CString) -> IoResult<()> {
 
 pub fn chmod(p: &CString, mode: io::FilePermission) -> IoResult<()> {
     super::mkerr_libc(retry(|| unsafe {
-        libc::chmod(p.with_ref(|p| p), mode as libc::mode_t)
+        libc::chmod(p.with_ref(|p| p), mode.bits() as libc::mode_t)
     }))
 }
 
@@ -441,9 +463,7 @@ pub fn link(src: &CString, dst: &CString) -> IoResult<()> {
     }))
 }
 
-fn mkstat(stat: &libc::stat, path: &CString) -> io::FileStat {
-    let path = unsafe { CString::new(path.with_ref(|p| p), false) };
-
+fn mkstat(stat: &libc::stat) -> io::FileStat {
     // FileStat times are in milliseconds
     fn mktime(secs: u64, nsecs: u64) -> u64 { secs * 1000 + nsecs / 1000000 }
 
@@ -467,10 +487,9 @@ fn mkstat(stat: &libc::stat, path: &CString) -> io::FileStat {
     fn gen(_stat: &libc::stat) -> u64 { 0 }
 
     io::FileStat {
-        path: Path::new(path),
         size: stat.st_size as u64,
         kind: kind,
-        perm: (stat.st_mode) as io::FilePermission & io::AllPermissions,
+        perm: io::FilePermission::from_bits_truncate(stat.st_mode as u32),
         created: mktime(stat.st_ctime as u64, stat.st_ctime_nsec as u64),
         modified: mktime(stat.st_mtime as u64, stat.st_mtime_nsec as u64),
         accessed: mktime(stat.st_atime as u64, stat.st_atime_nsec as u64),
@@ -490,17 +509,17 @@ fn mkstat(stat: &libc::stat, path: &CString) -> io::FileStat {
 }
 
 pub fn stat(p: &CString) -> IoResult<io::FileStat> {
-    let mut stat: libc::stat = unsafe { mem::uninit() };
+    let mut stat: libc::stat = unsafe { mem::zeroed() };
     match retry(|| unsafe { libc::stat(p.with_ref(|p| p), &mut stat) }) {
-        0 => Ok(mkstat(&stat, p)),
+        0 => Ok(mkstat(&stat)),
         _ => Err(super::last_error()),
     }
 }
 
 pub fn lstat(p: &CString) -> IoResult<io::FileStat> {
-    let mut stat: libc::stat = unsafe { mem::uninit() };
+    let mut stat: libc::stat = unsafe { mem::zeroed() };
     match retry(|| unsafe { libc::lstat(p.with_ref(|p| p), &mut stat) }) {
-        0 => Ok(mkstat(&stat, p)),
+        0 => Ok(mkstat(&stat)),
         _ => Err(super::last_error()),
     }
 }

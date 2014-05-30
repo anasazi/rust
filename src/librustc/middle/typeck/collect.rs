@@ -50,7 +50,8 @@ use std::rc::Rc;
 use collections::{HashMap, HashSet};
 
 use syntax::abi;
-use syntax::ast::{RegionTyParamBound, TraitTyParamBound};
+use syntax::ast::{StaticRegionTyParamBound, OtherRegionTyParamBound,
+                  TraitTyParamBound};
 use syntax::ast;
 use syntax::ast_map;
 use syntax::ast_util::{local_def, split_trait_methods};
@@ -122,7 +123,8 @@ impl<'a> AstConv for CrateCtxt<'a> {
             }
             x => {
                 self.tcx.sess.bug(format!("unexpected sort of node \
-                                           in get_item_ty(): {:?}", x));
+                                           in get_item_ty(): {:?}",
+                                          x).as_slice());
             }
         }
     }
@@ -133,7 +135,8 @@ impl<'a> AstConv for CrateCtxt<'a> {
 
     fn ty_infer(&self, span: Span) -> ty::t {
         self.tcx.sess.span_err(span, "the type placeholder `_` is not \
-                                      allowed within types on item signatures.");
+                                      allowed within types on item \
+                                      signatures.");
         ty::mk_err()
     }
 }
@@ -437,8 +440,10 @@ pub fn ensure_supertraits(ccx: &CrateCtxt,
     }
     if sized == ast::StaticSize {
         match tcx.lang_items.require(SizedTraitLangItem) {
-            Ok(def_id) => { ty::try_add_builtin_trait(tcx, def_id, &mut bounds); },
-            Err(s) => tcx.sess.err(s),
+            Ok(def_id) => {
+                ty::try_add_builtin_trait(tcx, def_id, &mut bounds);
+            }
+            Err(s) => tcx.sess.err(s.as_slice()),
         };
     }
 
@@ -570,7 +575,8 @@ pub fn ensure_no_ty_param_bounds(ccx: &CrateCtxt,
         if ty_param.bounds.len() > 0 {
             ccx.tcx.sess.span_err(
                 span,
-                format!("trait bounds are not allowed in {} definitions", thing));
+                format!("trait bounds are not allowed in {} definitions",
+                        thing).as_slice());
         }
     }
 }
@@ -631,14 +637,7 @@ pub fn convert(ccx: &CrateCtxt, it: &ast::Item) {
                             parent_visibility);
 
             for trait_ref in opt_trait_ref.iter() {
-                let trait_ref = instantiate_trait_ref(ccx, trait_ref, selfty);
-
-                // Prevent the builtin kind traits from being manually implemented.
-                if tcx.lang_items.to_builtin_kind(trait_ref.def_id).is_some() {
-                    tcx.sess.span_err(it.span,
-                        "cannot provide an explicit implementation \
-                         for a builtin kind");
-                }
+                instantiate_trait_ref(ccx, trait_ref, selfty);
             }
         },
         ast::ItemTrait(ref generics, _, _, ref trait_methods) => {
@@ -715,10 +714,12 @@ pub fn convert_struct(ccx: &CrateCtxt,
         if result.name != special_idents::unnamed_field.name {
             let dup = match seen_fields.find(&result.name) {
                 Some(prev_span) => {
-                    tcx.sess.span_err(f.span,
-                        format!("field `{}` is already declared", token::get_name(result.name)));
+                    tcx.sess.span_err(
+                        f.span,
+                        format!("field `{}` is already declared",
+                                token::get_name(result.name)).as_slice());
                     tcx.sess.span_note(*prev_span,
-                        "previously declared here");
+                                       "previously declared here");
                     true
                 },
                 None => false,
@@ -844,7 +845,7 @@ pub fn instantiate_trait_ref(ccx: &CrateCtxt,
             ccx.tcx.sess.span_fatal(
                 ast_trait_ref.path.span,
                 format!("`{}` is not a trait",
-                    path_to_str(&ast_trait_ref.path)));
+                        path_to_str(&ast_trait_ref.path)).as_slice());
         }
     }
 }
@@ -856,8 +857,10 @@ fn get_trait_def(ccx: &CrateCtxt, trait_id: ast::DefId) -> Rc<ty::TraitDef> {
 
     match ccx.tcx.map.get(trait_id.node) {
         ast_map::NodeItem(item) => trait_def_of_item(ccx, item),
-        _ => ccx.tcx.sess.bug(format!("get_trait_def({}): not an item",
-                                   trait_id.node))
+        _ => {
+            ccx.tcx.sess.bug(format!("get_trait_def({}): not an item",
+                                     trait_id.node).as_slice())
+        }
     }
 }
 
@@ -893,7 +896,7 @@ pub fn trait_def_of_item(ccx: &CrateCtxt, it: &ast::Item) -> Rc<ty::TraitDef> {
         ref s => {
             tcx.sess.span_bug(
                 it.span,
-                format!("trait_def_of_item invoked on {:?}", s));
+                format!("trait_def_of_item invoked on {:?}", s).as_slice());
         }
     }
 }
@@ -964,9 +967,7 @@ pub fn ty_of_item(ccx: &CrateCtxt, it: &ast::Item)
             return tpt;
         }
         ast::ItemTrait(..) => {
-            tcx.sess.span_bug(
-                it.span,
-                format!("invoked ty_of_item on trait"));
+            tcx.sess.span_bug(it.span, "invoked ty_of_item on trait");
         }
         ast::ItemStruct(_, ref generics) => {
             let ty_generics = ty_generics_for_type(ccx, generics);
@@ -1109,8 +1110,16 @@ fn ty_generics(ccx: &CrateCtxt,
                     }
                 }
 
-                RegionTyParamBound => {
+                StaticRegionTyParamBound => {
                     param_bounds.builtin_bounds.add(ty::BoundStatic);
+                }
+
+                OtherRegionTyParamBound(span) => {
+                    if !ccx.tcx.sess.features.issue_5723_bootstrap.get() {
+                        ccx.tcx.sess.span_err(
+                            span,
+                            "only the 'static lifetime is accepted here.");
+                    }
                 }
             }
         }
@@ -1146,7 +1155,8 @@ fn ty_generics(ccx: &CrateCtxt,
                         format!("incompatible bounds on type parameter {}, \
                                  bound {} does not allow unsized type",
                         token::get_ident(ident),
-                        ppaux::trait_ref_to_str(tcx, &*trait_ref)));
+                        ppaux::trait_ref_to_str(tcx,
+                                                &*trait_ref)).as_slice());
                 }
                 true
             });

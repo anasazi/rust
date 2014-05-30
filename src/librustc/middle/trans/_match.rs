@@ -195,7 +195,7 @@
 #![allow(non_camel_case_types)]
 
 use back::abi;
-use driver::session::FullDebugInfo;
+use driver::config::FullDebugInfo;
 use lib::llvm::{llvm, ValueRef, BasicBlockRef};
 use middle::const_eval;
 use middle::lang_items::{UniqStrEqFnLangItem, StrEqFnLangItem};
@@ -289,42 +289,6 @@ fn opt_eq(tcx: &ty::ctxt, a: &Opt, b: &Opt) -> bool {
     }
 }
 
-fn opt_overlap(tcx: &ty::ctxt, a: &Opt, b: &Opt) -> bool {
-    match (a, b) {
-        (&lit(a), &lit(b)) => {
-            let a_expr = lit_to_expr(tcx, &a);
-            let b_expr = lit_to_expr(tcx, &b);
-            match const_eval::compare_lit_exprs(tcx, a_expr, b_expr) {
-                Some(val1) => val1 == 0,
-                None => fail!("opt_overlap: type mismatch"),
-            }
-        }
-
-        (&range(a1, a2), &range(b1, b2)) => {
-            let m1 = const_eval::compare_lit_exprs(tcx, a1, b2);
-            let m2 = const_eval::compare_lit_exprs(tcx, b1, a2);
-            match (m1, m2) {
-                // two ranges [a1, a2] and [b1, b2] overlap iff:
-                //      a1 <= b2 && b1 <= a2
-                (Some(val1), Some(val2)) => (val1 <= 0 && val2 <= 0),
-                _ => fail!("opt_overlap: type mismatch"),
-            }
-        }
-
-        (&range(a1, a2), &lit(b)) | (&lit(b), &range(a1, a2)) => {
-            let b_expr = lit_to_expr(tcx, &b);
-            let m1 = const_eval::compare_lit_exprs(tcx, a1, b_expr);
-            let m2 = const_eval::compare_lit_exprs(tcx, a2, b_expr);
-            match (m1, m2) {
-                // b is in range [a1, a2] iff a1 <= b and b <= a2
-                (Some(val1), Some(val2)) => (val1 <= 0 && 0 <= val2),
-                _ => fail!("opt_overlap: type mismatch"),
-            }
-        }
-        _ => fail!("opt_overlap: expect lit or range")
-    }
-}
-
 pub enum opt_result<'a> {
     single_result(Result<'a>),
     lower_bound(Result<'a>),
@@ -340,16 +304,16 @@ fn trans_opt<'a>(bcx: &'a Block<'a>, o: &Opt) -> opt_result<'a> {
             let lit_datum = unpack_datum!(bcx, expr::trans(bcx, lit_expr));
             let lit_datum = lit_datum.assert_rvalue(bcx); // literals are rvalues
             let lit_datum = unpack_datum!(bcx, lit_datum.to_appropriate_datum(bcx));
-            return single_result(rslt(bcx, lit_datum.val));
+            return single_result(Result::new(bcx, lit_datum.val));
         }
         lit(UnitLikeStructLit(pat_id)) => {
             let struct_ty = ty::node_id_to_type(bcx.tcx(), pat_id);
             let datum = datum::rvalue_scratch_datum(bcx, struct_ty, "");
-            return single_result(rslt(bcx, datum.val));
+            return single_result(Result::new(bcx, datum.val));
         }
         lit(ConstLit(lit_id)) => {
             let (llval, _) = consts::get_const_val(bcx.ccx(), lit_id);
-            return single_result(rslt(bcx, llval));
+            return single_result(Result::new(bcx, llval));
         }
         var(disr_val, ref repr) => {
             return adt::trans_case(bcx, &**repr, disr_val);
@@ -357,13 +321,13 @@ fn trans_opt<'a>(bcx: &'a Block<'a>, o: &Opt) -> opt_result<'a> {
         range(l1, l2) => {
             let (l1, _) = consts::const_expr(ccx, l1, true);
             let (l2, _) = consts::const_expr(ccx, l2, true);
-            return range_result(rslt(bcx, l1), rslt(bcx, l2));
+            return range_result(Result::new(bcx, l1), Result::new(bcx, l2));
         }
         vec_len(n, vec_len_eq, _) => {
-            return single_result(rslt(bcx, C_int(ccx, n as int)));
+            return single_result(Result::new(bcx, C_int(ccx, n as int)));
         }
         vec_len(n, vec_len_ge(_), _) => {
-            return lower_bound(rslt(bcx, C_int(ccx, n as int)));
+            return lower_bound(Result::new(bcx, C_int(ccx, n as int)));
         }
     }
 }
@@ -436,7 +400,7 @@ struct Match<'a, 'b> {
 }
 
 impl<'a, 'b> Repr for Match<'a, 'b> {
-    fn repr(&self, tcx: &ty::ctxt) -> ~str {
+    fn repr(&self, tcx: &ty::ctxt) -> String {
         if tcx.sess.verbose() {
             // for many programs, this just take too long to serialize
             self.pats.repr(tcx)
@@ -498,7 +462,7 @@ fn assert_is_binding_or_wild(bcx: &Block, p: @ast::Pat) {
         bcx.sess().span_bug(
             p.span,
             format!("expected an identifier pattern but found p: {}",
-                 p.repr(bcx.tcx())));
+                    p.repr(bcx.tcx())).as_slice());
     }
 }
 
@@ -562,7 +526,7 @@ fn enter_default<'a, 'b>(
     // Collect all of the matches that can match against anything.
     let matches = enter_match(bcx, dm, m, col, val, |p| {
         match p.node {
-          ast::PatWild | ast::PatWildMulti | ast::PatTup(_) => Some(Vec::new()),
+          ast::PatWild | ast::PatWildMulti => Some(Vec::new()),
           ast::PatIdent(_, _, None) if pat_is_binding(dm, p) => Some(Vec::new()),
           _ => None
         }
@@ -634,30 +598,16 @@ fn enter_opt<'a, 'b>(
     let tcx = bcx.tcx();
     let dummy = @ast::Pat {id: 0, node: ast::PatWild, span: DUMMY_SP};
     let mut i = 0;
-    // By the virtue of fact that we are in `trans` already, `enter_opt` is able
-    // to prune sub-match tree aggressively based on exact equality. But when it
-    // comes to literal or range, that strategy may lead to wrong result if there
-    // are guard function or multiple patterns inside tuple; in that case, pruning
-    // based on the overlap of patterns is required.
-    //
-    // Ideally, when constructing the sub-match tree for certain arm, only those
-    // arms beneath it matter. But that isn't how algorithm works right now and
-    // all other arms are taken into consideration when computing `guarded` below.
-    // That is ok since each round of `compile_submatch` guarantees to trim one
-    // "column" of arm patterns and the algorithm will converge.
-    let guarded = m.iter().any(|x| x.data.arm.guard.is_some());
-    let multi_pats = m.len() > 0 && m[0].pats.len() > 1;
     enter_match(bcx, &tcx.def_map, m, col, val, |p| {
         let answer = match p.node {
             ast::PatEnum(..) |
             ast::PatIdent(_, _, None) if pat_is_const(&tcx.def_map, p) => {
                 let const_def = tcx.def_map.borrow().get_copy(&p.id);
                 let const_def_id = ast_util::def_id_of_def(const_def);
-                let konst = lit(ConstLit(const_def_id));
-                match guarded || multi_pats {
-                    false if opt_eq(tcx, &konst, opt) => Some(Vec::new()),
-                    true if opt_overlap(tcx, &konst, opt) => Some(Vec::new()),
-                    _ => None,
+                if opt_eq(tcx, &lit(ConstLit(const_def_id)), opt) {
+                    Some(Vec::new())
+                } else {
+                    None
                 }
             }
             ast::PatEnum(_, ref subpats) => {
@@ -682,20 +632,12 @@ fn enter_opt<'a, 'b>(
                 }
             }
             ast::PatLit(l) => {
-                let lit_expr = lit(ExprLit(l));
-                match guarded || multi_pats {
-                    false if opt_eq(tcx, &lit_expr, opt) => Some(Vec::new()),
-                    true if opt_overlap(tcx, &lit_expr, opt) => Some(Vec::new()),
-                    _ => None,
-                }
+                if opt_eq(tcx, &lit(ExprLit(l)), opt) { Some(Vec::new()) }
+                else { None }
             }
             ast::PatRange(l1, l2) => {
-                let rng = range(l1, l2);
-                match guarded || multi_pats {
-                    false if opt_eq(tcx, &rng, opt) => Some(Vec::new()),
-                    true if opt_overlap(tcx, &rng, opt) => Some(Vec::new()),
-                    _ => None,
-                }
+                if opt_eq(tcx, &range(l1, l2), opt) { Some(Vec::new()) }
+                else { None }
             }
             ast::PatStruct(_, ref field_pats, _) => {
                 if opt_eq(tcx, &variant_opt(bcx, p.id), opt) {
@@ -770,18 +712,7 @@ fn enter_opt<'a, 'b>(
             }
             _ => {
                 assert_is_binding_or_wild(bcx, p);
-                // In most cases, a binding/wildcard match be
-                // considered to match against any Opt. However, when
-                // doing vector pattern matching, submatches are
-                // considered even if the eventual match might be from
-                // a different submatch. Thus, when a submatch fails
-                // when doing a vector match, we proceed to the next
-                // submatch. Thus, including a default match would
-                // cause the default match to fire spuriously.
-                match *opt {
-                    vec_len(..) => None,
-                    _ => Some(Vec::from_elem(variant_size, dummy))
-                }
+                Some(Vec::from_elem(variant_size, dummy))
             }
         };
         i += 1;
@@ -879,6 +810,9 @@ fn enter_tuple_struct<'a, 'b>(
             ast::PatEnum(_, Some(ref elts)) => {
                 Some(elts.iter().map(|x| (*x)).collect())
             }
+            ast::PatEnum(_, None) => {
+                Some(Vec::from_elem(n_elts, dummy))
+            }
             _ => {
                 assert_is_binding_or_wild(bcx, p);
                 Some(Vec::from_elem(n_elts, dummy))
@@ -904,7 +838,7 @@ fn enter_uniq<'a, 'b>(
     let dummy = @ast::Pat {id: 0, node: ast::PatWild, span: DUMMY_SP};
     enter_match(bcx, dm, m, col, val, |p| {
         match p.node {
-            ast::PatUniq(sub) => {
+            ast::PatBox(sub) => {
                 Some(vec!(sub))
             }
             _ => {
@@ -1171,7 +1105,7 @@ macro_rules! any_pat (
 )
 
 fn any_uniq_pat(m: &[Match], col: uint) -> bool {
-    any_pat!(m, ast::PatUniq(_))
+    any_pat!(m, ast::PatBox(_))
 }
 
 fn any_region_pat(m: &[Match], col: uint) -> bool {
@@ -1186,7 +1120,7 @@ fn any_tuple_struct_pat(bcx: &Block, m: &[Match], col: uint) -> bool {
     m.iter().any(|br| {
         let pat = *br.pats.get(col);
         match pat.node {
-            ast::PatEnum(_, Some(_)) => {
+            ast::PatEnum(_, _) => {
                 match bcx.tcx().def_map.borrow().find(&pat.id) {
                     Some(&ast::DefFn(..)) |
                     Some(&ast::DefStruct(..)) => true,
@@ -1224,7 +1158,7 @@ impl<'a> DynamicFailureHandler<'a> {
 enum FailureHandler<'a> {
     Infallible,
     JumpToBasicBlock(BasicBlockRef),
-    DynamicFailureHandlerClass(~DynamicFailureHandler<'a>),
+    DynamicFailureHandlerClass(Box<DynamicFailureHandler<'a>>),
 }
 
 impl<'a> FailureHandler<'a> {
@@ -1298,8 +1232,10 @@ fn compare_values<'a>(
                        rhs: ValueRef,
                        rhs_t: ty::t)
                        -> Result<'a> {
-        let did = langcall(cx, None,
-                           format!("comparison of `{}`", cx.ty_to_str(rhs_t)),
+        let did = langcall(cx,
+                           None,
+                           format!("comparison of `{}`",
+                                   cx.ty_to_str(rhs_t)).as_slice(),
                            StrEqFnLangItem);
         let result = callee::trans_lang_call(cx, did, [lhs, rhs], None);
         Result {
@@ -1311,7 +1247,7 @@ fn compare_values<'a>(
     let _icx = push_ctxt("compare_values");
     if ty::type_is_scalar(rhs_t) {
         let rs = compare_scalar_types(cx, lhs, rhs, rhs_t, ast::BiEq);
-        return rslt(rs.bcx, rs.val);
+        return Result::new(rs.bcx, rs.val);
     }
 
     match ty::get(rhs_t).sty {
@@ -1321,8 +1257,10 @@ fn compare_values<'a>(
                 Store(cx, lhs, scratch_lhs);
                 let scratch_rhs = alloca(cx, val_ty(rhs), "__rhs");
                 Store(cx, rhs, scratch_rhs);
-                let did = langcall(cx, None,
-                                   format!("comparison of `{}`", cx.ty_to_str(rhs_t)),
+                let did = langcall(cx,
+                                   None,
+                                   format!("comparison of `{}`",
+                                           cx.ty_to_str(rhs_t)).as_slice(),
                                    UniqStrEqFnLangItem);
                 let result = callee::trans_lang_call(cx, did, [scratch_lhs, scratch_rhs], None);
                 Result {
@@ -1421,7 +1359,8 @@ fn compile_guard<'a, 'b>(
                  data: &ArmData,
                  m: &'a [Match<'a, 'b>],
                  vals: &[ValueRef],
-                 chk: &FailureHandler)
+                 chk: &FailureHandler,
+                 has_genuine_default: bool)
                  -> &'b Block<'b> {
     debug!("compile_guard(bcx={}, guard_expr={}, m={}, vals={})",
            bcx.to_str(),
@@ -1452,7 +1391,17 @@ fn compile_guard<'a, 'b>(
         // Guard does not match: free the values we copied,
         // and remove all bindings from the lllocals table
         let bcx = drop_bindings(bcx, data);
-        compile_submatch(bcx, m, vals, chk);
+        match chk {
+            // If the default arm is the only one left, move on to the next
+            // condition explicitly rather than (possibly) falling back to
+            // the default arm.
+            &JumpToBasicBlock(_) if m.len() == 1 && has_genuine_default => {
+                Br(bcx, chk.handle_fail());
+            }
+            _ => {
+                compile_submatch(bcx, m, vals, chk, has_genuine_default);
+            }
+        };
         bcx
     });
 
@@ -1476,7 +1425,8 @@ fn compile_submatch<'a, 'b>(
                     bcx: &'b Block<'b>,
                     m: &'a [Match<'a, 'b>],
                     vals: &[ValueRef],
-                    chk: &FailureHandler) {
+                    chk: &FailureHandler,
+                    has_genuine_default: bool) {
     debug!("compile_submatch(bcx={}, m={}, vals={})",
            bcx.to_str(),
            m.repr(bcx.tcx()),
@@ -1506,7 +1456,8 @@ fn compile_submatch<'a, 'b>(
                                     m[0].data,
                                     m.slice(1, m.len()),
                                     vals,
-                                    chk);
+                                    chk,
+                                    has_genuine_default);
             }
             _ => ()
         }
@@ -1524,9 +1475,10 @@ fn compile_submatch<'a, 'b>(
                                   vals,
                                   chk,
                                   col,
-                                  val)
+                                  val,
+                                  has_genuine_default)
     } else {
-        compile_submatch_continue(bcx, m, vals, chk, col, val)
+        compile_submatch_continue(bcx, m, vals, chk, col, val, has_genuine_default)
     }
 }
 
@@ -1536,7 +1488,8 @@ fn compile_submatch_continue<'a, 'b>(
                              vals: &[ValueRef],
                              chk: &FailureHandler,
                              col: uint,
-                             val: ValueRef) {
+                             val: ValueRef,
+                             has_genuine_default: bool) {
     let fcx = bcx.fcx;
     let tcx = bcx.tcx();
     let dm = &tcx.def_map;
@@ -1570,7 +1523,7 @@ fn compile_submatch_continue<'a, 'b>(
                                             rec_fields.as_slice(),
                                             val).as_slice(),
                         rec_vals.append(vals_left.as_slice()).as_slice(),
-                        chk);
+                        chk, has_genuine_default);
             });
             return;
         }
@@ -1595,7 +1548,7 @@ fn compile_submatch_continue<'a, 'b>(
                                    val,
                                    n_tup_elts).as_slice(),
                          tup_vals.append(vals_left.as_slice()).as_slice(),
-                         chk);
+                         chk, has_genuine_default);
         return;
     }
 
@@ -1620,7 +1573,7 @@ fn compile_submatch_continue<'a, 'b>(
                          enter_tuple_struct(bcx, dm, m, col, val,
                                             struct_element_count).as_slice(),
                          llstructvals.append(vals_left.as_slice()).as_slice(),
-                         chk);
+                         chk, has_genuine_default);
         return;
     }
 
@@ -1629,7 +1582,7 @@ fn compile_submatch_continue<'a, 'b>(
         compile_submatch(bcx,
                          enter_uniq(bcx, dm, m, col, val).as_slice(),
                          (vec!(llbox)).append(vals_left.as_slice()).as_slice(),
-                         chk);
+                         chk, has_genuine_default);
         return;
     }
 
@@ -1638,7 +1591,7 @@ fn compile_submatch_continue<'a, 'b>(
         compile_submatch(bcx,
                          enter_region(bcx, dm, m, col, val).as_slice(),
                          (vec!(loaded_val)).append(vals_left.as_slice()).as_slice(),
-                         chk);
+                         chk, has_genuine_default);
         return;
     }
 
@@ -1695,9 +1648,9 @@ fn compile_submatch_continue<'a, 'b>(
 
     // Compile subtrees for each option
     for (i, opt) in opts.iter().enumerate() {
-        // In some cases in vector pattern matching, we need to override
-        // the failure case so that instead of failing, it proceeds to
-        // try more matching. branch_chk, then, is the proper failure case
+        // In some cases of range and vector pattern matching, we need to
+        // override the failure case so that instead of failing, it proceeds
+        // to try more matching. branch_chk, then, is the proper failure case
         // for the current conditional branch.
         let mut branch_chk = None;
         let mut opt_cx = else_cx;
@@ -1742,11 +1695,21 @@ fn compile_submatch_continue<'a, 'b>(
                                   compare_scalar_types(
                                   bcx, test_val, vend,
                                   t, ast::BiLe);
-                              rslt(bcx, And(bcx, llge, llle))
+                              Result::new(bcx, And(bcx, llge, llle))
                           }
                       }
                   };
                   bcx = fcx.new_temp_block("compare_next");
+
+                  // If none of the sub-cases match, and the current condition
+                  // is guarded or has multiple patterns, move on to the next
+                  // condition, if there is any, rather than falling back to
+                  // the default.
+                  let guarded = m[i].data.arm.guard.is_some();
+                  let multi_pats = m[i].pats.len() > 1;
+                  if i+1 < len && (guarded || multi_pats) {
+                      branch_chk = Some(JumpToBasicBlock(bcx.llbb));
+                  }
                   CondBr(after_cx, matches, opt_cx.llbb, bcx.llbb);
               }
               compare_vec_len => {
@@ -1757,14 +1720,14 @@ fn compile_submatch_continue<'a, 'b>(
                               let value = compare_scalar_values(
                                   bcx, test_val, val,
                                   signed_int, ast::BiEq);
-                              rslt(bcx, value)
+                              Result::new(bcx, value)
                           }
                           lower_bound(
                               Result {bcx, val: val}) => {
                               let value = compare_scalar_values(
                                   bcx, test_val, val,
                                   signed_int, ast::BiGe);
-                              rslt(bcx, value)
+                              Result::new(bcx, value)
                           }
                           range_result(
                               Result {val: vbegin, ..},
@@ -1777,15 +1740,17 @@ fn compile_submatch_continue<'a, 'b>(
                                   compare_scalar_values(
                                   bcx, test_val, vend,
                                   signed_int, ast::BiLe);
-                              rslt(bcx, And(bcx, llge, llle))
+                              Result::new(bcx, And(bcx, llge, llle))
                           }
                       }
                   };
                   bcx = fcx.new_temp_block("compare_vec_len_next");
 
                   // If none of these subcases match, move on to the
-                  // next condition.
-                  branch_chk = Some(JumpToBasicBlock(bcx.llbb));
+                  // next condition if there is any.
+                  if i+1 < len {
+                      branch_chk = Some(JumpToBasicBlock(bcx.llbb));
+                  }
                   CondBr(after_cx, matches, opt_cx.llbb, bcx.llbb);
               }
               _ => ()
@@ -1825,27 +1790,38 @@ fn compile_submatch_continue<'a, 'b>(
                 compile_submatch(opt_cx,
                                  opt_ms.as_slice(),
                                  opt_vals.as_slice(),
-                                 chk)
+                                 chk,
+                                 has_genuine_default)
             }
             Some(branch_chk) => {
                 compile_submatch(opt_cx,
                                  opt_ms.as_slice(),
                                  opt_vals.as_slice(),
-                                 &branch_chk)
+                                 &branch_chk,
+                                 has_genuine_default)
             }
         }
     }
 
     // Compile the fall-through case, if any
-    if !exhaustive {
+    if !exhaustive && kind != single {
         if kind == compare || kind == compare_vec_len {
             Br(bcx, else_cx.llbb);
         }
-        if kind != single {
-            compile_submatch(else_cx,
-                             defaults.as_slice(),
-                             vals_left.as_slice(),
-                             chk);
+        match chk {
+            // If there is only one default arm left, move on to the next
+            // condition explicitly rather than (eventually) falling back to
+            // the last default arm.
+            &JumpToBasicBlock(_) if defaults.len() == 1 && has_genuine_default => {
+                Br(else_cx, chk.handle_fail());
+            }
+            _ => {
+                compile_submatch(else_cx,
+                                 defaults.as_slice(),
+                                 vals_left.as_slice(),
+                                 chk,
+                                 has_genuine_default);
+            }
         }
     }
 }
@@ -1882,11 +1858,14 @@ fn create_bindings_map(bcx: &Block, pat: @ast::Pat) -> BindingsMap {
                 // but during matching we need to store a *T as explained
                 // above
                 llmatch = alloca(bcx, llvariable_ty.ptr_to(), "__llmatch");
-                trmode = TrByValue(alloca(bcx, llvariable_ty,
-                                          bcx.ident(ident)));
+                trmode = TrByValue(alloca(bcx,
+                                          llvariable_ty,
+                                          bcx.ident(ident).as_slice()));
             }
             ast::BindByRef(_) => {
-                llmatch = alloca(bcx, llvariable_ty, bcx.ident(ident));
+                llmatch = alloca(bcx,
+                                 llvariable_ty,
+                                 bcx.ident(ident).as_slice());
                 trmode = TrByRef;
             }
         };
@@ -1922,7 +1901,7 @@ fn trans_match_inner<'a>(scope_cx: &'a Block<'a>,
         if ty::type_is_empty(tcx, t) {
             // Special case for empty types
             let fail_cx = Cell::new(None);
-            let fail_handler = ~DynamicFailureHandler {
+            let fail_handler = box DynamicFailureHandler {
                 bcx: scope_cx,
                 sp: discr_expr.span,
                 msg: InternedString::new("scrutinizing value that can't \
@@ -1950,7 +1929,22 @@ fn trans_match_inner<'a>(scope_cx: &'a Block<'a>,
         }));
     }
 
-    compile_submatch(bcx, matches.as_slice(), [discr_datum.val], &chk);
+    // `compile_submatch` works one column of arm patterns a time and
+    // then peels that column off. So as we progress, it may become
+    // impossible to know whether we have a genuine default arm, i.e.
+    // `_ => foo` or not. Sometimes it is important to know that in order
+    // to decide whether moving on to the next condition or falling back
+    // to the default arm.
+    let has_default = arms.len() > 0 && {
+        let ref pats = arms.last().unwrap().pats;
+
+        pats.len() == 1
+        && match pats.last().unwrap().node {
+            ast::PatWild => true, _ => false
+        }
+    };
+
+    compile_submatch(bcx, matches.as_slice(), [discr_datum.val], &chk, has_default);
 
     let mut arm_cxs = Vec::new();
     for arm_data in arm_datas.iter() {
@@ -2119,7 +2113,7 @@ fn mk_binding_alloca<'a,A>(bcx: &'a Block<'a>,
     let ident = ast_util::path_to_ident(path);
 
     // Allocate memory on stack for the binding.
-    let llval = alloc_ty(bcx, var_ty, bcx.ident(ident));
+    let llval = alloc_ty(bcx, var_ty, bcx.ident(ident).as_slice());
 
     // Subtle: be sure that we *populate* the memory *before*
     // we schedule the cleanup.
@@ -2167,7 +2161,7 @@ fn bind_irrefutable_pat<'a>(
 
     if bcx.sess().asm_comments() {
         add_comment(bcx, format!("bind_irrefutable_pat(pat={})",
-                              pat.repr(bcx.tcx())));
+                                 pat.repr(bcx.tcx())).as_slice());
     }
 
     let _indenter = indenter();
@@ -2276,7 +2270,7 @@ fn bind_irrefutable_pat<'a>(
                                            binding_mode, cleanup_scope);
             }
         }
-        ast::PatUniq(inner) => {
+        ast::PatBox(inner) => {
             let llbox = Load(bcx, val);
             bcx = bind_irrefutable_pat(bcx, inner, llbox, binding_mode, cleanup_scope);
         }
@@ -2286,7 +2280,10 @@ fn bind_irrefutable_pat<'a>(
         }
         ast::PatVec(..) => {
             bcx.sess().span_bug(pat.span,
-                format!("vector patterns are never irrefutable!"));
+                                "vector patterns are never irrefutable!");
+        }
+        ast::PatMac(..) => {
+            bcx.sess().span_bug(pat.span, "unexpanded macro");
         }
         ast::PatWild | ast::PatWildMulti | ast::PatLit(_) | ast::PatRange(_, _) => ()
     }

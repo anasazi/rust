@@ -11,22 +11,22 @@
 #![feature(managed_boxes)]
 
 trait Foo {
-    fn foo(&self) -> ~str;
+    fn foo(&self) -> String;
 }
 
 impl<T:Foo> Foo for @T {
-    fn foo(&self) -> ~str {
+    fn foo(&self) -> String {
         format!("@{}", (**self).foo())
     }
 }
 
 impl Foo for uint {
-    fn foo(&self) -> ~str {
+    fn foo(&self) -> String {
         format!("{}", *self)
     }
 }
 
 pub fn main() {
     let x = @3u;
-    assert_eq!(x.foo(), "@3".to_owned());
+    assert_eq!(x.foo(), "@3".to_string());
 }

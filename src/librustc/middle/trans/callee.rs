@@ -18,7 +18,7 @@
 
 use back::abi;
 use driver::session;
-use lib::llvm::{ValueRef, NoAliasAttribute, StructRetAttribute, NoCaptureAttribute};
+use lib::llvm::ValueRef;
 use lib::llvm::llvm;
 use metadata::csearch;
 use middle::trans::base;
@@ -102,8 +102,9 @@ fn trans<'a>(bcx: &'a Block<'a>, expr: &ast::Expr) -> Callee<'a> {
             _ => {
                 bcx.tcx().sess.span_bug(
                     expr.span,
-                    format!("type of callee is neither bare-fn nor closure: {}",
-                         bcx.ty_to_str(datum.ty)));
+                    format!("type of callee is neither bare-fn nor closure: \
+                             {}",
+                            bcx.ty_to_str(datum.ty)).as_slice());
             }
         }
     }
@@ -151,7 +152,7 @@ fn trans<'a>(bcx: &'a Block<'a>, expr: &ast::Expr) -> Callee<'a> {
                 bcx.tcx().sess.span_bug(
                     ref_expr.span,
                     format!("cannot translate def {:?} \
-                          to a callable thing!", def));
+                             to a callable thing!", def).as_slice());
             }
         }
     }
@@ -159,36 +160,36 @@ fn trans<'a>(bcx: &'a Block<'a>, expr: &ast::Expr) -> Callee<'a> {
 
 pub fn trans_fn_ref(bcx: &Block, def_id: ast::DefId, node: ExprOrMethodCall) -> ValueRef {
     /*!
-     *
      * Translates a reference (with id `ref_id`) to the fn/method
      * with id `def_id` into a function pointer.  This may require
-     * monomorphization or inlining. */
+     * monomorphization or inlining.
+     */
 
     let _icx = push_ctxt("trans_fn_ref");
 
-    let type_params = node_id_type_params(bcx, node);
+    let substs = node_id_substs(bcx, node);
     let vtable_key = match node {
         ExprId(id) => MethodCall::expr(id),
         MethodCall(method_call) => method_call
     };
     let vtables = node_vtables(bcx, vtable_key);
-    debug!("trans_fn_ref(def_id={}, node={:?}, type_params={}, vtables={})",
-           def_id.repr(bcx.tcx()), node, type_params.repr(bcx.tcx()),
+    debug!("trans_fn_ref(def_id={}, node={:?}, substs={}, vtables={})",
+           def_id.repr(bcx.tcx()),
+           node,
+           substs.repr(bcx.tcx()),
            vtables.repr(bcx.tcx()));
-    trans_fn_ref_with_vtables(bcx, def_id, node,
-                              type_params,
-                              vtables)
+    trans_fn_ref_with_vtables(bcx, def_id, node, substs, vtables)
 }
 
 fn trans_fn_ref_with_vtables_to_callee<'a>(bcx: &'a Block<'a>,
                                            def_id: ast::DefId,
                                            ref_id: ast::NodeId,
-                                           type_params: Vec<ty::t>,
+                                           substs: ty::substs,
                                            vtables: Option<typeck::vtable_res>)
                                            -> Callee<'a> {
     Callee {bcx: bcx,
             data: Fn(trans_fn_ref_with_vtables(bcx, def_id, ExprId(ref_id),
-                                               type_params, vtables))}
+                                               substs, vtables))}
 }
 
 fn resolve_default_method_vtables(bcx: &Block,
@@ -204,8 +205,7 @@ fn resolve_default_method_vtables(bcx: &Block,
     // Build up a param_substs that we are going to resolve the
     // trait_vtables under.
     let param_substs = param_substs {
-        tys: substs.tps.clone(),
-        self_ty: substs.self_ty,
+        substs: (*substs).clone(),
         vtables: impl_vtables.clone(),
         self_vtables: None
     };
@@ -241,7 +241,7 @@ pub fn trans_fn_ref_with_vtables(
         bcx: &Block,       //
         def_id: ast::DefId,   // def id of fn
         node: ExprOrMethodCall,  // node id of use of fn; may be zero if N/A
-        type_params: Vec<ty::t>, // values for fn's ty params
+        substs: ty::substs, // values for fn's ty params
         vtables: Option<typeck::vtable_res>) // vtables for the call
      -> ValueRef {
     /*!
@@ -255,7 +255,7 @@ pub fn trans_fn_ref_with_vtables(
      * - `node`: node id of the reference to the fn/method, if applicable.
      *   This parameter may be zero; but, if so, the resulting value may not
      *   have the right type, so it must be cast before being used.
-     * - `type_params`: values for each of the fn/method's type parameters
+     * - `substs`: values for each of the fn/method's parameters
      * - `vtables`: values for each bound on each of the type parameters
      */
 
@@ -264,23 +264,17 @@ pub fn trans_fn_ref_with_vtables(
     let tcx = bcx.tcx();
 
     debug!("trans_fn_ref_with_vtables(bcx={}, def_id={}, node={:?}, \
-            type_params={}, vtables={})",
+            substs={}, vtables={})",
            bcx.to_str(),
            def_id.repr(tcx),
            node,
-           type_params.repr(tcx),
+           substs.repr(tcx),
            vtables.repr(tcx));
 
-    assert!(type_params.iter().all(|t| !ty::type_needs_infer(*t)));
+    assert!(substs.tps.iter().all(|t| !ty::type_needs_infer(*t)));
 
     // Polytype of the function item (may have type params)
     let fn_tpt = ty::lookup_item_type(tcx, def_id);
-
-    let substs = ty::substs {
-        regions: ty::ErasedRegions,
-        self_ty: None,
-        tps: type_params
-    };
 
     // Load the info for the appropriate trait if necessary.
     match ty::trait_of_method(tcx, def_id) {
@@ -364,7 +358,7 @@ pub fn trans_fn_ref_with_vtables(
         let map_node = session::expect(
             ccx.sess(),
             tcx.map.find(def_id.node),
-            || format!("local item should be in ast map"));
+            || "local item should be in ast map".to_string());
 
         match map_node {
             ast_map::NodeForeignItem(_) => {
@@ -510,7 +504,7 @@ pub fn trans_lang_call<'a>(
                                 trans_fn_ref_with_vtables_to_callee(bcx,
                                                                     did,
                                                                     0,
-                                                                    vec!(),
+                                                                    ty::substs::empty(),
                                                                     None)
                              },
                              ArgVals(args),
@@ -620,13 +614,9 @@ pub fn trans_call_inner<'a>(
             llargs.push(opt_llretslot.unwrap());
         }
 
-        // start at 1, because index 0 is the return value of the llvm func
-        let mut first_arg_offset = 1;
-
         // Push the environment (or a trait object's self).
         match (llenv, llself) {
             (Some(llenv), None) => {
-                first_arg_offset += 1;
                 llargs.push(llenv)
             },
             (None, Some(llself)) => llargs.push(llself),
@@ -640,61 +630,11 @@ pub fn trans_call_inner<'a>(
 
         fcx.pop_custom_cleanup_scope(arg_cleanup_scope);
 
-        // A function pointer is called without the declaration
-        // available, so we have to apply any attributes with ABI
-        // implications directly to the call instruction. Right now,
-        // the only attribute we need to worry about is `sret`.
-        let mut attrs = Vec::new();
-        if type_of::return_uses_outptr(ccx, ret_ty) {
-            attrs.push((1, StructRetAttribute));
-            // The outptr can be noalias and nocapture because it's entirely
-            // invisible to the program.
-            attrs.push((1, NoAliasAttribute));
-            attrs.push((1, NoCaptureAttribute));
-            first_arg_offset += 1;
-        }
-
-        // The `noalias` attribute on the return value is useful to a
-        // function ptr caller.
-        match ty::get(ret_ty).sty {
-            // `~` pointer return values never alias because ownership
-            // is transferred
-            ty::ty_uniq(ty) => match ty::get(ty).sty {
-                ty::ty_str => {}
-                _ => attrs.push((0, NoAliasAttribute)),
-            },
-            _ => {}
-        }
-
-        debug!("trans_callee_inner: first_arg_offset={}", first_arg_offset);
-
-        for (idx, &t) in ty::ty_fn_args(callee_ty).iter().enumerate()
-                                                  .map(|(i, v)| (i+first_arg_offset, v)) {
-            use middle::ty::{BrAnon, ReLateBound};
-            if !type_is_immediate(ccx, t) {
-                // if it's not immediate, we have a program-invisible pointer,
-                // which it can't possibly capture
-                attrs.push((idx, NoCaptureAttribute));
-                debug!("trans_callee_inner: argument {} nocapture because it's non-immediate", idx);
-                continue;
-            }
-
-            let t_ = ty::get(t);
-            match t_.sty {
-                ty::ty_rptr(ReLateBound(_, BrAnon(_)), _) => {
-                    debug!("trans_callee_inner: argument {} nocapture because \
-                           of anonymous lifetime", idx);
-                    attrs.push((idx, NoCaptureAttribute));
-                },
-                _ => { }
-            }
-        }
-
         // Invoke the actual rust fn and update bcx/llresult.
         let (llret, b) = base::invoke(bcx,
                                       llfn,
                                       llargs,
-                                      attrs.as_slice(),
+                                      callee_ty,
                                       call_info);
         bcx = b;
         llresult = llret;
@@ -746,7 +686,7 @@ pub fn trans_call_inner<'a>(
         Unreachable(bcx);
     }
 
-    rslt(bcx, llresult)
+    Result::new(bcx, llresult)
 }
 
 pub enum CallArgs<'a> {
@@ -904,5 +844,5 @@ pub fn trans_arg_datum<'a>(
     }
 
     debug!("--- trans_arg_datum passing {}", bcx.val_to_str(val));
-    rslt(bcx, val)
+    Result::new(bcx, val)
 }

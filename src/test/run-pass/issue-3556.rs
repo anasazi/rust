@@ -10,13 +10,15 @@
 
 #![feature(managed_boxes)]
 
+extern crate debug;
+
 enum Token {
-    Text(@~str),
-    ETag(@Vec<~str> , @~str),
-    UTag(@Vec<~str> , @~str),
-    Section(@Vec<~str> , bool, @Vec<Token> , @~str, @~str, @~str, @~str, @~str),
-    IncompleteSection(@Vec<~str> , bool, @~str, bool),
-    Partial(@~str, @~str, @~str),
+    Text(@String),
+    ETag(@Vec<String> , @String),
+    UTag(@Vec<String> , @String),
+    Section(@Vec<String> , bool, @Vec<Token> , @String, @String, @String, @String, @String),
+    IncompleteSection(@Vec<String> , bool, @String, bool),
+    Partial(@String, @String, @String),
 }
 
 fn check_strs(actual: &str, expected: &str) -> bool
@@ -31,14 +33,17 @@ fn check_strs(actual: &str, expected: &str) -> bool
 
 pub fn main()
 {
-// assert!(check_strs(fmt!("%?", Text(@"foo".to_owned())), "Text(@~\"foo\")"));
-// assert!(check_strs(fmt!("%?", ETag(@~["foo".to_owned()], @"bar".to_owned())),
+// assert!(check_strs(fmt!("%?", Text(@"foo".to_string())), "Text(@~\"foo\")"));
+// assert!(check_strs(fmt!("%?", ETag(@~["foo".to_string()], @"bar".to_string())),
 //                    "ETag(@~[ ~\"foo\" ], @~\"bar\")"));
 
-    let t = Text(@"foo".to_owned());
-    let u = Section(@vec!("alpha".to_owned()), true, @vec!(t), @"foo".to_owned(),
-                    @"foo".to_owned(), @"foo".to_owned(), @"foo".to_owned(),
-                    @"foo".to_owned());
+    let t = Text(@"foo".to_string());
+    let u = Section(@vec!("alpha".to_string()),
+                          true,
+                          @vec!(t),
+                          @"foo".to_string(),
+                    @"foo".to_string(), @"foo".to_string(), @"foo".to_string(),
+                    @"foo".to_string());
     let v = format!("{:?}", u);    // this is the line that causes the seg fault
     assert!(v.len() > 0);
 }

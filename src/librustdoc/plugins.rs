@@ -12,9 +12,9 @@ use clean;
 
 use dl = std::unstable::dynamic_lib;
 use serialize::json;
-use std::strbuf::StrBuf;
+use std::string::String;
 
-pub type PluginJson = Option<(~str, json::Json)>;
+pub type PluginJson = Option<(String, json::Json)>;
 pub type PluginResult = (clean::Crate, PluginJson);
 pub type PluginCallback = fn (clean::Crate) -> PluginResult;
 
@@ -41,7 +41,7 @@ impl PluginManager {
     /// Turns `name` into the proper dynamic library filename for the given
     /// platform. On windows, it turns into name.dll, on OS X, name.dylib, and
     /// elsewhere, libname.so.
-    pub fn load_plugin(&mut self, name: ~str) {
+    pub fn load_plugin(&mut self, name: String) {
         let x = self.prefix.join(libname(name));
         let lib_result = dl::DynamicLibrary::open(Some(&x));
         let lib = lib_result.unwrap();
@@ -71,23 +71,21 @@ impl PluginManager {
 }
 
 #[cfg(target_os="win32")]
-fn libname(n: ~str) -> ~str {
-    let mut n = StrBuf::from_owned_str(n);
+fn libname(mut n: String) -> String {
     n.push_str(".dll");
-    n.into_owned()
+    n
 }
 
 #[cfg(target_os="macos")]
-fn libname(n: ~str) -> ~str {
-    let mut n = StrBuf::from_owned_str(n);
+fn libname(mut n: String) -> String {
     n.push_str(".dylib");
-    n.into_owned()
+    n
 }
 
 #[cfg(not(target_os="win32"), not(target_os="macos"))]
-fn libname(n: ~str) -> ~str {
-    let mut i = StrBuf::from_str("lib");
-    i.push_str(n);
+fn libname(n: String) -> String {
+    let mut i = String::from_str("lib");
+    i.push_str(n.as_slice());
     i.push_str(".so");
-    i.into_owned()
+    i
 }

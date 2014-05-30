@@ -276,13 +276,15 @@ impl<T: Clone + Integer + Ord>
 impl<T: fmt::Show> fmt::Show for Ratio<T> {
     /// Renders as `numer/denom`.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f.buf, "{}/{}", self.numer, self.denom)
+        write!(f, "{}/{}", self.numer, self.denom)
     }
 }
 impl<T: ToStrRadix> ToStrRadix for Ratio<T> {
     /// Renders as `numer/denom` where the numbers are in base `radix`.
-    fn to_str_radix(&self, radix: uint) -> ~str {
-        format!("{}/{}", self.numer.to_str_radix(radix), self.denom.to_str_radix(radix))
+    fn to_str_radix(&self, radix: uint) -> String {
+        format!("{}/{}",
+                self.numer.to_str_radix(radix),
+                self.denom.to_str_radix(radix))
     }
 }
 
@@ -555,16 +557,16 @@ mod test {
 
     #[test]
     fn test_to_from_str() {
-        fn test(r: Rational, s: ~str) {
-            assert_eq!(FromStr::from_str(s), Some(r));
-            assert_eq!(r.to_str(), s);
+        fn test(r: Rational, s: String) {
+            assert_eq!(FromStr::from_str(s.as_slice()), Some(r));
+            assert_eq!(r.to_str().to_string(), s);
         }
-        test(_1, "1/1".to_owned());
-        test(_0, "0/1".to_owned());
-        test(_1_2, "1/2".to_owned());
-        test(_3_2, "3/2".to_owned());
-        test(_2, "2/1".to_owned());
-        test(_neg1_2, "-1/2".to_owned());
+        test(_1, "1/1".to_string());
+        test(_0, "0/1".to_string());
+        test(_1_2, "1/2".to_string());
+        test(_3_2, "3/2".to_string());
+        test(_2, "2/1".to_string());
+        test(_neg1_2, "-1/2".to_string());
     }
     #[test]
     fn test_from_str_fail() {
@@ -581,30 +583,31 @@ mod test {
 
     #[test]
     fn test_to_from_str_radix() {
-        fn test(r: Rational, s: ~str, n: uint) {
-            assert_eq!(FromStrRadix::from_str_radix(s, n), Some(r));
-            assert_eq!(r.to_str_radix(n), s);
+        fn test(r: Rational, s: String, n: uint) {
+            assert_eq!(FromStrRadix::from_str_radix(s.as_slice(), n),
+                       Some(r));
+            assert_eq!(r.to_str_radix(n).to_string(), s);
         }
-        fn test3(r: Rational, s: ~str) { test(r, s, 3) }
-        fn test16(r: Rational, s: ~str) { test(r, s, 16) }
+        fn test3(r: Rational, s: String) { test(r, s, 3) }
+        fn test16(r: Rational, s: String) { test(r, s, 16) }
 
-        test3(_1, "1/1".to_owned());
-        test3(_0, "0/1".to_owned());
-        test3(_1_2, "1/2".to_owned());
-        test3(_3_2, "10/2".to_owned());
-        test3(_2, "2/1".to_owned());
-        test3(_neg1_2, "-1/2".to_owned());
-        test3(_neg1_2 / _2, "-1/11".to_owned());
+        test3(_1, "1/1".to_string());
+        test3(_0, "0/1".to_string());
+        test3(_1_2, "1/2".to_string());
+        test3(_3_2, "10/2".to_string());
+        test3(_2, "2/1".to_string());
+        test3(_neg1_2, "-1/2".to_string());
+        test3(_neg1_2 / _2, "-1/11".to_string());
 
-        test16(_1, "1/1".to_owned());
-        test16(_0, "0/1".to_owned());
-        test16(_1_2, "1/2".to_owned());
-        test16(_3_2, "3/2".to_owned());
-        test16(_2, "2/1".to_owned());
-        test16(_neg1_2, "-1/2".to_owned());
-        test16(_neg1_2 / _2, "-1/4".to_owned());
-        test16(Ratio::new(13,15), "d/f".to_owned());
-        test16(_1_2*_1_2*_1_2*_1_2, "1/10".to_owned());
+        test16(_1, "1/1".to_string());
+        test16(_0, "0/1".to_string());
+        test16(_1_2, "1/2".to_string());
+        test16(_3_2, "3/2".to_string());
+        test16(_2, "2/1".to_string());
+        test16(_neg1_2, "-1/2".to_string());
+        test16(_neg1_2 / _2, "-1/4".to_string());
+        test16(Ratio::new(13,15), "d/f".to_string());
+        test16(_1_2*_1_2*_1_2*_1_2, "1/10".to_string());
     }
 
     #[test]

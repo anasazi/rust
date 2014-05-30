@@ -8,53 +8,43 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::strbuf::StrBuf;
+use std::string::String;
 
 fn test_stack_assign() {
-    let s: ~str = "a".to_owned();
+    let s: String = "a".to_string();
     println!("{}", s.clone());
-    let t: ~str = "a".to_owned();
+    let t: String = "a".to_string();
     assert!(s == t);
-    let u: ~str = "b".to_owned();
+    let u: String = "b".to_string();
     assert!((s != u));
 }
 
-fn test_heap_lit() { "a big string".to_owned(); }
+fn test_heap_lit() { "a big string".to_string(); }
 
 fn test_heap_assign() {
-    let s: ~str = "a big ol' string".to_owned();
-    let t: ~str = "a big ol' string".to_owned();
+    let s: String = "a big ol' string".to_string();
+    let t: String = "a big ol' string".to_string();
     assert!(s == t);
-    let u: ~str = "a bad ol' string".to_owned();
+    let u: String = "a bad ol' string".to_string();
     assert!((s != u));
 }
 
-fn test_heap_log() { let s = "a big ol' string".to_owned(); println!("{}", s); }
-
-fn test_stack_add() {
-    assert_eq!("a".to_owned() + "b", "ab".to_owned());
-    let s: ~str = "a".to_owned();
-    assert_eq!(s + s, "aa".to_owned());
-    assert_eq!("".to_owned() + "", "".to_owned());
-}
-
-fn test_stack_heap_add() { assert!(("a".to_owned() + "bracadabra" == "abracadabra".to_owned())); }
-
-fn test_heap_add() {
-    assert_eq!("this should".to_owned() + " totally work", "this should totally work".to_owned());
+fn test_heap_log() {
+    let s = "a big ol' string".to_string();
+    println!("{}", s);
 }
 
 fn test_append() {
-    let mut s = StrBuf::new();
+    let mut s = String::new();
     s.push_str("a");
     assert_eq!(s.as_slice(), "a");
 
-    let mut s = StrBuf::from_str("a");
+    let mut s = String::from_str("a");
     s.push_str("b");
     println!("{}", s.clone());
     assert_eq!(s.as_slice(), "ab");
 
-    let mut s = StrBuf::from_str("c");
+    let mut s = String::from_str("c");
     s.push_str("offee");
     assert!(s.as_slice() == "coffee");
 
@@ -67,8 +57,5 @@ pub fn main() {
     test_heap_lit();
     test_heap_assign();
     test_heap_log();
-    test_stack_add();
-    test_stack_heap_add();
-    test_heap_add();
     test_append();
 }

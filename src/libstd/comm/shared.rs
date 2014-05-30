@@ -24,6 +24,7 @@ use iter::Iterator;
 use kinds::Send;
 use ops::Drop;
 use option::{Some, None, Option};
+use owned::Box;
 use result::{Ok, Err, Result};
 use rt::local::Local;
 use rt::task::{Task, BlockedTask};
@@ -65,7 +66,8 @@ pub enum Failure {
 }
 
 impl<T: Send> Packet<T> {
-    // Creation of a packet *must* be followed by a call to inherit_blocker
+    // Creation of a packet *must* be followed by a call to postinit_lock
+    // and later by inherit_blocker
     pub fn new() -> Packet<T> {
         let p = Packet {
             queue: mpsc::Queue::new(),
@@ -77,9 +79,16 @@ impl<T: Send> Packet<T> {
             sender_drain: atomics::AtomicInt::new(0),
             select_lock: unsafe { NativeMutex::new() },
         };
-        // see comments in inherit_blocker about why we grab this lock
-        unsafe { p.select_lock.lock_noguard() }
         return p;
+    }
+
+    // This function should be used after newly created Packet
+    // was wrapped with an Arc
+    // In other case mutex data will be duplicated while clonning
+    // and that could cause problems on platforms where it is
+    // represented by opaque data structure
+    pub fn postinit_lock(&mut self) {
+        unsafe { self.select_lock.lock_noguard() }
     }
 
     // This function is used at the creation of a shared packet to inherit a
@@ -223,7 +232,7 @@ impl<T: Send> Packet<T> {
             data => return data,
         }
 
-        let task: ~Task = Local::take();
+        let task: Box<Task> = Local::take();
         task.deschedule(1, |task| {
             self.decrement(task)
         });

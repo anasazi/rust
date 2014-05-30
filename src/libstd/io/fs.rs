@@ -55,11 +55,12 @@ use container::Container;
 use iter::Iterator;
 use kinds::Send;
 use super::{Reader, Writer, Seek};
-use super::{SeekStyle, Read, Write, Open, IoError, Truncate,
-            FileMode, FileAccess, FileStat, IoResult, FilePermission};
+use super::{SeekStyle, Read, Write, Open, IoError, Truncate};
+use super::{FileMode, FileAccess, FileStat, IoResult, FilePermission};
 use rt::rtio::{RtioFileStream, IoFactory, LocalIo};
 use io;
 use option::{Some, None, Option};
+use owned::Box;
 use result::{Ok, Err};
 use path;
 use path::{Path, GenericPath};
@@ -78,7 +79,7 @@ use vec::Vec;
 /// configured at creation time, via the `FileAccess` parameter to
 /// `File::open_mode()`.
 pub struct File {
-    fd: ~RtioFileStream:Send,
+    fd: Box<RtioFileStream:Send>,
     path: Path,
     last_nread: int,
 }
@@ -212,6 +213,11 @@ impl File {
     /// `read`.
     pub fn eof(&self) -> bool {
         self.last_nread == 0
+    }
+
+    /// Queries information about the underlying file.
+    pub fn stat(&mut self) -> IoResult<FileStat> {
+        self.fd.fstat()
     }
 }
 
@@ -848,11 +854,11 @@ mod test {
         }
         check!(unlink(filename));
         let read_str = str::from_utf8(read_mem).unwrap();
-        assert!(read_str == final_msg.to_owned());
+        assert!(read_str.as_slice() == final_msg.as_slice());
     })
 
     iotest!(fn file_test_io_seek_shakedown() {
-        use std::str;          // 01234567890123
+        use str;          // 01234567890123
         let initial_msg =   "qwer-asdf-zxcv";
         let chunk_one: &str = "qwer";
         let chunk_two: &str = "asdf";
@@ -886,9 +892,12 @@ mod test {
         let tmpdir = tmpdir();
         let filename = &tmpdir.join("file_stat_correct_on_is_file.txt");
         {
-            let mut fs = File::open_mode(filename, Open, ReadWrite);
+            let mut fs = check!(File::open_mode(filename, Open, ReadWrite));
             let msg = "hw";
             fs.write(msg.as_bytes()).unwrap();
+
+            let fstat_res = check!(fs.stat());
+            assert_eq!(fstat_res.kind, io::TypeFile);
         }
         let stat_res_fn = check!(stat(filename));
         assert_eq!(stat_res_fn.kind, io::TypeFile);
@@ -937,7 +946,7 @@ mod test {
     })
 
     iotest!(fn file_test_directoryinfo_readdir() {
-        use std::str;
+        use str;
         let tmpdir = tmpdir();
         let dir = &tmpdir.join("di_readdir");
         check!(mkdir(dir, io::UserRWX));
@@ -945,8 +954,8 @@ mod test {
         for n in range(0,3) {
             let f = dir.join(format!("{}.txt", n));
             let mut w = check!(File::create(&f));
-            let msg_str = (prefix + n.to_str().to_owned()).to_owned();
-            let msg = msg_str.as_bytes();
+            let msg_str = format!("{}{}", prefix, n.to_str());
+            let msg = msg_str.as_slice().as_bytes();
             check!(w.write(msg));
         }
         let files = check!(readdir(dir));
@@ -958,7 +967,7 @@ mod test {
                 let read_str = str::from_utf8(mem).unwrap();
                 let expected = match n {
                     None|Some("") => fail!("really shouldn't happen.."),
-                    Some(n) => prefix+n
+                    Some(n) => format!("{}{}", prefix, n),
                 };
                 assert_eq!(expected.as_slice(), read_str);
             }
@@ -1119,7 +1128,7 @@ mod test {
         check!(File::create(&input));
         check!(chmod(&input, io::UserRead));
         check!(copy(&input, &out));
-        assert!(check!(out.stat()).perm & io::UserWrite == 0);
+        assert!(!check!(out.stat()).perm.intersects(io::UserWrite));
 
         check!(chmod(&input, io::UserFile));
         check!(chmod(&out, io::UserFile));
@@ -1193,9 +1202,9 @@ mod test {
         let file = tmpdir.join("in.txt");
 
         check!(File::create(&file));
-        assert!(check!(stat(&file)).perm & io::UserWrite == io::UserWrite);
+        assert!(check!(stat(&file)).perm.contains(io::UserWrite));
         check!(chmod(&file, io::UserRead));
-        assert!(check!(stat(&file)).perm & io::UserWrite == 0);
+        assert!(!check!(stat(&file)).perm.contains(io::UserWrite));
 
         match chmod(&tmpdir.join("foo"), io::UserRWX) {
             Ok(..) => fail!("wanted a failure"),
@@ -1227,12 +1236,12 @@ mod test {
         check!(file.fsync());
 
         // Do some simple things with truncation
-        assert_eq!(check!(stat(&path)).size, 3);
+        assert_eq!(check!(file.stat()).size, 3);
         check!(file.truncate(10));
-        assert_eq!(check!(stat(&path)).size, 10);
+        assert_eq!(check!(file.stat()).size, 10);
         check!(file.write(bytes!("bar")));
         check!(file.fsync());
-        assert_eq!(check!(stat(&path)).size, 10);
+        assert_eq!(check!(file.stat()).size, 10);
         assert_eq!(check!(File::open(&path).read_to_end()),
                    (Vec::from_slice(bytes!("foobar", 0, 0, 0, 0))));
 
@@ -1240,10 +1249,10 @@ mod test {
         // Ensure that the intermediate zeroes are all filled in (we're seeked
         // past the end of the file).
         check!(file.truncate(2));
-        assert_eq!(check!(stat(&path)).size, 2);
+        assert_eq!(check!(file.stat()).size, 2);
         check!(file.write(bytes!("wut")));
         check!(file.fsync());
-        assert_eq!(check!(stat(&path)).size, 9);
+        assert_eq!(check!(file.stat()).size, 9);
         assert_eq!(check!(File::open(&path).read_to_end()),
                    (Vec::from_slice(bytes!("fo", 0, 0, 0, 0, "wut"))));
         drop(file);
@@ -1255,11 +1264,31 @@ mod test {
         match File::open_mode(&tmpdir.join("a"), io::Open, io::Read) {
             Ok(..) => fail!(), Err(..) => {}
         }
+
+        // Perform each one twice to make sure that it succeeds the second time
+        // (where the file exists)
         check!(File::open_mode(&tmpdir.join("b"), io::Open, io::Write));
+        assert!(tmpdir.join("b").exists());
+        check!(File::open_mode(&tmpdir.join("b"), io::Open, io::Write));
+
         check!(File::open_mode(&tmpdir.join("c"), io::Open, io::ReadWrite));
+        assert!(tmpdir.join("c").exists());
+        check!(File::open_mode(&tmpdir.join("c"), io::Open, io::ReadWrite));
+
         check!(File::open_mode(&tmpdir.join("d"), io::Append, io::Write));
+        assert!(tmpdir.join("d").exists());
+        check!(File::open_mode(&tmpdir.join("d"), io::Append, io::Write));
+
         check!(File::open_mode(&tmpdir.join("e"), io::Append, io::ReadWrite));
+        assert!(tmpdir.join("e").exists());
+        check!(File::open_mode(&tmpdir.join("e"), io::Append, io::ReadWrite));
+
         check!(File::open_mode(&tmpdir.join("f"), io::Truncate, io::Write));
+        assert!(tmpdir.join("f").exists());
+        check!(File::open_mode(&tmpdir.join("f"), io::Truncate, io::Write));
+
+        check!(File::open_mode(&tmpdir.join("g"), io::Truncate, io::ReadWrite));
+        assert!(tmpdir.join("g").exists());
         check!(File::open_mode(&tmpdir.join("g"), io::Truncate, io::ReadWrite));
 
         check!(File::create(&tmpdir.join("h")).write("foo".as_bytes()));
@@ -1314,7 +1343,7 @@ mod test {
         use rand::{StdRng, Rng};
 
         let mut bytes = [0, ..1024];
-        StdRng::new().unwrap().fill_bytes(bytes);
+        StdRng::new().ok().unwrap().fill_bytes(bytes);
 
         let tmpdir = tmpdir();
 

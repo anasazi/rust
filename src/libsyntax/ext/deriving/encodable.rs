@@ -36,7 +36,7 @@ impl<D:Decoder> Decodable for node_id {
     fn decode(d: &D) -> Node {
         d.read_struct("Node", 1, || {
             Node {
-                id: d.read_field("x".to_owned(), 0, || decode(d))
+                id: d.read_field("x".to_string(), 0, || decode(d))
             }
         })
     }
@@ -73,8 +73,8 @@ would yield functions like:
         fn decode(d: &D) -> spanned<T> {
             d.read_rec(|| {
                 {
-                    node: d.read_field("node".to_owned(), 0, || decode(d)),
-                    span: d.read_field("span".to_owned(), 1, || decode(d)),
+                    node: d.read_field("node".to_string(), 0, || decode(d)),
+                    span: d.read_field("span".to_string(), 1, || decode(d)),
                 }
             })
         }
@@ -99,14 +99,14 @@ pub fn expand_deriving_encodable(cx: &mut ExtCtxt,
         span: span,
         attributes: Vec::new(),
         path: Path::new_(vec!("serialize", "Encodable"), None,
-                         vec!(~Literal(Path::new_local("__S")),
-                              ~Literal(Path::new_local("__E"))), true),
+                         vec!(box Literal(Path::new_local("__S")),
+                              box Literal(Path::new_local("__E"))), true),
         additional_bounds: Vec::new(),
         generics: LifetimeBounds {
             lifetimes: Vec::new(),
             bounds: vec!(("__S", ast::StaticSize, vec!(Path::new_(
                             vec!("serialize", "Encoder"), None,
-                            vec!(~Literal(Path::new_local("__E"))), true))),
+                            vec!(box Literal(Path::new_local("__E"))), true))),
                          ("__E", ast::StaticSize, vec!()))
         },
         methods: vec!(
@@ -114,12 +114,12 @@ pub fn expand_deriving_encodable(cx: &mut ExtCtxt,
                 name: "encode",
                 generics: LifetimeBounds::empty(),
                 explicit_self: borrowed_explicit_self(),
-                args: vec!(Ptr(~Literal(Path::new_local("__S")),
+                args: vec!(Ptr(box Literal(Path::new_local("__S")),
                             Borrowed(None, MutMutable))),
                 ret_ty: Literal(Path::new_(vec!("std", "result", "Result"),
                                            None,
-                                           vec!(~Tuple(Vec::new()),
-                                                ~Literal(Path::new_local("__E"))),
+                                           vec!(box Tuple(Vec::new()),
+                                                box Literal(Path::new_local("__E"))),
                                            true)),
                 attributes: Vec::new(),
                 const_nonmatching: true,
@@ -154,7 +154,8 @@ fn encodable_substructure(cx: &mut ExtCtxt, trait_span: Span,
                 let name = match name {
                     Some(id) => token::get_ident(id),
                     None => {
-                        token::intern_and_get_ident(format!("_field{}", i))
+                        token::intern_and_get_ident(format!("_field{}",
+                                                            i).as_slice())
                     }
                 };
                 let enc = cx.expr_method_call(span, self_, encode, vec!(blkencoder));

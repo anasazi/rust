@@ -67,7 +67,7 @@ use middle::typeck::MethodCall;
 use util::common::indenter;
 use util::ppaux::Repr;
 use util::nodemap::NodeMap;
-use middle::trans::machine::{llsize_of, llsize_of_alloc};
+use middle::trans::machine::{llalign_of_min, llsize_of, llsize_of_alloc};
 use middle::trans::type_::Type;
 
 use syntax::ast;
@@ -86,10 +86,10 @@ pub enum Dest {
 }
 
 impl Dest {
-    pub fn to_str(&self, ccx: &CrateContext) -> ~str {
+    pub fn to_str(&self, ccx: &CrateContext) -> String {
         match *self {
             SaveIn(v) => format!("SaveIn({})", ccx.tn.val_to_str(v)),
-            Ignore => "Ignore".to_owned()
+            Ignore => "Ignore".to_string()
         }
     }
 }
@@ -397,8 +397,8 @@ fn trans_datum_unadjusted<'a>(bcx: &'a Block<'a>,
             DatumBlock(bcx, datum)
         }
         ast::ExprBox(_, contents) => {
-            // Special case for `~T`. (The other case, for GC, is handled in
-            // `trans_rvalue_dps_unadjusted`.)
+            // Special case for `box T`. (The other case, for GC, is handled
+            // in `trans_rvalue_dps_unadjusted`.)
             let box_ty = expr_ty(bcx, expr);
             let contents_ty = expr_ty(bcx, contents);
             trans_uniq_expr(bcx, box_ty, contents, contents_ty)
@@ -421,8 +421,8 @@ fn trans_datum_unadjusted<'a>(bcx: &'a Block<'a>,
             bcx.tcx().sess.span_bug(
                 expr.span,
                 format!("trans_rvalue_datum_unadjusted reached \
-                      fall-through case: {:?}",
-                     expr.node));
+                         fall-through case: {:?}",
+                        expr.node).as_slice());
         }
     }
 }
@@ -545,7 +545,7 @@ fn trans_def<'a>(bcx: &'a Block<'a>,
                         let symbol = csearch::get_symbol(
                             &bcx.ccx().sess().cstore,
                             did);
-                        let llval = symbol.with_c_str(|buf| {
+                        let llval = symbol.as_slice().with_c_str(|buf| {
                                 llvm::LLVMAddGlobal(bcx.ccx().llmod,
                                                     llty.to_ref(),
                                                     buf)
@@ -635,8 +635,8 @@ fn trans_rvalue_stmt_unadjusted<'a>(bcx: &'a Block<'a>,
             bcx.tcx().sess.span_bug(
                 expr.span,
                 format!("trans_rvalue_stmt_unadjusted reached \
-                      fall-through case: {:?}",
-                     expr.node));
+                         fall-through case: {:?}",
+                        expr.node).as_slice());
         }
     }
 }
@@ -765,8 +765,9 @@ fn trans_rvalue_dps_unadjusted<'a>(bcx: &'a Block<'a>,
         _ => {
             bcx.tcx().sess.span_bug(
                 expr.span,
-                format!("trans_rvalue_dps_unadjusted reached fall-through case: {:?}",
-                     expr.node));
+                format!("trans_rvalue_dps_unadjusted reached fall-through \
+                         case: {:?}",
+                        expr.node).as_slice());
         }
     }
 }
@@ -815,7 +816,7 @@ fn trans_def_dps_unadjusted<'a>(
         _ => {
             bcx.tcx().sess.span_bug(ref_expr.span, format!(
                 "Non-DPS def {:?} referened by {}",
-                def, bcx.node_id_to_str(ref_expr.id)));
+                def, bcx.node_id_to_str(ref_expr.id)).as_slice());
         }
     }
 }
@@ -839,7 +840,7 @@ fn trans_def_fn_unadjusted<'a>(bcx: &'a Block<'a>,
             bcx.tcx().sess.span_bug(ref_expr.span, format!(
                     "trans_def_fn_unadjusted invoked on: {:?} for {}",
                     def,
-                    ref_expr.repr(bcx.tcx())));
+                    ref_expr.repr(bcx.tcx())).as_slice());
         }
     };
 
@@ -865,7 +866,8 @@ pub fn trans_local_var<'a>(bcx: &'a Block<'a>,
                 Some(&val) => Datum(val, local_ty, Lvalue),
                 None => {
                     bcx.sess().bug(format!(
-                        "trans_local_var: no llval for upvar {:?} found", nid));
+                        "trans_local_var: no llval for upvar {:?} found",
+                        nid).as_slice());
                 }
             }
         }
@@ -877,7 +879,8 @@ pub fn trans_local_var<'a>(bcx: &'a Block<'a>,
         }
         _ => {
             bcx.sess().unimpl(format!(
-                "unsupported def type in trans_local_var: {:?}", def));
+                "unsupported def type in trans_local_var: {:?}",
+                def).as_slice());
         }
     };
 
@@ -889,7 +892,8 @@ pub fn trans_local_var<'a>(bcx: &'a Block<'a>,
             Some(&v) => v,
             None => {
                 bcx.sess().bug(format!(
-                    "trans_local_var: no datum for local/arg {:?} found", nid));
+                    "trans_local_var: no datum for local/arg {:?} found",
+                    nid).as_slice());
             }
         };
         debug!("take_local(nid={:?}, v={}, ty={})",
@@ -922,7 +926,7 @@ pub fn with_field_tys<R>(tcx: &ty::ctxt,
                     tcx.sess.bug(format!(
                         "cannot get field types from the enum type {} \
                          without a node ID",
-                        ty.repr(tcx)));
+                        ty.repr(tcx)).as_slice());
                 }
                 Some(node_id) => {
                     let def = tcx.def_map.borrow().get_copy(&node_id);
@@ -947,7 +951,7 @@ pub fn with_field_tys<R>(tcx: &ty::ctxt,
         _ => {
             tcx.sess.bug(format!(
                 "cannot get field types from the type {}",
-                ty.repr(tcx)));
+                ty.repr(tcx)).as_slice());
         }
     }
 }
@@ -1170,18 +1174,20 @@ fn trans_uniq_expr<'a>(bcx: &'a Block<'a>,
     let fcx = bcx.fcx;
     let llty = type_of::type_of(bcx.ccx(), contents_ty);
     let size = llsize_of(bcx.ccx(), llty);
+    let align = C_uint(bcx.ccx(), llalign_of_min(bcx.ccx(), llty) as uint);
     // We need to a make a pointer type because box_ty is ty_bot
-    // if content_ty is, e.g. ~fail!().
+    // if content_ty is, e.g. box fail!().
     let real_box_ty = ty::mk_uniq(bcx.tcx(), contents_ty);
-    let Result { bcx, val } = malloc_raw_dyn(bcx, real_box_ty, size);
-    // Unique boxes do not allocate for zero-size types. The standard library may assume
-    // that `free` is never called on the pointer returned for `~ZeroSizeType`.
+    let Result { bcx, val } = malloc_raw_dyn(bcx, real_box_ty, size, align);
+    // Unique boxes do not allocate for zero-size types. The standard library
+    // may assume that `free` is never called on the pointer returned for
+    // `Box<ZeroSizeType>`.
     let bcx = if llsize_of_alloc(bcx.ccx(), llty) == 0 {
         trans_into(bcx, contents, SaveIn(val))
     } else {
         let custom_cleanup_scope = fcx.push_custom_cleanup_scope();
         fcx.schedule_free_value(cleanup::CustomScope(custom_cleanup_scope),
-                                val, cleanup::HeapExchange);
+                                val, cleanup::HeapExchange, contents_ty);
         let bcx = trans_into(bcx, contents, SaveIn(val));
         fcx.pop_custom_cleanup_scope(custom_cleanup_scope);
         bcx
@@ -1203,7 +1209,7 @@ fn trans_managed_expr<'a>(bcx: &'a Block<'a>,
 
     let custom_cleanup_scope = fcx.push_custom_cleanup_scope();
     fcx.schedule_free_value(cleanup::CustomScope(custom_cleanup_scope),
-                            bx, cleanup::HeapManaged);
+                            bx, cleanup::HeapManaged, contents_ty);
     let bcx = trans_into(bcx, contents, SaveIn(body));
     fcx.pop_custom_cleanup_scope(custom_cleanup_scope);
     immediate_rvalue_bcx(bcx, bx, box_ty).to_expr_datumblock()
@@ -1259,16 +1265,15 @@ fn trans_eager_binop<'a>(
                      -> DatumBlock<'a, Expr> {
     let _icx = push_ctxt("trans_eager_binop");
 
-    let mut intype = {
+    let tcx = bcx.tcx();
+    let is_simd = ty::type_is_simd(tcx, lhs_t);
+    let intype = {
         if ty::type_is_bot(lhs_t) { rhs_t }
+        else if is_simd { ty::simd_type(tcx, lhs_t) }
         else { lhs_t }
     };
-    let tcx = bcx.tcx();
-    if ty::type_is_simd(tcx, intype) {
-        intype = ty::simd_type(tcx, intype);
-    }
     let is_float = ty::type_is_fp(intype);
-    let signed = ty::type_is_signed(intype);
+    let is_signed = ty::type_is_signed(intype);
 
     let rhs = base::cast_shift_expr_rhs(bcx, op, lhs, rhs);
 
@@ -1293,7 +1298,7 @@ fn trans_eager_binop<'a>(
             // Only zero-check integers; fp /0 is NaN
             bcx = base::fail_if_zero(bcx, binop_expr.span,
                                      op, rhs, rhs_t);
-            if signed {
+            if is_signed {
                 SDiv(bcx, lhs, rhs)
             } else {
                 UDiv(bcx, lhs, rhs)
@@ -1307,7 +1312,7 @@ fn trans_eager_binop<'a>(
             // Only zero-check integers; fp %0 is NaN
             bcx = base::fail_if_zero(bcx, binop_expr.span,
                                      op, rhs, rhs_t);
-            if signed {
+            if is_signed {
                 SRem(bcx, lhs, rhs)
             } else {
                 URem(bcx, lhs, rhs)
@@ -1319,21 +1324,21 @@ fn trans_eager_binop<'a>(
       ast::BiBitXor => Xor(bcx, lhs, rhs),
       ast::BiShl => Shl(bcx, lhs, rhs),
       ast::BiShr => {
-        if signed {
+        if is_signed {
             AShr(bcx, lhs, rhs)
         } else { LShr(bcx, lhs, rhs) }
       }
       ast::BiEq | ast::BiNe | ast::BiLt | ast::BiGe | ast::BiLe | ast::BiGt => {
         if ty::type_is_bot(rhs_t) {
             C_bool(bcx.ccx(), false)
-        } else {
-            if !ty::type_is_scalar(rhs_t) {
-                bcx.tcx().sess.span_bug(binop_expr.span,
-                                        "non-scalar comparison");
-            }
+        } else if ty::type_is_scalar(rhs_t) {
             let cmpr = base::compare_scalar_types(bcx, lhs, rhs, rhs_t, op);
             bcx = cmpr.bcx;
             ZExt(bcx, cmpr.val, Type::i8(bcx.ccx()))
+        } else if is_simd {
+            base::compare_simd_types(bcx, lhs, rhs, intype, ty::simd_size(tcx, lhs_t), op)
+        } else {
+            bcx.tcx().sess.span_bug(binop_expr.span, "comparison operator unsupported for type")
         }
       }
       _ => {
@@ -1585,16 +1590,22 @@ fn trans_imm_cast<'a>(bcx: &'a Block<'a>,
                                           val_ty(lldiscrim_a),
                                           lldiscrim_a, true),
                 cast_float => SIToFP(bcx, lldiscrim_a, ll_t_out),
-                _ => ccx.sess().bug(format!("translating unsupported cast: \
+                _ => {
+                    ccx.sess().bug(format!("translating unsupported cast: \
                                             {} ({:?}) -> {} ({:?})",
-                                            t_in.repr(bcx.tcx()), k_in,
-                                            t_out.repr(bcx.tcx()), k_out))
+                                            t_in.repr(bcx.tcx()),
+                                            k_in,
+                                            t_out.repr(bcx.tcx()),
+                                            k_out).as_slice())
+                }
             }
         }
         _ => ccx.sess().bug(format!("translating unsupported cast: \
                                     {} ({:?}) -> {} ({:?})",
-                                    t_in.repr(bcx.tcx()), k_in,
-                                    t_out.repr(bcx.tcx()), k_out))
+                                    t_in.repr(bcx.tcx()),
+                                    k_in,
+                                    t_out.repr(bcx.tcx()),
+                                    k_out).as_slice())
     };
     return immediate_rvalue_bcx(bcx, newval, t_out).to_expr_datumblock();
 }
@@ -1756,7 +1767,7 @@ fn deref_once<'a>(bcx: &'a Block<'a>,
             bcx.tcx().sess.span_bug(
                 expr.span,
                 format!("deref invoked on expr of illegal type {}",
-                        datum.ty.repr(bcx.tcx())));
+                        datum.ty.repr(bcx.tcx())).as_slice());
         }
     };
 
@@ -1775,8 +1786,8 @@ fn deref_once<'a>(bcx: &'a Block<'a>,
          * Basically, the idea is to make the deref of an rvalue
          * result in an rvalue. This helps to avoid intermediate stack
          * slots in the resulting LLVM. The idea here is that, if the
-         * `~T` pointer is an rvalue, then we can schedule a *shallow*
-         * free of the `~T` pointer, and then return a ByRef rvalue
+         * `Box<T>` pointer is an rvalue, then we can schedule a *shallow*
+         * free of the `Box<T>` pointer, and then return a ByRef rvalue
          * into the pointer. Because the free is shallow, it is legit
          * to return an rvalue, because we know that the contents are
          * not yet scheduled to be freed. The language rules ensure that the
@@ -1788,13 +1799,14 @@ fn deref_once<'a>(bcx: &'a Block<'a>,
                 let scope = cleanup::temporary_scope(bcx.tcx(), expr.id);
                 let ptr = Load(bcx, datum.val);
                 if !type_is_zero_size(bcx.ccx(), content_ty) {
-                    bcx.fcx.schedule_free_value(scope, ptr, cleanup::HeapExchange);
+                    bcx.fcx.schedule_free_value(scope, ptr, cleanup::HeapExchange, content_ty);
                 }
             }
             RvalueExpr(Rvalue { mode: ByValue }) => {
                 let scope = cleanup::temporary_scope(bcx.tcx(), expr.id);
                 if !type_is_zero_size(bcx.ccx(), content_ty) {
-                    bcx.fcx.schedule_free_value(scope, datum.val, cleanup::HeapExchange);
+                    bcx.fcx.schedule_free_value(scope, datum.val, cleanup::HeapExchange,
+                                                content_ty);
                 }
             }
             LvalueExpr => { }

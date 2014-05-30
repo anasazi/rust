@@ -30,8 +30,6 @@ use std::result::{Ok, Err};
 use std::slice::ImmutableVector;
 
 mod table {
-    extern crate libc;
-
     use std::clone::Clone;
     use std::cmp;
     use std::cmp::Eq;
@@ -42,10 +40,10 @@ mod table {
     use std::prelude::Drop;
     use std::ptr;
     use std::ptr::RawPtr;
-    use std::rt::global_heap;
-    use std::intrinsics::{size_of, min_align_of, transmute};
-    use std::intrinsics::{move_val_init, set_memory};
+    use std::mem::{min_align_of, size_of};
+    use std::intrinsics::{move_val_init, set_memory, transmute};
     use std::iter::{Iterator, range_step_inclusive};
+    use std::rt::heap::{allocate, deallocate};
 
     static EMPTY_BUCKET: u64 = 0u64;
 
@@ -185,10 +183,6 @@ mod table {
         assert_eq!(round_up_to_next(5, 4), 8);
     }
 
-    fn has_alignment(n: uint, alignment: uint) -> bool {
-        round_up_to_next(n, alignment) == n
-    }
-
     // Returns a tuple of (minimum required malloc alignment, hash_offset,
     // key_offset, val_offset, array_size), from the start of a mallocated array.
     fn calculate_offsets(
@@ -243,12 +237,7 @@ mod table {
                     keys_size,   min_align_of::< K >(),
                     vals_size,   min_align_of::< V >());
 
-            let buffer = global_heap::malloc_raw(size) as *mut u8;
-
-            // FIXME #13094: If malloc was not at as aligned as we expected,
-            // our offset calculations are just plain wrong. We could support
-            // any alignment if we switched from `malloc` to `posix_memalign`.
-            assert!(has_alignment(buffer as uint, malloc_alignment));
+            let buffer = allocate(size, malloc_alignment);
 
             let hashes = buffer.offset(hash_offset as int) as *mut u64;
             let keys   = buffer.offset(keys_offset as int) as *mut K;
@@ -278,8 +267,7 @@ mod table {
         /// the appropriate types to pass on to most of the other functions in
         /// this module.
         pub fn peek(&self, index: uint) -> BucketState {
-            // FIXME #12049
-            if cfg!(test) { assert!(index < self.capacity) }
+            debug_assert!(index < self.capacity);
 
             let idx  = index as int;
             let hash = unsafe { *self.hashes.offset(idx) };
@@ -306,8 +294,7 @@ mod table {
             let idx = index.idx;
 
             unsafe {
-                // FIXME #12049
-                if cfg!(test) { assert!(*self.hashes.offset(idx) != EMPTY_BUCKET) }
+                debug_assert!(*self.hashes.offset(idx) != EMPTY_BUCKET);
                 (&'a *self.keys.offset(idx),
                  &'a *self.vals.offset(idx))
             }
@@ -319,8 +306,7 @@ mod table {
             let idx = index.idx;
 
             unsafe {
-                // FIXME #12049
-                if cfg!(test) { assert!(*self.hashes.offset(idx) != EMPTY_BUCKET) }
+                debug_assert!(*self.hashes.offset(idx) != EMPTY_BUCKET);
                 (&'a     *self.keys.offset(idx),
                  &'a mut *self.vals.offset(idx))
             }
@@ -332,8 +318,7 @@ mod table {
             let idx = index.idx;
 
             unsafe {
-                // FIXME #12049
-                if cfg!(test) { assert!(*self.hashes.offset(idx) != EMPTY_BUCKET) }
+                debug_assert!(*self.hashes.offset(idx) != EMPTY_BUCKET);
                 (transmute(self.hashes.offset(idx)),
                  &'a mut *self.keys.offset(idx),
                  &'a mut *self.vals.offset(idx))
@@ -351,8 +336,7 @@ mod table {
             let idx = index.idx;
 
             unsafe {
-                // FIXME #12049
-                if cfg!(test) { assert_eq!(*self.hashes.offset(idx), EMPTY_BUCKET) }
+                debug_assert_eq!(*self.hashes.offset(idx), EMPTY_BUCKET);
                 *self.hashes.offset(idx) = hash.inspect();
                 move_val_init(&mut *self.keys.offset(idx), k);
                 move_val_init(&mut *self.vals.offset(idx), v);
@@ -371,8 +355,7 @@ mod table {
             let idx  = index.idx;
 
             unsafe {
-                // FIXME #12049
-                if cfg!(test) { assert!(*self.hashes.offset(idx) != EMPTY_BUCKET) }
+                debug_assert!(*self.hashes.offset(idx) != EMPTY_BUCKET);
 
                 *self.hashes.offset(idx) = EMPTY_BUCKET;
 
@@ -424,7 +407,7 @@ mod table {
     // modified to no longer assume this.
     #[test]
     fn can_alias_safehash_as_u64() {
-        unsafe { assert_eq!(size_of::<SafeHash>(), size_of::<u64>()) };
+        assert_eq!(size_of::<SafeHash>(), size_of::<u64>())
     }
 
     pub struct Entries<'a, K, V> {
@@ -566,8 +549,15 @@ mod table {
 
             assert_eq!(self.size, 0);
 
+            let hashes_size = self.capacity * size_of::<u64>();
+            let keys_size = self.capacity * size_of::<K>();
+            let vals_size = self.capacity * size_of::<V>();
+            let (align, _, _, _, size) = calculate_offsets(hashes_size, min_align_of::<u64>(),
+                                                           keys_size, min_align_of::<K>(),
+                                                           vals_size, min_align_of::<V>());
+
             unsafe {
-                libc::free(self.hashes as *mut libc::c_void);
+                deallocate(self.hashes as *mut u8, size, align);
                 // Remember how everything was allocated out of one buffer
                 // during initialization? We only need one call to free here.
             }
@@ -669,7 +659,7 @@ static INITIAL_LOAD_FACTOR: Fraction = (9, 10);
 /// on creation by default, this means the ordering of the keys is
 /// randomized, but makes the tables more resistant to
 /// denial-of-service attacks (Hash DoS). This behaviour can be
-/// overriden with one of the constructors.
+/// overridden with one of the constructors.
 ///
 /// It is required that the keys implement the `Eq` and `Hash` traits, although
 /// this can frequently be achieved by using `#[deriving(Eq, Hash)]`.
@@ -698,13 +688,13 @@ static INITIAL_LOAD_FACTOR: Fraction = (9, 10);
 /// book_reviews.insert("The Adventures of Sherlock Holmes", "Eye lyked it alot.");
 ///
 /// // check for a specific one.
-/// if !book_reviews.contains_key(& &"Les Misérables") {
+/// if !book_reviews.contains_key(&("Les Misérables")) {
 ///     println!("We've got {} reviews, but Les Misérables ain't one.",
 ///              book_reviews.len());
 /// }
 ///
 /// // oops, this review has a lot of spelling mistakes, let's delete it.
-/// book_reviews.remove(& &"The Adventures of Sherlock Holmes");
+/// book_reviews.remove(&("The Adventures of Sherlock Holmes"));
 ///
 /// // look up the values associated with some keys.
 /// let to_find = ["Pride and Prejudice", "Alice's Adventure in Wonderland"];
@@ -1249,31 +1239,14 @@ impl<K: TotalEq + Hash<S>, V, S, H: Hasher<S>> HashMap<K, V, H> {
     /// Return the value corresponding to the key in the map, or insert
     /// and return the value if it doesn't exist.
     pub fn find_or_insert<'a>(&'a mut self, k: K, v: V) -> &'a mut V {
-        let hash = self.make_hash(&k);
-        match self.search_hashed(&hash, &k) {
-            Some(idx) => {
-                let (_, v_ref) = self.table.read_mut(&idx);
-                v_ref
-            },
-            None => self.insert_hashed(hash, k, v)
-        }
+        self.find_with_or_insert_with(k, v, |_k, _v, _a| (), |_k, a| a)
     }
 
     /// Return the value corresponding to the key in the map, or create,
     /// insert, and return a new value if it doesn't exist.
     pub fn find_or_insert_with<'a>(&'a mut self, k: K, f: |&K| -> V)
                                -> &'a mut V {
-        let hash = self.make_hash(&k);
-        match self.search_hashed(&hash, &k) {
-            Some(idx) => {
-                let (_, v_ref) = self.table.read_mut(&idx);
-                v_ref
-            },
-            None => {
-                let v = f(&k);
-                self.insert_hashed(hash, k, v)
-            }
-        }
+        self.find_with_or_insert_with(k, (), |_k, _v, _a| (), |k, _a| f(k))
     }
 
     /// Insert a key-value pair into the map if the key is not already present.
@@ -1285,12 +1258,66 @@ impl<K: TotalEq + Hash<S>, V, S, H: Hasher<S>> HashMap<K, V, H> {
                                  v: V,
                                  f: |&K, &mut V|)
                                  -> &'a mut V {
+        self.find_with_or_insert_with(k, v, |k, v, _a| f(k, v), |_k, a| a)
+    }
+
+    /// Modify and return the value corresponding to the key in the map, or
+    /// insert and return a new value if it doesn't exist.
+    ///
+    /// This method allows for all insertion behaviours of a hashmap;
+    /// see methods like `insert`, `find_or_insert` and
+    /// `insert_or_update_with` for less general and more friendly
+    /// variations of this.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use collections::HashMap;
+    ///
+    /// // map some strings to vectors of strings
+    /// let mut map = HashMap::new();
+    /// map.insert("a key", vec!["value"]);
+    /// map.insert("z key", vec!["value"]);
+    ///
+    /// let new = vec!["a key", "b key", "z key"];
+    ///
+    /// for k in new.move_iter() {
+    ///     map.find_with_or_insert_with(
+    ///         k, "new value",
+    ///         // if the key does exist either prepend or append this
+    ///         // new value based on the first letter of the key.
+    ///         |key, already, new| {
+    ///             if key.as_slice().starts_with("z") {
+    ///                 already.unshift(new);
+    ///             } else {
+    ///                 already.push(new);
+    ///             }
+    ///         },
+    ///         // if the key doesn't exist in the map yet, add it in
+    ///         // the obvious way.
+    ///         |_k, v| vec![v]);
+    /// }
+    ///
+    /// assert_eq!(map.len(), 3);
+    /// assert_eq!(map.get(&"a key"), &vec!["value", "new value"]);
+    /// assert_eq!(map.get(&"b key"), &vec!["new value"]);
+    /// assert_eq!(map.get(&"z key"), &vec!["new value", "value"]);
+    /// ```
+    pub fn find_with_or_insert_with<'a, A>(&'a mut self,
+                                           k: K,
+                                           a: A,
+                                           found: |&K, &mut V, A|,
+                                           not_found: |&K, A| -> V)
+                                          -> &'a mut V {
         let hash = self.make_hash(&k);
         match self.search_hashed(&hash, &k) {
-            None      => self.insert_hashed(hash, k, v),
+            None => {
+                let v = not_found(&k, a);
+                self.insert_hashed(hash, k, v)
+            },
             Some(idx) => {
                 let (_, v_ref) = self.table.read_mut(&idx);
-                f(&k, v_ref);
+                found(&k, v_ref, a);
                 v_ref
             }
         }
@@ -1391,14 +1418,14 @@ impl<K: TotalEq + Hash<S>, V: Eq, S, H: Hasher<S>> Eq for HashMap<K, V, H> {
 
 impl<K: TotalEq + Hash<S> + Show, V: Show, S, H: Hasher<S>> Show for HashMap<K, V, H> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        try!(write!(f.buf, r"\{"));
+        try!(write!(f, r"\{"));
 
         for (i, (k, v)) in self.iter().enumerate() {
-            if i != 0 { try!(write!(f.buf, ", ")); }
-            try!(write!(f.buf, "{}: {}", *k, *v));
+            if i != 0 { try!(write!(f, ", ")); }
+            try!(write!(f, "{}: {}", *k, *v));
         }
 
-        write!(f.buf, r"\}")
+        write!(f, r"\}")
     }
 }
 
@@ -1578,14 +1605,14 @@ impl<T: TotalEq + Hash<S>, S, H: Hasher<S>> HashSet<T, H> {
 
 impl<T: TotalEq + Hash<S> + fmt::Show, S, H: Hasher<S>> fmt::Show for HashSet<T, H> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        try!(write!(f.buf, r"\{"));
+        try!(write!(f, r"\{"));
 
         for (i, x) in self.iter().enumerate() {
-            if i != 0 { try!(write!(f.buf, ", ")); }
-            try!(write!(f.buf, "{}", *x));
+            if i != 0 { try!(write!(f, ", ")); }
+            try!(write!(f, "{}", *x));
         }
 
-        write!(f.buf, r"\}")
+        write!(f, r"\}")
     }
 }
 
@@ -1623,8 +1650,7 @@ mod test_map {
     use std::cmp::Equiv;
     use std::hash::Hash;
     use std::iter::{Iterator,range_inclusive,range_step_inclusive};
-    use std::local_data;
-    use std::vec;
+    use std::cell::RefCell;
 
     struct KindaIntLike(int);
 
@@ -1663,7 +1689,7 @@ mod test_map {
         assert_eq!(*m.find(&2).unwrap(), 4);
     }
 
-    local_data_key!(drop_vector: vec::Vec<int>)
+    local_data_key!(drop_vector: RefCell<Vec<int>>)
 
     #[deriving(Hash, Eq, TotalEq)]
     struct Dropable {
@@ -1673,8 +1699,8 @@ mod test_map {
 
     impl Dropable {
         fn new(k: uint) -> Dropable {
-            local_data::get_mut(drop_vector,
-                |v| { v.unwrap().as_mut_slice()[k] += 1; });
+            let v = drop_vector.get().unwrap();
+            v.borrow_mut().as_mut_slice()[k] += 1;
 
             Dropable { k: k }
         }
@@ -1682,23 +1708,23 @@ mod test_map {
 
     impl Drop for Dropable {
         fn drop(&mut self) {
-            local_data::get_mut(drop_vector, |v|
-                { v.unwrap().as_mut_slice()[self.k] -= 1; });
+            let v = drop_vector.get().unwrap();
+            v.borrow_mut().as_mut_slice()[self.k] -= 1;
         }
     }
 
     #[test]
     fn test_drops() {
-        local_data::set(drop_vector, vec::Vec::from_elem(200, 0));
+        drop_vector.replace(Some(RefCell::new(Vec::from_elem(200, 0))));
 
         {
             let mut m = HashMap::new();
 
-            local_data::get(drop_vector, |v| {
-                for i in range(0u, 200) {
-                    assert_eq!(v.unwrap().as_slice()[i], 0);
-                }
-            });
+            let v = drop_vector.get().unwrap();
+            for i in range(0u, 200) {
+                assert_eq!(v.borrow().as_slice()[i], 0);
+            }
+            drop(v);
 
             for i in range(0u, 100) {
                 let d1 = Dropable::new(i);
@@ -1706,11 +1732,11 @@ mod test_map {
                 m.insert(d1, d2);
             }
 
-            local_data::get(drop_vector, |v| {
-                for i in range(0u, 200) {
-                    assert_eq!(v.unwrap().as_slice()[i], 1);
-                }
-            });
+            let v = drop_vector.get().unwrap();
+            for i in range(0u, 200) {
+                assert_eq!(v.borrow().as_slice()[i], 1);
+            }
+            drop(v);
 
             for i in range(0u, 50) {
                 let k = Dropable::new(i);
@@ -1718,30 +1744,27 @@ mod test_map {
 
                 assert!(v.is_some());
 
-                local_data::get(drop_vector, |v| {
-                    assert_eq!(v.unwrap().as_slice()[i], 1);
-                    assert_eq!(v.unwrap().as_slice()[i+100], 1);
-                });
+                let v = drop_vector.get().unwrap();
+                assert_eq!(v.borrow().as_slice()[i], 1);
+                assert_eq!(v.borrow().as_slice()[i+100], 1);
             }
 
-            local_data::get(drop_vector, |v| {
-                for i in range(0u, 50) {
-                    assert_eq!(v.unwrap().as_slice()[i], 0);
-                    assert_eq!(v.unwrap().as_slice()[i+100], 0);
-                }
+            let v = drop_vector.get().unwrap();
+            for i in range(0u, 50) {
+                assert_eq!(v.borrow().as_slice()[i], 0);
+                assert_eq!(v.borrow().as_slice()[i+100], 0);
+            }
 
-                for i in range(50u, 100) {
-                    assert_eq!(v.unwrap().as_slice()[i], 1);
-                    assert_eq!(v.unwrap().as_slice()[i+100], 1);
-                }
-            });
+            for i in range(50u, 100) {
+                assert_eq!(v.borrow().as_slice()[i], 1);
+                assert_eq!(v.borrow().as_slice()[i+100], 1);
+            }
         }
 
-        local_data::get(drop_vector, |v| {
-            for i in range(0u, 200) {
-                assert_eq!(v.unwrap().as_slice()[i], 0);
-            }
-        });
+        let v = drop_vector.get().unwrap();
+        for i in range(0u, 200) {
+            assert_eq!(v.borrow().as_slice()[i], 0);
+        }
     }
 
     #[test]
@@ -1920,7 +1943,7 @@ mod test_map {
         }
         assert_eq!(m.len(), 32);
 
-        let mut observed = 0;
+        let mut observed: u32 = 0;
 
         for (k, v) in m.iter() {
             assert_eq!(*v, *k * 2);
@@ -1981,6 +2004,20 @@ mod test_map {
     }
 
     #[test]
+    fn test_show() {
+        let mut map: HashMap<int, int> = HashMap::new();
+        let empty: HashMap<int, int> = HashMap::new();
+
+        map.insert(1, 2);
+        map.insert(3, 4);
+
+        let map_str = format!("{}", map);
+
+        assert!(map_str == "{1: 2, 3: 4}".to_owned() || map_str == "{3: 4, 1: 2}".to_owned());
+        assert_eq!(format!("{}", empty), "{}".to_owned());
+    }
+
+    #[test]
     fn test_expand() {
         let mut m = HashMap::new();
 
@@ -2003,9 +2040,9 @@ mod test_map {
         let mut m = HashMap::new();
 
         let (foo, bar, baz) = (1,2,3);
-        m.insert("foo".to_owned(), foo);
-        m.insert("bar".to_owned(), bar);
-        m.insert("baz".to_owned(), baz);
+        m.insert("foo".to_string(), foo);
+        m.insert("bar".to_string(), bar);
+        m.insert("baz".to_string(), baz);
 
 
         assert_eq!(m.find_equiv(&("foo")), Some(&foo));
@@ -2116,7 +2153,7 @@ mod test_set {
         for i in range(0u, 32) {
             assert!(a.insert(i));
         }
-        let mut observed = 0;
+        let mut observed: u32 = 0;
         for k in a.iter() {
             observed |= 1 << *k;
         }
@@ -2290,8 +2327,8 @@ mod test_set {
 
         let set_str = format!("{}", set);
 
-        assert!(set_str == "{1, 2}".to_owned() || set_str == "{2, 1}".to_owned());
-        assert_eq!(format!("{}", empty), "{}".to_owned());
+        assert!(set_str == "{1, 2}".to_string() || set_str == "{2, 1}".to_string());
+        assert_eq!(format!("{}", empty), "{}".to_string());
     }
 }
 

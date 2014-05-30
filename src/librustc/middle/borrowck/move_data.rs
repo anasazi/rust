@@ -22,6 +22,7 @@ use collections::{HashMap, HashSet};
 use middle::borrowck::*;
 use middle::dataflow::DataFlowContext;
 use middle::dataflow::DataFlowOperator;
+use euv = middle::expr_use_visitor;
 use middle::ty;
 use syntax::ast;
 use syntax::ast_util;
@@ -146,27 +147,13 @@ pub struct Assignment {
     pub span: Span,
 }
 
+#[deriving(Clone)]
 pub struct MoveDataFlowOperator;
-
-/// FIXME(pcwalton): Should just be #[deriving(Clone)], but that doesn't work
-/// yet on unit structs.
-impl Clone for MoveDataFlowOperator {
-    fn clone(&self) -> MoveDataFlowOperator {
-        MoveDataFlowOperator
-    }
-}
 
 pub type MoveDataFlow<'a> = DataFlowContext<'a, MoveDataFlowOperator>;
 
+#[deriving(Clone)]
 pub struct AssignDataFlowOperator;
-
-/// FIXME(pcwalton): Should just be #[deriving(Clone)], but that doesn't work
-/// yet on unit structs.
-impl Clone for AssignDataFlowOperator {
-    fn clone(&self) -> AssignDataFlowOperator {
-        AssignDataFlowOperator
-    }
-}
 
 pub type AssignDataFlow<'a> = DataFlowContext<'a, AssignDataFlowOperator>;
 
@@ -357,7 +344,7 @@ impl MoveData {
                           assign_id: ast::NodeId,
                           span: Span,
                           assignee_id: ast::NodeId,
-                          is_also_move: bool) {
+                          mode: euv::MutateMode) {
         /*!
          * Adds a new record for an assignment to `lp` that occurs at
          * location `id` with the given `span`.
@@ -368,8 +355,11 @@ impl MoveData {
 
         let path_index = self.move_path(tcx, lp.clone());
 
-        if !is_also_move {
-            self.assignee_ids.borrow_mut().insert(assignee_id);
+        match mode {
+            euv::JustWrite => {
+                self.assignee_ids.borrow_mut().insert(assignee_id);
+            }
+            euv::WriteAndRead => { }
         }
 
         let assignment = Assignment {

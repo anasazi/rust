@@ -13,9 +13,9 @@ use std::io;
 
 #[deriving(Clone)]
 pub struct Layout {
-    pub logo: ~str,
-    pub favicon: ~str,
-    pub krate: ~str,
+    pub logo: String,
+    pub favicon: String,
+    pub krate: String,
 }
 
 pub struct Page<'a> {
@@ -26,7 +26,7 @@ pub struct Page<'a> {
 
 pub fn render<T: fmt::Show, S: fmt::Show>(
     dst: &mut io::Writer, layout: &Layout, page: &Page, sidebar: &S, t: &T)
-    -> fmt::Result
+    -> io::IoResult<()>
 {
     write!(dst,
 r##"<!DOCTYPE html>
@@ -119,9 +119,9 @@ r##"<!DOCTYPE html>
     content   = *t,
     root_path = page.root_path,
     ty        = page.ty,
-    logo      = nonestr(layout.logo),
+    logo      = nonestr(layout.logo.as_slice()),
     title     = page.title,
-    favicon   = nonestr(layout.favicon),
+    favicon   = nonestr(layout.favicon.as_slice()),
     sidebar   = *sidebar,
     krate     = layout.krate,
     )

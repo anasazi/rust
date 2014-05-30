@@ -10,16 +10,18 @@
 
 // Test that we do not permit moves from &[] matched by a vec pattern.
 
+extern crate debug;
+
 #[deriving(Clone)]
 struct Foo {
-    string: ~str
+    string: String
 }
 
 pub fn main() {
     let x = vec!(
-        Foo { string: "foo".to_owned() },
-        Foo { string: "bar".to_owned() },
-        Foo { string: "baz".to_owned() }
+        Foo { string: "foo".to_string() },
+        Foo { string: "bar".to_string() },
+        Foo { string: "baz".to_string() }
     );
     let x: &[Foo] = x.as_slice();
     match x {

@@ -1,5 +1,3 @@
-// ignore-pretty
-
 // Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
@@ -10,13 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// ignore-pretty very bad with line comments
+
 #![feature(managed_boxes)]
 
 use std::io;
 use std::io::stdio::StdReader;
 use std::io::BufferedReader;
-use std::os;
 use std::num::Bitwise;
+use std::os;
 
 // Computes a single solution to a given 9x9 sudoku
 //
@@ -67,12 +67,15 @@ impl Sudoku {
 
     pub fn read(mut reader: BufferedReader<StdReader>) -> Sudoku {
         /* assert first line is exactly "9,9" */
-        assert!(reader.read_line().unwrap() == "9,9".to_owned());
+        assert!(reader.read_line().unwrap() == "9,9".to_string());
 
         let mut g = Vec::from_fn(10u, { |_i| vec!(0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8) });
         for line in reader.lines() {
             let line = line.unwrap();
-            let comps: Vec<&str> = line.trim().split(',').collect();
+            let comps: Vec<&str> = line.as_slice()
+                                       .trim()
+                                       .split(',')
+                                       .collect();
 
             if comps.len() == 3u {
                 let row     = from_str::<uint>(*comps.get(0)).unwrap() as u8;
@@ -132,7 +135,7 @@ impl Sudoku {
     fn next_color(&mut self, row: u8, col: u8, start_color: u8) -> bool {
         if start_color < 10u8 {
             // colors not yet used
-            let mut avail = ~Colors::new(start_color);
+            let mut avail = box Colors::new(start_color);
 
             // drop colors already in use in neighbourhood
             self.drop_colors(avail, row, col);

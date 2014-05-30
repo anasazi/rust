@@ -9,11 +9,10 @@
 // except according to those terms.
 
 // ignore-android see #10393 #13206
-// ignore-pretty
 
 extern crate sync;
 
-use std::strbuf::StrBuf;
+use std::string::String;
 use std::slice;
 use sync::Arc;
 use sync::Future;
@@ -52,7 +51,7 @@ impl Code {
         string.bytes().fold(Code(0u64), |a, b| a.push_char(b))
     }
 
-    fn unpack(&self, frame: uint) -> StrBuf {
+    fn unpack(&self, frame: uint) -> String {
         let mut key = self.hash();
         let mut result = Vec::new();
         for _ in range(0, frame) {
@@ -61,7 +60,7 @@ impl Code {
         }
 
         result.reverse();
-        StrBuf::from_utf8(result).unwrap()
+        String::from_utf8(result).unwrap()
     }
 }
 
@@ -91,16 +90,16 @@ impl TableCallback for PrintCallback {
 struct Entry {
     code: Code,
     count: uint,
-    next: Option<~Entry>,
+    next: Option<Box<Entry>>,
 }
 
 struct Table {
     count: uint,
-    items: Vec<Option<~Entry>> }
+    items: Vec<Option<Box<Entry>>> }
 
 struct Items<'a> {
     cur: Option<&'a Entry>,
-    items: slice::Items<'a, Option<~Entry>>,
+    items: slice::Items<'a, Option<Box<Entry>>>,
 }
 
 impl Table {
@@ -114,7 +113,7 @@ impl Table {
     fn search_remainder<C:TableCallback>(item: &mut Entry, key: Code, c: C) {
         match item.next {
             None => {
-                let mut entry = ~Entry {
+                let mut entry = box Entry {
                     code: key,
                     count: 0,
                     next: None,
@@ -138,7 +137,7 @@ impl Table {
 
         {
             if self.items.get(index as uint).is_none() {
-                let mut entry = ~Entry {
+                let mut entry = box Entry {
                     code: key,
                     count: 0,
                     next: None,
@@ -253,9 +252,9 @@ fn print_occurrences(frequencies: &mut Table, occurrence: &'static str) {
 fn get_sequence<R: Buffer>(r: &mut R, key: &str) -> Vec<u8> {
     let mut res = Vec::new();
     for l in r.lines().map(|l| l.ok().unwrap())
-        .skip_while(|l| key != l.slice_to(key.len())).skip(1)
+        .skip_while(|l| key != l.as_slice().slice_to(key.len())).skip(1)
     {
-        res.push_all(l.trim().as_bytes());
+        res.push_all(l.as_slice().trim().as_bytes());
     }
     for b in res.mut_iter() {
         *b = b.to_ascii().to_upper().to_byte();

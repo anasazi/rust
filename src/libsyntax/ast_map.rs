@@ -22,7 +22,7 @@ use std::cell::RefCell;
 use std::fmt;
 use std::iter;
 use std::slice;
-use std::strbuf::StrBuf;
+use std::string::String;
 
 #[deriving(Clone, Eq)]
 pub enum PathElem {
@@ -41,7 +41,7 @@ impl PathElem {
 impl fmt::Show for PathElem {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let slot = token::get_name(self.name());
-        write!(f.buf, "{}", slot)
+        write!(f, "{}", slot)
     }
 }
 
@@ -79,17 +79,17 @@ impl<'a, T: Copy> Iterator<T> for Values<'a, T> {
 /// The type of the iterator used by with_path.
 pub type PathElems<'a, 'b> = iter::Chain<Values<'a, PathElem>, LinkedPath<'b>>;
 
-pub fn path_to_str<PI: Iterator<PathElem>>(mut path: PI) -> ~str {
+pub fn path_to_str<PI: Iterator<PathElem>>(mut path: PI) -> String {
     let itr = token::get_ident_interner();
 
-    path.fold(StrBuf::new(), |mut s, e| {
+    path.fold(String::new(), |mut s, e| {
         let e = itr.get(e.name());
         if !s.is_empty() {
             s.push_str("::");
         }
         s.push_str(e.as_slice());
         s
-    }).into_owned()
+    }).to_string()
 }
 
 #[deriving(Clone)]
@@ -103,6 +103,7 @@ pub enum Node {
     NodeStmt(@Stmt),
     NodeArg(@Pat),
     NodeLocal(@Pat),
+    NodePat(@Pat),
     NodeBlock(P<Block>),
 
     /// NodeStructCtor represents a tuple struct.
@@ -127,6 +128,7 @@ enum MapEntry {
     EntryStmt(NodeId, @Stmt),
     EntryArg(NodeId, @Pat),
     EntryLocal(NodeId, @Pat),
+    EntryPat(NodeId, @Pat),
     EntryBlock(NodeId, P<Block>),
     EntryStructCtor(NodeId, @StructDef),
     EntryLifetime(NodeId, @Lifetime),
@@ -154,6 +156,7 @@ impl MapEntry {
             EntryStmt(id, _) => id,
             EntryArg(id, _) => id,
             EntryLocal(id, _) => id,
+            EntryPat(id, _) => id,
             EntryBlock(id, _) => id,
             EntryStructCtor(id, _) => id,
             EntryLifetime(id, _) => id,
@@ -172,6 +175,7 @@ impl MapEntry {
             EntryStmt(_, p) => NodeStmt(p),
             EntryArg(_, p) => NodeArg(p),
             EntryLocal(_, p) => NodeLocal(p),
+            EntryPat(_, p) => NodePat(p),
             EntryBlock(_, p) => NodeBlock(p),
             EntryStructCtor(_, p) => NodeStructCtor(p),
             EntryLifetime(_, p) => NodeLifetime(p),
@@ -322,11 +326,11 @@ impl Map {
         self.with_path_next(id, None, f)
     }
 
-    pub fn path_to_str(&self, id: NodeId) -> ~str {
+    pub fn path_to_str(&self, id: NodeId) -> String {
         self.with_path(id, |path| path_to_str(path))
     }
 
-    fn path_to_str_with_ident(&self, id: NodeId, i: Ident) -> ~str {
+    fn path_to_str_with_ident(&self, id: NodeId, i: Ident) -> String {
         self.with_path(id, |path| {
             path_to_str(path.chain(Some(PathName(i.name)).move_iter()))
         })
@@ -384,8 +388,8 @@ impl Map {
         f(attrs)
     }
 
-    pub fn span(&self, id: NodeId) -> Span {
-        match self.find(id) {
+    pub fn opt_span(&self, id: NodeId) -> Option<Span> {
+        let sp = match self.find(id) {
             Some(NodeItem(item)) => item.span,
             Some(NodeForeignItem(foreign_item)) => foreign_item.span,
             Some(NodeTraitMethod(trait_method)) => {
@@ -399,13 +403,20 @@ impl Map {
             Some(NodeExpr(expr)) => expr.span,
             Some(NodeStmt(stmt)) => stmt.span,
             Some(NodeArg(pat)) | Some(NodeLocal(pat)) => pat.span,
+            Some(NodePat(pat)) => pat.span,
             Some(NodeBlock(block)) => block.span,
             Some(NodeStructCtor(_)) => self.expect_item(self.get_parent(id)).span,
-            _ => fail!("node_span: could not find span for id {}", id),
-        }
+            _ => return None,
+        };
+        Some(sp)
     }
 
-    pub fn node_to_str(&self, id: NodeId) -> ~str {
+    pub fn span(&self, id: NodeId) -> Span {
+        self.opt_span(id)
+            .unwrap_or_else(|| fail!("AstMap.span: could not find span for id {}", id))
+    }
+
+    pub fn node_to_str(&self, id: NodeId) -> String {
         node_id_to_str(self, id)
     }
 }
@@ -513,7 +524,9 @@ impl<'a, F: FoldOps> Folder for Ctx<'a, F> {
                 // Note: this is at least *potentially* a pattern...
                 self.insert(pat.id, EntryLocal(self.parent, pat));
             }
-            _ => {}
+            _ => {
+                self.insert(pat.id, EntryPat(self.parent, pat));
+            }
         }
 
         pat
@@ -650,7 +663,7 @@ pub fn map_decoded_item<F: FoldOps>(map: &Map,
     ii
 }
 
-fn node_id_to_str(map: &Map, id: NodeId) -> ~str {
+fn node_id_to_str(map: &Map, id: NodeId) -> String {
     match map.find(id) {
         Some(NodeItem(item)) => {
             let path_str = map.path_to_str_with_ident(id, item.ident);
@@ -666,51 +679,61 @@ fn node_id_to_str(map: &Map, id: NodeId) -> ~str {
                 ItemImpl(..) => "impl",
                 ItemMac(..) => "macro"
             };
-            format!("{} {} (id={})", item_str, path_str, id)
+            (format!("{} {} (id={})", item_str, path_str, id)).to_string()
         }
         Some(NodeForeignItem(item)) => {
             let path_str = map.path_to_str_with_ident(id, item.ident);
-            format!("foreign item {} (id={})", path_str, id)
+            (format!("foreign item {} (id={})", path_str, id)).to_string()
         }
         Some(NodeMethod(m)) => {
-            format!("method {} in {} (id={})",
+            (format!("method {} in {} (id={})",
                     token::get_ident(m.ident),
-                    map.path_to_str(id), id)
+                    map.path_to_str(id), id)).to_string()
         }
         Some(NodeTraitMethod(ref tm)) => {
             let m = ast_util::trait_method_to_ty_method(&**tm);
-            format!("method {} in {} (id={})",
+            (format!("method {} in {} (id={})",
                     token::get_ident(m.ident),
-                    map.path_to_str(id), id)
+                    map.path_to_str(id), id)).to_string()
         }
         Some(NodeVariant(ref variant)) => {
-            format!("variant {} in {} (id={})",
+            (format!("variant {} in {} (id={})",
                     token::get_ident(variant.node.name),
-                    map.path_to_str(id), id)
+                    map.path_to_str(id), id)).to_string()
         }
         Some(NodeExpr(expr)) => {
-            format!("expr {} (id={})", pprust::expr_to_str(expr), id)
+            (format!("expr {} (id={})",
+                    pprust::expr_to_str(expr), id)).to_string()
         }
         Some(NodeStmt(stmt)) => {
-            format!("stmt {} (id={})", pprust::stmt_to_str(stmt), id)
+            (format!("stmt {} (id={})",
+                    pprust::stmt_to_str(stmt), id)).to_string()
         }
         Some(NodeArg(pat)) => {
-            format!("arg {} (id={})", pprust::pat_to_str(pat), id)
+            (format!("arg {} (id={})",
+                    pprust::pat_to_str(pat), id)).to_string()
         }
         Some(NodeLocal(pat)) => {
-            format!("local {} (id={})", pprust::pat_to_str(pat), id)
+            (format!("local {} (id={})",
+                    pprust::pat_to_str(pat), id)).to_string()
+        }
+        Some(NodePat(pat)) => {
+            (format!("pat {} (id={})", pprust::pat_to_str(pat), id)).to_string()
         }
         Some(NodeBlock(block)) => {
-            format!("block {} (id={})", pprust::block_to_str(block), id)
+            (format!("block {} (id={})",
+                    pprust::block_to_str(block), id)).to_string()
         }
         Some(NodeStructCtor(_)) => {
-            format!("struct_ctor {} (id={})", map.path_to_str(id), id)
+            (format!("struct_ctor {} (id={})",
+                    map.path_to_str(id), id)).to_string()
         }
         Some(NodeLifetime(ref l)) => {
-            format!("lifetime {} (id={})", pprust::lifetime_to_str(*l), id)
+            (format!("lifetime {} (id={})",
+                    pprust::lifetime_to_str(*l), id)).to_string()
         }
         None => {
-            format!("unknown node (id={})", id)
+            (format!("unknown node (id={})", id)).to_string()
         }
     }
 }

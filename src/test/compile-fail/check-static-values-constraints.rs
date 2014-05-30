@@ -27,7 +27,7 @@ enum SafeEnum {
     Variant1,
     Variant2(int),
     Variant3(WithDtor),
-    Variant4(~str)
+    Variant4(String)
 }
 
 // These should be ok
@@ -94,7 +94,7 @@ static STATIC10: UnsafeStruct = UnsafeStruct;
 
 struct MyOwned;
 
-static STATIC11: ~MyOwned = ~MyOwned;
+static STATIC11: Box<MyOwned> = box MyOwned;
 //~^ ERROR static items are not allowed to have owned pointers
 
 // The following examples test that mutable structs are just forbidden
@@ -106,14 +106,18 @@ static mut STATIC12: UnsafeStruct = UnsafeStruct;
 static mut STATIC13: SafeStruct = SafeStruct{field1: Variant1, field2: Variant3(WithDtor)};
 //~^ ERROR mutable static items are not allowed to have destructors
 
-static mut STATIC14: SafeStruct = SafeStruct{field1: Variant1, field2: Variant4("str".to_owned())};
+static mut STATIC14: SafeStruct = SafeStruct {
 //~^ ERROR mutable static items are not allowed to have destructors
+    field1: Variant1,
+    field2: Variant4("str".to_string())
+};
 
-static STATIC15: &'static [~MyOwned] = &'static [~MyOwned, ~MyOwned];
+static STATIC15: &'static [Box<MyOwned>] = &'static [box MyOwned, box MyOwned];
 //~^ ERROR static items are not allowed to have owned pointers
 //~^^ ERROR static items are not allowed to have owned pointers
 
-static STATIC16: (&'static ~MyOwned, &'static ~MyOwned) = (&'static ~MyOwned, &'static ~MyOwned);
+static STATIC16: (&'static Box<MyOwned>, &'static Box<MyOwned>) =
+    (&'static box MyOwned, &'static box MyOwned);
 //~^ ERROR static items are not allowed to have owned pointers
 //~^^ ERROR static items are not allowed to have owned pointers
 
@@ -123,10 +127,10 @@ static mut STATIC17: SafeEnum = Variant1;
 static STATIC18: @SafeStruct = @SafeStruct{field1: Variant1, field2: Variant2(0)};
 //~^ ERROR static items are not allowed to have managed pointers
 
-static STATIC19: ~int = box 3;
+static STATIC19: Box<int> = box 3;
 //~^ ERROR static items are not allowed to have owned pointers
 
 pub fn main() {
-    let y = { static x: ~int = ~3; x };
+    let y = { static x: Box<int> = box 3; x };
     //~^ ERROR static items are not allowed to have owned pointers
 }

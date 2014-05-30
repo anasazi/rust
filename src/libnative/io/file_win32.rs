@@ -10,19 +10,18 @@
 
 //! Blocking win32-based file I/O
 
-use std::c_str::CString;
-use std::cast;
-use std::io::IoError;
-use std::io;
+use alloc::arc::Arc;
 use libc::{c_int, c_void};
 use libc;
+use std::c_str::CString;
+use std::io::IoError;
+use std::io;
 use std::mem;
 use std::os::win32::{as_utf16_p, fill_utf16_buf_and_decode};
 use std::ptr;
 use std::rt::rtio;
 use std::str;
-use std::sync::arc::UnsafeArc;
-use std::slice;
+use std::vec;
 
 use io::IoResult;
 
@@ -34,7 +33,7 @@ struct Inner {
 }
 
 pub struct FileDesc {
-    inner: UnsafeArc<Inner>
+    inner: Arc<Inner>
 }
 
 impl FileDesc {
@@ -47,7 +46,7 @@ impl FileDesc {
     /// Note that all I/O operations done on this object will be *blocking*, but
     /// they do not require the runtime to be active.
     pub fn new(fd: fd_t, close_on_drop: bool) -> FileDesc {
-        FileDesc { inner: UnsafeArc::new(Inner {
+        FileDesc { inner: Arc::new(Inner {
             fd: fd,
             close_on_drop: close_on_drop
         }) }
@@ -86,15 +85,30 @@ impl FileDesc {
         Ok(())
     }
 
-    pub fn fd(&self) -> fd_t {
-        // This unsafety is fine because we're just reading off the file
-        // descriptor, no one is modifying this.
-        unsafe { (*self.inner.get()).fd }
-    }
+    pub fn fd(&self) -> fd_t { self.inner.fd }
 
     pub fn handle(&self) -> libc::HANDLE {
         unsafe { libc::get_osfhandle(self.fd()) as libc::HANDLE }
     }
+
+    // A version of seek that takes &self so that tell can call it
+    //   - the private seek should of course take &mut self.
+    fn seek_common(&self, pos: i64, style: io::SeekStyle) -> Result<u64, IoError> {
+        let whence = match style {
+            io::SeekSet => libc::FILE_BEGIN,
+            io::SeekEnd => libc::FILE_END,
+            io::SeekCur => libc::FILE_CURRENT,
+        };
+        unsafe {
+            let mut newpos = 0;
+            match libc::SetFilePointerEx(self.handle(), pos, &mut newpos,
+                                         whence) {
+                0 => Err(super::last_error()),
+                _ => Ok(newpos as u64),
+            }
+        }
+    }
+
 }
 
 impl io::Reader for FileDesc {
@@ -119,7 +133,7 @@ impl rtio::RtioFileStream for FileDesc {
 
     fn pread(&mut self, buf: &mut [u8], offset: u64) -> Result<int, IoError> {
         let mut read = 0;
-        let mut overlap: libc::OVERLAPPED = unsafe { mem::init() };
+        let mut overlap: libc::OVERLAPPED = unsafe { mem::zeroed() };
         overlap.Offset = offset as libc::DWORD;
         overlap.OffsetHigh = (offset >> 32) as libc::DWORD;
         let ret = unsafe {
@@ -136,7 +150,7 @@ impl rtio::RtioFileStream for FileDesc {
     fn pwrite(&mut self, buf: &[u8], mut offset: u64) -> Result<(), IoError> {
         let mut cur = buf.as_ptr();
         let mut remaining = buf.len();
-        let mut overlap: libc::OVERLAPPED = unsafe { mem::init() };
+        let mut overlap: libc::OVERLAPPED = unsafe { mem::zeroed() };
         while remaining > 0 {
             overlap.Offset = offset as libc::DWORD;
             overlap.OffsetHigh = (offset >> 32) as libc::DWORD;
@@ -156,25 +170,13 @@ impl rtio::RtioFileStream for FileDesc {
         }
         Ok(())
     }
+
     fn seek(&mut self, pos: i64, style: io::SeekStyle) -> Result<u64, IoError> {
-        let whence = match style {
-            io::SeekSet => libc::FILE_BEGIN,
-            io::SeekEnd => libc::FILE_END,
-            io::SeekCur => libc::FILE_CURRENT,
-        };
-        unsafe {
-            let mut newpos = 0;
-            match libc::SetFilePointerEx(self.handle(), pos, &mut newpos,
-                                         whence) {
-                0 => Err(super::last_error()),
-                _ => Ok(newpos as u64),
-            }
-        }
+        self.seek_common(pos, style)
     }
+
     fn tell(&self) -> Result<u64, IoError> {
-        // This transmute is fine because our seek implementation doesn't
-        // actually use the mutable self at all.
-        unsafe { cast::transmute_mut(self).seek(0, io::SeekCur) }
+        self.seek_common(0, io::SeekCur)
     }
 
     fn fsync(&mut self) -> Result<(), IoError> {
@@ -197,6 +199,14 @@ impl rtio::RtioFileStream for FileDesc {
         let _ = self.seek(orig_pos as i64, io::SeekSet);
         return ret;
     }
+
+    fn fstat(&mut self) -> IoResult<io::FileStat> {
+        let mut stat: libc::stat = unsafe { mem::zeroed() };
+        match unsafe { libc::fstat(self.fd(), &mut stat) } {
+            0 => Ok(mkstat(&stat)),
+            _ => Err(super::last_error()),
+        }
+    }
 }
 
 impl rtio::RtioPipe for FileDesc {
@@ -206,9 +216,23 @@ impl rtio::RtioPipe for FileDesc {
     fn write(&mut self, buf: &[u8]) -> Result<(), IoError> {
         self.inner_write(buf)
     }
-    fn clone(&self) -> ~rtio::RtioPipe:Send {
-        ~FileDesc { inner: self.inner.clone() } as ~rtio::RtioPipe:Send
+    fn clone(&self) -> Box<rtio::RtioPipe:Send> {
+        box FileDesc { inner: self.inner.clone() } as Box<rtio::RtioPipe:Send>
     }
+
+    // Only supported on named pipes currently. Note that this doesn't have an
+    // impact on the std::io primitives, this is never called via
+    // std::io::PipeStream. If the functionality is exposed in the future, then
+    // these methods will need to be implemented.
+    fn close_read(&mut self) -> IoResult<()> {
+        Err(io::standard_error(io::InvalidInput))
+    }
+    fn close_write(&mut self) -> IoResult<()> {
+        Err(io::standard_error(io::InvalidInput))
+    }
+    fn set_timeout(&mut self, _t: Option<u64>) {}
+    fn set_read_timeout(&mut self, _t: Option<u64>) {}
+    fn set_write_timeout(&mut self, _t: Option<u64>) {}
 }
 
 impl rtio::RtioTTY for FileDesc {
@@ -274,7 +298,7 @@ pub fn open(path: &CString, fm: io::FileMode, fa: io::FileAccess)
         (io::Truncate, io::Read) => libc::TRUNCATE_EXISTING,
         (io::Truncate, _) => libc::CREATE_ALWAYS,
         (io::Open, io::Read) => libc::OPEN_EXISTING,
-        (io::Open, _) => libc::CREATE_NEW,
+        (io::Open, _) => libc::OPEN_ALWAYS,
         (io::Append, io::Read) => {
             dwDesiredAccess |= libc::FILE_APPEND_DATA;
             libc::OPEN_EXISTING
@@ -324,7 +348,7 @@ pub fn mkdir(p: &CString, _mode: io::FilePermission) -> IoResult<()> {
 }
 
 pub fn readdir(p: &CString) -> IoResult<Vec<Path>> {
-    use std::rt::global_heap::malloc_raw;
+    use std::rt::libc_heap::malloc_raw;
 
     fn prune(root: &CString, dirs: Vec<Path>) -> Vec<Path> {
         let root = unsafe { CString::new(root.with_ref(|p| p), false) };
@@ -353,8 +377,8 @@ pub fn readdir(p: &CString) -> IoResult<Vec<Path>> {
                 if fp_buf as uint == 0 {
                     fail!("os::list_dir() failure: got null ptr from wfd");
                 } else {
-                    let fp_vec = slice::from_buf(fp_buf, libc::wcslen(fp_buf) as uint);
-                    let fp_trimmed = str::truncate_utf16_at_nul(fp_vec);
+                    let fp_vec = vec::raw::from_buf(fp_buf, libc::wcslen(fp_buf) as uint);
+                    let fp_trimmed = str::truncate_utf16_at_nul(fp_vec.as_slice());
                     let fp_str = str::from_utf16(fp_trimmed)
                             .expect("rust_list_dir_wfd_fp_buf returned invalid UTF-16");
                     paths.push(Path::new(fp_str));
@@ -391,7 +415,7 @@ pub fn rename(old: &CString, new: &CString) -> IoResult<()> {
 
 pub fn chmod(p: &CString, mode: io::FilePermission) -> IoResult<()> {
     super::mkerr_libc(as_utf16_p(p.as_str().unwrap(), |p| unsafe {
-        libc::wchmod(p, mode as libc::c_int)
+        libc::wchmod(p, mode.bits() as libc::c_int)
     }))
 }
 
@@ -408,6 +432,7 @@ pub fn chown(_p: &CString, _uid: int, _gid: int) -> IoResult<()> {
 
 pub fn readlink(p: &CString) -> IoResult<Path> {
     // FIXME: I have a feeling that this reads intermediate symlinks as well.
+    use io::c::compat::kernel32::GetFinalPathNameByHandleW;
     let handle = unsafe {
         as_utf16_p(p.as_str().unwrap(), |p| {
             libc::CreateFileW(p,
@@ -425,13 +450,15 @@ pub fn readlink(p: &CString) -> IoResult<Path> {
     // Specify (sz - 1) because the documentation states that it's the size
     // without the null pointer
     let ret = fill_utf16_buf_and_decode(|buf, sz| unsafe {
-        libc::GetFinalPathNameByHandleW(handle,
-                                        buf as *u16,
-                                        sz - 1,
-                                        libc::VOLUME_NAME_DOS)
+        GetFinalPathNameByHandleW(handle,
+                                  buf as *u16,
+                                  sz - 1,
+                                  libc::VOLUME_NAME_DOS)
     });
     let ret = match ret {
-        Some(ref s) if s.starts_with(r"\\?\") => Ok(Path::new(s.slice_from(4))),
+        Some(ref s) if s.as_slice().starts_with(r"\\?\") => {
+            Ok(Path::new(s.as_slice().slice_from(4)))
+        }
         Some(s) => Ok(Path::new(s)),
         None => Err(super::last_error()),
     };
@@ -440,9 +467,10 @@ pub fn readlink(p: &CString) -> IoResult<Path> {
 }
 
 pub fn symlink(src: &CString, dst: &CString) -> IoResult<()> {
+    use io::c::compat::kernel32::CreateSymbolicLinkW;
     super::mkerr_winbool(as_utf16_p(src.as_str().unwrap(), |src| {
         as_utf16_p(dst.as_str().unwrap(), |dst| {
-            unsafe { libc::CreateSymbolicLinkW(dst, src, 0) }
+            unsafe { CreateSymbolicLinkW(dst, src, 0) }
         }) as libc::BOOL
     }))
 }
@@ -455,8 +483,7 @@ pub fn link(src: &CString, dst: &CString) -> IoResult<()> {
     }))
 }
 
-fn mkstat(stat: &libc::stat, path: &CString) -> io::FileStat {
-    let path = unsafe { CString::new(path.with_ref(|p| p), false) };
+fn mkstat(stat: &libc::stat) -> io::FileStat {
     let kind = match (stat.st_mode as c_int) & libc::S_IFMT {
         libc::S_IFREG => io::TypeFile,
         libc::S_IFDIR => io::TypeDirectory,
@@ -467,10 +494,9 @@ fn mkstat(stat: &libc::stat, path: &CString) -> io::FileStat {
     };
 
     io::FileStat {
-        path: Path::new(path),
         size: stat.st_size as u64,
         kind: kind,
-        perm: (stat.st_mode) as io::FilePermission & io::AllPermissions,
+        perm: io::FilePermission::from_bits_truncate(stat.st_mode as u32),
         created: stat.st_ctime as u64,
         modified: stat.st_mtime as u64,
         accessed: stat.st_atime as u64,
@@ -490,10 +516,10 @@ fn mkstat(stat: &libc::stat, path: &CString) -> io::FileStat {
 }
 
 pub fn stat(p: &CString) -> IoResult<io::FileStat> {
-    let mut stat: libc::stat = unsafe { mem::uninit() };
+    let mut stat: libc::stat = unsafe { mem::zeroed() };
     as_utf16_p(p.as_str().unwrap(), |up| {
         match unsafe { libc::wstat(up, &mut stat) } {
-            0 => Ok(mkstat(&stat, p)),
+            0 => Ok(mkstat(&stat)),
             _ => Err(super::last_error()),
         }
     })

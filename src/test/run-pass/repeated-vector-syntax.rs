@@ -10,10 +10,7 @@
 
 #![feature(managed_boxes)]
 
-#[deriving(Clone)]
-struct Foo {
-    a: ~str,
-}
+extern crate debug;
 
 pub fn main() {
     let x = [ [true], ..512 ];

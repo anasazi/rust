@@ -9,62 +9,62 @@
 // except according to those terms.
 
 trait Base: Base2 + Base3{
-    fn foo(&self) -> ~str;
-    fn foo1(&self) -> ~str;
-    fn foo2(&self) -> ~str{
-        "base foo2".to_owned()
+    fn foo(&self) -> String;
+    fn foo1(&self) -> String;
+    fn foo2(&self) -> String{
+        "base foo2".to_string()
     }
 }
 
 trait Base2: Base3{
-    fn baz(&self) -> ~str;
+    fn baz(&self) -> String;
 }
 
 trait Base3{
-    fn root(&self) -> ~str;
+    fn root(&self) -> String;
 }
 
 trait Super: Base{
-    fn bar(&self) -> ~str;
+    fn bar(&self) -> String;
 }
 
 struct X;
 
 impl Base for X {
-    fn foo(&self) -> ~str{
-        "base foo".to_owned()
+    fn foo(&self) -> String{
+        "base foo".to_string()
     }
-    fn foo1(&self) -> ~str{
-        "base foo1".to_owned()
+    fn foo1(&self) -> String{
+        "base foo1".to_string()
     }
 
 }
 
 impl Base2 for X {
-    fn baz(&self) -> ~str{
-        "base2 baz".to_owned()
+    fn baz(&self) -> String{
+        "base2 baz".to_string()
     }
 }
 
 impl Base3 for X {
-    fn root(&self) -> ~str{
-        "base3 root".to_owned()
+    fn root(&self) -> String{
+        "base3 root".to_string()
     }
 }
 
 impl Super for X {
-    fn bar(&self) -> ~str{
-        "super bar".to_owned()
+    fn bar(&self) -> String{
+        "super bar".to_string()
     }
 }
 
 pub fn main() {
     let n = X;
     let s = &n as &Super;
-    assert_eq!(s.bar(),"super bar".to_owned());
-    assert_eq!(s.foo(),"base foo".to_owned());
-    assert_eq!(s.foo1(),"base foo1".to_owned());
-    assert_eq!(s.foo2(),"base foo2".to_owned());
-    assert_eq!(s.baz(),"base2 baz".to_owned());
-    assert_eq!(s.root(),"base3 root".to_owned());
+    assert_eq!(s.bar(),"super bar".to_string());
+    assert_eq!(s.foo(),"base foo".to_string());
+    assert_eq!(s.foo1(),"base foo1".to_string());
+    assert_eq!(s.foo2(),"base foo2".to_string());
+    assert_eq!(s.baz(),"base2 baz".to_string());
+    assert_eq!(s.root(),"base3 root".to_string());
 }

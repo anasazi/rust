@@ -20,7 +20,7 @@ use middle::ty;
 
 use std::rc::Rc;
 use std::str;
-use std::strbuf::StrBuf;
+use std::string::String;
 use std::uint;
 use syntax::abi;
 use syntax::ast;
@@ -155,7 +155,10 @@ fn parse_trait_store(st: &mut PState, conv: conv_did) -> ty::TraitStore {
     match next(st) {
         '~' => ty::UniqTraitStore,
         '&' => ty::RegionTraitStore(parse_region(st, conv), parse_mutability(st)),
-        c => st.tcx.sess.bug(format!("parse_trait_store(): bad input '{}'", c))
+        c => {
+            st.tcx.sess.bug(format!("parse_trait_store(): bad input '{}'",
+                                    c).as_slice())
+        }
     }
 }
 
@@ -201,7 +204,7 @@ fn parse_bound_region(st: &mut PState, conv: conv_did) -> ty::BoundRegion {
         }
         '[' => {
             let def = parse_def(st, RegionParameter, |x,y| conv(x,y));
-            let ident = token::str_to_ident(parse_str(st, ']'));
+            let ident = token::str_to_ident(parse_str(st, ']').as_slice());
             ty::BrNamed(def, ident.name)
         }
         'f' => {
@@ -229,7 +232,7 @@ fn parse_region(st: &mut PState, conv: conv_did) -> ty::Region {
         assert_eq!(next(st), '|');
         let index = parse_uint(st);
         assert_eq!(next(st), '|');
-        let nm = token::str_to_ident(parse_str(st, ']'));
+        let nm = token::str_to_ident(parse_str(st, ']').as_slice());
         ty::ReEarlyBound(node_id, index, nm.name)
       }
       'f' => {
@@ -264,15 +267,15 @@ fn parse_opt<T>(st: &mut PState, f: |&mut PState| -> T) -> Option<T> {
     }
 }
 
-fn parse_str(st: &mut PState, term: char) -> ~str {
-    let mut result = StrBuf::new();
+fn parse_str(st: &mut PState, term: char) -> String {
+    let mut result = String::new();
     while peek(st) != term {
         unsafe {
             result.push_bytes([next_byte(st)])
         }
     }
     next(st);
-    return result.into_owned();
+    result
 }
 
 fn parse_trait_ref(st: &mut PState, conv: conv_did) -> ty::TraitRef {
@@ -441,7 +444,6 @@ fn parse_fn_style(c: char) -> FnStyle {
     match c {
         'u' => UnsafeFn,
         'n' => NormalFn,
-        'c' => ExternFn,
         _ => fail!("parse_fn_style: bad fn_style {}", c)
     }
 }
@@ -449,8 +451,8 @@ fn parse_fn_style(c: char) -> FnStyle {
 fn parse_abi_set(st: &mut PState) -> abi::Abi {
     assert_eq!(next(st), '[');
     scan(st, |c| c == ']', |bytes| {
-        let abi_str = str::from_utf8(bytes).unwrap().to_owned();
-        abi::lookup(abi_str).expect(abi_str)
+        let abi_str = str::from_utf8(bytes).unwrap().to_string();
+        abi::lookup(abi_str.as_slice()).expect(abi_str)
     })
 }
 

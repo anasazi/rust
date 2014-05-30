@@ -8,10 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-
+#![feature(managed_boxes)]
 
 pub fn main() {
     assert!((@1 < @3));
-    assert!((@@"hello ".to_owned() > @@"hello".to_owned()));
-    assert!((@@@"hello".to_owned() != @@@"there".to_owned()));
+    assert!((@@"hello ".to_string() > @@"hello".to_string()));
+    assert!((@@@"hello".to_string() != @@@"there".to_string()));
 }

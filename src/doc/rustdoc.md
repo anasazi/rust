@@ -11,6 +11,7 @@ Documenting Rust APIs is quite simple. To document a given item, we have "doc
 comments":
 
 ~~~
+# #![allow(unused_attribute)]
 // the "link" crate attribute is currently required for rustdoc, but normally
 // isn't needed.
 #![crate_id = "universe"]
@@ -26,7 +27,7 @@ comments":
 pub struct Widget {
 	/// All widgets have a purpose (this is a doc comment, and will show up
 	/// the field's documentation).
-	purpose: ~str,
+	purpose: String,
 	/// Humans are not allowed to understand some widgets
 	understandable: bool
 }
@@ -39,6 +40,31 @@ pub fn recalibrate() {
 }
 # }
 ~~~
+
+Documentation can also be controlled via the `doc` attribute on items. This is
+implicitly done by the compiler when using the above form of doc comments
+(converting the slash-based comments to `#[doc]` attributes).
+
+~~~
+#[doc = "
+Calculates the factorial of a number.
+
+Given the input integer `n`, this function will calculate `n!` and return it.
+"]
+pub fn factorial(n: int) -> int { if n < 2 {1} else {n * factorial(n)} }
+# fn main() {}
+~~~
+
+The `doc` attribute can also be used to control how rustdoc emits documentation
+in some cases.
+
+```
+// Rustdoc will inline documentation of a `pub use` into this crate when the
+// `pub use` reaches across crates, but this behavior can also be disabled.
+#[doc(no_inline)]
+pub use std::option::Option;
+# fn main() {}
+```
 
 Doc comments are markdown, and are currently parsed with the
 [sundown][sundown] library. rustdoc does not yet do any fanciness such as
@@ -67,7 +93,7 @@ documentation:
 ~~~
 #[doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
       html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-      html_root_url = "http://static.rust-lang.org/doc/master")];
+      html_root_url = "http://doc.rust-lang.org/")];
 ~~~
 
 The `html_root_url` is the prefix that rustdoc will apply to any references to
@@ -107,44 +133,35 @@ code blocks as testable-by-default. In order to not run a test over a block of
 code, the `ignore` string can be added to the three-backtick form of markdown
 code block.
 
-    /**
-    # nested code fences confuse sundown => indentation + comment to
-    #  avoid failing tests
-    ```
-    // This is a testable code block
-    ```
+~~~notrust
+```
+// This is a testable code block
+```
 
-    ```ignore
-    // This is not a testable code block
-    ```
+```ignore
+// This is not a testable code block
+```
 
-        // This is a testable code block (4-space indent)
-    */
-    # fn foo() {}
+    // This is a testable code block (4-space indent)
+~~~
 
 You can specify that the test's execution should fail with the `should_fail`
 directive.
 
-    /**
-    # nested code fences confuse sundown => indentation + comment to
-    #  avoid failing tests
-    ```should_fail
-    // This code block is expected to generate a failure when run
-    ```
-    */
-    # fn foo() {}
+~~~notrust
+```should_fail
+// This code block is expected to generate a failure when run
+```
+~~~
 
 You can specify that the code block should be compiled but not run with the
 `no_run` directive.
 
-    /**
-    # nested code fences confuse sundown => indentation + comment to
-    #  avoid failing tests
-    ```no_run
-    // This code will be compiled but not executed
-    ```
-    */
-    # fn foo() {}
+~~~notrust
+```no_run
+// This code will be compiled but not executed
+```
+~~~
 
 Rustdoc also supplies some extra sugar for helping with some tedious
 documentation examples. If a line is prefixed with `# `, then the line
@@ -152,23 +169,19 @@ will not show up in the HTML documentation, but it will be used when
 testing the code block (NB. the space after the `#` is required, so
 that one can still write things like `#[deriving(Eq)]`).
 
-    /**
-    # nested code fences confuse sundown => indentation + comment to
-    #  avoid failing tests
-    ```rust
-    # /!\ The three following lines are comments, which are usually stripped off by
-    # the doc-generating tool.  In order to display them anyway in this particular
-    # case, the character following the leading '#' is not a usual space like in
-    # these first five lines but a non breakable one.
-    #
-    # // showing 'fib' in this documentation would just be tedious and detracts from
-    # // what's actually being documented.
-    # fn fib(n: int) { n + 2 }
+~~~notrust
+```
+# /!\ The three following lines are comments, which are usually stripped off by
+# the doc-generating tool.  In order to display them anyway in this particular
+# case, the character following the leading '#' is not a usual space like in
+# these first five lines but a non breakable one.
+# // showing 'fib' in this documentation would just be tedious and detracts from
+# // what's actually being documented.
+# fn fib(n: int) { n + 2 }
 
-    spawn(proc() { fib(200); })
-    ```
-    */
-    # fn foo() {}
+spawn(proc() { fib(200); })
+```
+~~~
 
 The documentation online would look like `spawn(proc() { fib(200); })`, but when
 testing this code, the `fib` function will be included (so it can compile).
@@ -182,10 +195,10 @@ rustc's `--test` flag. Extra arguments can be passed to rustdoc's test harness
 with the `--test-args` flag.
 
 ~~~ {.notrust}
-$ # Only run tests containing 'foo' in their name
+# Only run tests containing 'foo' in their name
 $ rustdoc --test lib.rs --test-args 'foo'
 
-$ # See what's possible when running tests
+# See what's possible when running tests
 $ rustdoc --test lib.rs --test-args '--help'
 ~~~
 

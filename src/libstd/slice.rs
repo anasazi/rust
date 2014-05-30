@@ -19,7 +19,7 @@ homogeneous types:
 ```rust
 let int_vector = [1,2,3];
 let str_vector = ["one", "two", "three"];
- ```
+```
 
 This is a big module, but for a high-level overview:
 
@@ -44,7 +44,7 @@ a vector or a vector slice from the index interval `[a, b)`:
 let numbers = [0, 1, 2];
 let last_numbers = numbers.slice(1, 3);
 // last_numbers is now &[1, 2]
- ```
+```
 
 Traits defined for the `~[T]` type, like `OwnedVector`, can only be called
 on such vectors. These methods deal with adding elements or otherwise changing
@@ -57,7 +57,7 @@ of the vector:
 let mut numbers = vec![0, 1, 2];
 numbers.push(7);
 // numbers is now vec![0, 1, 2, 7];
- ```
+```
 
 ## Implementations of other traits
 
@@ -79,10 +79,8 @@ let numbers = [0, 1, 2];
 for &x in numbers.iter() {
     println!("{} is a number!", x);
 }
- ```
+```
 
-* `.rev_iter()` returns an iterator with the same values as `.iter()`,
-  but going in the reverse order, starting with the back element.
 * `.mut_iter()` returns an iterator that allows modifying each value.
 * `.move_iter()` converts an owned vector into an iterator that
   moves out a value from the vector each iteration.
@@ -99,145 +97,27 @@ There are a number of free functions that create or take vectors, for example:
 
 */
 
-use cast;
-use cast::transmute;
-use ops::Drop;
+use mem::transmute;
 use clone::Clone;
-use container::Container;
-use cmp::{Eq, TotalOrd, Ordering, Less, Equal, Greater};
+use cmp::{TotalOrd, Ordering, Less, Greater};
 use cmp;
-use default::Default;
-use fmt;
+use container::Container;
 use iter::*;
-use num::{CheckedAdd, Saturating, div_rem};
-use num::CheckedMul;
-use option::{None, Option, Some};
-use ptr;
-use ptr::RawPtr;
-use rt::global_heap::{malloc_raw, exchange_free};
-use result::{Ok, Err};
-use mem;
 use mem::size_of;
-use kinds::marker;
-use uint;
-use unstable::finally::try_finally;
-use raw::{Repr, Slice};
-use RawVec = raw::Vec;
+use mem;
+use ops::Drop;
+use option::{None, Option, Some};
+use ptr::RawPtr;
+use ptr;
+use rt::heap::{allocate, deallocate};
+use finally::try_finally;
 use vec::Vec;
 
-/**
- * Converts a pointer to A into a slice of length 1 (without copying).
- */
-pub fn ref_slice<'a, A>(s: &'a A) -> &'a [A] {
-    unsafe {
-        transmute(Slice { data: s, len: 1 })
-    }
-}
-
-/**
- * Converts a pointer to A into a slice of length 1 (without copying).
- */
-pub fn mut_ref_slice<'a, A>(s: &'a mut A) -> &'a mut [A] {
-    unsafe {
-        let ptr: *A = transmute(s);
-        transmute(Slice { data: ptr, len: 1 })
-    }
-}
-
-/// An iterator over the slices of a vector separated by elements that
-/// match a predicate function.
-pub struct Splits<'a, T> {
-    v: &'a [T],
-    n: uint,
-    pred: |t: &T|: 'a -> bool,
-    finished: bool
-}
-
-impl<'a, T> Iterator<&'a [T]> for Splits<'a, T> {
-    #[inline]
-    fn next(&mut self) -> Option<&'a [T]> {
-        if self.finished { return None; }
-
-        if self.n == 0 {
-            self.finished = true;
-            return Some(self.v);
-        }
-
-        match self.v.iter().position(|x| (self.pred)(x)) {
-            None => {
-                self.finished = true;
-                Some(self.v)
-            }
-            Some(idx) => {
-                let ret = Some(self.v.slice(0, idx));
-                self.v = self.v.slice(idx + 1, self.v.len());
-                self.n -= 1;
-                ret
-            }
-        }
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (uint, Option<uint>) {
-        if self.finished {
-            return (0, Some(0))
-        }
-        // if the predicate doesn't match anything, we yield one slice
-        // if it matches every element, we yield N+1 empty slices where
-        // N is either the number of elements or the number of splits.
-        match (self.v.len(), self.n) {
-            (0,_) => (1, Some(1)),
-            (_,0) => (1, Some(1)),
-            (l,n) => (1, cmp::min(l,n).checked_add(&1u))
-        }
-    }
-}
-
-/// An iterator over the slices of a vector separated by elements that
-/// match a predicate function, from back to front.
-pub struct RevSplits<'a, T> {
-    v: &'a [T],
-    n: uint,
-    pred: |t: &T|: 'a -> bool,
-    finished: bool
-}
-
-impl<'a, T> Iterator<&'a [T]> for RevSplits<'a, T> {
-    #[inline]
-    fn next(&mut self) -> Option<&'a [T]> {
-        if self.finished { return None; }
-
-        if self.n == 0 {
-            self.finished = true;
-            return Some(self.v);
-        }
-
-        match self.v.iter().rposition(|x| (self.pred)(x)) {
-            None => {
-                self.finished = true;
-                Some(self.v)
-            }
-            Some(idx) => {
-                let ret = Some(self.v.slice(idx + 1, self.v.len()));
-                self.v = self.v.slice(0, idx);
-                self.n -= 1;
-                ret
-            }
-        }
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (uint, Option<uint>) {
-        if self.finished {
-            return (0, Some(0))
-        }
-        match (self.v.len(), self.n) {
-            (0,_) => (1, Some(1)),
-            (_,0) => (1, Some(1)),
-            (l,n) => (1, cmp::min(l,n).checked_add(&1u))
-        }
-    }
-}
+pub use core::slice::{ref_slice, mut_ref_slice, Splits, Windows};
+pub use core::slice::{Chunks, Vector, ImmutableVector, ImmutableEqVector};
+pub use core::slice::{ImmutableTotalOrdVector, MutableVector, Items, MutItems};
+pub use core::slice::{MutSplits, MutChunks};
+pub use core::slice::{bytes, MutableCloneableVector};
 
 // Functional utilities
 
@@ -246,23 +126,23 @@ pub trait VectorVector<T> {
     // FIXME #5898: calling these .concat and .connect conflicts with
     // StrVector::con{cat,nect}, since they have generic contents.
     /// Flattens a vector of vectors of T into a single vector of T.
-    fn concat_vec(&self) -> ~[T];
+    fn concat_vec(&self) -> Vec<T>;
 
     /// Concatenate a vector of vectors, placing a given separator between each.
-    fn connect_vec(&self, sep: &T) -> ~[T];
+    fn connect_vec(&self, sep: &T) -> Vec<T>;
 }
 
 impl<'a, T: Clone, V: Vector<T>> VectorVector<T> for &'a [V] {
-    fn concat_vec(&self) -> ~[T] {
+    fn concat_vec(&self) -> Vec<T> {
         let size = self.iter().fold(0u, |acc, v| acc + v.as_slice().len());
         let mut result = Vec::with_capacity(size);
         for v in self.iter() {
             result.push_all(v.as_slice())
         }
-        result.move_iter().collect()
+        result
     }
 
-    fn connect_vec(&self, sep: &T) -> ~[T] {
+    fn connect_vec(&self, sep: &T) -> Vec<T> {
         let size = self.iter().fold(0u, |acc, v| acc + v.as_slice().len());
         let mut result = Vec::with_capacity(size + self.len());
         let mut first = true;
@@ -270,27 +150,8 @@ impl<'a, T: Clone, V: Vector<T>> VectorVector<T> for &'a [V] {
             if first { first = false } else { result.push(sep.clone()) }
             result.push_all(v.as_slice())
         }
-        result.move_iter().collect()
+        result
     }
-}
-
-/**
- * Convert an iterator of pairs into a pair of vectors.
- *
- * Returns a tuple containing two vectors where the i-th element of the first
- * vector contains the first element of the i-th tuple of the input iterator,
- * and the i-th element of the second vector contains the second element
- * of the i-th tuple of the input iterator.
- */
-pub fn unzip<T, U, V: Iterator<(T, U)>>(mut iter: V) -> (~[T], ~[U]) {
-    let (lo, _) = iter.size_hint();
-    let mut ts = Vec::with_capacity(lo);
-    let mut us = Vec::with_capacity(lo);
-    for (t, u) in iter {
-        ts.push(t);
-        us.push(u);
-    }
-    (ts.move_iter().collect(), us.move_iter().collect())
 }
 
 /// An Iterator that yields the element swaps needed to produce
@@ -304,7 +165,7 @@ pub fn unzip<T, U, V: Iterator<(T, U)>>(mut iter: V) -> (~[T], ~[U]) {
 /// The last generated swap is always (0, 1), and it returns the
 /// sequence to its initial order.
 pub struct ElementSwaps {
-    sdir: ~[SizeDirection],
+    sdir: Vec<SizeDirection>,
     /// If true, emit the last swap that returns the sequence to initial state
     emit_reset: bool,
     swaps_made : uint,
@@ -318,9 +179,7 @@ impl ElementSwaps {
         // element (equal to the original index).
         ElementSwaps{
             emit_reset: true,
-            sdir: range(0, length)
-                    .map(|i| SizeDirection{ size: i, dir: Neg })
-                    .collect::<~[_]>(),
+            sdir: range(0, length).map(|i| SizeDirection{ size: i, dir: Neg }).collect(),
             swaps_made: 0
         }
     }
@@ -347,12 +206,12 @@ impl Iterator<(uint, uint)> for ElementSwaps {
         let max = self.sdir.iter().map(|&x| x).enumerate()
                            .filter(|&(i, sd)|
                                 new_pos(i, sd.dir) < self.sdir.len() &&
-                                self.sdir[new_pos(i, sd.dir)].size < sd.size)
+                                self.sdir.get(new_pos(i, sd.dir)).size < sd.size)
                            .max_by(|&(_, sd)| sd.size);
         match max {
             Some((i, sd)) => {
                 let j = new_pos(i, sd.dir);
-                self.sdir.swap(i, j);
+                self.sdir.as_mut_slice().swap(i, j);
 
                 // Swap the direction of each larger SizeDirection
                 for x in self.sdir.mut_iter() {
@@ -419,249 +278,6 @@ impl<T: Clone> Iterator<~[T]> for Permutations<T> {
     }
 }
 
-/// An iterator over the (overlapping) slices of length `size` within
-/// a vector.
-#[deriving(Clone)]
-pub struct Windows<'a, T> {
-    v: &'a [T],
-    size: uint
-}
-
-impl<'a, T> Iterator<&'a [T]> for Windows<'a, T> {
-    #[inline]
-    fn next(&mut self) -> Option<&'a [T]> {
-        if self.size > self.v.len() {
-            None
-        } else {
-            let ret = Some(self.v.slice(0, self.size));
-            self.v = self.v.slice(1, self.v.len());
-            ret
-        }
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (uint, Option<uint>) {
-        if self.size > self.v.len() {
-            (0, Some(0))
-        } else {
-            let x = self.v.len() - self.size;
-            (x.saturating_add(1), x.checked_add(&1u))
-        }
-    }
-}
-
-/// An iterator over a vector in (non-overlapping) chunks (`size`
-/// elements at a time).
-///
-/// When the vector len is not evenly divided by the chunk size,
-/// the last slice of the iteration will be the remainder.
-#[deriving(Clone)]
-pub struct Chunks<'a, T> {
-    v: &'a [T],
-    size: uint
-}
-
-impl<'a, T> Iterator<&'a [T]> for Chunks<'a, T> {
-    #[inline]
-    fn next(&mut self) -> Option<&'a [T]> {
-        if self.v.len() == 0 {
-            None
-        } else {
-            let chunksz = cmp::min(self.v.len(), self.size);
-            let (fst, snd) = (self.v.slice_to(chunksz),
-                              self.v.slice_from(chunksz));
-            self.v = snd;
-            Some(fst)
-        }
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (uint, Option<uint>) {
-        if self.v.len() == 0 {
-            (0, Some(0))
-        } else {
-            let (n, rem) = div_rem(self.v.len(), self.size);
-            let n = if rem > 0 { n+1 } else { n };
-            (n, Some(n))
-        }
-    }
-}
-
-impl<'a, T> DoubleEndedIterator<&'a [T]> for Chunks<'a, T> {
-    #[inline]
-    fn next_back(&mut self) -> Option<&'a [T]> {
-        if self.v.len() == 0 {
-            None
-        } else {
-            let remainder = self.v.len() % self.size;
-            let chunksz = if remainder != 0 { remainder } else { self.size };
-            let (fst, snd) = (self.v.slice_to(self.v.len() - chunksz),
-                              self.v.slice_from(self.v.len() - chunksz));
-            self.v = fst;
-            Some(snd)
-        }
-    }
-}
-
-impl<'a, T> RandomAccessIterator<&'a [T]> for Chunks<'a, T> {
-    #[inline]
-    fn indexable(&self) -> uint {
-        self.v.len()/self.size + if self.v.len() % self.size != 0 { 1 } else { 0 }
-    }
-
-    #[inline]
-    fn idx(&mut self, index: uint) -> Option<&'a [T]> {
-        if index < self.indexable() {
-            let lo = index * self.size;
-            let mut hi = lo + self.size;
-            if hi < lo || hi > self.v.len() { hi = self.v.len(); }
-
-            Some(self.v.slice(lo, hi))
-        } else {
-            None
-        }
-    }
-}
-
-// Equality
-
-#[cfg(not(test))]
-#[allow(missing_doc)]
-pub mod traits {
-    use super::*;
-
-    use container::Container;
-    use clone::Clone;
-    use cmp::{Eq, Ord, TotalEq, TotalOrd, Ordering, Equiv};
-    use iter::{order, Iterator};
-    use ops::Add;
-    use vec::Vec;
-
-    impl<'a,T:Eq> Eq for &'a [T] {
-        fn eq(&self, other: & &'a [T]) -> bool {
-            self.len() == other.len() &&
-                order::eq(self.iter(), other.iter())
-        }
-        fn ne(&self, other: & &'a [T]) -> bool {
-            self.len() != other.len() ||
-                order::ne(self.iter(), other.iter())
-        }
-    }
-
-    impl<T:Eq> Eq for ~[T] {
-        #[inline]
-        fn eq(&self, other: &~[T]) -> bool { self.as_slice() == *other }
-        #[inline]
-        fn ne(&self, other: &~[T]) -> bool { !self.eq(other) }
-    }
-
-    impl<'a,T:TotalEq> TotalEq for &'a [T] {}
-
-    impl<T:TotalEq> TotalEq for ~[T] {}
-
-    impl<'a,T:Eq, V: Vector<T>> Equiv<V> for &'a [T] {
-        #[inline]
-        fn equiv(&self, other: &V) -> bool { self.as_slice() == other.as_slice() }
-    }
-
-    impl<'a,T:Eq, V: Vector<T>> Equiv<V> for ~[T] {
-        #[inline]
-        fn equiv(&self, other: &V) -> bool { self.as_slice() == other.as_slice() }
-    }
-
-    impl<'a,T:TotalOrd> TotalOrd for &'a [T] {
-        fn cmp(&self, other: & &'a [T]) -> Ordering {
-            order::cmp(self.iter(), other.iter())
-        }
-    }
-
-    impl<T: TotalOrd> TotalOrd for ~[T] {
-        #[inline]
-        fn cmp(&self, other: &~[T]) -> Ordering { self.as_slice().cmp(&other.as_slice()) }
-    }
-
-    impl<'a, T: Ord> Ord for &'a [T] {
-        fn lt(&self, other: & &'a [T]) -> bool {
-            order::lt(self.iter(), other.iter())
-        }
-        #[inline]
-        fn le(&self, other: & &'a [T]) -> bool {
-            order::le(self.iter(), other.iter())
-        }
-        #[inline]
-        fn ge(&self, other: & &'a [T]) -> bool {
-            order::ge(self.iter(), other.iter())
-        }
-        #[inline]
-        fn gt(&self, other: & &'a [T]) -> bool {
-            order::gt(self.iter(), other.iter())
-        }
-    }
-
-    impl<T: Ord> Ord for ~[T] {
-        #[inline]
-        fn lt(&self, other: &~[T]) -> bool { self.as_slice() < other.as_slice() }
-        #[inline]
-        fn le(&self, other: &~[T]) -> bool { self.as_slice() <= other.as_slice() }
-        #[inline]
-        fn ge(&self, other: &~[T]) -> bool { self.as_slice() >= other.as_slice() }
-        #[inline]
-        fn gt(&self, other: &~[T]) -> bool { self.as_slice() > other.as_slice() }
-    }
-
-    impl<'a,T:Clone, V: Vector<T>> Add<V, ~[T]> for &'a [T] {
-        #[inline]
-        fn add(&self, rhs: &V) -> ~[T] {
-            let mut res = Vec::with_capacity(self.len() + rhs.as_slice().len());
-            res.push_all(*self);
-            res.push_all(rhs.as_slice());
-            res.move_iter().collect()
-        }
-    }
-
-    impl<T:Clone, V: Vector<T>> Add<V, ~[T]> for ~[T] {
-        #[inline]
-        fn add(&self, rhs: &V) -> ~[T] {
-            self.as_slice() + rhs.as_slice()
-        }
-    }
-}
-
-#[cfg(test)]
-pub mod traits {}
-
-/// Any vector that can be represented as a slice.
-pub trait Vector<T> {
-    /// Work with `self` as a slice.
-    fn as_slice<'a>(&'a self) -> &'a [T];
-}
-
-impl<'a,T> Vector<T> for &'a [T] {
-    #[inline(always)]
-    fn as_slice<'a>(&'a self) -> &'a [T] { *self }
-}
-
-impl<T> Vector<T> for ~[T] {
-    #[inline(always)]
-    fn as_slice<'a>(&'a self) -> &'a [T] { let v: &'a [T] = *self; v }
-}
-
-impl<'a, T> Container for &'a [T] {
-    /// Returns the length of a vector
-    #[inline]
-    fn len(&self) -> uint {
-        self.repr().len
-    }
-}
-
-impl<T> Container for ~[T] {
-    /// Returns the length of a vector
-    #[inline]
-    fn len(&self) -> uint {
-        self.as_slice().len()
-    }
-}
-
 /// Extension methods for vector slices with cloneable elements
 pub trait CloneableVector<T> {
     /// Copy `self` into a new owned vector
@@ -676,27 +292,49 @@ impl<'a, T: Clone> CloneableVector<T> for &'a [T] {
     /// Returns a copy of `v`.
     #[inline]
     fn to_owned(&self) -> ~[T] {
+        use RawVec = core::raw::Vec;
+        use num::{CheckedAdd, CheckedMul};
+        use option::Expect;
+
         let len = self.len();
-        let mut result = Vec::with_capacity(len);
-        // Unsafe code so this can be optimised to a memcpy (or something
-        // similarly fast) when T is Copy. LLVM is easily confused, so any
-        // extra operations during the loop can prevent this optimisation
+        let data_size = len.checked_mul(&mem::size_of::<T>());
+        let data_size = data_size.expect("overflow in to_owned()");
+        let size = mem::size_of::<RawVec<()>>().checked_add(&data_size);
+        let size = size.expect("overflow in to_owned()");
+
         unsafe {
+            // this should pass the real required alignment
+            let ret = allocate(size, 8) as *mut RawVec<()>;
+
+            let a_size = mem::size_of::<T>();
+            let a_size = if a_size == 0 {1} else {a_size};
+            (*ret).fill = len * a_size;
+            (*ret).alloc = len * a_size;
+
+            // Be careful with the following loop. We want it to be optimized
+            // to a memcpy (or something similarly fast) when T is Copy. LLVM
+            // is easily confused, so any extra operations during the loop can
+            // prevent this optimization.
             let mut i = 0;
-            let p = result.as_mut_ptr();
-            // Use try_finally here otherwise the write to length
-            // inside the loop stops LLVM from optimising this.
+            let p = &mut (*ret).data as *mut _ as *mut T;
             try_finally(
                 &mut i, (),
                 |i, ()| while *i < len {
-                    mem::move_val_init(
+                    mem::overwrite(
                         &mut(*p.offset(*i as int)),
                         self.unsafe_ref(*i).clone());
                     *i += 1;
                 },
-                |i| result.set_len(*i));
+                |i| if *i < len {
+                    // we must be failing, clean up after ourselves
+                    for j in range(0, *i as int) {
+                        ptr::read(&*p.offset(j));
+                    }
+                    // FIXME: #13994 (should pass align and size here)
+                    deallocate(ret as *mut u8, 0, 8);
+                });
+            mem::transmute(ret)
         }
-        result.move_iter().collect()
     }
 
     #[inline(always)]
@@ -712,416 +350,11 @@ impl<T: Clone> CloneableVector<T> for ~[T] {
     fn into_owned(self) -> ~[T] { self }
 }
 
-/// Extension methods for vectors
-pub trait ImmutableVector<'a, T> {
-    /**
-     * Returns a slice of self between `start` and `end`.
-     *
-     * Fails when `start` or `end` point outside the bounds of self,
-     * or when `start` > `end`.
-     */
-    fn slice(&self, start: uint, end: uint) -> &'a [T];
-
-    /**
-     * Returns a slice of self from `start` to the end of the vec.
-     *
-     * Fails when `start` points outside the bounds of self.
-     */
-    fn slice_from(&self, start: uint) -> &'a [T];
-
-    /**
-     * Returns a slice of self from the start of the vec to `end`.
-     *
-     * Fails when `end` points outside the bounds of self.
-     */
-    fn slice_to(&self, end: uint) -> &'a [T];
-    /// Returns an iterator over the vector
-    fn iter(self) -> Items<'a, T>;
-    /// Returns a reversed iterator over a vector
-    fn rev_iter(self) -> RevItems<'a, T>;
-    /// Returns an iterator over the subslices of the vector which are
-    /// separated by elements that match `pred`.  The matched element
-    /// is not contained in the subslices.
-    fn split(self, pred: |&T|: 'a -> bool) -> Splits<'a, T>;
-    /// Returns an iterator over the subslices of the vector which are
-    /// separated by elements that match `pred`, limited to splitting
-    /// at most `n` times.  The matched element is not contained in
-    /// the subslices.
-    fn splitn(self, n: uint, pred: |&T|: 'a -> bool) -> Splits<'a, T>;
-    /// Returns an iterator over the subslices of the vector which are
-    /// separated by elements that match `pred`. This starts at the
-    /// end of the vector and works backwards.  The matched element is
-    /// not contained in the subslices.
-    fn rsplit(self, pred: |&T|: 'a -> bool) -> RevSplits<'a, T>;
-    /// Returns an iterator over the subslices of the vector which are
-    /// separated by elements that match `pred` limited to splitting
-    /// at most `n` times. This starts at the end of the vector and
-    /// works backwards.  The matched element is not contained in the
-    /// subslices.
-    fn rsplitn(self,  n: uint, pred: |&T|: 'a -> bool) -> RevSplits<'a, T>;
-
-    /**
-     * Returns an iterator over all contiguous windows of length
-     * `size`. The windows overlap. If the vector is shorter than
-     * `size`, the iterator returns no values.
-     *
-     * # Failure
-     *
-     * Fails if `size` is 0.
-     *
-     * # Example
-     *
-     * Print the adjacent pairs of a vector (i.e. `[1,2]`, `[2,3]`,
-     * `[3,4]`):
-     *
-     * ```rust
-     * let v = &[1,2,3,4];
-     * for win in v.windows(2) {
-     *     println!("{:?}", win);
-     * }
-     * ```
-     *
-     */
-    fn windows(self, size: uint) -> Windows<'a, T>;
-    /**
-     *
-     * Returns an iterator over `size` elements of the vector at a
-     * time. The chunks do not overlap. If `size` does not divide the
-     * length of the vector, then the last chunk will not have length
-     * `size`.
-     *
-     * # Failure
-     *
-     * Fails if `size` is 0.
-     *
-     * # Example
-     *
-     * Print the vector two elements at a time (i.e. `[1,2]`,
-     * `[3,4]`, `[5]`):
-     *
-     * ```rust
-     * let v = &[1,2,3,4,5];
-     * for win in v.chunks(2) {
-     *     println!("{:?}", win);
-     * }
-     * ```
-     *
-     */
-    fn chunks(self, size: uint) -> Chunks<'a, T>;
-
-    /// Returns the element of a vector at the given index, or `None` if the
-    /// index is out of bounds
-    fn get(&self, index: uint) -> Option<&'a T>;
-    /// Returns the first element of a vector, or `None` if it is empty
-    fn head(&self) -> Option<&'a T>;
-    /// Returns all but the first element of a vector
-    fn tail(&self) -> &'a [T];
-    /// Returns all but the first `n' elements of a vector
-    fn tailn(&self, n: uint) -> &'a [T];
-    /// Returns all but the last element of a vector
-    fn init(&self) -> &'a [T];
-    /// Returns all but the last `n' elements of a vector
-    fn initn(&self, n: uint) -> &'a [T];
-    /// Returns the last element of a vector, or `None` if it is empty.
-    fn last(&self) -> Option<&'a T>;
-
-    /// Returns a pointer to the element at the given index, without doing
-    /// bounds checking.
-    unsafe fn unsafe_ref(self, index: uint) -> &'a T;
-
-    /**
-     * Returns an unsafe pointer to the vector's buffer
-     *
-     * The caller must ensure that the vector outlives the pointer this
-     * function returns, or else it will end up pointing to garbage.
-     *
-     * Modifying the vector may cause its buffer to be reallocated, which
-     * would also make any pointers to it invalid.
-     */
-    fn as_ptr(&self) -> *T;
-
-    /**
-     * Binary search a sorted vector with a comparator function.
-     *
-     * The comparator function should implement an order consistent
-     * with the sort order of the underlying vector, returning an
-     * order code that indicates whether its argument is `Less`,
-     * `Equal` or `Greater` the desired target.
-     *
-     * Returns the index where the comparator returned `Equal`, or `None` if
-     * not found.
-     */
-    fn bsearch(&self, f: |&T| -> Ordering) -> Option<uint>;
-
-    /**
-     * Returns a mutable reference to the first element in this slice
-     * and adjusts the slice in place so that it no longer contains
-     * that element. O(1).
-     *
-     * Equivalent to:
-     *
-     * ```ignore
-     *     if self.len() == 0 { return None }
-     *     let head = &self[0];
-     *     *self = self.slice_from(1);
-     *     Some(head)
-     * ```
-     *
-     * Returns `None` if vector is empty
-     */
-    fn shift_ref(&mut self) -> Option<&'a T>;
-
-    /**
-     * Returns a mutable reference to the last element in this slice
-     * and adjusts the slice in place so that it no longer contains
-     * that element. O(1).
-     *
-     * Equivalent to:
-     *
-     * ```ignore
-     *     if self.len() == 0 { return None; }
-     *     let tail = &self[self.len() - 1];
-     *     *self = self.slice_to(self.len() - 1);
-     *     Some(tail)
-     * ```
-     *
-     * Returns `None` if slice is empty.
-     */
-    fn pop_ref(&mut self) -> Option<&'a T>;
-}
-
-impl<'a,T> ImmutableVector<'a, T> for &'a [T] {
-    #[inline]
-    fn slice(&self, start: uint, end: uint) -> &'a [T] {
-        assert!(start <= end);
-        assert!(end <= self.len());
-        unsafe {
-            transmute(Slice {
-                    data: self.as_ptr().offset(start as int),
-                    len: (end - start)
-                })
-        }
-    }
-
-    #[inline]
-    fn slice_from(&self, start: uint) -> &'a [T] {
-        self.slice(start, self.len())
-    }
-
-    #[inline]
-    fn slice_to(&self, end: uint) -> &'a [T] {
-        self.slice(0, end)
-    }
-
-    #[inline]
-    fn iter(self) -> Items<'a, T> {
-        unsafe {
-            let p = self.as_ptr();
-            if mem::size_of::<T>() == 0 {
-                Items{ptr: p,
-                      end: (p as uint + self.len()) as *T,
-                      marker: marker::ContravariantLifetime::<'a>}
-            } else {
-                Items{ptr: p,
-                      end: p.offset(self.len() as int),
-                      marker: marker::ContravariantLifetime::<'a>}
-            }
-        }
-    }
-
-    #[inline]
-    fn rev_iter(self) -> RevItems<'a, T> {
-        self.iter().rev()
-    }
-
-    #[inline]
-    fn split(self, pred: |&T|: 'a -> bool) -> Splits<'a, T> {
-        self.splitn(uint::MAX, pred)
-    }
-
-    #[inline]
-    fn splitn(self, n: uint, pred: |&T|: 'a -> bool) -> Splits<'a, T> {
-        Splits {
-            v: self,
-            n: n,
-            pred: pred,
-            finished: false
-        }
-    }
-
-    #[inline]
-    fn rsplit(self, pred: |&T|: 'a -> bool) -> RevSplits<'a, T> {
-        self.rsplitn(uint::MAX, pred)
-    }
-
-    #[inline]
-    fn rsplitn(self, n: uint, pred: |&T|: 'a -> bool) -> RevSplits<'a, T> {
-        RevSplits {
-            v: self,
-            n: n,
-            pred: pred,
-            finished: false
-        }
-    }
-
-    #[inline]
-    fn windows(self, size: uint) -> Windows<'a, T> {
-        assert!(size != 0);
-        Windows { v: self, size: size }
-    }
-
-    #[inline]
-    fn chunks(self, size: uint) -> Chunks<'a, T> {
-        assert!(size != 0);
-        Chunks { v: self, size: size }
-    }
-
-    #[inline]
-    fn get(&self, index: uint) -> Option<&'a T> {
-        if index < self.len() { Some(&self[index]) } else { None }
-    }
-
-    #[inline]
-    fn head(&self) -> Option<&'a T> {
-        if self.len() == 0 { None } else { Some(&self[0]) }
-    }
-
-    #[inline]
-    fn tail(&self) -> &'a [T] { self.slice(1, self.len()) }
-
-    #[inline]
-    fn tailn(&self, n: uint) -> &'a [T] { self.slice(n, self.len()) }
-
-    #[inline]
-    fn init(&self) -> &'a [T] {
-        self.slice(0, self.len() - 1)
-    }
-
-    #[inline]
-    fn initn(&self, n: uint) -> &'a [T] {
-        self.slice(0, self.len() - n)
-    }
-
-    #[inline]
-    fn last(&self) -> Option<&'a T> {
-            if self.len() == 0 { None } else { Some(&self[self.len() - 1]) }
-    }
-
-    #[inline]
-    unsafe fn unsafe_ref(self, index: uint) -> &'a T {
-        transmute(self.repr().data.offset(index as int))
-    }
-
-    #[inline]
-    fn as_ptr(&self) -> *T {
-        self.repr().data
-    }
-
-
-    fn bsearch(&self, f: |&T| -> Ordering) -> Option<uint> {
-        let mut base : uint = 0;
-        let mut lim : uint = self.len();
-
-        while lim != 0 {
-            let ix = base + (lim >> 1);
-            match f(&self[ix]) {
-                Equal => return Some(ix),
-                Less => {
-                    base = ix + 1;
-                    lim -= 1;
-                }
-                Greater => ()
-            }
-            lim >>= 1;
-        }
-        return None;
-    }
-
-    fn shift_ref(&mut self) -> Option<&'a T> {
-        if self.len() == 0 { return None; }
-        unsafe {
-            let s: &mut Slice<T> = transmute(self);
-            Some(&*raw::shift_ptr(s))
-        }
-    }
-
-    fn pop_ref(&mut self) -> Option<&'a T> {
-        if self.len() == 0 { return None; }
-        unsafe {
-            let s: &mut Slice<T> = transmute(self);
-            Some(&*raw::pop_ptr(s))
-        }
-    }
-}
-
-/// Extension methods for vectors contain `Eq` elements.
-pub trait ImmutableEqVector<T:Eq> {
-    /// Find the first index containing a matching value
-    fn position_elem(&self, t: &T) -> Option<uint>;
-
-    /// Find the last index containing a matching value
-    fn rposition_elem(&self, t: &T) -> Option<uint>;
-
-    /// Return true if a vector contains an element with the given value
-    fn contains(&self, x: &T) -> bool;
-
-    /// Returns true if `needle` is a prefix of the vector.
-    fn starts_with(&self, needle: &[T]) -> bool;
-
-    /// Returns true if `needle` is a suffix of the vector.
-    fn ends_with(&self, needle: &[T]) -> bool;
-}
-
-impl<'a,T:Eq> ImmutableEqVector<T> for &'a [T] {
-    #[inline]
-    fn position_elem(&self, x: &T) -> Option<uint> {
-        self.iter().position(|y| *x == *y)
-    }
-
-    #[inline]
-    fn rposition_elem(&self, t: &T) -> Option<uint> {
-        self.iter().rposition(|x| *x == *t)
-    }
-
-    #[inline]
-    fn contains(&self, x: &T) -> bool {
-        self.iter().any(|elt| *x == *elt)
-    }
-
-    #[inline]
-    fn starts_with(&self, needle: &[T]) -> bool {
-        let n = needle.len();
-        self.len() >= n && needle == self.slice_to(n)
-    }
-
-    #[inline]
-    fn ends_with(&self, needle: &[T]) -> bool {
-        let (m, n) = (self.len(), needle.len());
-        m >= n && needle == self.slice_from(m - n)
-    }
-}
-
-/// Extension methods for vectors containing `TotalOrd` elements.
-pub trait ImmutableTotalOrdVector<T: TotalOrd> {
-    /**
-     * Binary search a sorted vector for a given element.
-     *
-     * Returns the index of the element or None if not found.
-     */
-    fn bsearch_elem(&self, x: &T) -> Option<uint>;
-}
-
-impl<'a, T: TotalOrd> ImmutableTotalOrdVector<T> for &'a [T] {
-    fn bsearch_elem(&self, x: &T) -> Option<uint> {
-        self.bsearch(|p| p.cmp(x))
-    }
-}
-
 /// Extension methods for vectors containing `Clone` elements.
 pub trait ImmutableCloneableVector<T> {
     /// Partitions the vector into two vectors `(A,B)`, where all
     /// elements of `A` satisfy `f` and all elements of `B` do not.
-    fn partitioned(&self, f: |&T| -> bool) -> (~[T], ~[T]);
+    fn partitioned(&self, f: |&T| -> bool) -> (Vec<T>, Vec<T>);
 
     /// Create an iterator that yields every possible permutation of the
     /// vector in succession.
@@ -1130,7 +363,7 @@ pub trait ImmutableCloneableVector<T> {
 
 impl<'a,T:Clone> ImmutableCloneableVector<T> for &'a [T] {
     #[inline]
-    fn partitioned(&self, f: |&T| -> bool) -> (~[T], ~[T]) {
+    fn partitioned(&self, f: |&T| -> bool) -> (Vec<T>, Vec<T>) {
         let mut lefts  = Vec::new();
         let mut rights = Vec::new();
 
@@ -1142,7 +375,7 @@ impl<'a,T:Clone> ImmutableCloneableVector<T> for &'a [T] {
             }
         }
 
-        (lefts.move_iter().collect(), rights.move_iter().collect())
+        (lefts, rights)
     }
 
     fn permutations(self) -> Permutations<T> {
@@ -1163,22 +396,19 @@ pub trait OwnedVector<T> {
     /// # Examples
     ///
     /// ```rust
-    /// let v = ~["a".to_owned(), "b".to_owned()];
+    /// let v = ~["a".to_string(), "b".to_string()];
     /// for s in v.move_iter() {
     ///   // s has type ~str, not &~str
     ///   println!("{}", s);
     /// }
     /// ```
     fn move_iter(self) -> MoveItems<T>;
-    /// Creates a consuming iterator that moves out of the vector in
-    /// reverse order.
-    fn move_rev_iter(self) -> RevMoveItems<T>;
 
     /**
      * Partitions the vector into two vectors `(A,B)`, where all
      * elements of `A` satisfy `f` and all elements of `B` do not.
      */
-    fn partition(self, f: |&T| -> bool) -> (~[T], ~[T]);
+    fn partition(self, f: |&T| -> bool) -> (Vec<T>, Vec<T>);
 }
 
 impl<T> OwnedVector<T> for ~[T] {
@@ -1192,12 +422,7 @@ impl<T> OwnedVector<T> for ~[T] {
     }
 
     #[inline]
-    fn move_rev_iter(self) -> RevMoveItems<T> {
-        self.move_iter().rev()
-    }
-
-    #[inline]
-    fn partition(self, f: |&T| -> bool) -> (~[T], ~[T]) {
+    fn partition(self, f: |&T| -> bool) -> (Vec<T>, Vec<T>) {
         let mut lefts  = Vec::new();
         let mut rights = Vec::new();
 
@@ -1209,7 +434,7 @@ impl<T> OwnedVector<T> for ~[T] {
             }
         }
 
-        (lefts.move_iter().collect(), rights.move_iter().collect())
+        (lefts, rights)
     }
 }
 
@@ -1249,7 +474,7 @@ fn insertion_sort<T>(v: &mut [T], compare: |&T, &T| -> Ordering) {
                 ptr::copy_nonoverlapping_memory(buf_v.offset(j),
                                                 &tmp as *T,
                                                 1);
-                cast::forget(tmp);
+                mem::forget(tmp);
             }
         }
     }
@@ -1418,154 +643,7 @@ fn merge_sort<T>(v: &mut [T], compare: |&T, &T| -> Ordering) {
 
 /// Extension methods for vectors such that their elements are
 /// mutable.
-pub trait MutableVector<'a, T> {
-    /// Work with `self` as a mut slice.
-    /// Primarily intended for getting a &mut [T] from a [T, ..N].
-    fn as_mut_slice(self) -> &'a mut [T];
-
-    /// Return a slice that points into another slice.
-    fn mut_slice(self, start: uint, end: uint) -> &'a mut [T];
-
-    /**
-     * Returns a slice of self from `start` to the end of the vec.
-     *
-     * Fails when `start` points outside the bounds of self.
-     */
-    fn mut_slice_from(self, start: uint) -> &'a mut [T];
-
-    /**
-     * Returns a slice of self from the start of the vec to `end`.
-     *
-     * Fails when `end` points outside the bounds of self.
-     */
-    fn mut_slice_to(self, end: uint) -> &'a mut [T];
-
-    /// Returns an iterator that allows modifying each value
-    fn mut_iter(self) -> MutItems<'a, T>;
-
-    /// Returns a mutable pointer to the last item in the vector.
-    fn mut_last(self) -> Option<&'a mut T>;
-
-    /// Returns a reversed iterator that allows modifying each value
-    fn mut_rev_iter(self) -> RevMutItems<'a, T>;
-
-    /// Returns an iterator over the mutable subslices of the vector
-    /// which are separated by elements that match `pred`.  The
-    /// matched element is not contained in the subslices.
-    fn mut_split(self, pred: |&T|: 'a -> bool) -> MutSplits<'a, T>;
-
-    /**
-     * Returns an iterator over `size` elements of the vector at a time.
-     * The chunks are mutable and do not overlap. If `size` does not divide the
-     * length of the vector, then the last chunk will not have length
-     * `size`.
-     *
-     * # Failure
-     *
-     * Fails if `size` is 0.
-     */
-    fn mut_chunks(self, chunk_size: uint) -> MutChunks<'a, T>;
-
-    /**
-     * Returns a mutable reference to the first element in this slice
-     * and adjusts the slice in place so that it no longer contains
-     * that element. O(1).
-     *
-     * Equivalent to:
-     *
-     * ```ignore
-     *     if self.len() == 0 { return None; }
-     *     let head = &mut self[0];
-     *     *self = self.mut_slice_from(1);
-     *     Some(head)
-     * ```
-     *
-     * Returns `None` if slice is empty
-     */
-    fn mut_shift_ref(&mut self) -> Option<&'a mut T>;
-
-    /**
-     * Returns a mutable reference to the last element in this slice
-     * and adjusts the slice in place so that it no longer contains
-     * that element. O(1).
-     *
-     * Equivalent to:
-     *
-     * ```ignore
-     *     if self.len() == 0 { return None; }
-     *     let tail = &mut self[self.len() - 1];
-     *     *self = self.mut_slice_to(self.len() - 1);
-     *     Some(tail)
-     * ```
-     *
-     * Returns `None` if slice is empty.
-     */
-    fn mut_pop_ref(&mut self) -> Option<&'a mut T>;
-
-    /// Swaps two elements in a vector.
-    ///
-    /// Fails if `a` or `b` are out of bounds.
-    ///
-    /// # Arguments
-    ///
-    /// * a - The index of the first element
-    /// * b - The index of the second element
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let mut v = ["a", "b", "c", "d"];
-    /// v.swap(1, 3);
-    /// assert!(v == ["a", "d", "c", "b"]);
-    /// ```
-    fn swap(self, a: uint, b: uint);
-
-
-    /// Divides one `&mut` into two at an index.
-    ///
-    /// The first will contain all indices from `[0, mid)` (excluding
-    /// the index `mid` itself) and the second will contain all
-    /// indices from `[mid, len)` (excluding the index `len` itself).
-    ///
-    /// Fails if `mid > len`.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let mut v = [1, 2, 3, 4, 5, 6];
-    ///
-    /// // scoped to restrict the lifetime of the borrows
-    /// {
-    ///    let (left, right) = v.mut_split_at(0);
-    ///    assert!(left == &mut []);
-    ///    assert!(right == &mut [1, 2, 3, 4, 5, 6]);
-    /// }
-    ///
-    /// {
-    ///     let (left, right) = v.mut_split_at(2);
-    ///     assert!(left == &mut [1, 2]);
-    ///     assert!(right == &mut [3, 4, 5, 6]);
-    /// }
-    ///
-    /// {
-    ///     let (left, right) = v.mut_split_at(6);
-    ///     assert!(left == &mut [1, 2, 3, 4, 5, 6]);
-    ///     assert!(right == &mut []);
-    /// }
-    /// ```
-    fn mut_split_at(self, mid: uint) -> (&'a mut [T], &'a mut [T]);
-
-    /// Reverse the order of elements in a vector, in place.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let mut v = [1, 2, 3];
-    /// v.reverse();
-    /// assert!(v == [3, 2, 1]);
-    /// ```
-    fn reverse(self);
-
+pub trait MutableVectorAllocating<'a, T> {
     /// Sort the vector, in place, using `compare` to compare
     /// elements.
     ///
@@ -1599,176 +677,9 @@ pub trait MutableVector<'a, T> {
      * * end - The index into `str` to stop copying from
      */
     fn move_from(self, src: ~[T], start: uint, end: uint) -> uint;
-
-    /// Returns an unsafe mutable pointer to the element in index
-    unsafe fn unsafe_mut_ref(self, index: uint) -> &'a mut T;
-
-    /// Return an unsafe mutable pointer to the vector's buffer.
-    ///
-    /// The caller must ensure that the vector outlives the pointer this
-    /// function returns, or else it will end up pointing to garbage.
-    ///
-    /// Modifying the vector may cause its buffer to be reallocated, which
-    /// would also make any pointers to it invalid.
-    #[inline]
-    fn as_mut_ptr(self) -> *mut T;
-
-    /// Unsafely sets the element in index to the value.
-    ///
-    /// This performs no bounds checks, and it is undefined behaviour
-    /// if `index` is larger than the length of `self`. However, it
-    /// does run the destructor at `index`. It is equivalent to
-    /// `self[index] = val`.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let mut v = ~["foo".to_owned(), "bar".to_owned(), "baz".to_owned()];
-    ///
-    /// unsafe {
-    ///     // `"baz".to_owned()` is deallocated.
-    ///     v.unsafe_set(2, "qux".to_owned());
-    ///
-    ///     // Out of bounds: could cause a crash, or overwriting
-    ///     // other data, or something else.
-    ///     // v.unsafe_set(10, "oops".to_owned());
-    /// }
-    /// ```
-    unsafe fn unsafe_set(self, index: uint, val: T);
-
-    /// Unchecked vector index assignment.  Does not drop the
-    /// old value and hence is only suitable when the vector
-    /// is newly allocated.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let mut v = ["foo".to_owned(), "bar".to_owned()];
-    ///
-    /// // memory leak! `"bar".to_owned()` is not deallocated.
-    /// unsafe { v.init_elem(1, "baz".to_owned()); }
-    /// ```
-    unsafe fn init_elem(self, i: uint, val: T);
-
-    /// Copies raw bytes from `src` to `self`.
-    ///
-    /// This does not run destructors on the overwritten elements, and
-    /// ignores move semantics. `self` and `src` must not
-    /// overlap. Fails if `self` is shorter than `src`.
-    unsafe fn copy_memory(self, src: &[T]);
 }
 
-impl<'a,T> MutableVector<'a, T> for &'a mut [T] {
-    #[inline]
-    fn as_mut_slice(self) -> &'a mut [T] { self }
-
-    fn mut_slice(self, start: uint, end: uint) -> &'a mut [T] {
-        assert!(start <= end);
-        assert!(end <= self.len());
-        unsafe {
-            transmute(Slice {
-                    data: self.as_mut_ptr().offset(start as int) as *T,
-                    len: (end - start)
-                })
-        }
-    }
-
-    #[inline]
-    fn mut_slice_from(self, start: uint) -> &'a mut [T] {
-        let len = self.len();
-        self.mut_slice(start, len)
-    }
-
-    #[inline]
-    fn mut_slice_to(self, end: uint) -> &'a mut [T] {
-        self.mut_slice(0, end)
-    }
-
-    #[inline]
-    fn mut_split_at(self, mid: uint) -> (&'a mut [T], &'a mut [T]) {
-        unsafe {
-            let len = self.len();
-            let self2: &'a mut [T] = cast::transmute_copy(&self);
-            (self.mut_slice(0, mid), self2.mut_slice(mid, len))
-        }
-    }
-
-    #[inline]
-    fn mut_iter(self) -> MutItems<'a, T> {
-        unsafe {
-            let p = self.as_mut_ptr();
-            if mem::size_of::<T>() == 0 {
-                MutItems{ptr: p,
-                         end: (p as uint + self.len()) as *mut T,
-                         marker: marker::ContravariantLifetime::<'a>,
-                         marker2: marker::NoCopy}
-            } else {
-                MutItems{ptr: p,
-                         end: p.offset(self.len() as int),
-                         marker: marker::ContravariantLifetime::<'a>,
-                         marker2: marker::NoCopy}
-            }
-        }
-    }
-
-    #[inline]
-    fn mut_last(self) -> Option<&'a mut T> {
-        let len = self.len();
-        if len == 0 { return None; }
-        Some(&mut self[len - 1])
-    }
-
-    #[inline]
-    fn mut_rev_iter(self) -> RevMutItems<'a, T> {
-        self.mut_iter().rev()
-    }
-
-    #[inline]
-    fn mut_split(self, pred: |&T|: 'a -> bool) -> MutSplits<'a, T> {
-        MutSplits { v: self, pred: pred, finished: false }
-    }
-
-    #[inline]
-    fn mut_chunks(self, chunk_size: uint) -> MutChunks<'a, T> {
-        assert!(chunk_size > 0);
-        MutChunks { v: self, chunk_size: chunk_size }
-    }
-
-    fn mut_shift_ref(&mut self) -> Option<&'a mut T> {
-        if self.len() == 0 { return None; }
-        unsafe {
-            let s: &mut Slice<T> = transmute(self);
-            Some(cast::transmute_mut(&*raw::shift_ptr(s)))
-        }
-    }
-
-    fn mut_pop_ref(&mut self) -> Option<&'a mut T> {
-        if self.len() == 0 { return None; }
-        unsafe {
-            let s: &mut Slice<T> = transmute(self);
-            Some(cast::transmute_mut(&*raw::pop_ptr(s)))
-        }
-    }
-
-    fn swap(self, a: uint, b: uint) {
-        unsafe {
-            // Can't take two mutable loans from one vector, so instead just cast
-            // them to their raw pointers to do the swap
-            let pa: *mut T = &mut self[a];
-            let pb: *mut T = &mut self[b];
-            ptr::swap(pa, pb);
-        }
-    }
-
-    fn reverse(self) {
-        let mut i: uint = 0;
-        let ln = self.len();
-        while i < ln / 2 {
-            self.swap(i, ln - i - 1);
-            i += 1;
-        }
-    }
-
+impl<'a,T> MutableVectorAllocating<'a, T> for &'a mut [T] {
     #[inline]
     fn sort_by(self, compare: |&T, &T| -> Ordering) {
         merge_sort(self, compare)
@@ -1780,67 +691,6 @@ impl<'a,T> MutableVector<'a, T> for &'a mut [T] {
             mem::swap(a, b);
         }
         cmp::min(self.len(), end-start)
-    }
-
-    #[inline]
-    unsafe fn unsafe_mut_ref(self, index: uint) -> &'a mut T {
-        transmute((self.repr().data as *mut T).offset(index as int))
-    }
-
-    #[inline]
-    fn as_mut_ptr(self) -> *mut T {
-        self.repr().data as *mut T
-    }
-
-    #[inline]
-    unsafe fn unsafe_set(self, index: uint, val: T) {
-        *self.unsafe_mut_ref(index) = val;
-    }
-
-    #[inline]
-    unsafe fn init_elem(self, i: uint, val: T) {
-        mem::move_val_init(&mut (*self.as_mut_ptr().offset(i as int)), val);
-    }
-
-    #[inline]
-    unsafe fn copy_memory(self, src: &[T]) {
-        let len_src = src.len();
-        assert!(self.len() >= len_src);
-        ptr::copy_nonoverlapping_memory(self.as_mut_ptr(), src.as_ptr(), len_src)
-    }
-}
-
-/// Trait for &[T] where T is Cloneable
-pub trait MutableCloneableVector<T> {
-    /// Copies as many elements from `src` as it can into `self` (the
-    /// shorter of `self.len()` and `src.len()`). Returns the number
-    /// of elements copied.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use std::slice::MutableCloneableVector;
-    ///
-    /// let mut dst = [0, 0, 0];
-    /// let src = [1, 2];
-    ///
-    /// assert!(dst.copy_from(src) == 2);
-    /// assert!(dst == [1, 2, 0]);
-    ///
-    /// let src2 = [3, 4, 5, 6];
-    /// assert!(dst.copy_from(src2) == 3);
-    /// assert!(dst == [3, 4, 5]);
-    /// ```
-    fn copy_from(self, &[T]) -> uint;
-}
-
-impl<'a, T:Clone> MutableCloneableVector<T> for &'a mut [T] {
-    #[inline]
-    fn copy_from(self, src: &[T]) -> uint {
-        for (a, b) in self.mut_iter().zip(src.iter()) {
-            a.clone_from(b);
-        }
-        cmp::min(self.len(), src.len())
     }
 }
 
@@ -1861,6 +711,7 @@ pub trait MutableTotalOrdVector<T> {
     /// ```
     fn sort(self);
 }
+
 impl<'a, T: TotalOrd> MutableTotalOrdVector<T> for &'a mut [T] {
     #[inline]
     fn sort(self) {
@@ -1868,399 +719,10 @@ impl<'a, T: TotalOrd> MutableTotalOrdVector<T> for &'a mut [T] {
     }
 }
 
-/**
-* Constructs a vector from an unsafe pointer to a buffer
-*
-* # Arguments
-*
-* * ptr - An unsafe pointer to a buffer of `T`
-* * elts - The number of elements in the buffer
-*/
-// Wrapper for fn in raw: needs to be called by net_tcp::on_tcp_read_cb
-pub unsafe fn from_buf<T>(ptr: *T, elts: uint) -> ~[T] {
-    raw::from_buf_raw(ptr, elts)
-}
-
 /// Unsafe operations
 pub mod raw {
-    use cast::transmute;
-    use iter::Iterator;
-    use ptr::RawPtr;
-    use ptr;
-    use raw::Slice;
-    use slice::{MutableVector, OwnedVector};
-    use vec::Vec;
-
-    /**
-     * Form a slice from a pointer and length (as a number of units,
-     * not bytes).
-     */
-    #[inline]
-    pub unsafe fn buf_as_slice<T,U>(p: *T, len: uint, f: |v: &[T]| -> U)
-                               -> U {
-        f(transmute(Slice {
-            data: p,
-            len: len
-        }))
-    }
-
-    /**
-     * Form a slice from a pointer and length (as a number of units,
-     * not bytes).
-     */
-    #[inline]
-    pub unsafe fn mut_buf_as_slice<T,
-                                   U>(
-                                   p: *mut T,
-                                   len: uint,
-                                   f: |v: &mut [T]| -> U)
-                                   -> U {
-        f(transmute(Slice {
-            data: p as *T,
-            len: len
-        }))
-    }
-
-    /**
-    * Constructs a vector from an unsafe pointer to a buffer
-    *
-    * # Arguments
-    *
-    * * ptr - An unsafe pointer to a buffer of `T`
-    * * elts - The number of elements in the buffer
-    */
-    // Was in raw, but needs to be called by net_tcp::on_tcp_read_cb
-    #[inline]
-    pub unsafe fn from_buf_raw<T>(ptr: *T, elts: uint) -> ~[T] {
-        let mut dst = Vec::with_capacity(elts);
-        dst.set_len(elts);
-        ptr::copy_memory(dst.as_mut_ptr(), ptr, elts);
-        dst.move_iter().collect()
-    }
-
-    /**
-     * Returns a pointer to first element in slice and adjusts
-     * slice so it no longer contains that element. Fails if
-     * slice is empty. O(1).
-     */
-    pub unsafe fn shift_ptr<T>(slice: &mut Slice<T>) -> *T {
-        if slice.len == 0 { fail!("shift on empty slice"); }
-        let head: *T = slice.data;
-        slice.data = slice.data.offset(1);
-        slice.len -= 1;
-        head
-    }
-
-    /**
-     * Returns a pointer to last element in slice and adjusts
-     * slice so it no longer contains that element. Fails if
-     * slice is empty. O(1).
-     */
-    pub unsafe fn pop_ptr<T>(slice: &mut Slice<T>) -> *T {
-        if slice.len == 0 { fail!("pop on empty slice"); }
-        let tail: *T = slice.data.offset((slice.len - 1) as int);
-        slice.len -= 1;
-        tail
-    }
-}
-
-/// Operations on `[u8]`.
-pub mod bytes {
-    use container::Container;
-    use slice::MutableVector;
-    use ptr;
-
-    /// A trait for operations on mutable `[u8]`s.
-    pub trait MutableByteVector {
-        /// Sets all bytes of the receiver to the given value.
-        fn set_memory(self, value: u8);
-    }
-
-    impl<'a> MutableByteVector for &'a mut [u8] {
-        #[inline]
-        fn set_memory(self, value: u8) {
-            unsafe { ptr::set_memory(self.as_mut_ptr(), value, self.len()) };
-        }
-    }
-
-    /// Copies data from `src` to `dst`
-    ///
-    /// `src` and `dst` must not overlap. Fails if the length of `dst`
-    /// is less than the length of `src`.
-    #[inline]
-    pub fn copy_memory(dst: &mut [u8], src: &[u8]) {
-        // Bound checks are done at .copy_memory.
-        unsafe { dst.copy_memory(src) }
-    }
-}
-
-impl<A: Clone> Clone for ~[A] {
-    #[inline]
-    fn clone(&self) -> ~[A] {
-        // Use the fast to_owned on &[A] for cloning
-        self.as_slice().to_owned()
-    }
-}
-
-impl<'a, T: fmt::Show> fmt::Show for &'a [T] {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if f.flags & (1 << (fmt::parse::FlagAlternate as uint)) == 0 {
-            try!(write!(f.buf, "["));
-        }
-        let mut is_first = true;
-        for x in self.iter() {
-            if is_first {
-                is_first = false;
-            } else {
-                try!(write!(f.buf, ", "));
-            }
-            try!(write!(f.buf, "{}", *x))
-        }
-        if f.flags & (1 << (fmt::parse::FlagAlternate as uint)) == 0 {
-            try!(write!(f.buf, "]"));
-        }
-        Ok(())
-    }
-}
-
-impl<'a, T: fmt::Show> fmt::Show for &'a mut [T] {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.as_slice().fmt(f)
-    }
-}
-
-impl<T: fmt::Show> fmt::Show for ~[T] {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.as_slice().fmt(f)
-    }
-}
-
-// This works because every lifetime is a sub-lifetime of 'static
-impl<'a, A> Default for &'a [A] {
-    fn default() -> &'a [A] { &'a [] }
-}
-
-impl<A> Default for ~[A] {
-    fn default() -> ~[A] { ~[] }
-}
-
-/// Immutable slice iterator
-pub struct Items<'a, T> {
-    ptr: *T,
-    end: *T,
-    marker: marker::ContravariantLifetime<'a>
-}
-
-/// Mutable slice iterator
-pub struct MutItems<'a, T> {
-    ptr: *mut T,
-    end: *mut T,
-    marker: marker::ContravariantLifetime<'a>,
-    marker2: marker::NoCopy
-}
-
-macro_rules! iterator {
-    (struct $name:ident -> $ptr:ty, $elem:ty) => {
-        impl<'a, T> Iterator<$elem> for $name<'a, T> {
-            #[inline]
-            fn next(&mut self) -> Option<$elem> {
-                // could be implemented with slices, but this avoids bounds checks
-                unsafe {
-                    if self.ptr == self.end {
-                        None
-                    } else {
-                        let old = self.ptr;
-                        self.ptr = if mem::size_of::<T>() == 0 {
-                            // purposefully don't use 'ptr.offset' because for
-                            // vectors with 0-size elements this would return the
-                            // same pointer.
-                            transmute(self.ptr as uint + 1)
-                        } else {
-                            self.ptr.offset(1)
-                        };
-
-                        Some(transmute(old))
-                    }
-                }
-            }
-
-            #[inline]
-            fn size_hint(&self) -> (uint, Option<uint>) {
-                let diff = (self.end as uint) - (self.ptr as uint);
-                let exact = diff / mem::nonzero_size_of::<T>();
-                (exact, Some(exact))
-            }
-        }
-
-        impl<'a, T> DoubleEndedIterator<$elem> for $name<'a, T> {
-            #[inline]
-            fn next_back(&mut self) -> Option<$elem> {
-                // could be implemented with slices, but this avoids bounds checks
-                unsafe {
-                    if self.end == self.ptr {
-                        None
-                    } else {
-                        self.end = if mem::size_of::<T>() == 0 {
-                            // See above for why 'ptr.offset' isn't used
-                            transmute(self.end as uint - 1)
-                        } else {
-                            self.end.offset(-1)
-                        };
-                        Some(transmute(self.end))
-                    }
-                }
-            }
-        }
-    }
-}
-
-impl<'a, T> RandomAccessIterator<&'a T> for Items<'a, T> {
-    #[inline]
-    fn indexable(&self) -> uint {
-        let (exact, _) = self.size_hint();
-        exact
-    }
-
-    #[inline]
-    fn idx(&mut self, index: uint) -> Option<&'a T> {
-        unsafe {
-            if index < self.indexable() {
-                transmute(self.ptr.offset(index as int))
-            } else {
-                None
-            }
-        }
-    }
-}
-
-iterator!{struct Items -> *T, &'a T}
-pub type RevItems<'a, T> = Rev<Items<'a, T>>;
-
-impl<'a, T> ExactSize<&'a T> for Items<'a, T> {}
-impl<'a, T> ExactSize<&'a mut T> for MutItems<'a, T> {}
-
-impl<'a, T> Clone for Items<'a, T> {
-    fn clone(&self) -> Items<'a, T> { *self }
-}
-
-iterator!{struct MutItems -> *mut T, &'a mut T}
-pub type RevMutItems<'a, T> = Rev<MutItems<'a, T>>;
-
-/// An iterator over the subslices of the vector which are separated
-/// by elements that match `pred`.
-pub struct MutSplits<'a, T> {
-    v: &'a mut [T],
-    pred: |t: &T|: 'a -> bool,
-    finished: bool
-}
-
-impl<'a, T> Iterator<&'a mut [T]> for MutSplits<'a, T> {
-    #[inline]
-    fn next(&mut self) -> Option<&'a mut [T]> {
-        if self.finished { return None; }
-
-        let pred = &mut self.pred;
-        match self.v.iter().position(|x| (*pred)(x)) {
-            None => {
-                self.finished = true;
-                let tmp = mem::replace(&mut self.v, &mut []);
-                let len = tmp.len();
-                let (head, tail) = tmp.mut_split_at(len);
-                self.v = tail;
-                Some(head)
-            }
-            Some(idx) => {
-                let tmp = mem::replace(&mut self.v, &mut []);
-                let (head, tail) = tmp.mut_split_at(idx);
-                self.v = tail.mut_slice_from(1);
-                Some(head)
-            }
-        }
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (uint, Option<uint>) {
-        if self.finished {
-            (0, Some(0))
-        } else {
-            // if the predicate doesn't match anything, we yield one slice
-            // if it matches every element, we yield len+1 empty slices.
-            (1, Some(self.v.len() + 1))
-        }
-    }
-}
-
-impl<'a, T> DoubleEndedIterator<&'a mut [T]> for MutSplits<'a, T> {
-    #[inline]
-    fn next_back(&mut self) -> Option<&'a mut [T]> {
-        if self.finished { return None; }
-
-        let pred = &mut self.pred;
-        match self.v.iter().rposition(|x| (*pred)(x)) {
-            None => {
-                self.finished = true;
-                let tmp = mem::replace(&mut self.v, &mut []);
-                Some(tmp)
-            }
-            Some(idx) => {
-                let tmp = mem::replace(&mut self.v, &mut []);
-                let (head, tail) = tmp.mut_split_at(idx);
-                self.v = head;
-                Some(tail.mut_slice_from(1))
-            }
-        }
-    }
-}
-
-/// An iterator over a vector in (non-overlapping) mutable chunks (`size`  elements at a time). When
-/// the vector len is not evenly divided by the chunk size, the last slice of the iteration will be
-/// the remainder.
-pub struct MutChunks<'a, T> {
-    v: &'a mut [T],
-    chunk_size: uint
-}
-
-impl<'a, T> Iterator<&'a mut [T]> for MutChunks<'a, T> {
-    #[inline]
-    fn next(&mut self) -> Option<&'a mut [T]> {
-        if self.v.len() == 0 {
-            None
-        } else {
-            let sz = cmp::min(self.v.len(), self.chunk_size);
-            let tmp = mem::replace(&mut self.v, &mut []);
-            let (head, tail) = tmp.mut_split_at(sz);
-            self.v = tail;
-            Some(head)
-        }
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (uint, Option<uint>) {
-        if self.v.len() == 0 {
-            (0, Some(0))
-        } else {
-            let (n, rem) = div_rem(self.v.len(), self.chunk_size);
-            let n = if rem > 0 { n + 1 } else { n };
-            (n, Some(n))
-        }
-    }
-}
-
-impl<'a, T> DoubleEndedIterator<&'a mut [T]> for MutChunks<'a, T> {
-    #[inline]
-    fn next_back(&mut self) -> Option<&'a mut [T]> {
-        if self.v.len() == 0 {
-            None
-        } else {
-            let remainder = self.v.len() % self.chunk_size;
-            let sz = if remainder != 0 { remainder } else { self.chunk_size };
-            let tmp = mem::replace(&mut self.v, &mut []);
-            let tmp_len = tmp.len();
-            let (head, tail) = tmp.mut_split_at(tmp_len - sz);
-            self.v = head;
-            Some(tail)
-        }
-    }
+    pub use core::slice::raw::{buf_as_slice, mut_buf_as_slice};
+    pub use core::slice::raw::{shift_ptr, pop_ptr};
 }
 
 /// An iterator that moves out of a vector.
@@ -2298,45 +760,8 @@ impl<T> Drop for MoveItems<T> {
         // destroy the remaining elements
         for _x in *self {}
         unsafe {
-            exchange_free(self.allocation as *u8)
-        }
-    }
-}
-
-/// An iterator that moves out of a vector in reverse order.
-pub type RevMoveItems<T> = Rev<MoveItems<T>>;
-
-impl<A> FromIterator<A> for ~[A] {
-    fn from_iter<T: Iterator<A>>(mut iterator: T) -> ~[A] {
-        let mut xs: Vec<A> = iterator.collect();
-
-        // Must shrink so the capacity is the same as the length. The length of
-        // the ~[T] vector must exactly match the length of the allocation.
-        xs.shrink_to_fit();
-
-        let len = xs.len();
-        assert!(len == xs.capacity());
-        let data = xs.as_mut_ptr();
-
-        let data_size = len.checked_mul(&mem::size_of::<A>());
-        let data_size = data_size.expect("overflow in from_iter()");
-        let size = mem::size_of::<RawVec<()>>().checked_add(&data_size);
-        let size = size.expect("overflow in from_iter()");
-
-
-        // This is some terribly awful code. Note that all of this will go away
-        // with DST because creating ~[T] from Vec<T> will just be some pointer
-        // swizzling.
-        unsafe {
-            let ret = malloc_raw(size) as *mut RawVec<()>;
-
-            (*ret).fill = len * mem::nonzero_size_of::<A>();
-            (*ret).alloc = len * mem::nonzero_size_of::<A>();
-            ptr::copy_nonoverlapping_memory(&mut (*ret).data as *mut _ as *mut u8,
-                                            data as *u8,
-                                            data_size);
-            xs.set_len(0); // ownership has been transferred
-            cast::transmute(ret)
+            // FIXME: #13994 (should pass align and size here)
+            deallocate(self.allocation, 0, 8)
         }
     }
 }
@@ -2344,39 +769,15 @@ impl<A> FromIterator<A> for ~[A] {
 #[cfg(test)]
 mod tests {
     use prelude::*;
-    use mem;
-    use slice::*;
     use cmp::*;
+    use mem;
+    use owned::Box;
     use rand::{Rng, task_rng};
+    use slice::*;
 
     fn square(n: uint) -> uint { n * n }
 
     fn is_odd(n: &uint) -> bool { *n % 2u == 1u }
-
-    #[test]
-    fn test_unsafe_ptrs() {
-        unsafe {
-            // Test on-stack copy-from-buf.
-            let a = ~[1, 2, 3];
-            let mut ptr = a.as_ptr();
-            let b = from_buf(ptr, 3u);
-            assert_eq!(b.len(), 3u);
-            assert_eq!(b[0], 1);
-            assert_eq!(b[1], 2);
-            assert_eq!(b[2], 3);
-
-            // Test on-heap copy-from-buf.
-            let c = ~[1, 2, 3, 4, 5];
-            ptr = c.as_ptr();
-            let d = from_buf(ptr, 5u);
-            assert_eq!(d.len(), 5u);
-            assert_eq!(d[0], 1);
-            assert_eq!(d[1], 2);
-            assert_eq!(d[2], 3);
-            assert_eq!(d[3], 4);
-            assert_eq!(d[4], 5);
-        }
-    }
 
     #[test]
     fn test_from_fn() {
@@ -2448,91 +849,91 @@ mod tests {
 
     #[test]
     fn test_get() {
-        let mut a = ~[11];
+        let mut a = box [11];
         assert_eq!(a.get(1), None);
-        a = ~[11, 12];
+        a = box [11, 12];
         assert_eq!(a.get(1).unwrap(), &12);
-        a = ~[11, 12, 13];
+        a = box [11, 12, 13];
         assert_eq!(a.get(1).unwrap(), &12);
     }
 
     #[test]
     fn test_head() {
-        let mut a = ~[];
+        let mut a = box [];
         assert_eq!(a.head(), None);
-        a = ~[11];
+        a = box [11];
         assert_eq!(a.head().unwrap(), &11);
-        a = ~[11, 12];
+        a = box [11, 12];
         assert_eq!(a.head().unwrap(), &11);
     }
 
     #[test]
     fn test_tail() {
-        let mut a = ~[11];
+        let mut a = box [11];
         assert_eq!(a.tail(), &[]);
-        a = ~[11, 12];
+        a = box [11, 12];
         assert_eq!(a.tail(), &[12]);
     }
 
     #[test]
     #[should_fail]
     fn test_tail_empty() {
-        let a: ~[int] = ~[];
+        let a: ~[int] = box [];
         a.tail();
     }
 
     #[test]
     fn test_tailn() {
-        let mut a = ~[11, 12, 13];
+        let mut a = box [11, 12, 13];
         assert_eq!(a.tailn(0), &[11, 12, 13]);
-        a = ~[11, 12, 13];
+        a = box [11, 12, 13];
         assert_eq!(a.tailn(2), &[13]);
     }
 
     #[test]
     #[should_fail]
     fn test_tailn_empty() {
-        let a: ~[int] = ~[];
+        let a: ~[int] = box [];
         a.tailn(2);
     }
 
     #[test]
     fn test_init() {
-        let mut a = ~[11];
+        let mut a = box [11];
         assert_eq!(a.init(), &[]);
-        a = ~[11, 12];
+        a = box [11, 12];
         assert_eq!(a.init(), &[11]);
     }
 
     #[test]
     #[should_fail]
     fn test_init_empty() {
-        let a: ~[int] = ~[];
+        let a: ~[int] = box [];
         a.init();
     }
 
     #[test]
     fn test_initn() {
-        let mut a = ~[11, 12, 13];
+        let mut a = box [11, 12, 13];
         assert_eq!(a.initn(0), &[11, 12, 13]);
-        a = ~[11, 12, 13];
+        a = box [11, 12, 13];
         assert_eq!(a.initn(2), &[11]);
     }
 
     #[test]
     #[should_fail]
     fn test_initn_empty() {
-        let a: ~[int] = ~[];
+        let a: ~[int] = box [];
         a.initn(2);
     }
 
     #[test]
     fn test_last() {
-        let mut a = ~[];
+        let mut a = box [];
         assert_eq!(a.last(), None);
-        a = ~[11];
+        a = box [11];
         assert_eq!(a.last().unwrap(), &11);
-        a = ~[11, 12];
+        a = box [11, 12];
         assert_eq!(a.last().unwrap(), &12);
     }
 
@@ -2553,8 +954,8 @@ mod tests {
         assert_eq!(v_b[0], 2);
         assert_eq!(v_b[1], 3);
 
-        // Test on exchange heap.
-        let vec_unique = ~[1, 2, 3, 4, 5, 6];
+        // Test `Box<[T]>`
+        let vec_unique = box [1, 2, 3, 4, 5, 6];
         let v_d = vec_unique.slice(1u, 6u).to_owned();
         assert_eq!(v_d.len(), 5u);
         assert_eq!(v_d[0], 2);
@@ -2688,7 +1089,7 @@ mod tests {
 
     #[test]
     fn test_truncate() {
-        let mut v = vec![~6,~5,~4];
+        let mut v = vec![box 6,box 5,box 4];
         v.truncate(1);
         let v = v.as_slice();
         assert_eq!(v.len(), 1);
@@ -2698,7 +1099,7 @@ mod tests {
 
     #[test]
     fn test_clear() {
-        let mut v = vec![~6,~5,~4];
+        let mut v = vec![box 6,box 5,box 4];
         v.clear();
         assert_eq!(v.len(), 0);
         // If the unsafe block didn't drop things properly, we blow up here.
@@ -2723,25 +1124,25 @@ mod tests {
 
     #[test]
     fn test_dedup_unique() {
-        let mut v0 = vec![~1, ~1, ~2, ~3];
+        let mut v0 = vec![box 1, box 1, box 2, box 3];
         v0.dedup();
-        let mut v1 = vec![~1, ~2, ~2, ~3];
+        let mut v1 = vec![box 1, box 2, box 2, box 3];
         v1.dedup();
-        let mut v2 = vec![~1, ~2, ~3, ~3];
+        let mut v2 = vec![box 1, box 2, box 3, box 3];
         v2.dedup();
         /*
-         * If the ~pointers were leaked or otherwise misused, valgrind and/or
-         * rustrt should raise errors.
+         * If the boxed pointers were leaked or otherwise misused, valgrind
+         * and/or rustrt should raise errors.
          */
     }
 
     #[test]
     fn test_dedup_shared() {
-        let mut v0 = vec![~1, ~1, ~2, ~3];
+        let mut v0 = vec![box 1, box 1, box 2, box 3];
         v0.dedup();
-        let mut v1 = vec![~1, ~2, ~2, ~3];
+        let mut v1 = vec![box 1, box 2, box 2, box 3];
         v1.dedup();
-        let mut v2 = vec![~1, ~2, ~3, ~3];
+        let mut v2 = vec![box 1, box 2, box 3, box 3];
         v2.dedup();
         /*
          * If the pointers were leaked or otherwise misused, valgrind and/or
@@ -2754,17 +1155,6 @@ mod tests {
         let mut v = vec![1, 2, 3, 4, 5];
         v.retain(is_odd);
         assert_eq!(v, vec![1, 3, 5]);
-    }
-
-    #[test]
-    fn test_zip_unzip() {
-        let z1 = vec![(1, 4), (2, 5), (3, 6)];
-
-        let (left, right) = unzip(z1.iter().map(|&x| x));
-
-        assert_eq!((1, 4), (left[0], right[0]));
-        assert_eq!((2, 5), (left[1], right[1]));
-        assert_eq!((3, 6), (left[2], right[2]));
     }
 
     #[test]
@@ -2796,7 +1186,7 @@ mod tests {
             assert_eq!(it.next(), None);
         }
         {
-            let v = ["Hello".to_owned()];
+            let v = ["Hello".to_string()];
             let mut it = v.permutations();
             let (min_size, max_opt) = it.size_hint();
             assert_eq!(min_size, 1);
@@ -2810,15 +1200,15 @@ mod tests {
             let (min_size, max_opt) = it.size_hint();
             assert_eq!(min_size, 3*2);
             assert_eq!(max_opt.unwrap(), 3*2);
-            assert_eq!(it.next(), Some(~[1,2,3]));
-            assert_eq!(it.next(), Some(~[1,3,2]));
-            assert_eq!(it.next(), Some(~[3,1,2]));
+            assert_eq!(it.next(), Some(box [1,2,3]));
+            assert_eq!(it.next(), Some(box [1,3,2]));
+            assert_eq!(it.next(), Some(box [3,1,2]));
             let (min_size, max_opt) = it.size_hint();
             assert_eq!(min_size, 3);
             assert_eq!(max_opt.unwrap(), 3);
-            assert_eq!(it.next(), Some(~[3,2,1]));
-            assert_eq!(it.next(), Some(~[2,3,1]));
-            assert_eq!(it.next(), Some(~[2,1,3]));
+            assert_eq!(it.next(), Some(box [3,2,1]));
+            assert_eq!(it.next(), Some(box [2,3,1]));
+            assert_eq!(it.next(), Some(box [2,1,3]));
             assert_eq!(it.next(), None);
         }
         {
@@ -2841,7 +1231,7 @@ mod tests {
     fn test_position_elem() {
         assert!([].position_elem(&1).is_none());
 
-        let v1 = ~[1, 2, 3, 3, 2, 5];
+        let v1 = box [1, 2, 3, 3, 2, 5];
         assert_eq!(v1.position_elem(&1), Some(0u));
         assert_eq!(v1.position_elem(&2), Some(1u));
         assert_eq!(v1.position_elem(&5), Some(5u));
@@ -2895,14 +1285,14 @@ mod tests {
 
     #[test]
     fn test_reverse() {
-        let mut v: ~[int] = ~[10, 20];
+        let mut v: ~[int] = box [10, 20];
         assert_eq!(v[0], 10);
         assert_eq!(v[1], 20);
         v.reverse();
         assert_eq!(v[0], 20);
         assert_eq!(v[1], 10);
 
-        let mut v3: ~[int] = ~[];
+        let mut v3: ~[int] = box [];
         v3.reverse();
         assert!(v3.is_empty());
     }
@@ -2951,7 +1341,7 @@ mod tests {
                         let n = task_rng().gen::<uint>() % 10;
                         counts[n] += 1;
                         (n, counts[n])
-                    }).collect::<~[(uint, int)]>();
+                    }).collect::<Vec<(uint, int)>>();
 
                 // only sort on the first element, so an unstable sort
                 // may mix up the counts.
@@ -2962,46 +1352,45 @@ mod tests {
                 // will need to be ordered with increasing
                 // counts... i.e. exactly asserting that this sort is
                 // stable.
-                assert!(v.windows(2).all(|w| w[0] <= w[1]));
+                assert!(v.as_slice().windows(2).all(|w| w[0] <= w[1]));
             }
         }
     }
 
     #[test]
     fn test_partition() {
-        assert_eq!((~[]).partition(|x: &int| *x < 3), (~[], ~[]));
-        assert_eq!((~[1, 2, 3]).partition(|x: &int| *x < 4), (~[1, 2, 3], ~[]));
-        assert_eq!((~[1, 2, 3]).partition(|x: &int| *x < 2), (~[1], ~[2, 3]));
-        assert_eq!((~[1, 2, 3]).partition(|x: &int| *x < 0), (~[], ~[1, 2, 3]));
+        assert_eq!((box []).partition(|x: &int| *x < 3), (vec![], vec![]));
+        assert_eq!((box [1, 2, 3]).partition(|x: &int| *x < 4), (vec![1, 2, 3], vec![]));
+        assert_eq!((box [1, 2, 3]).partition(|x: &int| *x < 2), (vec![1], vec![2, 3]));
+        assert_eq!((box [1, 2, 3]).partition(|x: &int| *x < 0), (vec![], vec![1, 2, 3]));
     }
 
     #[test]
     fn test_partitioned() {
-        assert_eq!(([]).partitioned(|x: &int| *x < 3), (~[], ~[]))
-        assert_eq!(([1, 2, 3]).partitioned(|x: &int| *x < 4), (~[1, 2, 3], ~[]));
-        assert_eq!(([1, 2, 3]).partitioned(|x: &int| *x < 2), (~[1], ~[2, 3]));
-        assert_eq!(([1, 2, 3]).partitioned(|x: &int| *x < 0), (~[], ~[1, 2, 3]));
+        assert_eq!(([]).partitioned(|x: &int| *x < 3), (vec![], vec![]));
+        assert_eq!(([1, 2, 3]).partitioned(|x: &int| *x < 4), (vec![1, 2, 3], vec![]));
+        assert_eq!(([1, 2, 3]).partitioned(|x: &int| *x < 2), (vec![1], vec![2, 3]));
+        assert_eq!(([1, 2, 3]).partitioned(|x: &int| *x < 0), (vec![], vec![1, 2, 3]));
     }
 
     #[test]
     fn test_concat() {
         let v: [~[int], ..0] = [];
-        assert_eq!(v.concat_vec(), ~[]);
-        assert_eq!([~[1], ~[2,3]].concat_vec(), ~[1, 2, 3]);
+        assert_eq!(v.concat_vec(), vec![]);
+        assert_eq!([box [1], box [2,3]].concat_vec(), vec![1, 2, 3]);
 
-        assert_eq!([&[1], &[2,3]].concat_vec(), ~[1, 2, 3]);
+        assert_eq!([&[1], &[2,3]].concat_vec(), vec![1, 2, 3]);
     }
 
     #[test]
     fn test_connect() {
         let v: [~[int], ..0] = [];
-        assert_eq!(v.connect_vec(&0), ~[]);
-        assert_eq!([~[1], ~[2, 3]].connect_vec(&0), ~[1, 0, 2, 3]);
-        assert_eq!([~[1], ~[2], ~[3]].connect_vec(&0), ~[1, 0, 2, 0, 3]);
+        assert_eq!(v.connect_vec(&0), vec![]);
+        assert_eq!([box [1], box [2, 3]].connect_vec(&0), vec![1, 0, 2, 3]);
+        assert_eq!([box [1], box [2], box [3]].connect_vec(&0), vec![1, 0, 2, 0, 3]);
 
-        assert_eq!(v.connect_vec(&0), ~[]);
-        assert_eq!([&[1], &[2, 3]].connect_vec(&0), ~[1, 0, 2, 3]);
-        assert_eq!([&[1], &[2], &[3]].connect_vec(&0), ~[1, 0, 2, 0, 3]);
+        assert_eq!([&[1], &[2, 3]].connect_vec(&0), vec![1, 0, 2, 3]);
+        assert_eq!([&[1], &[2], &[3]].connect_vec(&0), vec![1, 0, 2, 0, 3]);
     }
 
     #[test]
@@ -3096,31 +1485,30 @@ mod tests {
     fn test_from_fn_fail() {
         Vec::from_fn(100, |v| {
             if v == 50 { fail!() }
-            ~0
+            box 0
         });
     }
 
     #[test]
     #[should_fail]
     fn test_from_elem_fail() {
-        use cast;
+        use cell::Cell;
         use rc::Rc;
 
         struct S {
-            f: int,
-            boxes: (~int, Rc<int>)
+            f: Cell<int>,
+            boxes: (Box<int>, Rc<int>)
         }
 
         impl Clone for S {
             fn clone(&self) -> S {
-                let s = unsafe { cast::transmute_mut(self) };
-                s.f += 1;
-                if s.f == 10 { fail!() }
-                S { f: s.f, boxes: s.boxes.clone() }
+                self.f.set(self.f.get() + 1);
+                if self.f.get() == 10 { fail!() }
+                S { f: self.f, boxes: self.boxes.clone() }
             }
         }
 
-        let s = S { f: 0, boxes: (~0, Rc::new(0)) };
+        let s = S { f: Cell::new(0), boxes: (box 0, Rc::new(0)) };
         let _ = Vec::from_elem(100, s);
     }
 
@@ -3133,7 +1521,7 @@ mod tests {
             if i == 50 {
                 fail!()
             }
-            (~0, Rc::new(0))
+            (box 0, Rc::new(0))
         })
     }
 
@@ -3141,7 +1529,8 @@ mod tests {
     #[should_fail]
     fn test_permute_fail() {
         use rc::Rc;
-        let v = [(~0, Rc::new(0)), (~0, Rc::new(0)), (~0, Rc::new(0)), (~0, Rc::new(0))];
+        let v = [(box 0, Rc::new(0)), (box 0, Rc::new(0)),
+                 (box 0, Rc::new(0)), (box 0, Rc::new(0))];
         let mut i = 0;
         for _ in v.permutations() {
             if i == 2 {
@@ -3233,9 +1622,7 @@ mod tests {
         use iter::*;
         let mut xs = [1, 2, 5, 10, 11];
         assert_eq!(xs.iter().size_hint(), (5, Some(5)));
-        assert_eq!(xs.rev_iter().size_hint(), (5, Some(5)));
         assert_eq!(xs.mut_iter().size_hint(), (5, Some(5)));
-        assert_eq!(xs.mut_rev_iter().size_hint(), (5, Some(5)));
     }
 
     #[test]
@@ -3266,7 +1653,7 @@ mod tests {
         let xs = [1, 2, 5, 10, 11];
         let ys = [11, 10, 5, 2, 1];
         let mut i = 0;
-        for &x in xs.rev_iter() {
+        for &x in xs.iter().rev() {
             assert_eq!(x, ys[i]);
             i += 1;
         }
@@ -3277,7 +1664,7 @@ mod tests {
     fn test_mut_rev_iterator() {
         use iter::*;
         let mut xs = [1u, 2, 3, 4, 5];
-        for (i,x) in xs.mut_rev_iter().enumerate() {
+        for (i,x) in xs.mut_iter().rev().enumerate() {
             *x += i;
         }
         assert!(xs == [5, 5, 5, 5, 5])
@@ -3286,89 +1673,89 @@ mod tests {
     #[test]
     fn test_move_iterator() {
         use iter::*;
-        let xs = ~[1u,2,3,4,5];
+        let xs = box [1u,2,3,4,5];
         assert_eq!(xs.move_iter().fold(0, |a: uint, b: uint| 10*a + b), 12345);
     }
 
     #[test]
     fn test_move_rev_iterator() {
         use iter::*;
-        let xs = ~[1u,2,3,4,5];
-        assert_eq!(xs.move_rev_iter().fold(0, |a: uint, b: uint| 10*a + b), 54321);
+        let xs = box [1u,2,3,4,5];
+        assert_eq!(xs.move_iter().rev().fold(0, |a: uint, b: uint| 10*a + b), 54321);
     }
 
     #[test]
     fn test_splitator() {
         let xs = &[1i,2,3,4,5];
 
-        assert_eq!(xs.split(|x| *x % 2 == 0).collect::<~[&[int]]>(),
-                   ~[&[1], &[3], &[5]]);
-        assert_eq!(xs.split(|x| *x == 1).collect::<~[&[int]]>(),
-                   ~[&[], &[2,3,4,5]]);
-        assert_eq!(xs.split(|x| *x == 5).collect::<~[&[int]]>(),
-                   ~[&[1,2,3,4], &[]]);
-        assert_eq!(xs.split(|x| *x == 10).collect::<~[&[int]]>(),
-                   ~[&[1,2,3,4,5]]);
-        assert_eq!(xs.split(|_| true).collect::<~[&[int]]>(),
-                   ~[&[], &[], &[], &[], &[], &[]]);
+        assert_eq!(xs.split(|x| *x % 2 == 0).collect::<Vec<&[int]>>().as_slice(),
+                   &[&[1], &[3], &[5]]);
+        assert_eq!(xs.split(|x| *x == 1).collect::<Vec<&[int]>>().as_slice(),
+                   &[&[], &[2,3,4,5]]);
+        assert_eq!(xs.split(|x| *x == 5).collect::<Vec<&[int]>>().as_slice(),
+                   &[&[1,2,3,4], &[]]);
+        assert_eq!(xs.split(|x| *x == 10).collect::<Vec<&[int]>>().as_slice(),
+                   &[&[1,2,3,4,5]]);
+        assert_eq!(xs.split(|_| true).collect::<Vec<&[int]>>().as_slice(),
+                   &[&[], &[], &[], &[], &[], &[]]);
 
         let xs: &[int] = &[];
-        assert_eq!(xs.split(|x| *x == 5).collect::<~[&[int]]>(), ~[&[]]);
+        assert_eq!(xs.split(|x| *x == 5).collect::<Vec<&[int]>>().as_slice(), &[&[]]);
     }
 
     #[test]
     fn test_splitnator() {
         let xs = &[1i,2,3,4,5];
 
-        assert_eq!(xs.splitn(0, |x| *x % 2 == 0).collect::<~[&[int]]>(),
-                   ~[&[1,2,3,4,5]]);
-        assert_eq!(xs.splitn(1, |x| *x % 2 == 0).collect::<~[&[int]]>(),
-                   ~[&[1], &[3,4,5]]);
-        assert_eq!(xs.splitn(3, |_| true).collect::<~[&[int]]>(),
-                   ~[&[], &[], &[], &[4,5]]);
+        assert_eq!(xs.splitn(0, |x| *x % 2 == 0).collect::<Vec<&[int]>>().as_slice(),
+                   &[&[1,2,3,4,5]]);
+        assert_eq!(xs.splitn(1, |x| *x % 2 == 0).collect::<Vec<&[int]>>().as_slice(),
+                   &[&[1], &[3,4,5]]);
+        assert_eq!(xs.splitn(3, |_| true).collect::<Vec<&[int]>>().as_slice(),
+                   &[&[], &[], &[], &[4,5]]);
 
         let xs: &[int] = &[];
-        assert_eq!(xs.splitn(1, |x| *x == 5).collect::<~[&[int]]>(), ~[&[]]);
+        assert_eq!(xs.splitn(1, |x| *x == 5).collect::<Vec<&[int]>>().as_slice(), &[&[]]);
     }
 
     #[test]
     fn test_rsplitator() {
         let xs = &[1i,2,3,4,5];
 
-        assert_eq!(xs.rsplit(|x| *x % 2 == 0).collect::<~[&[int]]>(),
-                   ~[&[5], &[3], &[1]]);
-        assert_eq!(xs.rsplit(|x| *x == 1).collect::<~[&[int]]>(),
-                   ~[&[2,3,4,5], &[]]);
-        assert_eq!(xs.rsplit(|x| *x == 5).collect::<~[&[int]]>(),
-                   ~[&[], &[1,2,3,4]]);
-        assert_eq!(xs.rsplit(|x| *x == 10).collect::<~[&[int]]>(),
-                   ~[&[1,2,3,4,5]]);
+        assert_eq!(xs.split(|x| *x % 2 == 0).rev().collect::<Vec<&[int]>>().as_slice(),
+                   &[&[5], &[3], &[1]]);
+        assert_eq!(xs.split(|x| *x == 1).rev().collect::<Vec<&[int]>>().as_slice(),
+                   &[&[2,3,4,5], &[]]);
+        assert_eq!(xs.split(|x| *x == 5).rev().collect::<Vec<&[int]>>().as_slice(),
+                   &[&[], &[1,2,3,4]]);
+        assert_eq!(xs.split(|x| *x == 10).rev().collect::<Vec<&[int]>>().as_slice(),
+                   &[&[1,2,3,4,5]]);
 
         let xs: &[int] = &[];
-        assert_eq!(xs.rsplit(|x| *x == 5).collect::<~[&[int]]>(), ~[&[]]);
+        assert_eq!(xs.split(|x| *x == 5).rev().collect::<Vec<&[int]>>().as_slice(), &[&[]]);
     }
 
     #[test]
     fn test_rsplitnator() {
         let xs = &[1,2,3,4,5];
 
-        assert_eq!(xs.rsplitn(0, |x| *x % 2 == 0).collect::<~[&[int]]>(),
-                   ~[&[1,2,3,4,5]]);
-        assert_eq!(xs.rsplitn(1, |x| *x % 2 == 0).collect::<~[&[int]]>(),
-                   ~[&[5], &[1,2,3]]);
-        assert_eq!(xs.rsplitn(3, |_| true).collect::<~[&[int]]>(),
-                   ~[&[], &[], &[], &[1,2]]);
+        assert_eq!(xs.rsplitn(0, |x| *x % 2 == 0).collect::<Vec<&[int]>>().as_slice(),
+                   &[&[1,2,3,4,5]]);
+        assert_eq!(xs.rsplitn(1, |x| *x % 2 == 0).collect::<Vec<&[int]>>().as_slice(),
+                   &[&[5], &[1,2,3]]);
+        assert_eq!(xs.rsplitn(3, |_| true).collect::<Vec<&[int]>>().as_slice(),
+                   &[&[], &[], &[], &[1,2]]);
 
         let xs: &[int] = &[];
-        assert_eq!(xs.rsplitn(1, |x| *x == 5).collect::<~[&[int]]>(), ~[&[]]);
+        assert_eq!(xs.rsplitn(1, |x| *x == 5).collect::<Vec<&[int]>>().as_slice(), &[&[]]);
     }
 
     #[test]
     fn test_windowsator() {
         let v = &[1i,2,3,4];
 
-        assert_eq!(v.windows(2).collect::<~[&[int]]>(), ~[&[1,2], &[2,3], &[3,4]]);
-        assert_eq!(v.windows(3).collect::<~[&[int]]>(), ~[&[1i,2,3], &[2,3,4]]);
+        assert_eq!(v.windows(2).collect::<Vec<&[int]>>().as_slice(), &[&[1,2], &[2,3], &[3,4]]);
+        assert_eq!(v.windows(3).collect::<Vec<&[int]>>().as_slice(), &[&[1i,2,3], &[2,3,4]]);
         assert!(v.windows(6).next().is_none());
     }
 
@@ -3383,11 +1770,11 @@ mod tests {
     fn test_chunksator() {
         let v = &[1i,2,3,4,5];
 
-        assert_eq!(v.chunks(2).collect::<~[&[int]]>(), ~[&[1i,2], &[3,4], &[5]]);
-        assert_eq!(v.chunks(3).collect::<~[&[int]]>(), ~[&[1i,2,3], &[4,5]]);
-        assert_eq!(v.chunks(6).collect::<~[&[int]]>(), ~[&[1i,2,3,4,5]]);
+        assert_eq!(v.chunks(2).collect::<Vec<&[int]>>().as_slice(), &[&[1i,2], &[3,4], &[5]]);
+        assert_eq!(v.chunks(3).collect::<Vec<&[int]>>().as_slice(), &[&[1i,2,3], &[4,5]]);
+        assert_eq!(v.chunks(6).collect::<Vec<&[int]>>().as_slice(), &[&[1i,2,3,4,5]]);
 
-        assert_eq!(v.chunks(2).rev().collect::<~[&[int]]>(), ~[&[5i], &[3,4], &[1,2]]);
+        assert_eq!(v.chunks(2).rev().collect::<Vec<&[int]>>().as_slice(), &[&[5i], &[3,4], &[1,2]]);
         let mut it = v.chunks(2);
         assert_eq!(it.indexable(), 3);
         assert_eq!(it.idx(0).unwrap(), &[1,2]);
@@ -3406,19 +1793,19 @@ mod tests {
     #[test]
     fn test_move_from() {
         let mut a = [1,2,3,4,5];
-        let b = ~[6,7,8];
+        let b = box [6,7,8];
         assert_eq!(a.move_from(b, 0, 3), 3);
         assert!(a == [6,7,8,4,5]);
         let mut a = [7,2,8,1];
-        let b = ~[3,1,4,1,5,9];
+        let b = box [3,1,4,1,5,9];
         assert_eq!(a.move_from(b, 0, 6), 4);
         assert!(a == [3,1,4,1]);
         let mut a = [1,2,3,4];
-        let b = ~[5,6,7,8,9,0];
+        let b = box [5,6,7,8,9,0];
         assert_eq!(a.move_from(b, 2, 3), 1);
         assert!(a == [7,2,3,4]);
         let mut a = [1,2,3,4,5];
-        let b = ~[5,6,7,8,9,0];
+        let b = box [5,6,7,8,9,0];
         assert_eq!(a.mut_slice(2,4).move_from(b,1,6), 2);
         assert!(a == [1,2,6,7,5]);
     }
@@ -3451,17 +1838,19 @@ mod tests {
                 assert_eq!(format!("{}", x.as_slice()), x_str);
             })
         )
-        let empty: ~[int] = ~[];
-        test_show_vec!(empty, "[]".to_owned());
-        test_show_vec!(~[1], "[1]".to_owned());
-        test_show_vec!(~[1, 2, 3], "[1, 2, 3]".to_owned());
-        test_show_vec!(~[~[], ~[1u], ~[1u, 1u]], "[[], [1], [1, 1]]".to_owned());
+        let empty: ~[int] = box [];
+        test_show_vec!(empty, "[]".to_string());
+        test_show_vec!(box [1], "[1]".to_string());
+        test_show_vec!(box [1, 2, 3], "[1, 2, 3]".to_string());
+        test_show_vec!(box [box [], box [1u], box [1u, 1u]],
+                       "[[], [1], [1, 1]]".to_string());
 
         let empty_mut: &mut [int] = &mut[];
-        test_show_vec!(empty_mut, "[]".to_owned());
-        test_show_vec!(&mut[1], "[1]".to_owned());
-        test_show_vec!(&mut[1, 2, 3], "[1, 2, 3]".to_owned());
-        test_show_vec!(&mut[&mut[], &mut[1u], &mut[1u, 1u]], "[[], [1], [1, 1]]".to_owned());
+        test_show_vec!(empty_mut, "[]".to_string());
+        test_show_vec!(&mut[1], "[1]".to_string());
+        test_show_vec!(&mut[1, 2, 3], "[1, 2, 3]".to_string());
+        test_show_vec!(&mut[&mut[], &mut[1u], &mut[1u, 1u]],
+                       "[[], [1], [1, 1]]".to_string());
     }
 
     #[test]
@@ -3559,13 +1948,7 @@ mod tests {
         }
         assert_eq!(cnt, 11);
 
-        let xs = vec![Foo, Foo, Foo];
-        assert_eq!(format!("{:?}", xs.slice(0, 2).to_owned()),
-                   "~[slice::tests::Foo, slice::tests::Foo]".to_owned());
-
         let xs: [Foo, ..3] = [Foo, Foo, Foo];
-        assert_eq!(format!("{:?}", xs.slice(0, 2).to_owned()),
-                   "~[slice::tests::Foo, slice::tests::Foo]".to_owned());
         cnt = 0;
         for f in xs.iter() {
             assert!(*f == Foo);
@@ -3772,15 +2155,6 @@ mod bench {
     }
 
     #[bench]
-    fn add(b: &mut Bencher) {
-        let xs: &[int] = [5, ..10];
-        let ys: &[int] = [5, ..10];
-        b.iter(|| {
-            xs + ys;
-        });
-    }
-
-    #[bench]
     fn concat(b: &mut Bencher) {
         let xss: Vec<Vec<uint>> = Vec::from_fn(100, |i| range(0, i).collect());
         b.iter(|| {
@@ -3888,7 +2262,7 @@ mod bench {
     #[bench]
     fn zero_1kb_fixed_repeat(b: &mut Bencher) {
         b.iter(|| {
-            ~[0u8, ..1024]
+            box [0u8, ..1024]
         });
     }
 

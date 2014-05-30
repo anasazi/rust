@@ -15,12 +15,14 @@
 // makes all other generics or inline functions that it references
 // reachable as well.
 
+use driver::config;
 use middle::ty;
 use middle::typeck;
 use middle::privacy;
 use util::nodemap::NodeSet;
 
 use collections::HashSet;
+use syntax::abi;
 use syntax::ast;
 use syntax::ast_map;
 use syntax::ast_util::{def_id_of_def, is_local};
@@ -89,6 +91,8 @@ struct ReachableContext<'a> {
     // A worklist of item IDs. Each item ID in this worklist will be inlined
     // and will be scanned for further references.
     worklist: Vec<ast::NodeId>,
+    // Whether any output of this compilation is a library
+    any_library: bool,
 }
 
 impl<'a> Visitor<()> for ReachableContext<'a> {
@@ -157,10 +161,14 @@ impl<'a> Visitor<()> for ReachableContext<'a> {
 impl<'a> ReachableContext<'a> {
     // Creates a new reachability computation context.
     fn new(tcx: &'a ty::ctxt) -> ReachableContext<'a> {
+        let any_library = tcx.sess.crate_types.borrow().iter().any(|ty| {
+            *ty != config::CrateTypeExecutable
+        });
         ReachableContext {
             tcx: tcx,
             reachable_symbols: NodeSet::new(),
             worklist: Vec::new(),
+            any_library: any_library,
         }
     }
 
@@ -226,7 +234,7 @@ impl<'a> ReachableContext<'a> {
                 None => {
                     self.tcx.sess.bug(format!("found unmapped ID in worklist: \
                                                {}",
-                                              search_item))
+                                              search_item).as_slice())
                 }
             }
         }
@@ -234,7 +242,7 @@ impl<'a> ReachableContext<'a> {
 
     fn propagate_node(&mut self, node: &ast_map::Node,
                       search_item: ast::NodeId) {
-        if !self.tcx.sess.building_library.get() {
+        if !self.any_library {
             // If we are building an executable, then there's no need to flag
             // anything as external except for `extern fn` types. These
             // functions may still participate in some form of native interface,
@@ -243,8 +251,10 @@ impl<'a> ReachableContext<'a> {
             match *node {
                 ast_map::NodeItem(item) => {
                     match item.node {
-                        ast::ItemFn(_, ast::ExternFn, _, _, _) => {
-                            self.reachable_symbols.insert(search_item);
+                        ast::ItemFn(_, _, abi, _, _) => {
+                            if abi != abi::Rust {
+                                self.reachable_symbols.insert(search_item);
+                            }
                         }
                         _ => {}
                     }
@@ -270,11 +280,12 @@ impl<'a> ReachableContext<'a> {
 
                     // Statics with insignificant addresses are not reachable
                     // because they're inlined specially into all other crates.
-                    ast::ItemStatic(..) => {
+                    ast::ItemStatic(_, _, init) => {
                         if attr::contains_name(item.attrs.as_slice(),
                                                "address_insignificant") {
                             self.reachable_symbols.remove(&search_item);
                         }
+                        visit::walk_expr(self, init, ());
                     }
 
                     // These are normal, nothing reachable about these
@@ -313,9 +324,12 @@ impl<'a> ReachableContext<'a> {
             ast_map::NodeVariant(_) |
             ast_map::NodeStructCtor(_) => {}
             _ => {
-                self.tcx.sess.bug(format!("found unexpected thingy in \
-                                           worklist: {}",
-                                          self.tcx.map.node_to_str(search_item)))
+                self.tcx
+                    .sess
+                    .bug(format!("found unexpected thingy in worklist: {}",
+                                 self.tcx
+                                     .map
+                                     .node_to_str(search_item)).as_slice())
             }
         }
     }

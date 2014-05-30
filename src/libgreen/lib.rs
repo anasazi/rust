@@ -125,7 +125,7 @@
 //! }
 //! ```
 //!
-//! > **Note**: This `main` funciton in this example does *not* have I/O
+//! > **Note**: This `main` function in this example does *not* have I/O
 //! >           support. The basic event loop does not provide any support
 //!
 //! # Starting with I/O support in libgreen
@@ -197,13 +197,13 @@
 //! pool.shutdown();
 //! ```
 
-#![crate_id = "green#0.11-pre"]
+#![crate_id = "green#0.11.0-pre"]
 #![license = "MIT/ASL2"]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-       html_root_url = "http://static.rust-lang.org/doc/master")]
+       html_root_url = "http://doc.rust-lang.org/")]
 
 // NB this does *not* include globs, please keep it that way.
 #![feature(macro_rules, phase)]
@@ -214,7 +214,9 @@
 #[cfg(test)] extern crate rustuv;
 extern crate rand;
 extern crate libc;
+extern crate alloc;
 
+use alloc::arc::Arc;
 use std::mem::replace;
 use std::os;
 use std::rt::rtio;
@@ -223,7 +225,6 @@ use std::rt;
 use std::sync::atomics::{SeqCst, AtomicUint, INIT_ATOMIC_UINT};
 use std::sync::deque;
 use std::task::TaskOpts;
-use std::sync::arc::UnsafeArc;
 
 use sched::{Shutdown, Scheduler, SchedHandle, TaskFromFriend, NewNeighbor};
 use sleeper_list::SleeperList;
@@ -288,7 +289,7 @@ macro_rules! green_start( ($f:ident) => (
 /// The return value is used as the process return code. 0 on success, 101 on
 /// error.
 pub fn start(argc: int, argv: **u8,
-             event_loop_factory: fn() -> ~rtio::EventLoop:Send,
+             event_loop_factory: fn() -> Box<rtio::EventLoop:Send>,
              main: proc():Send) -> int {
     rt::init(argc, argv);
     let mut main = Some(main);
@@ -309,7 +310,7 @@ pub fn start(argc: int, argv: **u8,
 ///
 /// This function will not return until all schedulers in the associated pool
 /// have returned.
-pub fn run(event_loop_factory: fn() -> ~rtio::EventLoop:Send,
+pub fn run(event_loop_factory: fn() -> Box<rtio::EventLoop:Send>,
            main: proc():Send) -> int {
     // Create a scheduler pool and spawn the main task into this pool. We will
     // get notified over a channel when the main task exits.
@@ -340,7 +341,7 @@ pub struct PoolConfig {
     pub threads: uint,
     /// A factory function used to create new event loops. If this is not
     /// specified then the default event loop factory is used.
-    pub event_loop_factory: fn() -> ~rtio::EventLoop:Send,
+    pub event_loop_factory: fn() -> Box<rtio::EventLoop:Send>,
 }
 
 impl PoolConfig {
@@ -360,12 +361,12 @@ pub struct SchedPool {
     id: uint,
     threads: Vec<Thread<()>>,
     handles: Vec<SchedHandle>,
-    stealers: Vec<deque::Stealer<~task::GreenTask>>,
+    stealers: Vec<deque::Stealer<Box<task::GreenTask>>>,
     next_friend: uint,
     stack_pool: StackPool,
-    deque_pool: deque::BufferPool<~task::GreenTask>,
+    deque_pool: deque::BufferPool<Box<task::GreenTask>>,
     sleepers: SleeperList,
-    factory: fn() -> ~rtio::EventLoop:Send,
+    factory: fn() -> Box<rtio::EventLoop:Send>,
     task_state: TaskState,
     tasks_done: Receiver<()>,
 }
@@ -375,7 +376,7 @@ pub struct SchedPool {
 /// sending on a channel once the entire pool has been drained of all tasks.
 #[deriving(Clone)]
 struct TaskState {
-    cnt: UnsafeArc<AtomicUint>,
+    cnt: Arc<AtomicUint>,
     done: Sender<()>,
 }
 
@@ -427,14 +428,13 @@ impl SchedPool {
         for worker in workers.move_iter() {
             rtdebug!("inserting a regular scheduler");
 
-            let mut sched = ~Scheduler::new(pool.id,
+            let mut sched = box Scheduler::new(pool.id,
                                             (pool.factory)(),
                                             worker,
                                             pool.stealers.clone(),
                                             pool.sleepers.clone(),
                                             pool.task_state.clone());
             pool.handles.push(sched.make_handle());
-            let sched = sched;
             pool.threads.push(Thread::start(proc() { sched.bootstrap(); }));
         }
 
@@ -445,7 +445,7 @@ impl SchedPool {
     /// This is useful to create a task which can then be sent to a specific
     /// scheduler created by `spawn_sched` (and possibly pin it to that
     /// scheduler).
-    pub fn task(&mut self, opts: TaskOpts, f: proc():Send) -> ~GreenTask {
+    pub fn task(&mut self, opts: TaskOpts, f: proc():Send) -> Box<GreenTask> {
         GreenTask::configure(&mut self.stack_pool, opts, f)
     }
 
@@ -488,7 +488,7 @@ impl SchedPool {
         // Create the new scheduler, using the same sleeper list as all the
         // other schedulers as well as having a stealer handle to all other
         // schedulers.
-        let mut sched = ~Scheduler::new(self.id,
+        let mut sched = box Scheduler::new(self.id,
                                         (self.factory)(),
                                         worker,
                                         self.stealers.clone(),
@@ -496,7 +496,6 @@ impl SchedPool {
                                         self.task_state.clone());
         let ret = sched.make_handle();
         self.handles.push(sched.make_handle());
-        let sched = sched;
         self.threads.push(Thread::start(proc() { sched.bootstrap() }));
 
         return ret;
@@ -537,21 +536,21 @@ impl TaskState {
     fn new() -> (Receiver<()>, TaskState) {
         let (tx, rx) = channel();
         (rx, TaskState {
-            cnt: UnsafeArc::new(AtomicUint::new(0)),
+            cnt: Arc::new(AtomicUint::new(0)),
             done: tx,
         })
     }
 
     fn increment(&mut self) {
-        unsafe { (*self.cnt.get()).fetch_add(1, SeqCst); }
+        self.cnt.fetch_add(1, SeqCst);
     }
 
     fn active(&self) -> bool {
-        unsafe { (*self.cnt.get()).load(SeqCst) != 0 }
+        self.cnt.load(SeqCst) != 0
     }
 
     fn decrement(&mut self) {
-        let prev = unsafe { (*self.cnt.get()).fetch_sub(1, SeqCst) };
+        let prev = self.cnt.fetch_sub(1, SeqCst);
         if prev == 1 {
             self.done.send(());
         }

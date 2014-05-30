@@ -15,12 +15,14 @@
 //! which are not used for scheduling in any way.
 
 #![allow(non_camel_case_types)]
+#![allow(unsigned_negate)]
 
-use cast;
 use kinds::Send;
 use libc;
+use mem;
 use ops::Drop;
 use option::{Option, Some, None};
+use owned::Box;
 use uint;
 
 type StartFn = extern "C" fn(*libc::c_void) -> imp::rust_thread_return;
@@ -30,7 +32,7 @@ type StartFn = extern "C" fn(*libc::c_void) -> imp::rust_thread_return;
 pub struct Thread<T> {
     native: imp::rust_thread,
     joined: bool,
-    packet: ~Option<T>,
+    packet: Box<Option<T>>,
 }
 
 static DEFAULT_STACK_SIZE: uint = 1024 * 1024;
@@ -44,9 +46,9 @@ extern fn thread_start(main: *libc::c_void) -> imp::rust_thread_return {
     use rt::stack;
     unsafe {
         stack::record_stack_bounds(0, uint::MAX);
-        let f: ~proc() = cast::transmute(main);
+        let f: Box<proc()> = mem::transmute(main);
         (*f)();
-        cast::transmute(0 as imp::rust_thread_return)
+        mem::transmute(0 as imp::rust_thread_return)
     }
 }
 
@@ -77,14 +79,14 @@ impl Thread<()> {
     pub fn start_stack<T: Send>(stack: uint, main: proc():Send -> T) -> Thread<T> {
 
         // We need the address of the packet to fill in to be stable so when
-        // `main` fills it in it's still valid, so allocate an extra ~ box to do
+        // `main` fills it in it's still valid, so allocate an extra box to do
         // so.
-        let packet = ~None;
+        let packet = box None;
         let packet2: *mut Option<T> = unsafe {
-            *cast::transmute::<&~Option<T>, **mut Option<T>>(&packet)
+            *mem::transmute::<&Box<Option<T>>, **mut Option<T>>(&packet)
         };
         let main = proc() unsafe { *packet2 = Some(main()); };
-        let native = unsafe { imp::create(stack, ~main) };
+        let native = unsafe { imp::create(stack, box main) };
 
         Thread {
             native: native,
@@ -107,7 +109,7 @@ impl Thread<()> {
     /// stack size for the new thread.
     pub fn spawn_stack(stack: uint, main: proc():Send) {
         unsafe {
-            let handle = imp::create(stack, ~main);
+            let handle = imp::create(stack, box main);
             imp::detach(handle);
         }
     }
@@ -144,21 +146,22 @@ impl<T: Send> Drop for Thread<T> {
 
 #[cfg(windows)]
 mod imp {
-    use cast;
+    use mem;
     use cmp;
     use kinds::Send;
     use libc;
     use libc::types::os::arch::extra::{LPSECURITY_ATTRIBUTES, SIZE_T, BOOL,
                                        LPVOID, DWORD, LPDWORD, HANDLE};
     use os;
+    use owned::Box;
     use ptr;
     use rt::stack::RED_ZONE;
 
     pub type rust_thread = HANDLE;
     pub type rust_thread_return = DWORD;
 
-    pub unsafe fn create(stack: uint, p: ~proc():Send) -> rust_thread {
-        let arg: *mut libc::c_void = cast::transmute(p);
+    pub unsafe fn create(stack: uint, p: Box<proc():Send>) -> rust_thread {
+        let arg: *mut libc::c_void = mem::transmute(p);
         // FIXME On UNIX, we guard against stack sizes that are too small but
         // that's because pthreads enforces that stacks are at least
         // PTHREAD_STACK_MIN bytes big.  Windows has no such lower limit, it's
@@ -174,7 +177,7 @@ mod imp {
 
         if ret as uint == 0 {
             // be sure to not leak the closure
-            let _p: ~proc():Send = cast::transmute(arg);
+            let _p: Box<proc():Send> = mem::transmute(arg);
             fail!("failed to spawn native thread: {}", os::last_os_error());
         }
         return ret;
@@ -210,22 +213,22 @@ mod imp {
 
 #[cfg(unix)]
 mod imp {
-    use cast;
     use cmp;
     use kinds::Send;
     use libc::consts::os::posix01::{PTHREAD_CREATE_JOINABLE, PTHREAD_STACK_MIN};
     use libc;
     use mem;
     use os;
+    use owned::Box;
     use ptr;
     use rt::stack::RED_ZONE;
 
     pub type rust_thread = libc::pthread_t;
     pub type rust_thread_return = *u8;
 
-    pub unsafe fn create(stack: uint, p: ~proc():Send) -> rust_thread {
-        let mut native: libc::pthread_t = mem::uninit();
-        let mut attr: libc::pthread_attr_t = mem::uninit();
+    pub unsafe fn create(stack: uint, p: Box<proc():Send>) -> rust_thread {
+        let mut native: libc::pthread_t = mem::zeroed();
+        let mut attr: libc::pthread_attr_t = mem::zeroed();
         assert_eq!(pthread_attr_init(&mut attr), 0);
         assert_eq!(pthread_attr_setdetachstate(&mut attr,
                                                PTHREAD_CREATE_JOINABLE), 0);
@@ -250,13 +253,13 @@ mod imp {
             },
         };
 
-        let arg: *libc::c_void = cast::transmute(p);
+        let arg: *libc::c_void = mem::transmute(p);
         let ret = pthread_create(&mut native, &attr, super::thread_start, arg);
         assert_eq!(pthread_attr_destroy(&mut attr), 0);
 
         if ret != 0 {
             // be sure to not leak the closure
-            let _p: ~proc():Send = cast::transmute(arg);
+            let _p: Box<proc():Send> = mem::transmute(arg);
             fail!("failed to spawn native thread: {}", os::last_os_error());
         }
         native
@@ -270,12 +273,7 @@ mod imp {
         assert_eq!(pthread_detach(native), 0);
     }
 
-    #[cfg(target_os = "macos")]
-    #[cfg(target_os = "android")]
     pub unsafe fn yield_now() { assert_eq!(sched_yield(), 0); }
-
-    #[cfg(not(target_os = "macos"), not(target_os = "android"))]
-    pub unsafe fn yield_now() { assert_eq!(pthread_yield(), 0); }
 
     // glibc >= 2.15 has a __pthread_get_minstack() function that returns
     // PTHREAD_STACK_MIN plus however many bytes are needed for thread-local
@@ -290,7 +288,7 @@ mod imp {
     #[cfg(target_os = "linux")]
     fn min_stack_size(attr: *libc::pthread_attr_t) -> libc::size_t {
         use ptr::RawPtr;
-        type F = extern "C" unsafe fn(*libc::pthread_attr_t) -> libc::size_t;
+        type F = unsafe extern "C" fn(*libc::pthread_attr_t) -> libc::size_t;
         extern {
             #[linkage = "extern_weak"]
             static __pthread_get_minstack: *();
@@ -298,7 +296,7 @@ mod imp {
         if __pthread_get_minstack.is_null() {
             PTHREAD_STACK_MIN
         } else {
-            unsafe { cast::transmute::<*(), F>(__pthread_get_minstack)(attr) }
+            unsafe { mem::transmute::<*(), F>(__pthread_get_minstack)(attr) }
         }
     }
 
@@ -323,12 +321,7 @@ mod imp {
         fn pthread_attr_setdetachstate(attr: *mut libc::pthread_attr_t,
                                        state: libc::c_int) -> libc::c_int;
         fn pthread_detach(thread: libc::pthread_t) -> libc::c_int;
-
-        #[cfg(target_os = "macos")]
-        #[cfg(target_os = "android")]
         fn sched_yield() -> libc::c_int;
-        #[cfg(not(target_os = "macos"), not(target_os = "android"))]
-        fn pthread_yield() -> libc::c_int;
     }
 }
 

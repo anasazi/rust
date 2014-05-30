@@ -173,8 +173,8 @@ pub enum deref_kind {
 pub fn opt_deref_kind(t: ty::t) -> Option<deref_kind> {
     match ty::get(t).sty {
         ty::ty_uniq(_) |
-        ty::ty_trait(~ty::TyTrait { store: ty::UniqTraitStore, .. }) |
-        ty::ty_closure(~ty::ClosureTy {store: ty::UniqTraitStore, ..}) => {
+        ty::ty_trait(box ty::TyTrait { store: ty::UniqTraitStore, .. }) |
+        ty::ty_closure(box ty::ClosureTy {store: ty::UniqTraitStore, ..}) => {
             Some(deref_ptr(OwnedPtr))
         }
 
@@ -182,12 +182,18 @@ pub fn opt_deref_kind(t: ty::t) -> Option<deref_kind> {
             let kind = ty::BorrowKind::from_mutbl(mt.mutbl);
             Some(deref_ptr(BorrowedPtr(kind, r)))
         }
-        ty::ty_trait(~ty::TyTrait { store: ty::RegionTraitStore(r, mutbl), .. }) => {
+        ty::ty_trait(box ty::TyTrait {
+                store: ty::RegionTraitStore(r, mutbl),
+                ..
+            }) => {
             let kind = ty::BorrowKind::from_mutbl(mutbl);
             Some(deref_ptr(BorrowedPtr(kind, r)))
         }
 
-        ty::ty_closure(~ty::ClosureTy {store: ty::RegionTraitStore(r, _), ..}) => {
+        ty::ty_closure(box ty::ClosureTy {
+                store: ty::RegionTraitStore(r, _),
+                ..
+            }) => {
             Some(deref_ptr(BorrowedPtr(ty::ImmBorrow, r)))
         }
 
@@ -218,7 +224,7 @@ pub fn deref_kind(tcx: &ty::ctxt, t: ty::t) -> deref_kind {
       None => {
         tcx.sess.bug(
             format!("deref_cat() invoked on non-derefable type {}",
-                 ty_to_str(tcx, t)));
+                    ty_to_str(tcx, t)).as_slice());
       }
     }
 }
@@ -238,8 +244,8 @@ impl ast_node for ast::Pat {
     fn span(&self) -> Span { self.span }
 }
 
-pub struct MemCategorizationContext<TYPER> {
-    pub typer: TYPER
+pub struct MemCategorizationContext<'t,TYPER> {
+    typer: &'t TYPER
 }
 
 pub type McResult<T> = Result<T, ()>;
@@ -346,8 +352,12 @@ macro_rules! if_ok(
     )
 )
 
-impl<TYPER:Typer> MemCategorizationContext<TYPER> {
-    fn tcx<'a>(&'a self) -> &'a ty::ctxt {
+impl<'t,TYPER:Typer> MemCategorizationContext<'t,TYPER> {
+    pub fn new(typer: &'t TYPER) -> MemCategorizationContext<'t,TYPER> {
+        MemCategorizationContext { typer: typer }
+    }
+
+    fn tcx(&self) -> &'t ty::ctxt {
         self.typer.tcx()
     }
 
@@ -415,7 +425,9 @@ impl<TYPER:Typer> MemCategorizationContext<TYPER> {
         }
     }
 
-    pub fn cat_expr_autoderefd(&self, expr: &ast::Expr, autoderefs: uint)
+    pub fn cat_expr_autoderefd(&self,
+                               expr: &ast::Expr,
+                               autoderefs: uint)
                                -> McResult<cmt> {
         let mut cmt = if_ok!(self.cat_expr_unadjusted(expr));
         for deref in range(1u, autoderefs + 1) {
@@ -453,7 +465,9 @@ impl<TYPER:Typer> MemCategorizationContext<TYPER> {
             self.cat_def(expr.id, expr.span, expr_ty, def)
           }
 
-          ast::ExprParen(e) => self.cat_expr_unadjusted(e),
+          ast::ExprParen(e) => {
+            self.cat_expr(e)
+          }
 
           ast::ExprAddrOf(..) | ast::ExprCall(..) |
           ast::ExprAssign(..) | ast::ExprAssignOp(..) |
@@ -564,7 +578,8 @@ impl<TYPER:Typer> MemCategorizationContext<TYPER> {
                       self.tcx().sess.span_bug(
                           span,
                           format!("Upvar of non-closure {} - {}",
-                                  fn_node_id, ty.repr(self.tcx())));
+                                  fn_node_id,
+                                  ty.repr(self.tcx())).as_slice());
                   }
               }
           }
@@ -713,7 +728,7 @@ impl<TYPER:Typer> MemCategorizationContext<TYPER> {
                 self.tcx().sess.span_bug(
                     node.span(),
                     format!("Explicit deref of non-derefable type: {}",
-                            base_cmt.ty.repr(self.tcx())));
+                            base_cmt.ty.repr(self.tcx())).as_slice());
             }
         }
     }
@@ -786,7 +801,7 @@ impl<TYPER:Typer> MemCategorizationContext<TYPER> {
             self.tcx().sess.span_bug(
                 elt.span(),
                 format!("Explicit index of non-index type `{}`",
-                     base_cmt.ty.repr(self.tcx())));
+                        base_cmt.ty.repr(self.tcx())).as_slice());
           }
         };
 
@@ -870,9 +885,8 @@ impl<TYPER:Typer> MemCategorizationContext<TYPER> {
                 },
 
                 _ => {
-                    tcx.sess.span_bug(
-                        pat.span,
-                        format!("Type of slice pattern is not a slice"));
+                    tcx.sess.span_bug(pat.span,
+                                      "type of slice pattern is not a slice");
                 }
             }
         }
@@ -1050,7 +1064,7 @@ impl<TYPER:Typer> MemCategorizationContext<TYPER> {
             }
           }
 
-          ast::PatUniq(subpat) | ast::PatRegion(subpat) => {
+          ast::PatBox(subpat) | ast::PatRegion(subpat) => {
             // @p1, ~p1
             let subcmt = self.cat_deref(pat, cmt, 0);
             if_ok!(self.cat_pattern(subcmt, subpat, op));
@@ -1074,32 +1088,36 @@ impl<TYPER:Typer> MemCategorizationContext<TYPER> {
           ast::PatLit(_) | ast::PatRange(_, _) => {
               /*always ok*/
           }
+
+          ast::PatMac(_) => {
+              self.tcx().sess.span_bug(pat.span, "unexpanded macro");
+          }
         }
 
         Ok(())
     }
 
-    pub fn cmt_to_str(&self, cmt: &cmt_) -> ~str {
+    pub fn cmt_to_str(&self, cmt: &cmt_) -> String {
         match cmt.cat {
           cat_static_item => {
-              "static item".to_owned()
+              "static item".to_string()
           }
           cat_copied_upvar(_) => {
-              "captured outer variable in a proc".to_owned()
+              "captured outer variable in a proc".to_string()
           }
           cat_rvalue(..) => {
-              "non-lvalue".to_owned()
+              "non-lvalue".to_string()
           }
           cat_local(_) => {
-              "local variable".to_owned()
+              "local variable".to_string()
           }
           cat_arg(..) => {
-              "argument".to_owned()
+              "argument".to_string()
           }
           cat_deref(ref base, _, pk) => {
               match base.cat {
                   cat_upvar(..) => {
-                      format!("captured outer variable")
+                      "captured outer variable".to_string()
                   }
                   _ => {
                       format!("dereference of `{}`-pointer", ptr_sigil(pk))
@@ -1107,22 +1125,22 @@ impl<TYPER:Typer> MemCategorizationContext<TYPER> {
               }
           }
           cat_interior(_, InteriorField(NamedField(_))) => {
-              "field".to_owned()
+              "field".to_string()
           }
           cat_interior(_, InteriorField(PositionalField(_))) => {
-              "anonymous field".to_owned()
+              "anonymous field".to_string()
           }
           cat_interior(_, InteriorElement(VecElement)) => {
-              "vec content".to_owned()
+              "vec content".to_string()
           }
           cat_interior(_, InteriorElement(StrElement)) => {
-              "str content".to_owned()
+              "str content".to_string()
           }
           cat_interior(_, InteriorElement(OtherElement)) => {
-              "indexed content".to_owned()
+              "indexed content".to_string()
           }
           cat_upvar(..) => {
-              "captured outer variable".to_owned()
+              "captured outer variable".to_string()
           }
           cat_discr(ref cmt, _) => {
             self.cmt_to_str(&**cmt)
@@ -1234,17 +1252,17 @@ impl cmt_ {
 }
 
 impl Repr for cmt_ {
-    fn repr(&self, tcx: &ty::ctxt) -> ~str {
+    fn repr(&self, tcx: &ty::ctxt) -> String {
         format!("\\{{} id:{} m:{:?} ty:{}\\}",
-             self.cat.repr(tcx),
-             self.id,
-             self.mutbl,
-             self.ty.repr(tcx))
+                self.cat.repr(tcx),
+                self.id,
+                self.mutbl,
+                self.ty.repr(tcx))
     }
 }
 
 impl Repr for categorization {
-    fn repr(&self, tcx: &ty::ctxt) -> ~str {
+    fn repr(&self, tcx: &ty::ctxt) -> String {
         match *self {
             cat_static_item |
             cat_rvalue(..) |
@@ -1255,15 +1273,10 @@ impl Repr for categorization {
                 format!("{:?}", *self)
             }
             cat_deref(ref cmt, derefs, ptr) => {
-                format!("{}-{}{}->",
-                        cmt.cat.repr(tcx),
-                        ptr_sigil(ptr),
-                        derefs)
+                format!("{}-{}{}->", cmt.cat.repr(tcx), ptr_sigil(ptr), derefs)
             }
             cat_interior(ref cmt, interior) => {
-                format!("{}.{}",
-                     cmt.cat.repr(tcx),
-                     interior.repr(tcx))
+                format!("{}.{}", cmt.cat.repr(tcx), interior.repr(tcx))
             }
             cat_downcast(ref cmt) => {
                 format!("{}->(enum)", cmt.cat.repr(tcx))
@@ -1287,13 +1300,13 @@ pub fn ptr_sigil(ptr: PointerKind) -> &'static str {
 }
 
 impl Repr for InteriorKind {
-    fn repr(&self, _tcx: &ty::ctxt) -> ~str {
+    fn repr(&self, _tcx: &ty::ctxt) -> String {
         match *self {
             InteriorField(NamedField(fld)) => {
-                token::get_name(fld).get().to_str()
+                token::get_name(fld).get().to_str().to_string()
             }
             InteriorField(PositionalField(i)) => format!("\\#{:?}", i),
-            InteriorElement(_) => "[]".to_owned(),
+            InteriorElement(_) => "[]".to_string(),
         }
     }
 }

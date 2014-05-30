@@ -271,7 +271,8 @@
 // And now that you've seen all the races that I found and attempted to fix,
 // here's the code for you to find some more!
 
-use cast;
+use alloc::arc::Arc;
+
 use cell::Cell;
 use clone::Clone;
 use iter::Iterator;
@@ -280,10 +281,11 @@ use kinds::marker;
 use mem;
 use ops::Drop;
 use option::{Some, None, Option};
+use owned::Box;
 use result::{Ok, Err, Result};
 use rt::local::Local;
 use rt::task::{Task, BlockedTask};
-use sync::arc::UnsafeArc;
+use ty::Unsafe;
 
 pub use comm::select::{Select, Handle};
 
@@ -297,6 +299,7 @@ macro_rules! test (
             use prelude::*;
             use super::*;
             use super::super::*;
+            use owned::Box;
             use task;
 
             fn f() $b
@@ -325,7 +328,7 @@ static RESCHED_FREQ: int = 256;
 /// The receiving-half of Rust's channel type. This half can only be owned by
 /// one task
 pub struct Receiver<T> {
-    inner: Flavor<T>,
+    inner: Unsafe<Flavor<T>>,
     receives: Cell<uint>,
     // can't share in an arc
     marker: marker::NoShare,
@@ -341,7 +344,7 @@ pub struct Messages<'a, T> {
 /// The sending-half of Rust's asynchronous channel type. This half can only be
 /// owned by one task, but it can be cloned to send to other tasks.
 pub struct Sender<T> {
-    inner: Flavor<T>,
+    inner: Unsafe<Flavor<T>>,
     sends: Cell<uint>,
     // can't share in an arc
     marker: marker::NoShare,
@@ -350,7 +353,7 @@ pub struct Sender<T> {
 /// The sending-half of Rust's synchronous channel type. This half can only be
 /// owned by one task, but it can be cloned to send to other tasks.
 pub struct SyncSender<T> {
-    inner: UnsafeArc<sync::Packet<T>>,
+    inner: Arc<Unsafe<sync::Packet<T>>>,
     // can't share in an arc
     marker: marker::NoShare,
 }
@@ -384,10 +387,31 @@ pub enum TrySendError<T> {
 }
 
 enum Flavor<T> {
-    Oneshot(UnsafeArc<oneshot::Packet<T>>),
-    Stream(UnsafeArc<stream::Packet<T>>),
-    Shared(UnsafeArc<shared::Packet<T>>),
-    Sync(UnsafeArc<sync::Packet<T>>),
+    Oneshot(Arc<Unsafe<oneshot::Packet<T>>>),
+    Stream(Arc<Unsafe<stream::Packet<T>>>),
+    Shared(Arc<Unsafe<shared::Packet<T>>>),
+    Sync(Arc<Unsafe<sync::Packet<T>>>),
+}
+
+#[doc(hidden)]
+trait UnsafeFlavor<T> {
+    fn inner_unsafe<'a>(&'a self) -> &'a Unsafe<Flavor<T>>;
+    unsafe fn mut_inner<'a>(&'a self) -> &'a mut Flavor<T> {
+        &mut *self.inner_unsafe().get()
+    }
+    unsafe fn inner<'a>(&'a self) -> &'a Flavor<T> {
+        &*self.inner_unsafe().get()
+    }
+}
+impl<T> UnsafeFlavor<T> for Sender<T> {
+    fn inner_unsafe<'a>(&'a self) -> &'a Unsafe<Flavor<T>> {
+        &self.inner
+    }
+}
+impl<T> UnsafeFlavor<T> for Receiver<T> {
+    fn inner_unsafe<'a>(&'a self) -> &'a Unsafe<Flavor<T>> {
+        &self.inner
+    }
 }
 
 /// Creates a new asynchronous channel, returning the sender/receiver halves.
@@ -412,8 +436,8 @@ enum Flavor<T> {
 /// println!("{}", rx.recv());
 /// ```
 pub fn channel<T: Send>() -> (Sender<T>, Receiver<T>) {
-    let (a, b) = UnsafeArc::new2(oneshot::Packet::new());
-    (Sender::new(Oneshot(b)), Receiver::new(Oneshot(a)))
+    let a = Arc::new(Unsafe::new(oneshot::Packet::new()));
+    (Sender::new(Oneshot(a.clone())), Receiver::new(Oneshot(a)))
 }
 
 /// Creates a new synchronous, bounded channel.
@@ -448,8 +472,8 @@ pub fn channel<T: Send>() -> (Sender<T>, Receiver<T>) {
 /// assert_eq!(rx.recv(), 2);
 /// ```
 pub fn sync_channel<T: Send>(bound: uint) -> (SyncSender<T>, Receiver<T>) {
-    let (a, b) = UnsafeArc::new2(sync::Packet::new(bound));
-    (SyncSender::new(a), Receiver::new(Sync(b)))
+    let a = Arc::new(Unsafe::new(sync::Packet::new(bound)));
+    (SyncSender::new(a.clone()), Receiver::new(Sync(a)))
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -458,7 +482,7 @@ pub fn sync_channel<T: Send>(bound: uint) -> (SyncSender<T>, Receiver<T>) {
 
 impl<T: Send> Sender<T> {
     fn new(inner: Flavor<T>) -> Sender<T> {
-        Sender { inner: inner, sends: Cell::new(0), marker: marker::NoShare }
+        Sender { inner: Unsafe::new(inner), sends: Cell::new(0), marker: marker::NoShare }
     }
 
     /// Sends a value along this channel to be received by the corresponding
@@ -528,19 +552,19 @@ impl<T: Send> Sender<T> {
         let cnt = self.sends.get() + 1;
         self.sends.set(cnt);
         if cnt % (RESCHED_FREQ as uint) == 0 {
-            let task: Option<~Task> = Local::try_take();
+            let task: Option<Box<Task>> = Local::try_take();
             task.map(|t| t.maybe_yield());
         }
 
-        let (new_inner, ret) = match self.inner {
+        let (new_inner, ret) = match *unsafe { self.inner() } {
             Oneshot(ref p) => {
-                let p = p.get();
                 unsafe {
+                    let p = p.get();
                     if !(*p).sent() {
                         return (*p).send(t);
                     } else {
-                        let (a, b) = UnsafeArc::new2(stream::Packet::new());
-                        match (*p).upgrade(Receiver::new(Stream(b))) {
+                        let a = Arc::new(Unsafe::new(stream::Packet::new()));
+                        match (*p).upgrade(Receiver::new(Stream(a.clone()))) {
                             oneshot::UpSuccess => {
                                 let ret = (*a.get()).send(t);
                                 (a, ret)
@@ -564,8 +588,8 @@ impl<T: Send> Sender<T> {
         };
 
         unsafe {
-            let mut tmp = Sender::new(Stream(new_inner));
-            mem::swap(&mut cast::transmute_mut(self).inner, &mut tmp.inner);
+            let tmp = Sender::new(Stream(new_inner));
+            mem::swap(self.mut_inner(), tmp.mut_inner());
         }
         return ret;
     }
@@ -573,19 +597,25 @@ impl<T: Send> Sender<T> {
 
 impl<T: Send> Clone for Sender<T> {
     fn clone(&self) -> Sender<T> {
-        let (packet, sleeper) = match self.inner {
+        let (packet, sleeper) = match *unsafe { self.inner() } {
             Oneshot(ref p) => {
-                let (a, b) = UnsafeArc::new2(shared::Packet::new());
-                match unsafe { (*p.get()).upgrade(Receiver::new(Shared(a))) } {
-                    oneshot::UpSuccess | oneshot::UpDisconnected => (b, None),
-                    oneshot::UpWoke(task) => (b, Some(task))
+                let a = Arc::new(Unsafe::new(shared::Packet::new()));
+                unsafe {
+                    (*a.get()).postinit_lock();
+                    match (*p.get()).upgrade(Receiver::new(Shared(a.clone()))) {
+                        oneshot::UpSuccess | oneshot::UpDisconnected => (a, None),
+                        oneshot::UpWoke(task) => (a, Some(task))
+                    }
                 }
             }
             Stream(ref p) => {
-                let (a, b) = UnsafeArc::new2(shared::Packet::new());
-                match unsafe { (*p.get()).upgrade(Receiver::new(Shared(a))) } {
-                    stream::UpSuccess | stream::UpDisconnected => (b, None),
-                    stream::UpWoke(task) => (b, Some(task)),
+                let a = Arc::new(Unsafe::new(shared::Packet::new()));
+                unsafe {
+                    (*a.get()).postinit_lock();
+                    match (*p.get()).upgrade(Receiver::new(Shared(a.clone()))) {
+                        stream::UpSuccess | stream::UpDisconnected => (a, None),
+                        stream::UpWoke(task) => (a, Some(task)),
+                    }
                 }
             }
             Shared(ref p) => {
@@ -598,8 +628,8 @@ impl<T: Send> Clone for Sender<T> {
         unsafe {
             (*packet.get()).inherit_blocker(sleeper);
 
-            let mut tmp = Sender::new(Shared(packet.clone()));
-            mem::swap(&mut cast::transmute_mut(self).inner, &mut tmp.inner);
+            let tmp = Sender::new(Shared(packet.clone()));
+            mem::swap(self.mut_inner(), tmp.mut_inner());
         }
         Sender::new(Shared(packet))
     }
@@ -608,7 +638,7 @@ impl<T: Send> Clone for Sender<T> {
 #[unsafe_destructor]
 impl<T: Send> Drop for Sender<T> {
     fn drop(&mut self) {
-        match self.inner {
+        match *unsafe { self.mut_inner() } {
             Oneshot(ref mut p) => unsafe { (*p.get()).drop_chan(); },
             Stream(ref mut p) => unsafe { (*p.get()).drop_chan(); },
             Shared(ref mut p) => unsafe { (*p.get()).drop_chan(); },
@@ -622,7 +652,7 @@ impl<T: Send> Drop for Sender<T> {
 ////////////////////////////////////////////////////////////////////////////////
 
 impl<T: Send> SyncSender<T> {
-    fn new(inner: UnsafeArc<sync::Packet<T>>) -> SyncSender<T> {
+    fn new(inner: Arc<Unsafe<sync::Packet<T>>>) -> SyncSender<T> {
         SyncSender { inner: inner, marker: marker::NoShare }
     }
 
@@ -705,7 +735,7 @@ impl<T: Send> Drop for SyncSender<T> {
 
 impl<T: Send> Receiver<T> {
     fn new(inner: Flavor<T>) -> Receiver<T> {
-        Receiver { inner: inner, receives: Cell::new(0), marker: marker::NoShare }
+        Receiver { inner: Unsafe::new(inner), receives: Cell::new(0), marker: marker::NoShare }
     }
 
     /// Blocks waiting for a value on this receiver
@@ -752,12 +782,12 @@ impl<T: Send> Receiver<T> {
         let cnt = self.receives.get() + 1;
         self.receives.set(cnt);
         if cnt % (RESCHED_FREQ as uint) == 0 {
-            let task: Option<~Task> = Local::try_take();
+            let task: Option<Box<Task>> = Local::try_take();
             task.map(|t| t.maybe_yield());
         }
 
         loop {
-            let mut new_port = match self.inner {
+            let new_port = match *unsafe { self.inner() } {
                 Oneshot(ref p) => {
                     match unsafe { (*p.get()).try_recv() } {
                         Ok(t) => return Ok(t),
@@ -790,8 +820,8 @@ impl<T: Send> Receiver<T> {
                 }
             };
             unsafe {
-                mem::swap(&mut cast::transmute_mut(self).inner,
-                          &mut new_port.inner);
+                mem::swap(self.mut_inner(),
+                          new_port.mut_inner());
             }
         }
     }
@@ -810,7 +840,7 @@ impl<T: Send> Receiver<T> {
     /// the value found on the receiver is returned.
     pub fn recv_opt(&self) -> Result<T, ()> {
         loop {
-            let mut new_port = match self.inner {
+            let new_port = match *unsafe { self.inner() } {
                 Oneshot(ref p) => {
                     match unsafe { (*p.get()).recv() } {
                         Ok(t) => return Ok(t),
@@ -837,8 +867,7 @@ impl<T: Send> Receiver<T> {
                 Sync(ref p) => return unsafe { (*p.get()).recv() }
             };
             unsafe {
-                mem::swap(&mut cast::transmute_mut(self).inner,
-                          &mut new_port.inner);
+                mem::swap(self.mut_inner(), new_port.mut_inner());
             }
         }
     }
@@ -853,7 +882,7 @@ impl<T: Send> Receiver<T> {
 impl<T: Send> select::Packet for Receiver<T> {
     fn can_recv(&self) -> bool {
         loop {
-            let mut new_port = match self.inner {
+            let new_port = match *unsafe { self.inner() } {
                 Oneshot(ref p) => {
                     match unsafe { (*p.get()).can_recv() } {
                         Ok(ret) => return ret,
@@ -874,15 +903,15 @@ impl<T: Send> select::Packet for Receiver<T> {
                 }
             };
             unsafe {
-                mem::swap(&mut cast::transmute_mut(self).inner,
-                          &mut new_port.inner);
+                mem::swap(self.mut_inner(),
+                          new_port.mut_inner());
             }
         }
     }
 
     fn start_selection(&self, mut task: BlockedTask) -> Result<(), BlockedTask>{
         loop {
-            let (t, mut new_port) = match self.inner {
+            let (t, new_port) = match *unsafe { self.inner() } {
                 Oneshot(ref p) => {
                     match unsafe { (*p.get()).start_selection(task) } {
                         oneshot::SelSuccess => return Ok(()),
@@ -906,8 +935,8 @@ impl<T: Send> select::Packet for Receiver<T> {
             };
             task = t;
             unsafe {
-                mem::swap(&mut cast::transmute_mut(self).inner,
-                          &mut new_port.inner);
+                mem::swap(self.mut_inner(),
+                          new_port.mut_inner());
             }
         }
     }
@@ -915,7 +944,7 @@ impl<T: Send> select::Packet for Receiver<T> {
     fn abort_selection(&self) -> bool {
         let mut was_upgrade = false;
         loop {
-            let result = match self.inner {
+            let result = match *unsafe { self.inner() } {
                 Oneshot(ref p) => unsafe { (*p.get()).abort_selection() },
                 Stream(ref p) => unsafe {
                     (*p.get()).abort_selection(was_upgrade)
@@ -927,11 +956,11 @@ impl<T: Send> select::Packet for Receiver<T> {
                     (*p.get()).abort_selection()
                 },
             };
-            let mut new_port = match result { Ok(b) => return b, Err(p) => p };
+            let new_port = match result { Ok(b) => return b, Err(p) => p };
             was_upgrade = true;
             unsafe {
-                mem::swap(&mut cast::transmute_mut(self).inner,
-                          &mut new_port.inner);
+                mem::swap(self.mut_inner(),
+                          new_port.mut_inner());
             }
         }
     }
@@ -944,7 +973,7 @@ impl<'a, T: Send> Iterator<T> for Messages<'a, T> {
 #[unsafe_destructor]
 impl<T: Send> Drop for Receiver<T> {
     fn drop(&mut self) {
-        match self.inner {
+        match *unsafe { self.mut_inner() } {
             Oneshot(ref mut p) => unsafe { (*p.get()).drop_port(); },
             Stream(ref mut p) => unsafe { (*p.get()).drop_port(); },
             Shared(ref mut p) => unsafe { (*p.get()).drop_port(); },
@@ -963,7 +992,7 @@ mod test {
 
     pub fn stress_factor() -> uint {
         match os::getenv("RUST_TEST_STRESS") {
-            Some(val) => from_str::<uint>(val).unwrap(),
+            Some(val) => from_str::<uint>(val.as_slice()).unwrap(),
             None => 1,
         }
     }
@@ -976,14 +1005,14 @@ mod test {
 
     test!(fn drop_full() {
         let (tx, _rx) = channel();
-        tx.send(~1);
+        tx.send(box 1);
     })
 
     test!(fn drop_full_shared() {
         let (tx, _rx) = channel();
         drop(tx.clone());
         drop(tx.clone());
-        tx.send(~1);
+        tx.send(box 1);
     })
 
     test!(fn smoke_shared() {
@@ -1177,9 +1206,9 @@ mod test {
 
     test!(fn oneshot_single_thread_send_port_close() {
         // Testing that the sender cleans up the payload if receiver is closed
-        let (tx, rx) = channel::<~int>();
+        let (tx, rx) = channel::<Box<int>>();
         drop(rx);
-        tx.send(~0);
+        tx.send(box 0);
     } #[should_fail])
 
     test!(fn oneshot_single_thread_recv_chan_close() {
@@ -1194,9 +1223,9 @@ mod test {
     })
 
     test!(fn oneshot_single_thread_send_then_recv() {
-        let (tx, rx) = channel::<~int>();
-        tx.send(~10);
-        assert!(rx.recv() == ~10);
+        let (tx, rx) = channel::<Box<int>>();
+        tx.send(box 10);
+        assert!(rx.recv() == box 10);
     })
 
     test!(fn oneshot_single_thread_try_send_open() {
@@ -1243,21 +1272,21 @@ mod test {
     })
 
     test!(fn oneshot_multi_task_recv_then_send() {
-        let (tx, rx) = channel::<~int>();
+        let (tx, rx) = channel::<Box<int>>();
         spawn(proc() {
-            assert!(rx.recv() == ~10);
+            assert!(rx.recv() == box 10);
         });
 
-        tx.send(~10);
+        tx.send(box 10);
     })
 
     test!(fn oneshot_multi_task_recv_then_close() {
-        let (tx, rx) = channel::<~int>();
+        let (tx, rx) = channel::<Box<int>>();
         spawn(proc() {
             drop(tx);
         });
         let res = task::try(proc() {
-            assert!(rx.recv() == ~10);
+            assert!(rx.recv() == box 10);
         });
         assert!(res.is_err());
     })
@@ -1305,10 +1334,10 @@ mod test {
         for _ in range(0, stress_factor()) {
             let (tx, rx) = channel();
             spawn(proc() {
-                tx.send(~10);
+                tx.send(box 10);
             });
             spawn(proc() {
-                assert!(rx.recv() == ~10);
+                assert!(rx.recv() == box 10);
             });
         }
     })
@@ -1320,20 +1349,20 @@ mod test {
             send(tx, 0);
             recv(rx, 0);
 
-            fn send(tx: Sender<~int>, i: int) {
+            fn send(tx: Sender<Box<int>>, i: int) {
                 if i == 10 { return }
 
                 spawn(proc() {
-                    tx.send(~i);
+                    tx.send(box i);
                     send(tx, i + 1);
                 });
             }
 
-            fn recv(rx: Receiver<~int>, i: int) {
+            fn recv(rx: Receiver<Box<int>>, i: int) {
                 if i == 10 { return }
 
                 spawn(proc() {
-                    assert!(rx.recv() == ~i);
+                    assert!(rx.recv() == box i);
                     recv(rx, i + 1);
                 });
             }
@@ -1496,7 +1525,7 @@ mod sync_tests {
 
     pub fn stress_factor() -> uint {
         match os::getenv("RUST_TEST_STRESS") {
-            Some(val) => from_str::<uint>(val).unwrap(),
+            Some(val) => from_str::<uint>(val.as_slice()).unwrap(),
             None => 1,
         }
     }
@@ -1509,7 +1538,7 @@ mod sync_tests {
 
     test!(fn drop_full() {
         let (tx, _rx) = sync_channel(1);
-        tx.send(~1);
+        tx.send(box 1);
     })
 
     test!(fn smoke_shared() {
@@ -1637,9 +1666,9 @@ mod sync_tests {
 
     test!(fn oneshot_single_thread_send_port_close() {
         // Testing that the sender cleans up the payload if receiver is closed
-        let (tx, rx) = sync_channel::<~int>(0);
+        let (tx, rx) = sync_channel::<Box<int>>(0);
         drop(rx);
-        tx.send(~0);
+        tx.send(box 0);
     } #[should_fail])
 
     test!(fn oneshot_single_thread_recv_chan_close() {
@@ -1654,9 +1683,9 @@ mod sync_tests {
     })
 
     test!(fn oneshot_single_thread_send_then_recv() {
-        let (tx, rx) = sync_channel::<~int>(1);
-        tx.send(~10);
-        assert!(rx.recv() == ~10);
+        let (tx, rx) = sync_channel::<Box<int>>(1);
+        tx.send(box 10);
+        assert!(rx.recv() == box 10);
     })
 
     test!(fn oneshot_single_thread_try_send_open() {
@@ -1708,21 +1737,21 @@ mod sync_tests {
     })
 
     test!(fn oneshot_multi_task_recv_then_send() {
-        let (tx, rx) = sync_channel::<~int>(0);
+        let (tx, rx) = sync_channel::<Box<int>>(0);
         spawn(proc() {
-            assert!(rx.recv() == ~10);
+            assert!(rx.recv() == box 10);
         });
 
-        tx.send(~10);
+        tx.send(box 10);
     })
 
     test!(fn oneshot_multi_task_recv_then_close() {
-        let (tx, rx) = sync_channel::<~int>(0);
+        let (tx, rx) = sync_channel::<Box<int>>(0);
         spawn(proc() {
             drop(tx);
         });
         let res = task::try(proc() {
-            assert!(rx.recv() == ~10);
+            assert!(rx.recv() == box 10);
         });
         assert!(res.is_err());
     })
@@ -1770,10 +1799,10 @@ mod sync_tests {
         for _ in range(0, stress_factor()) {
             let (tx, rx) = sync_channel(0);
             spawn(proc() {
-                tx.send(~10);
+                tx.send(box 10);
             });
             spawn(proc() {
-                assert!(rx.recv() == ~10);
+                assert!(rx.recv() == box 10);
             });
         }
     })
@@ -1785,20 +1814,20 @@ mod sync_tests {
             send(tx, 0);
             recv(rx, 0);
 
-            fn send(tx: SyncSender<~int>, i: int) {
+            fn send(tx: SyncSender<Box<int>>, i: int) {
                 if i == 10 { return }
 
                 spawn(proc() {
-                    tx.send(~i);
+                    tx.send(box i);
                     send(tx, i + 1);
                 });
             }
 
-            fn recv(rx: Receiver<~int>, i: int) {
+            fn recv(rx: Receiver<Box<int>>, i: int) {
                 if i == 10 { return }
 
                 spawn(proc() {
-                    assert!(rx.recv() == ~i);
+                    assert!(rx.recv() == box i);
                     recv(rx, i + 1);
                 });
             }

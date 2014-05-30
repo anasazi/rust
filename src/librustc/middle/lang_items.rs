@@ -23,6 +23,7 @@
 use driver::session::Session;
 use metadata::csearch::each_lang_item;
 use middle::ty;
+use middle::weak_lang_items;
 use syntax::ast;
 use syntax::ast_util::local_def;
 use syntax::attr::AttrMetaMethods;
@@ -41,13 +42,14 @@ macro_rules! lets_do_this {
         $( $variant:ident, $name:expr, $method:ident; )*
     ) => {
 
-#[deriving(FromPrimitive)]
+#[deriving(FromPrimitive, Eq, TotalEq, Hash)]
 pub enum LangItem {
     $($variant),*
 }
 
 pub struct LanguageItems {
-    pub items: Vec<Option<ast::DefId>> ,
+    pub items: Vec<Option<ast::DefId>>,
+    pub missing: Vec<LangItem>,
 }
 
 impl LanguageItems {
@@ -55,7 +57,8 @@ impl LanguageItems {
         fn foo(_: LangItem) -> Option<ast::DefId> { None }
 
         LanguageItems {
-            items: vec!($(foo($variant)),*)
+            items: vec!($(foo($variant)),*),
+            missing: Vec::new(),
         }
     }
 
@@ -71,7 +74,7 @@ impl LanguageItems {
         }
     }
 
-    pub fn require(&self, it: LangItem) -> Result<ast::DefId, ~str> {
+    pub fn require(&self, it: LangItem) -> Result<ast::DefId, String> {
         match self.items.get(it as uint) {
             &Some(id) => Ok(id),
             &None => {
@@ -149,7 +152,8 @@ impl<'a> LanguageItemCollector<'a> {
         match self.items.items.get(item_index) {
             &Some(original_def_id) if original_def_id != item_def_id => {
                 self.session.err(format!("duplicate entry for `{}`",
-                                      LanguageItems::item_name(item_index)));
+                                         LanguageItems::item_name(
+                                             item_index)).as_slice());
             }
             &Some(_) | &None => {
                 // OK.
@@ -198,7 +202,8 @@ pub fn collect_language_items(krate: &ast::Crate,
                               session: &Session) -> LanguageItems {
     let mut collector = LanguageItemCollector::new(session);
     collector.collect(krate);
-    let LanguageItemCollector { items, .. } = collector;
+    let LanguageItemCollector { mut items, .. } = collector;
+    weak_lang_items::check_crate(krate, session, &mut items);
     session.abort_if_errors();
     items
 }
@@ -240,8 +245,20 @@ lets_do_this! {
 
     StrEqFnLangItem,                 "str_eq",                  str_eq_fn;
     UniqStrEqFnLangItem,             "uniq_str_eq",             uniq_str_eq_fn;
+
+    // A number of failure-related lang items. The `fail_` item corresponds to
+    // divide-by-zero and various failure cases with `match`. The
+    // `fail_bounds_check` item is for indexing arrays.
+    //
+    // The `begin_unwind` lang item has a predefined symbol name and is sort of
+    // a "weak lang item" in the sense that a crate is not required to have it
+    // defined to use it, but a final product is required to define it
+    // somewhere. Additionally, there are restrictions on crates that use a weak
+    // lang item, but do not have it defined.
     FailFnLangItem,                  "fail_",                   fail_fn;
     FailBoundsCheckFnLangItem,       "fail_bounds_check",       fail_bounds_check_fn;
+    BeginUnwindLangItem,             "begin_unwind",            begin_unwind;
+
     ExchangeMallocFnLangItem,        "exchange_malloc",         exchange_malloc_fn;
     ClosureExchangeMallocFnLangItem, "closure_exchange_malloc", closure_exchange_malloc_fn;
     ExchangeFreeFnLangItem,          "exchange_free",           exchange_free_fn;
@@ -257,11 +274,12 @@ lets_do_this! {
 
     TypeIdLangItem,                  "type_id",                 type_id;
 
-    EhPersonalityLangItem,           "eh_personality",          eh_personality_fn;
+    EhPersonalityLangItem,           "eh_personality",          eh_personality;
 
     ManagedHeapLangItem,             "managed_heap",            managed_heap;
     ExchangeHeapLangItem,            "exchange_heap",           exchange_heap;
     GcLangItem,                      "gc",                      gc;
+    OwnedBoxLangItem,                "owned_box",               owned_box;
 
     CovariantTypeItem,               "covariant_type",          covariant_type;
     ContravariantTypeItem,           "contravariant_type",      contravariant_type;
@@ -275,4 +293,6 @@ lets_do_this! {
     NoCopyItem,                      "no_copy_bound",           no_copy_bound;
     NoShareItem,                     "no_share_bound",          no_share_bound;
     ManagedItem,                     "managed_bound",           managed_bound;
+
+    StackExhaustedLangItem,          "stack_exhausted",         stack_exhausted;
 }

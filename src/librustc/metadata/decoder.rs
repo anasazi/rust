@@ -21,6 +21,7 @@ use metadata::cstore;
 use metadata::tydecode::{parse_ty_data, parse_def_id,
                          parse_type_param_def_data,
                          parse_bare_fn_ty_data, parse_trait_ref_data};
+use middle::lang_items;
 use middle::ty::{ImplContainer, TraitContainer};
 use middle::ty;
 use middle::typeck;
@@ -110,7 +111,6 @@ enum Family {
     UnsafeFn,              // u
     StaticMethod,          // F
     UnsafeStaticMethod,    // U
-    ForeignFn,             // e
     Type,                  // y
     ForeignType,           // T
     Mod,                   // m
@@ -134,7 +134,6 @@ fn item_family(item: ebml::Doc) -> Family {
       'u' => UnsafeFn,
       'F' => StaticMethod,
       'U' => UnsafeStaticMethod,
-      'e' => ForeignFn,
       'y' => Type,
       'T' => ForeignType,
       'm' => Mod,
@@ -186,8 +185,8 @@ fn item_method_sort(item: ebml::Doc) -> char {
     ret
 }
 
-fn item_symbol(item: ebml::Doc) -> ~str {
-    reader::get_doc(item, tag_items_data_item_symbol).as_str()
+fn item_symbol(item: ebml::Doc) -> String {
+    reader::get_doc(item, tag_items_data_item_symbol).as_str().to_string()
 }
 
 fn item_parent_item(d: ebml::Doc) -> Option<ast::DefId> {
@@ -339,7 +338,6 @@ fn item_to_def_like(item: ebml::Doc, did: ast::DefId, cnum: ast::CrateNum)
         Struct    => DlDef(ast::DefStruct(did)),
         UnsafeFn  => DlDef(ast::DefFn(did, ast::UnsafeFn)),
         Fn        => DlDef(ast::DefFn(did, ast::NormalFn)),
-        ForeignFn => DlDef(ast::DefFn(did, ast::ExternFn)),
         StaticMethod | UnsafeStaticMethod => {
             let fn_style = if fam == UnsafeStaticMethod { ast::UnsafeFn } else
                 { ast::NormalFn };
@@ -454,7 +452,7 @@ pub fn get_impl_vtables(cdata: Cmd,
 }
 
 
-pub fn get_symbol(data: &[u8], id: ast::NodeId) -> ~str {
+pub fn get_symbol(data: &[u8], id: ast::NodeId) -> String {
     return item_symbol(lookup_item(id, data));
 }
 
@@ -610,7 +608,7 @@ fn each_child_of_item_or_crate(intr: Rc<IdentInterner>,
                 // Hand off the item to the callback.
                 let def_like = item_to_def_like(child_item_doc,
                                                 child_def_id,
-                                                cdata.cnum);
+                                                child_def_id.krate);
                 // These items have a public visibility because they're part of
                 // a public re-export.
                 callback(def_like, token::str_to_ident(name), ast::Public);
@@ -955,20 +953,14 @@ pub fn get_tuple_struct_definition_if_ctor(cdata: Cmd,
 
 pub fn get_item_attrs(cdata: Cmd,
                       orig_node_id: ast::NodeId,
-                      f: |Vec<@ast::MetaItem> |) {
+                      f: |Vec<ast::Attribute>|) {
     // The attributes for a tuple struct are attached to the definition, not the ctor;
     // we assume that someone passing in a tuple struct ctor is actually wanting to
     // look at the definition
     let node_id = get_tuple_struct_definition_if_ctor(cdata, orig_node_id);
     let node_id = node_id.map(|x| x.node).unwrap_or(orig_node_id);
     let item = lookup_item(node_id, cdata.data());
-    reader::tagged_docs(item, tag_attributes, |attributes| {
-        reader::tagged_docs(attributes, tag_attribute, |attribute| {
-            f(get_meta_items(attribute));
-            true
-        });
-        true
-    });
+    f(get_attributes(item));
 }
 
 fn struct_field_family_to_visibility(family: Family) -> ast::Visibility {
@@ -1058,6 +1050,7 @@ fn get_attributes(md: ebml::Doc) -> Vec<ast::Attribute> {
             attrs.push(
                 codemap::Spanned {
                     node: ast::Attribute_ {
+                        id: attr::mk_attr_id(),
                         style: ast::AttrOuter,
                         value: meta_item,
                         is_sugared_doc: false,
@@ -1100,13 +1093,15 @@ pub fn get_crate_deps(data: &[u8]) -> Vec<CrateDep> {
     let cratedoc = reader::Doc(data);
     let depsdoc = reader::get_doc(cratedoc, tag_crate_deps);
     let mut crate_num = 1;
-    fn docstr(doc: ebml::Doc, tag_: uint) -> ~str {
+    fn docstr(doc: ebml::Doc, tag_: uint) -> String {
         let d = reader::get_doc(doc, tag_);
-        d.as_str_slice().to_str()
+        d.as_str_slice().to_string()
     }
     reader::tagged_docs(depsdoc, tag_crate_dep, |depdoc| {
-        let crate_id = from_str(docstr(depdoc, tag_crate_dep_crateid)).unwrap();
-        let hash = Svh::new(docstr(depdoc, tag_crate_dep_hash));
+        let crate_id =
+            from_str(docstr(depdoc,
+                            tag_crate_dep_crateid).as_slice()).unwrap();
+        let hash = Svh::new(docstr(depdoc, tag_crate_dep_hash).as_slice());
         deps.push(CrateDep {
             cnum: crate_num,
             crate_id: crate_id,
@@ -1147,10 +1142,10 @@ pub fn maybe_get_crate_id(data: &[u8]) -> Option<CrateId> {
     })
 }
 
-pub fn get_crate_triple(data: &[u8]) -> ~str {
+pub fn get_crate_triple(data: &[u8]) -> String {
     let cratedoc = reader::Doc(data);
     let triple_doc = reader::maybe_get_doc(cratedoc, tag_crate_triple);
-    triple_doc.expect("No triple in crate").as_str()
+    triple_doc.expect("No triple in crate").as_str().to_string()
 }
 
 pub fn get_crate_id(data: &[u8]) -> CrateId {
@@ -1242,7 +1237,8 @@ pub fn get_trait_of_method(cdata: Cmd, id: ast::NodeId, tcx: &ty::ctxt)
 }
 
 
-pub fn get_native_libraries(cdata: Cmd) -> Vec<(cstore::NativeLibaryKind, ~str)> {
+pub fn get_native_libraries(cdata: Cmd)
+                            -> Vec<(cstore::NativeLibaryKind, String)> {
     let libraries = reader::get_doc(reader::Doc(cdata.data()),
                                     tag_native_libraries);
     let mut result = Vec::new();
@@ -1251,7 +1247,7 @@ pub fn get_native_libraries(cdata: Cmd) -> Vec<(cstore::NativeLibaryKind, ~str)>
         let name_doc = reader::get_doc(lib_doc, tag_native_libraries_name);
         let kind: cstore::NativeLibaryKind =
             FromPrimitive::from_u32(reader::doc_as_u32(kind_doc)).unwrap();
-        let name = name_doc.as_str();
+        let name = name_doc.as_str().to_string();
         result.push((kind, name));
         true
     });
@@ -1263,13 +1259,68 @@ pub fn get_macro_registrar_fn(data: &[u8]) -> Option<ast::NodeId> {
         .map(|doc| FromPrimitive::from_u32(reader::doc_as_u32(doc)).unwrap())
 }
 
-pub fn get_exported_macros(data: &[u8]) -> Vec<~str> {
+pub fn get_exported_macros(data: &[u8]) -> Vec<String> {
     let macros = reader::get_doc(reader::Doc(data),
                                  tag_exported_macros);
     let mut result = Vec::new();
     reader::tagged_docs(macros, tag_macro_def, |macro_doc| {
-        result.push(macro_doc.as_str());
+        result.push(macro_doc.as_str().to_string());
         true
     });
     result
+}
+
+pub fn get_dylib_dependency_formats(cdata: Cmd)
+    -> Vec<(ast::CrateNum, cstore::LinkagePreference)>
+{
+    let formats = reader::get_doc(reader::Doc(cdata.data()),
+                                  tag_dylib_dependency_formats);
+    let mut result = Vec::new();
+
+    debug!("found dylib deps: {}", formats.as_str_slice());
+    for spec in formats.as_str_slice().split(',') {
+        if spec.len() == 0 { continue }
+        let cnum = spec.split(':').nth(0).unwrap();
+        let link = spec.split(':').nth(1).unwrap();
+        let cnum = from_str(cnum).unwrap();
+        let cnum = match cdata.cnum_map.find(&cnum) {
+            Some(&n) => n,
+            None => fail!("didn't find a crate in the cnum_map")
+        };
+        result.push((cnum, if link == "d" {
+            cstore::RequireDynamic
+        } else {
+            cstore::RequireStatic
+        }));
+    }
+    return result;
+}
+
+pub fn get_missing_lang_items(cdata: Cmd)
+    -> Vec<lang_items::LangItem>
+{
+    let items = reader::get_doc(reader::Doc(cdata.data()), tag_lang_items);
+    let mut result = Vec::new();
+    reader::tagged_docs(items, tag_lang_items_missing, |missing_doc| {
+        let item: lang_items::LangItem =
+            FromPrimitive::from_u32(reader::doc_as_u32(missing_doc)).unwrap();
+        result.push(item);
+        true
+    });
+    return result;
+}
+
+pub fn get_method_arg_names(cdata: Cmd, id: ast::NodeId) -> Vec<String> {
+    let mut ret = Vec::new();
+    let method_doc = lookup_item(id, cdata.data());
+    match reader::maybe_get_doc(method_doc, tag_method_argument_names) {
+        Some(args_doc) => {
+            reader::tagged_docs(args_doc, tag_method_argument_name, |name_doc| {
+                ret.push(name_doc.as_str_slice().to_string());
+                true
+            });
+        }
+        None => {}
+    }
+    return ret;
 }

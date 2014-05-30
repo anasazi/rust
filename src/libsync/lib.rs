@@ -12,13 +12,13 @@
  * Concurrency-enabled mechanisms and primitives.
  */
 
-#![crate_id = "sync#0.11-pre"]
+#![crate_id = "sync#0.11.0-pre"]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
 #![license = "MIT/ASL2"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-       html_root_url = "http://static.rust-lang.org/doc/master")]
+       html_root_url = "http://doc.rust-lang.org/")]
 #![feature(phase)]
 #![deny(deprecated_owned_vector)]
 
@@ -27,17 +27,18 @@
 #[cfg(test)]
 #[phase(syntax, link)] extern crate log;
 
+extern crate alloc;
+
 pub use comm::{DuplexStream, duplex};
 pub use task_pool::TaskPool;
 pub use future::Future;
-pub use arc::{Arc, Weak};
+pub use alloc::arc::{Arc, Weak};
 pub use lock::{Mutex, MutexGuard, Condvar, Barrier,
                RWLock, RWLockReadGuard, RWLockWriteGuard};
 
 // The mutex/rwlock in this module are not meant for reexport
 pub use raw::{Semaphore, SemaphoreGuard};
 
-mod arc;
 mod comm;
 mod future;
 mod lock;

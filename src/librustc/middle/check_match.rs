@@ -15,7 +15,6 @@ use middle::const_eval::{eval_const_expr, const_val, const_bool, const_float};
 use middle::pat_util::*;
 use middle::ty::*;
 use middle::ty;
-use util::nodemap::NodeSet;
 use util::ppaux::ty_to_str;
 
 use std::cmp;
@@ -29,7 +28,6 @@ use syntax::visit::{Visitor, FnKind};
 
 struct MatchCheckCtxt<'a> {
     tcx: &'a ty::ctxt,
-    moves_map: &'a NodeSet
 }
 
 impl<'a> Visitor<()> for MatchCheckCtxt<'a> {
@@ -39,17 +37,15 @@ impl<'a> Visitor<()> for MatchCheckCtxt<'a> {
     fn visit_local(&mut self, l: &Local, _: ()) {
         check_local(self, l);
     }
-    fn visit_fn(&mut self, fk: &FnKind, fd: &FnDecl, b: &Block, s: Span, n: NodeId, _: ()) {
-        check_fn(self, fk, fd, b, s, n);
+    fn visit_fn(&mut self, fk: &FnKind, fd: &FnDecl, b: &Block, s: Span, _: NodeId, _: ()) {
+        check_fn(self, fk, fd, b, s);
     }
 }
 
 pub fn check_crate(tcx: &ty::ctxt,
-                   moves_map: &NodeSet,
                    krate: &Crate) {
     let mut cx = MatchCheckCtxt {
         tcx: tcx,
-        moves_map: moves_map
     };
 
     visit::walk_crate(&mut cx, krate, ());
@@ -78,7 +74,7 @@ fn check_expr(cx: &mut MatchCheckCtxt, ex: &Expr) {
                // We know the type is inhabited, so this must be wrong
                cx.tcx.sess.span_err(ex.span, format!("non-exhaustive patterns: \
                             type {} is non-empty",
-                            ty_to_str(cx.tcx, pat_ty)));
+                            ty_to_str(cx.tcx, pat_ty)).as_slice());
            }
            // If the type *is* empty, it's vacuously exhaustive
            return;
@@ -168,8 +164,8 @@ fn check_exhaustive(cx: &MatchCheckCtxt, sp: Span, pats: Vec<@Pat> ) {
             match ty::get(ty).sty {
                 ty::ty_bool => {
                     match *ctor {
-                        val(const_bool(true)) => Some("true".to_owned()),
-                        val(const_bool(false)) => Some("false".to_owned()),
+                        val(const_bool(true)) => Some("true".to_string()),
+                        val(const_bool(false)) => Some("false".to_string()),
                         _ => None
                     }
                 }
@@ -181,7 +177,11 @@ fn check_exhaustive(cx: &MatchCheckCtxt, sp: Span, pats: Vec<@Pat> ) {
                     let variants = ty::enum_variants(cx.tcx, id);
 
                     match variants.iter().find(|v| v.id == vid) {
-                        Some(v) => Some(token::get_ident(v.name).get().to_str()),
+                        Some(v) => {
+                            Some(token::get_ident(v.name).get()
+                                                         .to_str()
+                                                         .into_string())
+                        }
                         None => {
                             fail!("check_exhaustive: bad variant in ctor")
                         }
@@ -189,7 +189,9 @@ fn check_exhaustive(cx: &MatchCheckCtxt, sp: Span, pats: Vec<@Pat> ) {
                 }
                 ty::ty_vec(..) | ty::ty_rptr(..) => {
                     match *ctor {
-                        vec(n) => Some(format!("vectors of length {}", n)),
+                        vec(n) => {
+                            Some(format!("vectors of length {}", n))
+                        }
                         _ => None
                     }
                 }
@@ -197,11 +199,11 @@ fn check_exhaustive(cx: &MatchCheckCtxt, sp: Span, pats: Vec<@Pat> ) {
             }
         }
     };
-    let msg = "non-exhaustive patterns".to_owned() + match ext {
-        Some(ref s) => format!(": {} not covered",  *s),
-        None => "".to_owned()
-    };
-    cx.tcx.sess.span_err(sp, msg);
+    let msg = format!("non-exhaustive patterns{}", match ext {
+        Some(ref s) => format!(": {} not covered", *s),
+        None => "".to_string()
+    });
+    cx.tcx.sess.span_err(sp, msg.as_slice());
 }
 
 type matrix = Vec<Vec<@Pat> > ;
@@ -243,7 +245,16 @@ fn is_useful(cx: &MatchCheckCtxt, m: &matrix, v: &[@Pat]) -> useful {
         return not_useful
     }
     let real_pat = match m.iter().find(|r| r.get(0).id != 0) {
-      Some(r) => *r.get(0), None => v[0]
+        Some(r) => {
+            match r.get(0).node {
+                // An arm of the form `ref x @ sub_pat` has type
+                // `sub_pat`, not `&sub_pat` as `x` itself does.
+                PatIdent(BindByRef(_), _, Some(sub)) => sub,
+                _ => *r.get(0)
+            }
+        }
+        None if v.len() == 0 => return not_useful,
+        None => v[0]
     };
     let left_ty = if real_pat.id == 0 { ty::mk_nil() }
                   else { ty::node_id_to_type(cx.tcx, real_pat.id) };
@@ -262,7 +273,7 @@ fn is_useful(cx: &MatchCheckCtxt, m: &matrix, v: &[@Pat]) -> useful {
                                                 val(const_bool(false)),
                                                 0u, left_ty)
                       }
-                      ref u => (*u).clone(),
+                      u => u,
                   }
               }
               ty::ty_enum(eid, _) => {
@@ -270,7 +281,7 @@ fn is_useful(cx: &MatchCheckCtxt, m: &matrix, v: &[@Pat]) -> useful {
                       match is_useful_specialized(cx, m, v, variant(va.id),
                                                   va.args.len(), left_ty) {
                         not_useful => (),
-                        ref u => return (*u).clone(),
+                        u => return u,
                       }
                   }
                   not_useful
@@ -292,7 +303,7 @@ fn is_useful(cx: &MatchCheckCtxt, m: &matrix, v: &[@Pat]) -> useful {
                       for n in iter::range(0u, max_len + 1) {
                           match is_useful_specialized(cx, m, v, vec(n), n, left_ty) {
                               not_useful => (),
-                              ref u => return (*u).clone(),
+                              u => return u,
                           }
                       }
                       not_useful
@@ -308,21 +319,21 @@ fn is_useful(cx: &MatchCheckCtxt, m: &matrix, v: &[@Pat]) -> useful {
               }
             }
           }
-          Some(ref ctor) => {
+          Some(ctor) => {
             match is_useful(cx,
                             &m.iter().filter_map(|r| {
                                 default(cx, r.as_slice())
                             }).collect::<matrix>(),
                             v.tail()) {
-              useful_ => useful(left_ty, (*ctor).clone()),
-              ref u => (*u).clone(),
+              useful_ => useful(left_ty, ctor),
+              u => u,
             }
           }
         }
       }
-      Some(ref v0_ctor) => {
-        let arity = ctor_arity(cx, v0_ctor, left_ty);
-        is_useful_specialized(cx, m, v, (*v0_ctor).clone(), arity, left_ty)
+      Some(v0_ctor) => {
+        let arity = ctor_arity(cx, &v0_ctor, left_ty);
+        is_useful_specialized(cx, m, v, v0_ctor, arity, left_ty)
       }
     }
 }
@@ -337,11 +348,13 @@ fn is_useful_specialized(cx: &MatchCheckCtxt,
     let ms = m.iter().filter_map(|r| {
         specialize(cx, r.as_slice(), &ctor, arity, lty)
     }).collect::<matrix>();
-    let could_be_useful = is_useful(
-        cx, &ms, specialize(cx, v, &ctor, arity, lty).unwrap().as_slice());
+    let could_be_useful = match specialize(cx, v, &ctor, arity, lty) {
+        Some(v) => is_useful(cx, &ms, v.as_slice()),
+        None => return not_useful,
+    };
     match could_be_useful {
       useful_ => useful(lty, ctor),
-      ref u => (*u).clone(),
+      u => u,
     }
 }
 
@@ -370,7 +383,7 @@ fn pat_ctor_id(cx: &MatchCheckCtxt, p: @Pat) -> Option<ctor> {
           _ => Some(single)
         }
       }
-      PatUniq(_) | PatTup(_) | PatRegion(..) => {
+      PatBox(_) | PatTup(_) | PatRegion(..) => {
         Some(single)
       }
       PatVec(ref before, slice, ref after) => {
@@ -379,6 +392,7 @@ fn pat_ctor_id(cx: &MatchCheckCtxt, p: @Pat) -> Option<ctor> {
           None => Some(vec(before.len() + after.len()))
         }
       }
+      PatMac(_) => cx.tcx.sess.bug("unexpanded macro"),
     }
 }
 
@@ -412,9 +426,9 @@ fn missing_ctor(cx: &MatchCheckCtxt,
         let mut found = Vec::new();
         for r in m.iter() {
             let r = pat_ctor_id(cx, *r.get(0));
-            for id in r.iter() {
-                if !found.contains(id) {
-                    found.push((*id).clone());
+            for id in r.move_iter() {
+                if !found.contains(&id) {
+                    found.push(id);
                 }
             }
         }
@@ -732,7 +746,8 @@ fn specialize(cx: &MatchCheckCtxt,
                                     pat_span,
                                     format!("struct pattern resolved to {}, \
                                           not a struct",
-                                         ty_to_str(cx.tcx, left_ty)));
+                                         ty_to_str(cx.tcx,
+                                                   left_ty)).as_slice());
                             }
                         }
                         let args = class_fields.iter().map(|class_field| {
@@ -749,7 +764,7 @@ fn specialize(cx: &MatchCheckCtxt,
             PatTup(args) => {
                 Some(args.iter().map(|x| *x).collect::<Vec<_>>().append(r.tail()))
             }
-            PatUniq(a) | PatRegion(a) => {
+            PatBox(a) | PatRegion(a) => {
                 Some((vec!(a)).append(r.tail()))
             }
             PatLit(expr) => {
@@ -816,30 +831,17 @@ fn specialize(cx: &MatchCheckCtxt,
                         let num_elements = before.len() + after.len();
                         if num_elements < arity && slice.is_some() {
                             let mut result = Vec::new();
-                            for pat in before.iter() {
-                                result.push((*pat).clone());
-                            }
-                            for _ in iter::range(0, arity - num_elements) {
-                                result.push(wild())
-                            }
-                            for pat in after.iter() {
-                                result.push((*pat).clone());
-                            }
-                            for pat in r.tail().iter() {
-                                result.push((*pat).clone());
-                            }
+                            let wilds = Vec::from_elem(arity - num_elements, wild());
+                            result.push_all_move(before);
+                            result.push_all_move(wilds);
+                            result.push_all_move(after);
+                            result.push_all(r.tail());
                             Some(result)
                         } else if num_elements == arity {
                             let mut result = Vec::new();
-                            for pat in before.iter() {
-                                result.push((*pat).clone());
-                            }
-                            for pat in after.iter() {
-                                result.push((*pat).clone());
-                            }
-                            for pat in r.tail().iter() {
-                                result.push((*pat).clone());
-                            }
+                            result.push_all_move(before);
+                            result.push_all_move(after);
+                            result.push_all(r.tail());
                             Some(result)
                         } else {
                             None
@@ -847,6 +849,10 @@ fn specialize(cx: &MatchCheckCtxt,
                     }
                     _ => None
                 }
+            }
+            PatMac(_) => {
+                cx.tcx.sess.span_err(pat_span, "unexpanded macro");
+                None
             }
         }
     }
@@ -862,9 +868,18 @@ fn default(cx: &MatchCheckCtxt, r: &[@Pat]) -> Option<Vec<@Pat> > {
 
 fn check_local(cx: &mut MatchCheckCtxt, loc: &Local) {
     visit::walk_local(cx, loc, ());
-    if is_refutable(cx, loc.pat) {
-        cx.tcx.sess.span_err(loc.pat.span,
-                             "refutable pattern in local binding");
+
+    let name = match loc.source {
+        LocalLet => "local",
+        LocalFor => "`for` loop"
+    };
+
+    let mut spans = vec![];
+    find_refutable(cx, loc.pat, &mut spans);
+
+    for span in spans.iter() {
+        cx.tcx.sess.span_err(*span,
+                             format!("refutable pattern in {} binding", name).as_slice());
     }
 
     // Check legality of move bindings.
@@ -875,79 +890,87 @@ fn check_fn(cx: &mut MatchCheckCtxt,
             kind: &FnKind,
             decl: &FnDecl,
             body: &Block,
-            sp: Span,
-            id: NodeId) {
-    visit::walk_fn(cx, kind, decl, body, sp, id, ());
+            sp: Span) {
+    visit::walk_fn(cx, kind, decl, body, sp, ());
     for input in decl.inputs.iter() {
-        if is_refutable(cx, input.pat) {
-            cx.tcx.sess.span_err(input.pat.span,
+        let mut spans = vec![];
+        find_refutable(cx, input.pat, &mut spans);
+
+        for span in spans.iter() {
+            cx.tcx.sess.span_err(*span,
                                  "refutable pattern in function argument");
         }
     }
 }
 
-fn is_refutable(cx: &MatchCheckCtxt, pat: &Pat) -> bool {
+fn find_refutable(cx: &MatchCheckCtxt, pat: &Pat, spans: &mut Vec<Span>) {
+    macro_rules! this_pattern {
+        () => {
+            {
+                spans.push(pat.span);
+                return
+            }
+        }
+    }
     let opt_def = cx.tcx.def_map.borrow().find_copy(&pat.id);
     match opt_def {
       Some(DefVariant(enum_id, _, _)) => {
         if ty::enum_variants(cx.tcx, enum_id).len() != 1u {
-            return true;
+            this_pattern!()
         }
       }
-      Some(DefStatic(..)) => return true,
+      Some(DefStatic(..)) => this_pattern!(),
       _ => ()
     }
 
     match pat.node {
-      PatUniq(sub) | PatRegion(sub) | PatIdent(_, _, Some(sub)) => {
-        is_refutable(cx, sub)
+      PatBox(sub) | PatRegion(sub) | PatIdent(_, _, Some(sub)) => {
+        find_refutable(cx, sub, spans)
       }
-      PatWild | PatWildMulti | PatIdent(_, _, None) => { false }
+      PatWild | PatWildMulti | PatIdent(_, _, None) => {}
       PatLit(lit) => {
           match lit.node {
             ExprLit(lit) => {
                 match lit.node {
-                    LitNil => false,    // `()`
-                    _ => true,
+                    LitNil => {}    // `()`
+                    _ => this_pattern!(),
                 }
             }
-            _ => true,
+            _ => this_pattern!(),
           }
       }
-      PatRange(_, _) => { true }
+      PatRange(_, _) => { this_pattern!() }
       PatStruct(_, ref fields, _) => {
-        fields.iter().any(|f| is_refutable(cx, f.pat))
+          for f in fields.iter() {
+              find_refutable(cx, f.pat, spans);
+          }
       }
-      PatTup(ref elts) => {
-        elts.iter().any(|elt| is_refutable(cx, *elt))
+      PatTup(ref elts) | PatEnum(_, Some(ref elts))=> {
+          for elt in elts.iter() {
+              find_refutable(cx, *elt, spans)
+          }
       }
-      PatEnum(_, Some(ref args)) => {
-        args.iter().any(|a| is_refutable(cx, *a))
-      }
-      PatEnum(_,_) => { false }
-      PatVec(..) => { true }
+      PatEnum(_,_) => {}
+      PatVec(..) => { this_pattern!() }
+      PatMac(_) => cx.tcx.sess.bug("unexpanded macro"),
     }
 }
 
 // Legality of move bindings checking
 
 fn check_legality_of_move_bindings(cx: &MatchCheckCtxt,
-                                       has_guard: bool,
-                                       pats: &[@Pat]) {
+                                   has_guard: bool,
+                                   pats: &[@Pat]) {
     let tcx = cx.tcx;
     let def_map = &tcx.def_map;
     let mut by_ref_span = None;
-    let mut any_by_move = false;
     for pat in pats.iter() {
-        pat_bindings(def_map, *pat, |bm, id, span, _path| {
+        pat_bindings(def_map, *pat, |bm, _, span, _path| {
             match bm {
                 BindByRef(_) => {
                     by_ref_span = Some(span);
                 }
                 BindByValue(_) => {
-                    if cx.moves_map.contains(&id) {
-                        any_by_move = true;
-                    }
                 }
             }
         })
@@ -976,22 +999,25 @@ fn check_legality_of_move_bindings(cx: &MatchCheckCtxt,
         }
     };
 
-    if !any_by_move { return; } // pointless micro-optimization
     for pat in pats.iter() {
         walk_pat(*pat, |p| {
             if pat_is_binding(def_map, p) {
                 match p.node {
-                    PatIdent(_, _, sub) => {
-                        if cx.moves_map.contains(&p.id) {
+                    PatIdent(BindByValue(_), _, sub) => {
+                        let pat_ty = ty::node_id_to_type(tcx, p.id);
+                        if ty::type_moves_by_default(tcx, pat_ty) {
                             check_move(p, sub);
                         }
+                    }
+                    PatIdent(BindByRef(_), _, _) => {
                     }
                     _ => {
                         cx.tcx.sess.span_bug(
                             p.span,
-                            format!("binding pattern {} is \
-                                  not an identifier: {:?}",
-                                 p.id, p.node));
+                            format!("binding pattern {} is not an \
+                                     identifier: {:?}",
+                                    p.id,
+                                    p.node).as_slice());
                     }
                 }
             }

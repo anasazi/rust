@@ -59,6 +59,10 @@ static KNOWN_FEATURES: &'static [(&'static str, Status)] = &[
 
     ("quad_precision_float", Active),
 
+    // A temporary feature gate used to enable parser extensions needed
+    // to bootstrap fix for #5723.
+    ("issue_5723_bootstrap", Active),
+
     // These are used to test this portion of the compiler, they don't actually
     // mean anything
     ("test_accepted_feature", Accepted),
@@ -80,14 +84,16 @@ enum Status {
 /// A set of features to be used by later passes.
 pub struct Features {
     pub default_type_params: Cell<bool>,
-    pub quad_precision_float: Cell<bool>
+    pub quad_precision_float: Cell<bool>,
+    pub issue_5723_bootstrap: Cell<bool>,
 }
 
 impl Features {
     pub fn new() -> Features {
         Features {
             default_type_params: Cell::new(false),
-            quad_precision_float: Cell::new(false)
+            quad_precision_float: Cell::new(false),
+            issue_5723_bootstrap: Cell::new(false),
         }
     }
 }
@@ -103,7 +109,7 @@ impl<'a> Context<'a> {
             self.sess.span_err(span, explain);
             self.sess.span_note(span, format!("add \\#![feature({})] to the \
                                                   crate attributes to enable",
-                                                 feature));
+                                                 feature).as_slice());
         }
     }
 
@@ -253,7 +259,9 @@ impl<'a> Visitor<()> for Context<'a> {
         else {
             for &quote in quotes.iter() {
                 if id == token::str_to_ident(quote) {
-                  self.gate_feature("quote", path.span, quote + msg);
+                  self.gate_feature("quote",
+                                    path.span,
+                                    format!("{}{}", quote, msg).as_slice());
                 }
             }
         }
@@ -319,7 +327,7 @@ pub fn check_crate(sess: &Session, krate: &ast::Crate) {
     };
 
     for attr in krate.attrs.iter() {
-        if !attr.name().equiv(&("feature")) {
+        if !attr.check_name("feature") {
             continue
         }
 
@@ -353,7 +361,7 @@ pub fn check_crate(sess: &Session, krate: &ast::Crate) {
                             sess.add_lint(lint::UnknownFeatures,
                                           ast::CRATE_NODE_ID,
                                           mi.span,
-                                          "unknown feature".to_owned());
+                                          "unknown feature".to_string());
                         }
                     }
                 }
@@ -367,4 +375,5 @@ pub fn check_crate(sess: &Session, krate: &ast::Crate) {
 
     sess.features.default_type_params.set(cx.has_feature("default_type_params"));
     sess.features.quad_precision_float.set(cx.has_feature("quad_precision_float"));
+    sess.features.issue_5723_bootstrap.set(cx.has_feature("issue_5723_bootstrap"));
 }

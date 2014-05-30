@@ -18,7 +18,7 @@ use ext::deriving::generic::*;
 use parse::token;
 
 use collections::HashMap;
-use std::strbuf::StrBuf;
+use std::string::String;
 
 pub fn expand_deriving_show(cx: &mut ExtCtxt,
                             span: Span,
@@ -26,7 +26,7 @@ pub fn expand_deriving_show(cx: &mut ExtCtxt,
                             item: @Item,
                             push: |@Item|) {
     // &mut ::std::fmt::Formatter
-    let fmtr = Ptr(~Literal(Path::new(vec!("std", "fmt", "Formatter"))),
+    let fmtr = Ptr(box Literal(Path::new(vec!("std", "fmt", "Formatter"))),
                    Borrowed(None, ast::MutMutable));
 
     let trait_def = TraitDef {
@@ -70,7 +70,7 @@ fn show_substructure(cx: &mut ExtCtxt, span: Span,
         }
     };
 
-    let mut format_string = StrBuf::from_str(token::get_ident(name).get());
+    let mut format_string = String::from_str(token::get_ident(name).get());
     // the internal fields we're actually formatting
     let mut exprs = Vec::new();
 
@@ -120,23 +120,18 @@ fn show_substructure(cx: &mut ExtCtxt, span: Span,
     // AST construction!
     // we're basically calling
     //
-    // format_arg!(|__args| ::std::fmt::write(fmt.buf, __args), "<format_string>", exprs...)
+    // format_arg_method!(fmt, write_fmt, "<format_string>", exprs...)
     //
     // but doing it directly via ext::format.
     let formatter = substr.nonself_args[0];
-    let buf = cx.expr_field_access(span, formatter, cx.ident_of("buf"));
 
-    let std_write = vec!(cx.ident_of("std"), cx.ident_of("fmt"), cx.ident_of("write"));
-    let args = cx.ident_of("__args");
-    let write_call = cx.expr_call_global(span, std_write, vec!(buf, cx.expr_ident(span, args)));
-    let format_closure = cx.lambda_expr(span, vec!(args), write_call);
-
+    let meth = cx.ident_of("write_fmt");
     let s = token::intern_and_get_ident(format_string.as_slice());
     let format_string = cx.expr_str(span, s);
 
     // phew, not our responsibility any more!
     format::expand_preparsed_format_args(cx, span,
-                                         format_closure,
+                                         format::MethodCall(formatter, meth),
                                          format_string, exprs, Vec::new(),
                                          HashMap::new())
 }

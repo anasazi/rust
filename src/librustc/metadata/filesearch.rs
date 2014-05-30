@@ -13,6 +13,7 @@
 use std::cell::RefCell;
 use std::os;
 use std::io::fs;
+use std::unstable::dynamic_lib::DynamicLibrary;
 use collections::HashSet;
 
 use myfs = util::fs;
@@ -132,6 +133,13 @@ impl<'a> FileSearch<'a> {
             triple: triple,
         }
     }
+
+    pub fn add_dylib_search_paths(&self) {
+        self.for_each_lib_search_path(|lib_search_path| {
+            DynamicLibrary::prepend_search_path(lib_search_path);
+            FileDoesntMatch
+        })
+    }
 }
 
 pub fn relative_target_lib_path(sysroot: &Path, target_triple: &str) -> Path {
@@ -178,8 +186,8 @@ static PATH_ENTRY_SEPARATOR: &'static str = ";";
 static PATH_ENTRY_SEPARATOR: &'static str = ":";
 
 /// Returns RUST_PATH as a string, without default paths added
-pub fn get_rust_path() -> Option<~str> {
-    os::getenv("RUST_PATH")
+pub fn get_rust_path() -> Option<String> {
+    os::getenv("RUST_PATH").map(|x| x.to_string())
 }
 
 /// Returns the value of RUST_PATH, as a list
@@ -191,7 +199,7 @@ pub fn rust_path() -> Vec<Path> {
     let mut env_rust_path: Vec<Path> = match get_rust_path() {
         Some(env_path) => {
             let env_path_components =
-                env_path.split_str(PATH_ENTRY_SEPARATOR);
+                env_path.as_slice().split_str(PATH_ENTRY_SEPARATOR);
             env_path_components.map(|s| Path::new(s)).collect()
         }
         None => Vec::new()
@@ -228,7 +236,7 @@ pub fn rust_path() -> Vec<Path> {
 // The name of the directory rustc expects libraries to be located.
 // On Unix should be "lib", on windows "bin"
 #[cfg(unix)]
-fn find_libdir(sysroot: &Path) -> ~str {
+fn find_libdir(sysroot: &Path) -> String {
     // FIXME: This is a quick hack to make the rustc binary able to locate
     // Rust libraries in Linux environments where libraries might be installed
     // to lib64/lib32. This would be more foolproof by basing the sysroot off
@@ -242,21 +250,27 @@ fn find_libdir(sysroot: &Path) -> ~str {
     }
 
     #[cfg(target_word_size = "64")]
-    fn primary_libdir_name() -> ~str { "lib64".to_owned() }
+    fn primary_libdir_name() -> String {
+        "lib64".to_string()
+    }
 
     #[cfg(target_word_size = "32")]
-    fn primary_libdir_name() -> ~str { "lib32".to_owned() }
+    fn primary_libdir_name() -> String {
+        "lib32".to_string()
+    }
 
-    fn secondary_libdir_name() -> ~str { "lib".to_owned() }
+    fn secondary_libdir_name() -> String {
+        "lib".to_string()
+    }
 }
 
 #[cfg(windows)]
-fn find_libdir(_sysroot: &Path) -> ~str {
-    "bin".to_owned()
+fn find_libdir(_sysroot: &Path) -> String {
+    "bin".to_string()
 }
 
 // The name of rustc's own place to organize libraries.
 // Used to be "rustc", now the default is "rustlib"
-pub fn rustlibdir() -> ~str {
-    "rustlib".to_owned()
+pub fn rustlibdir() -> String {
+    "rustlib".to_string()
 }

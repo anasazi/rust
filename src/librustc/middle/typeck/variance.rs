@@ -240,9 +240,9 @@ enum VarianceTerm<'a> {
 impl<'a> fmt::Show for VarianceTerm<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            ConstantTerm(c1) => write!(f.buf, "{}", c1),
-            TransformTerm(v1, v2) => write!(f.buf, "({} \u00D7 {})", v1, v2),
-            InferredTerm(id) => write!(f.buf, "[{}]", { let InferredIndex(i) = id; i })
+            ConstantTerm(c1) => write!(f, "{}", c1),
+            TransformTerm(v1, v2) => write!(f, "({} \u00D7 {})", v1, v2),
+            InferredTerm(id) => write!(f, "[{}]", { let InferredIndex(i) = id; i })
         }
     }
 }
@@ -538,8 +538,8 @@ impl<'a> ConstraintContext<'a> {
             Some(&index) => index,
             None => {
                 self.tcx().sess.bug(format!(
-                        "No inferred index entry for {}",
-                        self.tcx().map.node_to_str(param_id)));
+                        "no inferred index entry for {}",
+                        self.tcx().map.node_to_str(param_id)).as_slice());
             }
         }
     }
@@ -741,7 +741,7 @@ impl<'a> ConstraintContext<'a> {
                                                  substs, variance);
             }
 
-            ty::ty_trait(~ty::TyTrait { def_id, ref substs, .. }) => {
+            ty::ty_trait(box ty::TyTrait { def_id, ref substs, .. }) => {
                 let trait_def = ty::lookup_trait_def(self.tcx(), def_id);
                 self.add_constraints_from_substs(def_id, &trait_def.generics,
                                                  substs, variance);
@@ -768,11 +768,15 @@ impl<'a> ConstraintContext<'a> {
             }
 
             ty::ty_bare_fn(ty::BareFnTy { ref sig, .. }) |
-            ty::ty_closure(~ty::ClosureTy { ref sig, store: ty::UniqTraitStore, .. }) => {
+            ty::ty_closure(box ty::ClosureTy {
+                    ref sig,
+                    store: ty::UniqTraitStore,
+                    ..
+                }) => {
                 self.add_constraints_from_sig(sig, variance);
             }
 
-            ty::ty_closure(~ty::ClosureTy { ref sig,
+            ty::ty_closure(box ty::ClosureTy { ref sig,
                     store: ty::RegionTraitStore(region, _), .. }) => {
                 let contra = self.contravariant(variance);
                 self.add_constraints_from_region(region, contra);
@@ -783,7 +787,7 @@ impl<'a> ConstraintContext<'a> {
                 self.tcx().sess.bug(
                     format!("unexpected type encountered in \
                             variance inference: {}",
-                            ty.repr(self.tcx())));
+                            ty.repr(self.tcx())).as_slice());
             }
         }
     }
@@ -854,9 +858,11 @@ impl<'a> ConstraintContext<'a> {
             ty::ReEmpty => {
                 // We don't expect to see anything but 'static or bound
                 // regions when visiting member types or method types.
-                self.tcx().sess.bug(format!("unexpected region encountered in \
-                                            variance inference: {}",
-                                            region.repr(self.tcx())));
+                self.tcx()
+                    .sess
+                    .bug(format!("unexpected region encountered in variance \
+                                  inference: {}",
+                                 region.repr(self.tcx())).as_slice());
             }
         }
     }
@@ -997,7 +1003,7 @@ impl<'a> SolveContext<'a> {
             // attribute and report an error with various results if found.
             if ty::has_attr(tcx, item_def_id, "rustc_variance") {
                 let found = item_variances.repr(tcx);
-                tcx.sess.span_err(tcx.map.span(item_id), found);
+                tcx.sess.span_err(tcx.map.span(item_id), found.as_slice());
             }
 
             let newly_added = tcx.item_variance_map.borrow_mut()

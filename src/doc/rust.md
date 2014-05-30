@@ -17,14 +17,13 @@ This document does not serve as a tutorial introduction to the
 language. Background familiarity with the language is assumed. A separate
 [tutorial] document is available to help acquire such background familiarity.
 
-This document also does not serve as a reference to the [standard] or [extra]
-libraries included in the language distribution. Those libraries are
+This document also does not serve as a reference to the [standard]
+library included in the language distribution. Those libraries are
 documented separately by extracting documentation attributes from their
 source code.
 
 [tutorial]: tutorial.html
 [standard]: std/index.html
-[extra]: extra/index.html
 
 ## Disclaimer
 
@@ -116,8 +115,12 @@ production. See [tokens](#tokens) for more information.
 Rust input is interpreted as a sequence of Unicode codepoints encoded in UTF-8,
 normalized to Unicode normalization form NFKC.
 Most Rust grammar rules are defined in terms of printable ASCII-range codepoints,
-but a small number are defined in terms of Unicode properties or explicit codepoint lists.
-^[Substitute definitions for the special Unicode productions are provided to the grammar verifier, restricted to ASCII range, when verifying the grammar in this document.]
+but a small number are defined in terms of Unicode properties or explicit
+codepoint lists. [^inputformat]
+
+[^inputformat]: Substitute definitions for the special Unicode productions are
+    provided to the grammar verifier, restricted to ASCII range, when verifying
+    the grammar in this document.
 
 ## Special Unicode Productions
 
@@ -161,7 +164,7 @@ Comments in Rust code follow the general C++ style of line and block-comment for
 with no nesting of block-comment delimiters.
 
 Line comments beginning with exactly _three_ slashes (`///`), and block
-comments beginning with a exactly one repeated asterisk in the block-open
+comments beginning with exactly one repeated asterisk in the block-open
 sequence (`/**`), are interpreted as a special syntax for `doc`
 [attributes](#attributes).  That is, they are equivalent to writing
 `#[doc="..."]` around the body of the comment (this includes the comment
@@ -204,8 +207,8 @@ The keywords are the following strings:
 
 ~~~~ {.notrust .keyword}
 as
-break
-crate
+box break
+continue crate
 else enum extern
 false fn for
 if impl in
@@ -365,7 +368,7 @@ of integer literal suffix:
     give the literal the corresponding machine type.
 
 The type of an _unsuffixed_ integer literal is determined by type inference.
-If a integer type can be _uniquely_ determined from the surrounding program
+If an integer type can be _uniquely_ determined from the surrounding program
 context, the unsuffixed integer literal has that type.  If the program context
 underconstrains the type, the unsuffixed integer literal's type is `int`; if
 the program context overconstrains the type, it is considered a static type
@@ -470,8 +473,8 @@ Two examples of paths with type arguments:
 # struct HashMap<K, V>;
 # fn f() {
 # fn id<T>(t: T) -> T { t }
-type T = HashMap<int,~str>;  // Type arguments used in a type expression
-let x = id::<int>(10);         // Type arguments used in a call expression
+type T = HashMap<int,String>;  // Type arguments used in a type expression
+let x = id::<int>(10);       // Type arguments used in a call expression
 # }
 ~~~~
 
@@ -631,10 +634,13 @@ Semantic rules called "dynamic semantics" govern the behavior of programs at run
 A program that fails to compile due to violation of a compile-time rule has no defined dynamic semantics; the compiler should halt with an error report, and produce no executable artifact.
 
 The compilation model centres on artifacts called _crates_.
-Each compilation processes a single crate in source form, and if successful, produces a single crate in binary form: either an executable or a library.^[A crate is somewhat
-analogous to an *assembly* in the ECMA-335 CLI model, a *library* in the
-SML/NJ Compilation Manager, a *unit* in the Owens and Flatt module system,
-or a *configuration* in Mesa.]
+Each compilation processes a single crate in source form, and if successful,
+produces a single crate in binary form: either an executable or a
+library.[^cratesourcefile]
+
+[^cratesourcefile]: A crate is somewhat analogous to an *assembly* in the
+    ECMA-335 CLI model, a *library* in the SML/NJ Compilation Manager, a *unit*
+    in the Owens and Flatt module system, or a *configuration* in Mesa.
 
 A _crate_ is a unit of compilation and linking, as well as versioning, distribution and runtime loading.
 A crate contains a _tree_ of nested [module](#modules) scopes.
@@ -655,6 +661,7 @@ Attributes on the anonymous crate module define important metadata that influenc
 the behavior of the compiler.
 
 ~~~~ {.rust}
+# #![allow(unused_attribute)]
 // Crate ID
 #![crate_id = "projx#2.5"]
 
@@ -842,11 +849,11 @@ extern crate foo = "some/where/rust-foo#foo:1.0"; // a full crate ID for externa
 ##### Use declarations
 
 ~~~~ {.notrust .ebnf .gram}
-use_decl : "pub" ? "use" ident [ '=' path
-                          | "::" path_glob ] ;
+use_decl : "pub" ? "use" [ ident '=' path
+                          | path_glob ] ;
 
-path_glob : ident [ "::" path_glob ] ?
-          | '*'
+path_glob : ident [ "::" [ path_glob
+                          | '*' ] ] ?
           | '{' ident [ ',' ident ] * '}' ;
 ~~~~
 
@@ -1029,6 +1036,7 @@ Unsafe operations are those that potentially violate the memory-safety guarantee
 The following language level features cannot be used in the safe subset of Rust:
 
   - Dereferencing a [raw pointer](#pointer-types).
+  - Reading or writing a [mutable static variable](#mutable-statics).
   - Calling an unsafe function (including an intrinsic or foreign function).
 
 ##### Unsafe functions
@@ -1253,12 +1261,12 @@ Enumeration constructors can have either named or unnamed fields:
 
 ~~~~
 enum Animal {
-    Dog (~str, f64),
-    Cat { name: ~str, weight: f64 }
+    Dog (String, f64),
+    Cat { name: String, weight: f64 }
 }
 
-let mut a: Animal = Dog("Cocoa".to_owned(), 37.2);
-a = Cat{ name: "Spotty".to_owned(), weight: 2.7 };
+let mut a: Animal = Dog("Cocoa".to_string(), 37.2);
+a = Cat { name: "Spotty".to_string(), weight: 2.7 };
 ~~~~
 
 In this example, `Cat` is a _struct-like enum variant_,
@@ -1393,10 +1401,10 @@ to pointers to the trait name, used as a type.
 # trait Shape { }
 # impl Shape for int { }
 # let mycircle = 0;
-let myshape: ~Shape = ~mycircle as ~Shape;
+let myshape: Box<Shape> = box mycircle as Box<Shape>;
 ~~~~
 
-The resulting value is a managed box containing the value that was cast,
+The resulting value is a box containing the value that was cast,
 along with information that identifies the methods of the implementation that was used.
 Values with a trait type can have [methods called](#method-call-expressions) on them,
 for any method in the trait,
@@ -1428,7 +1436,7 @@ trait Circle : Shape { fn radius() -> f64; }
 ~~~~
 
 the syntax `Circle : Shape` means that types that implement `Circle` must also have an implementation for `Shape`.
-Multiple supertraits are separated by spaces, `trait Circle : Shape Eq { }`.
+Multiple supertraits are separated by `+`, `trait Circle : Shape + Eq { }`.
 In an implementation of `Circle` for a given type `T`, methods can refer to `Shape` methods,
 since the typechecker checks that any type with an implementation of `Circle` also has an implementation of `Shape`.
 
@@ -1734,10 +1742,10 @@ import public items from their destination, not private items.
 ## Attributes
 
 ~~~~ {.notrust .ebnf .gram}
-attribute : '#' '!' ? '[' attr_list ']' ;
-attr_list : attr [ ',' attr_list ]* ;
-attr : ident [ '=' literal
-             | '(' attr_list ')' ] ? ;
+attribute : '#' '!' ? '[' meta_item ']' ;
+meta_item : ident [ '=' literal
+                  | '(' meta_seq ')' ] ? ;
+meta_seq : meta_item [ ',' meta_seq ] ? ;
 ~~~~
 
 Static entities in Rust &mdash; crates, modules and items &mdash; may have _attributes_
@@ -1793,6 +1801,8 @@ type int8_t = i8;
 - `no_start` - disable linking to the `native` crate, which specifies the
   "start" language item.
 - `no_std` - disable linking to the `std` crate.
+- `no_builtins` - disable optimizing certain code patterns to invocations of
+                  library functions that are assumed to exist
 
 ### Module-only attributes
 
@@ -2073,7 +2083,7 @@ These are functions:
 * `str_eq`
   : Compare two strings (`&str`) for equality.
 * `uniq_str_eq`
-  : Compare two owned strings (`~str`) for equality.
+  : Compare two owned strings (`String`) for equality.
 * `strdup_uniq`
   : Return a new unique string
     containing a copy of the contents of a unique string.
@@ -2184,7 +2194,7 @@ Supported traits for `deriving` are:
 * `Hash`, to iterate over the bytes in a data type.
 * `Rand`, to create a random instance of a data type.
 * `Default`, to create an empty instance of a data type.
-* `Zero`, to create an zero instance of a numeric data type.
+* `Zero`, to create a zero instance of a numeric data type.
 * `FromPrimitive`, to create an instance from a numeric primitive.
 * `Show`, to format a value using the `{}` formatter.
 
@@ -2642,9 +2652,9 @@ before the expression they apply to.
   : Logical negation. On the boolean type, this flips between `true` and
     `false`. On integer types, this inverts the individual bits in the
     two's complement representation of the value.
-* `~`
+* `box`
   :  [Boxing](#pointer-types) operators. Allocate a box to hold the value they are applied to,
-     and store the value in it. `~` creates an owned box.
+     and store the value in it. `box` creates an owned box.
 * `&`
   : Borrow operator. Returns a reference, pointing to its operand.
     The operand of a borrow is statically proven to outlive the resulting pointer.
@@ -2918,9 +2928,7 @@ while i < 10 {
 
 ### Infinite loops
 
-The keyword `loop` in Rust appears both in _loop expressions_ and in _continue expressions_.
-A loop expression denotes an infinite loop;
-see [Continue expressions](#continue-expressions) for continue expressions.
+A `loop` expression denotes an infinite loop.
 
 ~~~~ {.notrust .ebnf .gram}
 loop_expr : [ lifetime ':' ] "loop" '{' block '}';
@@ -2928,8 +2936,8 @@ loop_expr : [ lifetime ':' ] "loop" '{' block '}';
 
 A `loop` expression may optionally have a _label_.
 If a label is present,
-then labeled `break` and `loop` expressions nested within this loop may exit out of this loop or return control to its head.
-See [Break expressions](#break-expressions).
+then labeled `break` and `continue` expressions nested within this loop may exit out of this loop or return control to its head.
+See [Break expressions](#break-expressions) and [Continue expressions](#continue-expressions).
 
 ### Break expressions
 
@@ -2937,7 +2945,7 @@ See [Break expressions](#break-expressions).
 break_expr : "break" [ lifetime ];
 ~~~~
 
-A `break` expression has an optional `label`.
+A `break` expression has an optional _label_.
 If the label is absent, then executing a `break` expression immediately terminates the innermost loop enclosing it.
 It is only permitted in the body of a loop.
 If the label is present, then `break foo` terminates the loop with label `foo`,
@@ -2947,21 +2955,21 @@ but must enclose it.
 ### Continue expressions
 
 ~~~~ {.notrust .ebnf .gram}
-continue_expr : "loop" [ lifetime ];
+continue_expr : "continue" [ lifetime ];
 ~~~~
 
-A continue expression, written `loop`, also has an optional `label`.
+A `continue` expression has an optional _label_.
 If the label is absent,
-then executing a `loop` expression immediately terminates the current iteration of the innermost loop enclosing it,
+then executing a `continue` expression immediately terminates the current iteration of the innermost loop enclosing it,
 returning control to the loop *head*.
 In the case of a `while` loop,
 the head is the conditional expression controlling the loop.
 In the case of a `for` loop, the head is the call-expression controlling the loop.
-If the label is present, then `loop foo` returns control to the head of the loop with label `foo`,
+If the label is present, then `continue foo` returns control to the head of the loop with label `foo`,
 which need not be the innermost label enclosing the `break` expression,
 but must enclose it.
 
-A `loop` expression is only permitted in the body of a loop.
+A `continue` expression is only permitted in the body of a loop.
 
 ### For expressions
 
@@ -3021,11 +3029,11 @@ then any `else` block is executed.
 ### Match expressions
 
 ~~~~ {.notrust .ebnf .gram}
-match_expr : "match" expr '{' match_arm [ '|' match_arm ] * '}' ;
+match_expr : "match" expr '{' match_arm * '}' ;
 
-match_arm : match_pat "=>" [ expr "," | '{' block '}' ] ;
+match_arm : attribute * match_pat "=>" [ expr "," | '{' block '}' ] ;
 
-match_pat : pat [ ".." pat ] ? [ "if" expr ] ;
+match_pat : pat [ '|' pat ] * [ "if" expr ] ? ;
 ~~~~
 
 A `match` expression branches on a *pattern*. The exact form of matching that
@@ -3041,19 +3049,19 @@ stands for a *single* data field, whereas a wildcard `..` stands for *all* the
 fields of a particular variant. For example:
 
 ~~~~
-enum List<X> { Nil, Cons(X, ~List<X>) }
+enum List<X> { Nil, Cons(X, Box<List<X>>) }
 
-let x: List<int> = Cons(10, ~Cons(11, ~Nil));
+let x: List<int> = Cons(10, box Cons(11, box Nil));
 
 match x {
-    Cons(_, ~Nil) => fail!("singleton list"),
-    Cons(..)      => return,
-    Nil           => fail!("empty list")
+    Cons(_, box Nil) => fail!("singleton list"),
+    Cons(..)         => return,
+    Nil              => fail!("empty list")
 }
 ~~~~
 
 The first pattern matches lists constructed by applying `Cons` to any head
-value, and a tail value of `~Nil`. The second pattern matches _any_ list
+value, and a tail value of `box Nil`. The second pattern matches _any_ list
 constructed with `Cons`, ignoring the values of its arguments. The difference
 between `_` and `..` is that the pattern `C(_)` is only type-correct if `C` has
 exactly one argument, while the pattern `C(..)` is type-correct for any enum
@@ -3103,13 +3111,13 @@ An example of a `match` expression:
 # fn process_pair(a: int, b: int) { }
 # fn process_ten() { }
 
-enum List<X> { Nil, Cons(X, ~List<X>) }
+enum List<X> { Nil, Cons(X, Box<List<X>>) }
 
-let x: List<int> = Cons(10, ~Cons(11, ~Nil));
+let x: List<int> = Cons(10, box Cons(11, box Nil));
 
 match x {
-    Cons(a, ~Cons(b, _)) => {
-        process_pair(a,b);
+    Cons(a, box Cons(b, _)) => {
+        process_pair(a, b);
     }
     Cons(10, _) => {
         process_ten();
@@ -3131,28 +3139,28 @@ using the `ref` keyword,
 or to a mutable reference using `ref mut`.
 
 Subpatterns can also be bound to variables by the use of the syntax
-`variable @ pattern`.
+`variable @ subpattern`.
 For example:
 
 ~~~~
-enum List { Nil, Cons(uint, ~List) }
+enum List { Nil, Cons(uint, Box<List>) }
 
 fn is_sorted(list: &List) -> bool {
     match *list {
-        Nil | Cons(_, ~Nil) => true,
-        Cons(x, ref r @ ~Cons(y, _)) => (x <= y) && is_sorted(*r)
+        Nil | Cons(_, box Nil) => true,
+        Cons(x, ref r @ box Cons(y, _)) => (x <= y) && is_sorted(*r)
     }
 }
 
 fn main() {
-    let a = Cons(6, ~Cons(7, ~Cons(42, ~Nil)));
+    let a = Cons(6, box Cons(7, box Cons(42, box Nil)));
     assert!(is_sorted(&a));
 }
 
 ~~~~
 
 Patterns can also dereference pointers by using the `&`,
-`~` or `@` symbols, as appropriate. For example, these two matches
+`box` or `@` symbols, as appropriate. For example, these two matches
 on `x: &int` are equivalent:
 
 ~~~~
@@ -3246,23 +3254,28 @@ types. User-defined types have limited capabilities.
 
 The primitive types are the following:
 
-* The "unit" type `()`, having the single "unit" value `()` (occasionally called "nil").
-  ^[The "unit" value `()` is *not* a sentinel "null pointer" value for reference slots; the "unit" type is the implicit return type from functions otherwise lacking a return type, and can be used in other contexts (such as message-sending or type-parametric code) as a zero-size type.]
+* The "unit" type `()`, having the single "unit" value `()` (occasionally called
+  "nil"). [^unittype]
 * The boolean type `bool` with values `true` and `false`.
 * The machine types.
 * The machine-dependent integer and floating-point types.
+
+[^unittype]: The "unit" value `()` is *not* a sentinel "null pointer" value for
+    reference slots; the "unit" type is the implicit return type from functions
+    otherwise lacking a return type, and can be used in other contexts (such as
+    message-sending or type-parametric code) as a zero-size type.]
 
 #### Machine types
 
 The machine types are the following:
 
 * The unsigned word types `u8`, `u16`, `u32` and `u64`, with values drawn from
-  the integer intervals $[0, 2^8 - 1]$, $[0, 2^{16} - 1]$, $[0, 2^{32} - 1]$ and
-  $[0, 2^{64} - 1]$ respectively.
+  the integer intervals [0, 2^8 - 1], [0, 2^16 - 1], [0, 2^32 - 1] and
+  [0, 2^64 - 1] respectively.
 
 * The signed two's complement word types `i8`, `i16`, `i32` and `i64`, with
-  values drawn from the integer intervals $[-(2^7), 2^7 - 1]$,
-  $[-(2^{15}), 2^{15} - 1]$, $[-(2^{31}), 2^{31} - 1]$, $[-(2^{63}), 2^{63} - 1]$
+  values drawn from the integer intervals [-(2^(7)), 2^7 - 1],
+  [-(2^(15)), 2^15 - 1], [-(2^(31)), 2^31 - 1], [-(2^(63)), 2^63 - 1]
   respectively.
 
 * The IEEE 754-2008 `binary32` and `binary64` floating-point types: `f32` and
@@ -3270,15 +3283,18 @@ The machine types are the following:
 
 #### Machine-dependent integer types
 
-The Rust type `uint`^[A Rust `uint` is analogous to a C99 `uintptr_t`.] is an
+The Rust type `uint` [^rustuint] is an
 unsigned integer type with target-machine-dependent size. Its size, in
 bits, is equal to the number of bits required to hold any memory address on
 the target machine.
 
-The Rust type `int`^[A Rust `int` is analogous to a C99 `intptr_t`.] is a
+The Rust type `int` [^rustint]  is a
 two's complement signed integer type with target-machine-dependent size. Its
 size, in bits, is equal to the size of the rust type `uint` on the same target
 machine.
+
+[^rustuint]: A Rust `uint` is analogous to a C99 `uintptr_t`.
+[^rustint]: A Rust `int` is analogous to a C99 `intptr_t`.
 
 ### Textual types
 
@@ -3295,7 +3311,7 @@ A value of type `str` is a Unicode string,
 represented as a vector of 8-bit unsigned bytes holding a sequence of UTF-8 codepoints.
 Since `str` is of unknown size, it is not a _first class_ type,
 but can only be instantiated through a pointer type,
-such as `&str` or `~str`.
+such as `&str` or `String`.
 
 ### Tuple types
 
@@ -3315,8 +3331,8 @@ order specified by the tuple type.
 An example of a tuple type and its use:
 
 ~~~~
-type Pair<'a> = (int,&'a str);
-let p: Pair<'static> = (10,"hello");
+type Pair<'a> = (int, &'a str);
+let p: Pair<'static> = (10, "hello");
 let (a, b) = p;
 assert!(b != "world");
 ~~~~
@@ -3352,10 +3368,12 @@ and access to a vector is always bounds-checked.
 
 ### Structure types
 
-A `struct` *type* is a heterogeneous product of other types, called the *fields* of the type.
-^[`struct` types are analogous `struct` types in C,
-the *record* types of the ML family,
-or the *structure* types of the Lisp family.]
+A `struct` *type* is a heterogeneous product of other types, called the *fields*
+of the type.[^structtype]
+
+[^structtype]: `struct` types are analogous `struct` types in C,
+    the *record* types of the ML family,
+    or the *structure* types of the Lisp family.
 
 New instances of a `struct` can be constructed with a [struct expression](#structure-expressions).
 
@@ -3375,9 +3393,10 @@ is the only value that inhabits such a type.
 ### Enumerated types
 
 An *enumerated type* is a nominal, heterogeneous disjoint union type,
-denoted by the name of an [`enum` item](#enumerations).
-^[The `enum` type is analogous to a `data` constructor declaration in ML,
-or a *pick ADT* in Limbo.]
+denoted by the name of an [`enum` item](#enumerations). [^enumtype]
+
+[^enumtype]: The `enum` type is analogous to a `data` constructor declaration in
+             ML, or a *pick ADT* in Limbo.
 
 An [`enum` item](#enumerations) declares both the type and a number of *variant constructors*,
 each of which is independently named and takes an optional tuple of arguments.
@@ -3411,10 +3430,10 @@ An example of a *recursive* type and its use:
 ~~~~
 enum List<T> {
   Nil,
-  Cons(T, ~List<T>)
+  Cons(T, Box<List<T>>)
 }
 
-let a: List<int> = Cons(7, ~Cons(13, ~Nil));
+let a: List<int> = Cons(7, box Cons(13, box Nil));
 ~~~~
 
 ### Pointer types
@@ -3423,11 +3442,11 @@ All pointers in Rust are explicit first-class values.
 They can be copied, stored into data structures, and returned from functions.
 There are four varieties of pointer in Rust:
 
-* Owning pointers (`~`)
+* Owning pointers (`Box`)
   : These point to owned heap allocations (or "boxes") in the shared, inter-task heap.
     Each owned box has a single owning pointer; pointer and pointee retain a 1:1 relationship at all times.
-    Owning pointers are written `~content`,
-    for example `~int` means an owning pointer to an owned box containing an integer.
+    Owning pointers are written `Box<content>`,
+    for example `Box<int>` means an owning pointer to an owned box containing an integer.
     Copying an owned box is a "deep" operation:
     it involves allocating a new owned box and copying the contents of the old box into the new box.
     Releasing an owning pointer immediately releases its corresponding owned box.
@@ -3520,7 +3539,7 @@ allocated on the heap (unlike closures). An example of creating and calling a
 procedure:
 
 ```rust
-let string = "Hello".to_owned();
+let string = "Hello".to_string();
 
 // Creates a new procedure, passing it to the `spawn` function.
 spawn(proc() {
@@ -3547,8 +3566,8 @@ Whereas most calls to trait methods are "early bound" (statically resolved) to s
 a call to a method on an object type is only resolved to a vtable entry at compile time.
 The actual implementation for each vtable entry can vary on an object-by-object basis.
 
-Given a pointer-typed expression `E` of type `&T` or `~T`, where `T` implements trait `R`,
-casting `E` to the corresponding pointer type `&R` or `~R` results in a value of the _object type_ `R`.
+Given a pointer-typed expression `E` of type `&T` or `Box<T>`, where `T` implements trait `R`,
+casting `E` to the corresponding pointer type `&R` or `Box<R>` results in a value of the _object type_ `R`.
 This result is represented as a pair of pointers:
 the vtable pointer for the `T` implementation of `R`, and the pointer value of `E`.
 
@@ -3556,19 +3575,19 @@ An example of an object type:
 
 ~~~~
 trait Printable {
-  fn to_string(&self) -> ~str;
+  fn to_string(&self) -> String;
 }
 
 impl Printable for int {
-  fn to_string(&self) -> ~str { self.to_str() }
+  fn to_string(&self) -> String { self.to_str().to_string() }
 }
 
-fn print(a: ~Printable) {
+fn print(a: Box<Printable>) {
    println!("{}", a.to_string());
 }
 
 fn main() {
-   print(~10 as ~Printable);
+   print(box 10 as Box<Printable>);
 }
 ~~~~
 
@@ -3580,18 +3599,18 @@ and the cast expression in `main`.
 Within the body of an item that has type parameter declarations, the names of its type parameters are types:
 
 ~~~~
-fn map<A: Clone, B: Clone>(f: |A| -> B, xs: &[A]) -> ~[B] {
+fn map<A: Clone, B: Clone>(f: |A| -> B, xs: &[A]) -> Vec<B> {
     if xs.len() == 0 {
-       return ~[];
+       return vec![];
     }
     let first: B = f(xs[0].clone());
-    let rest: ~[B] = map(f, xs.slice(1, xs.len()));
-    return ~[first] + rest;
+    let rest: Vec<B> = map(f, xs.slice(1, xs.len()));
+    return vec![first].append(rest.as_slice());
 }
 ~~~~
 
 Here, `first` has type `B`, referring to `map`'s `B` type parameter;
-and `rest` has type `~[B]`, a vector type with element type `B`.
+and `rest` has type `Vec<B>`, a vector type with element type `B`.
 
 ### Self types
 
@@ -3601,17 +3620,17 @@ example, in:
 
 ~~~~
 trait Printable {
-  fn make_string(&self) -> ~str;
+  fn make_string(&self) -> String;
 }
 
-impl Printable for ~str {
-    fn make_string(&self) -> ~str {
+impl Printable for String {
+    fn make_string(&self) -> String {
         (*self).clone()
     }
 }
 ~~~~
 
-`self` refers to the value of type `~str` that is the receiver for a
+`self` refers to the value of type `String` that is the receiver for a
 call to the method `make_string`.
 
 ## Type kinds
@@ -3746,7 +3765,7 @@ Local variables are immutable unless declared otherwise like: `let mut x = ...`.
 
 Function parameters are immutable unless declared with `mut`. The
 `mut` keyword applies only to the following parameter (so `|mut x, y|`
-and `fn f(mut x: ~int, y: ~int)` declare one mutable variable `x` and
+and `fn f(mut x: Box<int>, y: Box<int>)` declare one mutable variable `x` and
 one immutable variable `y`).
 
 Methods that take either `self` or `~self` can optionally place them in a
@@ -3755,7 +3774,7 @@ mutable slot by prefixing them with `mut` (similar to regular arguments):
 ~~~
 trait Changer {
     fn change(mut self) -> Self;
-    fn modify(mut ~self) -> ~Self;
+    fn modify(mut ~self) -> Box<Self>;
 }
 ~~~
 
@@ -3768,12 +3787,14 @@ initialized; this is enforced by the compiler.
 ### Owned boxes
 
 An  _owned box_ is a reference to a heap allocation holding another value, which is constructed
-by the prefix *tilde* sigil `~`.
+by the prefix operator `box`. When the standard library is in use, the type of an owned box is
+`std::owned::Box<T>`.
 
 An example of an owned box type and value:
 
 ~~~~
-let x: ~int = ~10;
+
+let x: Box<int> = box 10;
 ~~~~
 
 Owned box values exist in 1:1 correspondence with their heap allocation
@@ -3781,7 +3802,7 @@ copying an owned box value makes a shallow copy of the pointer
 Rust will consider a shallow copy of an owned box to move ownership of the value. After a value has been moved, the source location cannot be used unless it is reinitialized.
 
 ~~~~
-let x: ~int = ~10;
+let x: Box<int> = box 10;
 let y = x;
 // attempting to use `x` will result in an error here
 ~~~~
@@ -3804,14 +3825,15 @@ By default, the scheduler chooses the number of threads based on
 the number of concurrent physical CPUs detected at startup.
 It's also possible to override this choice at runtime.
 When the number of tasks exceeds the number of threads &mdash; which is likely &mdash;
-the scheduler multiplexes the tasks onto threads.^[
-This is an M:N scheduler,
-which is known to give suboptimal results for CPU-bound concurrency problems.
-In such cases, running with the same number of threads and tasks can yield better results.
-Rust has M:N scheduling in order to support very large numbers of tasks
-in contexts where threads are too resource-intensive to use in large number.
-The cost of threads varies substantially per operating system, and is sometimes quite low,
-so this flexibility is not always worth exploiting.]
+the scheduler multiplexes the tasks onto threads.[^mnscheduler]
+
+[^mnscheduler]: This is an M:N scheduler, which is known to give suboptimal
+    results for CPU-bound concurrency problems.  In such cases, running with the
+    same number of threads and tasks can yield better results.  Rust has M:N
+    scheduling in order to support very large numbers of tasks in contexts where
+    threads are too resource-intensive to use in large number.  The cost of
+    threads varies substantially per operating system, and is sometimes quite
+    low, so this flexibility is not always worth exploiting.
 
 ### Communication between tasks
 
@@ -3988,26 +4010,15 @@ compiler must at some point make a choice between these two formats. With this
 in mind, the compiler follows these rules when determining what format of
 dependencies will be used:
 
-1. If a dynamic library is being produced, then it is required for all upstream
-   Rust dependencies to also be dynamic. This is a limitation of the current
-   implementation of the linkage model.  The reason behind this limitation is to
-   prevent multiple copies of the same upstream library from showing up, and in
-   the future it is planned to support a mixture of dynamic and static linking.
-
-   When producing a dynamic library, the compiler will generate an error if an
-   upstream dependency could not be found, and also if an upstream dependency
-   could only be found in an `rlib` format. Remember that `staticlib` formats
-   are always ignored by `rustc` for crate-linking purposes.
-
-2. If a static library is being produced, all upstream dependencies are
+1. If a static library is being produced, all upstream dependencies are
    required to be available in `rlib` formats. This requirement stems from the
-   same reasons that a dynamic library must have all dynamic dependencies.
+   reason that a dynamic library cannot be converted into a static format.
 
    Note that it is impossible to link in native dynamic dependencies to a static
    library, and in this case warnings will be printed about all unlinked native
    dynamic dependencies.
 
-3. If an `rlib` file is being produced, then there are no restrictions on what
+2. If an `rlib` file is being produced, then there are no restrictions on what
    format the upstream dependencies are available in. It is simply required that
    all upstream dependencies be available for reading metadata from.
 
@@ -4015,18 +4026,29 @@ dependencies will be used:
    dependencies. It wouldn't be very efficient for all `rlib` files to contain a
    copy of `libstd.rlib`!
 
-4. If an executable is being produced, then things get a little interesting. As
-   with the above limitations in dynamic and static libraries, it is required
-   for all upstream dependencies to be in the same format. The next question is
-   whether to prefer a dynamic or a static format. The compiler currently favors
-   static linking over dynamic linking, but this can be inverted with the `-C
-   prefer-dynamic` flag to the compiler.
+3. If an executable is being produced and the `-C prefer-dynamic` flag is not
+   specified, then dependencies are first attempted to be found in the `rlib`
+   format. If some dependencies are not available in an rlib format, then
+   dynamic linking is attempted (see below).
 
-   What this means is that first the compiler will attempt to find all upstream
-   dependencies as `rlib` files, and if successful, it will create a statically
-   linked executable. If an upstream dependency is missing as an `rlib` file,
-   then the compiler will force all dependencies to be dynamic and will generate
-   errors if dynamic versions could not be found.
+4. If a dynamic library or an executable that is being dynamically linked is
+   being produced, then the compiler will attempt to reconcile the available
+   dependencies in either the rlib or dylib format to create a final product.
+
+   A major goal of the compiler is to ensure that a library never appears more
+   than once in any artifact. For example, if dynamic libraries B and C were
+   each statically linked to library A, then a crate could not link to B and C
+   together because there would be two copies of A. The compiler allows mixing
+   the rlib and dylib formats, but this restriction must be satisfied.
+
+   The compiler currently implements no method of hinting what format a library
+   should be linked with. When dynamically linking, the compiler will attempt to
+   maximize dynamic dependencies while still allowing some dependencies to be
+   linked in via an rlib.
+
+   For most situations, having all libraries available as a dylib is recommended
+   if dynamically linking. For other situations, the compiler will emit a
+   warning if it is unable to determine which formats to link each library with.
 
 In general, `--crate-type=bin` or `--crate-type=lib` should be sufficient for
 all compilation needs, and the other options are just available if more
@@ -4085,7 +4107,7 @@ fn main() {
 
 These four log levels correspond to levels 1-4, as controlled by `RUST_LOG`:
 
-``` {.bash .notrust}
+```notrust,bash
 $ RUST_LOG=rust=3 ./rust
 This is an error log
 This is a warn log

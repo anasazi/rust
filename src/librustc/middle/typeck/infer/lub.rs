@@ -8,7 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-
 use middle::ty::{BuiltinBounds};
 use middle::ty::RegionVid;
 use middle::ty;
@@ -23,8 +22,9 @@ use middle::typeck::infer::fold_regions_in_sig;
 use middle::typeck::infer::{TypeTrace, Subtype};
 use collections::HashMap;
 use syntax::ast::{Many, Once, NodeId};
-use syntax::ast::{ExternFn, NormalFn, UnsafeFn};
+use syntax::ast::{NormalFn, UnsafeFn};
 use syntax::ast::{Onceness, FnStyle};
+use syntax::ast::{MutMutable, MutImmutable};
 use util::ppaux::mt_to_str;
 
 pub struct Lub<'f>(pub CombineFields<'f>);  // least-upper-bound: common supertype
@@ -35,7 +35,7 @@ impl<'f> Lub<'f> {
 
 impl<'f> Combine for Lub<'f> {
     fn infcx<'a>(&'a self) -> &'a InferCtxt<'a> { self.get_ref().infcx }
-    fn tag(&self) -> ~str { "lub".to_owned() }
+    fn tag(&self) -> String { "lub".to_string() }
     fn a_is_expected(&self) -> bool { self.get_ref().a_is_expected }
     fn trace(&self) -> TypeTrace { self.get_ref().trace.clone() }
 
@@ -78,8 +78,7 @@ impl<'f> Combine for Lub<'f> {
     fn fn_styles(&self, a: FnStyle, b: FnStyle) -> cres<FnStyle> {
         match (a, b) {
           (UnsafeFn, _) | (_, UnsafeFn) => Ok(UnsafeFn),
-          (NormalFn, _) | (_, NormalFn) => Ok(NormalFn),
-          (ExternFn, ExternFn) => Ok(ExternFn),
+          (NormalFn, NormalFn) => Ok(NormalFn),
         }
     }
 
@@ -186,8 +185,9 @@ impl<'f> Combine for Lub<'f> {
 
             this.get_ref().infcx.tcx.sess.span_bug(
                 this.get_ref().trace.origin.span(),
-                format!("Region {:?} is not associated with \
-                        any bound region from A!", r0))
+                format!("region {:?} is not associated with \
+                         any bound region from A!",
+                        r0).as_slice())
         }
     }
 

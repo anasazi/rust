@@ -16,21 +16,22 @@ More runtime type reflection
 
 #![allow(missing_doc)]
 
-use cast::transmute;
 use char;
 use container::Container;
+use intrinsics::{Disr, Opaque, TyDesc, TyVisitor, get_tydesc, visit_tydesc};
 use io;
 use iter::Iterator;
+use mem::transmute;
 use option::{Some, None, Option};
 use ptr::RawPtr;
-use reflect;
-use reflect::{MovePtr, align};
-use result::{Ok, Err};
-use str::StrSlice;
-use to_str::ToStr;
-use slice::Vector;
-use intrinsics::{Disr, Opaque, TyDesc, TyVisitor, get_tydesc, visit_tydesc};
 use raw;
+use reflect::{MovePtr, align};
+use reflect;
+use result::{Ok, Err};
+use slice::Vector;
+use str::{Str, StrSlice};
+use string::String;
+use to_str::ToStr;
 use vec::Vec;
 
 macro_rules! try( ($me:expr, $e:expr) => (
@@ -157,7 +158,7 @@ impl<'a> ReprVisitor<'a> {
                 ptr: ptr,
                 ptr_stk: vec!(),
                 var_stk: vec!(),
-                writer: ::cast::transmute_copy(&self.writer),
+                writer: ::mem::transmute_copy(&self.writer),
                 last_err: None,
             };
             let mut v = reflect::MovePtrAdaptor(u);
@@ -280,7 +281,6 @@ impl<'a> TyVisitor for ReprVisitor<'a> {
 
     fn visit_f32(&mut self) -> bool { self.write::<f32>() }
     fn visit_f64(&mut self) -> bool { self.write::<f64>() }
-    #[cfg(not(stage0))]
     fn visit_f128(&mut self) -> bool { fail!("not implemented") }
 
     fn visit_char(&mut self) -> bool {
@@ -297,10 +297,7 @@ impl<'a> TyVisitor for ReprVisitor<'a> {
     }
 
     fn visit_estr_uniq(&mut self) -> bool {
-        self.get::<~str>(|this, s| {
-            try!(this, this.writer.write(['~' as u8]));
-            this.write_escaped_slice(*s)
-        })
+        true
     }
 
     fn visit_estr_slice(&mut self) -> bool {
@@ -321,7 +318,7 @@ impl<'a> TyVisitor for ReprVisitor<'a> {
     }
 
     fn visit_uniq(&mut self, _mtbl: uint, inner: *TyDesc) -> bool {
-        try!(self, self.writer.write(['~' as u8]));
+        try!(self, self.writer.write("box ".as_bytes()));
         self.get::<*u8>(|this, b| {
             this.visit_ptr_inner(*b, inner)
         })
@@ -354,7 +351,7 @@ impl<'a> TyVisitor for ReprVisitor<'a> {
 
     fn visit_evec_uniq(&mut self, mtbl: uint, inner: *TyDesc) -> bool {
         self.get::<&raw::Vec<()>>(|this, b| {
-            try!(this, this.writer.write(['~' as u8]));
+            try!(this, this.writer.write("box ".as_bytes()));
             this.write_unboxed_vec_repr(mtbl, *b, inner)
         })
     }
@@ -465,7 +462,7 @@ impl<'a> TyVisitor for ReprVisitor<'a> {
 
     fn visit_enter_enum(&mut self,
                         _n_variants: uint,
-                        get_disr: extern unsafe fn(ptr: *Opaque) -> Disr,
+                        get_disr: unsafe extern fn(ptr: *Opaque) -> Disr,
                         _sz: uint,
                         _align: uint) -> bool {
         let disr = unsafe {
@@ -539,7 +536,7 @@ impl<'a> TyVisitor for ReprVisitor<'a> {
 
     fn visit_leave_enum(&mut self,
                         _n_variants: uint,
-                        _get_disr: extern unsafe fn(ptr: *Opaque) -> Disr,
+                        _get_disr: unsafe extern fn(ptr: *Opaque) -> Disr,
                         _sz: uint,
                         _align: uint)
                         -> bool {
@@ -605,13 +602,14 @@ pub fn write_repr<T>(writer: &mut io::Writer, object: &T) -> io::IoResult<()> {
     }
 }
 
-pub fn repr_to_str<T>(t: &T) -> ~str {
+pub fn repr_to_str<T>(t: &T) -> String {
     use str;
+    use str::StrAllocating;
     use io;
 
     let mut result = io::MemWriter::new();
     write_repr(&mut result as &mut io::Writer, t).unwrap();
-    str::from_utf8(result.unwrap().as_slice()).unwrap().to_owned()
+    str::from_utf8(result.unwrap().as_slice()).unwrap().to_string()
 }
 
 #[cfg(test)]
@@ -637,12 +635,10 @@ fn test_repr() {
     exact_test(&true, "true");
     exact_test(&false, "false");
     exact_test(&1.234, "1.234f64");
-    exact_test(&(&"hello"), "\"hello\"");
-    // FIXME What do I do about this one?
-    exact_test(&("he\u10f3llo".to_owned()), "~\"he\\u10f3llo\"");
+    exact_test(&("hello"), "\"hello\"");
 
     exact_test(&(@10), "@10");
-    exact_test(&(~10), "~10");
+    exact_test(&(box 10), "box 10");
     exact_test(&(&10), "&10");
     let mut x = 10;
     exact_test(&(&mut x), "&mut 10");
@@ -651,24 +647,14 @@ fn test_repr() {
     exact_test(&(0 as *mut ()), "(0x0 as *mut ())");
 
     exact_test(&(1,), "(1,)");
-    exact_test(&(~["hi", "there"]),
-               "~[\"hi\", \"there\"]");
     exact_test(&(&["hi", "there"]),
                "&[\"hi\", \"there\"]");
     exact_test(&(P{a:10, b:1.234}),
                "repr::P{a: 10, b: 1.234f64}");
     exact_test(&(@P{a:10, b:1.234}),
                "@repr::P{a: 10, b: 1.234f64}");
-    exact_test(&(~P{a:10, b:1.234}),
-               "~repr::P{a: 10, b: 1.234f64}");
-    exact_test(&(10u8, "hello".to_owned()),
-               "(10u8, ~\"hello\")");
-    exact_test(&(10u16, "hello".to_owned()),
-               "(10u16, ~\"hello\")");
-    exact_test(&(10u32, "hello".to_owned()),
-               "(10u32, ~\"hello\")");
-    exact_test(&(10u64, "hello".to_owned()),
-               "(10u64, ~\"hello\")");
+    exact_test(&(box P{a:10, b:1.234}),
+               "box repr::P{a: 10, b: 1.234f64}");
 
     exact_test(&(&[1, 2]), "&[1, 2]");
     exact_test(&(&mut [1, 2]), "&mut [1, 2]");
@@ -681,10 +667,6 @@ fn test_repr() {
     exact_test(&println, "fn(&str)");
     exact_test(&swap::<int>, "fn(&mut int, &mut int)");
     exact_test(&is_alphabetic, "fn(char) -> bool");
-    exact_test(&(~5 as ~ToStr), "~to_str::ToStr<no-bounds>");
-
-    struct Foo;
-    exact_test(&(~[Foo, Foo]), "~[repr::test_repr::Foo, repr::test_repr::Foo]");
 
     struct Bar(int, int);
     exact_test(&(Bar(2, 2)), "repr::test_repr::Bar(2, 2)");

@@ -650,7 +650,6 @@ fn resolve_local(visitor: &mut RegionResolutionVisitor,
          *        | VariantName(..., P&, ...)
          *        | [ ..., P&, ... ]
          *        | ( ..., P&, ... )
-         *        | ~P&
          *        | box P&
          */
 
@@ -672,7 +671,7 @@ fn resolve_local(visitor: &mut RegionResolutionVisitor,
                 subpats.iter().any(|&p| is_binding_pat(p))
             }
 
-            ast::PatUniq(subpat) => {
+            ast::PatBox(subpat) => {
                 is_binding_pat(subpat)
             }
 
@@ -704,7 +703,7 @@ fn resolve_local(visitor: &mut RegionResolutionVisitor,
          *        | [ ..., E&, ... ]
          *        | ( ..., E&, ... )
          *        | {...; E&}
-         *        | ~E&
+         *        | box E&
          *        | E& as ...
          *        | ( E& )
          */

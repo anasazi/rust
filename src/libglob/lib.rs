@@ -23,13 +23,13 @@
  * `glob`/`fnmatch` functions.
  */
 
-#![crate_id = "glob#0.11-pre"]
+#![crate_id = "glob#0.11.0-pre"]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
 #![license = "MIT/ASL2"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-       html_root_url = "http://static.rust-lang.org/doc/master")]
+       html_root_url = "http://doc.rust-lang.org/")]
 
 #![deny(deprecated_owned_vector)]
 
@@ -37,7 +37,7 @@ use std::cell::Cell;
 use std::{cmp, os, path};
 use std::io::fs;
 use std::path::is_sep;
-use std::strbuf::StrBuf;
+use std::string::String;
 
 /**
  * An iterator that yields Paths from the filesystem that match a particular
@@ -310,8 +310,8 @@ impl Pattern {
      * brackets. The resulting string will, when compiled into a `Pattern`,
      * match the input string and nothing else.
      */
-    pub fn escape(s: &str) -> ~str {
-        let mut escaped = StrBuf::new();
+    pub fn escape(s: &str) -> String {
+        let mut escaped = String::new();
         for c in s.chars() {
             match c {
                 // note that ! does not need escaping because it is only special inside brackets
@@ -325,7 +325,7 @@ impl Pattern {
                 }
             }
         }
-        escaped.into_owned()
+        escaped
     }
 
     /**
@@ -464,8 +464,8 @@ impl Pattern {
 fn fill_todo(todo: &mut Vec<(Path, uint)>, patterns: &[Pattern], idx: uint, path: &Path,
              options: MatchOptions) {
     // convert a pattern that's just many Char(_) to a string
-    fn pattern_as_str(pattern: &Pattern) -> Option<StrBuf> {
-        let mut s = StrBuf::new();
+    fn pattern_as_str(pattern: &Pattern) -> Option<String> {
+        let mut s = String::new();
         for token in pattern.tokens.iter() {
             match *token {
                 Char(c) => s.push_char(c),
@@ -553,18 +553,18 @@ fn in_char_specifiers(specifiers: &[CharSpecifier], c: char, options: MatchOptio
                 // FIXME: work with non-ascii chars properly (issue #1347)
                 if !options.case_sensitive && c.is_ascii() && start.is_ascii() && end.is_ascii() {
 
-                    let start = start.to_ascii().to_lower();
-                    let end = end.to_ascii().to_lower();
+                    let start = start.to_ascii().to_lowercase();
+                    let end = end.to_ascii().to_lowercase();
 
-                    let start_up = start.to_upper();
-                    let end_up = end.to_upper();
+                    let start_up = start.to_uppercase();
+                    let end_up = end.to_uppercase();
 
                     // only allow case insensitive matching when
                     // both start and end are within a-z or A-Z
                     if start != start_up && end != end_up {
                         let start = start.to_char();
                         let end = end.to_char();
-                        let c = c.to_ascii().to_lower().to_char();
+                        let c = c.to_ascii().to_lowercase().to_char();
                         if c >= start && c <= end {
                             return true;
                         }
@@ -690,13 +690,13 @@ mod test {
 
         let pat = Pattern::new("a[0-9]b");
         for i in range(0, 10) {
-            assert!(pat.matches(format!("a{}b", i)));
+            assert!(pat.matches(format!("a{}b", i).as_slice()));
         }
         assert!(!pat.matches("a_b"));
 
         let pat = Pattern::new("a[!0-9]b");
         for i in range(0, 10) {
-            assert!(!pat.matches(format!("a{}b", i)));
+            assert!(!pat.matches(format!("a{}b", i).as_slice()));
         }
         assert!(pat.matches("a_b"));
 
@@ -704,11 +704,11 @@ mod test {
         for &p in pats.iter() {
             let pat = Pattern::new(p);
             for c in "abcdefghijklmnopqrstuvwxyz".chars() {
-                assert!(pat.matches(c.to_str()));
+                assert!(pat.matches(c.to_str().as_slice()));
             }
             for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ".chars() {
                 let options = MatchOptions {case_sensitive: false, .. MatchOptions::new()};
-                assert!(pat.matches_with(c.to_str(), options));
+                assert!(pat.matches_with(c.to_str().as_slice(), options));
             }
             assert!(pat.matches("1"));
             assert!(pat.matches("2"));
@@ -767,8 +767,8 @@ mod test {
     #[test]
     fn test_pattern_escape() {
         let s = "_[_]_?_*_!_";
-        assert_eq!(Pattern::escape(s), "_[[]_[]]_[?]_[*]_!_".to_owned());
-        assert!(Pattern::new(Pattern::escape(s)).matches(s));
+        assert_eq!(Pattern::escape(s), "_[[]_[]]_[?]_[*]_!_".to_string());
+        assert!(Pattern::new(Pattern::escape(s).as_slice()).matches(s));
     }
 
     #[test]

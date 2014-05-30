@@ -127,12 +127,13 @@ That's a great example for stack memory,
 but what about heap memory?
 Rust has a second kind of pointer,
 an 'owned box',
-that you can create with a `~`.
+that you can create with the `box` operator.
 Check it out:
 
 ```
-fn dangling() -> ~int {
-    let i = ~1234;
+
+fn dangling() -> Box<int> {
+    let i = box 1234;
     return i;
 }
 
@@ -143,7 +144,7 @@ fn add_one() -> int {
 ```
 
 Now instead of a stack allocated `1234`,
-we have a heap allocated `~1234`.
+we have a heap allocated `box 1234`.
 Whereas `&` borrows a pointer to existing memory,
 creating an owned box allocates memory on the heap and places a value in it,
 giving you the sole pointer to that memory.
@@ -151,7 +152,7 @@ You can roughly compare these two lines:
 
 ```
 // Rust
-let i = ~1234;
+let i = box 1234;
 ```
 
 ```notrust
@@ -370,7 +371,7 @@ fn main() {
 ```
 
 This example is starting to get more subtle,
-but it hints at the powerful compositionality of Rust's concurrent types.
+but it hints at the powerful composability of Rust's concurrent types.
 This time we've put our array of numbers inside a `Mutex` and then put *that* inside the `Arc`.
 Like immutable data,
 `Mutex`es are sharable,

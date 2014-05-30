@@ -58,12 +58,12 @@
 // Currently Rust uses unwind runtime provided by libgcc.
 
 use any::{Any, AnyRefExt};
-use c_str::CString;
-use cast;
 use fmt;
+use intrinsics;
 use kinds::Send;
 use mem;
 use option::{Some, None, Option};
+use owned::Box;
 use prelude::drop;
 use ptr::RawPtr;
 use result::{Err, Ok};
@@ -71,14 +71,14 @@ use rt::backtrace;
 use rt::local::Local;
 use rt::task::Task;
 use str::Str;
+use string::String;
 use task::TaskResult;
-use intrinsics;
 
 use uw = rt::libunwind;
 
 pub struct Unwinder {
     unwinding: bool,
-    cause: Option<~Any:Send>
+    cause: Option<Box<Any:Send>>
 }
 
 impl Unwinder {
@@ -98,7 +98,7 @@ impl Unwinder {
         use libc::{c_void};
 
         unsafe {
-            let closure: Closure = cast::transmute(f);
+            let closure: Closure = mem::transmute(f);
             let ep = rust_try(try_fn, closure.code as *c_void,
                               closure.env as *c_void);
             if !ep.is_null() {
@@ -109,7 +109,7 @@ impl Unwinder {
 
         extern fn try_fn(code: *c_void, env: *c_void) {
             unsafe {
-                let closure: || = cast::transmute(Closure {
+                let closure: || = mem::transmute(Closure {
                     code: code as *(),
                     env: env as *(),
                 });
@@ -128,7 +128,7 @@ impl Unwinder {
         }
     }
 
-    pub fn begin_unwind(&mut self, cause: ~Any:Send) -> ! {
+    pub fn begin_unwind(&mut self, cause: Box<Any:Send>) -> ! {
         rtdebug!("begin_unwind()");
 
         self.unwinding = true;
@@ -141,12 +141,12 @@ impl Unwinder {
         #[no_mangle]
         fn rust_fail() -> ! {
             unsafe {
-                let exception = ~uw::_Unwind_Exception {
+                let exception = box uw::_Unwind_Exception {
                     exception_class: rust_exception_class(),
                     exception_cleanup: exception_cleanup,
                     private: [0, ..uw::unwinder_private_data_size],
                 };
-                let error = uw::_Unwind_RaiseException(cast::transmute(exception));
+                let error = uw::_Unwind_RaiseException(mem::transmute(exception));
                 rtabort!("Could not unwind stack, error = {}", error as int)
             }
 
@@ -154,7 +154,8 @@ impl Unwinder {
                                             exception: *uw::_Unwind_Exception) {
                 rtdebug!("exception_cleanup()");
                 unsafe {
-                    let _: ~uw::_Unwind_Exception = cast::transmute(exception);
+                    let _: Box<uw::_Unwind_Exception> =
+                        mem::transmute(exception);
                 }
             }
         }
@@ -212,7 +213,23 @@ pub mod eabi {
     }
 
     #[lang="eh_personality"]
+    #[cfg(not(stage0))]
+    extern fn eh_personality(
+        version: c_int,
+        actions: uw::_Unwind_Action,
+        exception_class: uw::_Unwind_Exception_Class,
+        ue_header: *uw::_Unwind_Exception,
+        context: *uw::_Unwind_Context
+    ) -> uw::_Unwind_Reason_Code
+    {
+        unsafe {
+            __gcc_personality_v0(version, actions, exception_class, ue_header,
+                                 context)
+        }
+    }
+    #[lang="eh_personality"]
     #[no_mangle] // so we can reference it by name from middle/trans/base.rs
+    #[cfg(stage0)]
     pub extern "C" fn rust_eh_personality(
         version: c_int,
         actions: uw::_Unwind_Action,
@@ -264,7 +281,21 @@ pub mod eabi {
     }
 
     #[lang="eh_personality"]
+    #[cfg(not(stage0))]
+    extern "C" fn eh_personality(
+        state: uw::_Unwind_State,
+        ue_header: *uw::_Unwind_Exception,
+        context: *uw::_Unwind_Context
+    ) -> uw::_Unwind_Reason_Code
+    {
+        unsafe {
+            __gcc_personality_v0(state, ue_header, context)
+        }
+    }
+
+    #[lang="eh_personality"]
     #[no_mangle] // so we can reference it by name from middle/trans/base.rs
+    #[cfg(stage0)]
     pub extern "C" fn rust_eh_personality(
         state: uw::_Unwind_State,
         ue_header: *uw::_Unwind_Exception,
@@ -295,43 +326,19 @@ pub mod eabi {
     }
 }
 
-#[cold]
-#[lang="fail_"]
-#[cfg(not(test))]
-pub fn fail_(expr: *u8, file: *u8, line: uint) -> ! {
-    begin_unwind_raw(expr, file, line);
+// Entry point of failure from the libcore crate
+#[cfg(not(test), not(stage0))]
+#[lang = "begin_unwind"]
+pub extern fn rust_begin_unwind(msg: &fmt::Arguments,
+                                file: &'static str, line: uint) -> ! {
+    begin_unwind_fmt(msg, file, line)
 }
 
-#[cold]
-#[lang="fail_bounds_check"]
-#[cfg(not(test))]
-pub fn fail_bounds_check(file: *u8, line: uint, index: uint, len: uint) -> ! {
-    use c_str::ToCStr;
-
-    let msg = format!("index out of bounds: the len is {} but the index is {}",
-                      len as uint, index as uint);
-    msg.with_c_str(|buf| fail_(buf as *u8, file, line))
-}
-
-/// This is the entry point of unwinding for things like lang items and such.
-/// The arguments are normally generated by the compiler, and need to
-/// have static lifetimes.
-#[inline(never)] #[cold] // this is the slow path, please never inline this
-pub fn begin_unwind_raw(msg: *u8, file: *u8, line: uint) -> ! {
-    use libc::c_char;
-    #[inline]
-    fn static_char_ptr(p: *u8) -> &'static str {
-        let s = unsafe { CString::new(p as *c_char, false) };
-        match s.as_str() {
-            Some(s) => unsafe { cast::transmute::<&str, &'static str>(s) },
-            None => rtabort!("message wasn't utf8?")
-        }
-    }
-
-    let msg = static_char_ptr(msg);
-    let file = static_char_ptr(file);
-
-    begin_unwind(msg, file, line as uint)
+#[no_mangle]
+#[cfg(not(test), stage0)]
+pub extern fn rust_begin_unwind(msg: &fmt::Arguments,
+                                file: &'static str, line: uint) -> ! {
+    begin_unwind_fmt(msg, file, line)
 }
 
 /// The entry point for unwinding with a formatted message.
@@ -341,12 +348,13 @@ pub fn begin_unwind_raw(msg: *u8, file: *u8, line: uint) -> ! {
 /// on (e.g.) the inlining of other functions as possible), by moving
 /// the actual formatting into this shared place.
 #[inline(never)] #[cold]
-pub fn begin_unwind_fmt(msg: &fmt::Arguments, file: &'static str, line: uint) -> ! {
+pub fn begin_unwind_fmt(msg: &fmt::Arguments, file: &'static str,
+                        line: uint) -> ! {
     // We do two allocations here, unfortunately. But (a) they're
     // required with the current scheme, and (b) we don't handle
     // failure + OOM properly anyway (see comment in begin_unwind
     // below).
-    begin_unwind_inner(~fmt::format(msg), file, line)
+    begin_unwind_inner(box fmt::format(msg), file, line)
 }
 
 /// This is the entry point of unwinding for fail!() and assert!().
@@ -360,7 +368,7 @@ pub fn begin_unwind<M: Any + Send>(msg: M, file: &'static str, line: uint) -> ! 
     // failing.
 
     // see below for why we do the `Any` coercion here.
-    begin_unwind_inner(~msg, file, line)
+    begin_unwind_inner(box msg, file, line)
 }
 
 
@@ -374,14 +382,16 @@ pub fn begin_unwind<M: Any + Send>(msg: M, file: &'static str, line: uint) -> ! 
 /// Do this split took the LLVM IR line counts of `fn main() { fail!()
 /// }` from ~1900/3700 (-O/no opts) to 180/590.
 #[inline(never)] #[cold] // this is the slow path, please never inline this
-fn begin_unwind_inner(msg: ~Any:Send, file: &'static str, line: uint) -> ! {
+fn begin_unwind_inner(msg: Box<Any:Send>,
+                      file: &'static str,
+                      line: uint) -> ! {
     let mut task;
     {
         let msg_s = match msg.as_ref::<&'static str>() {
             Some(s) => *s,
-            None => match msg.as_ref::<~str>() {
+            None => match msg.as_ref::<String>() {
                 Some(s) => s.as_slice(),
-                None => "~Any",
+                None => "Box<Any>",
             }
         };
 
@@ -392,7 +402,7 @@ fn begin_unwind_inner(msg: ~Any:Send, file: &'static str, line: uint) -> ! {
         // order to get some better diagnostics, we print on failure and
         // immediately abort the whole process if there is no local task
         // available.
-        let opt_task: Option<~Task> = Local::try_take();
+        let opt_task: Option<Box<Task>> = Local::try_take();
         task = match opt_task {
             Some(t) => t,
             None => {
@@ -419,9 +429,9 @@ fn begin_unwind_inner(msg: ~Any:Send, file: &'static str, line: uint) -> ! {
                 Some(mut stderr) => {
                     Local::put(task);
                     // FIXME: what to do when the task printing fails?
-                    let _err = format_args!(|args| ::fmt::writeln(stderr, args),
-                                            "task '{}' failed at '{}', {}:{}",
-                                            n, msg_s, file, line);
+                    let _err = write!(stderr,
+                                      "task '{}' failed at '{}', {}:{}\n",
+                                      n, msg_s, file, line);
                     if backtrace::log_enabled() {
                         let _err = backtrace::write(stderr);
                     }

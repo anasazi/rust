@@ -10,11 +10,11 @@
 
 //! Ordered containers with integer keys, implemented as radix tries (`TrieSet` and `TrieMap` types)
 
+use std::mem::zeroed;
 use std::mem;
-use std::uint;
-use std::mem::init;
-use std::slice;
 use std::slice::{Items, MutItems};
+use std::slice;
+use std::uint;
 
 // FIXME: #5244: need to manually update the TrieNode constructor
 static SHIFT: uint = 4;
@@ -23,7 +23,7 @@ static MASK: uint = SIZE - 1;
 static NUM_CHUNKS: uint = uint::BITS / SHIFT;
 
 enum Child<T> {
-    Internal(~TrieNode<T>),
+    Internal(Box<TrieNode<T>>),
     External(uint, T),
     Nothing
 }
@@ -395,7 +395,7 @@ impl<T> TrieNode<T> {
 
 impl<T> TrieNode<T> {
     fn each_reverse<'a>(&'a self, f: |&uint, &'a T| -> bool) -> bool {
-        for elt in self.children.rev_iter() {
+        for elt in self.children.iter().rev() {
             match *elt {
                 Internal(ref x) => if !x.each_reverse(|i,t| f(i,t)) { return false },
                 External(k, ref v) => if !f(&k, v) { return false },
@@ -448,7 +448,7 @@ fn insert<T>(count: &mut uint, child: &mut Child<T>, key: uint, value: T,
     // have to move out of `child`.
     match mem::replace(child, Nothing) {
         External(stored_key, stored_value) => {
-            let mut new = ~TrieNode::new();
+            let mut new = box TrieNode::new();
             insert(&mut new.count,
                    &mut new.children[chunk(stored_key, idx)],
                    stored_key, stored_value, idx + 1);
@@ -522,7 +522,8 @@ macro_rules! iterator_impl {
                     remaining_max: 0,
                     length: 0,
                     // ick :( ... at least the compiler will tell us if we screwed up.
-                    stack: [init(), init(), init(), init(), init(), init(), init(), init()]
+                    stack: [zeroed(), zeroed(), zeroed(), zeroed(), zeroed(),
+                            zeroed(), zeroed(), zeroed()]
                 }
             }
 
@@ -532,8 +533,10 @@ macro_rules! iterator_impl {
                     remaining_min: 0,
                     remaining_max: 0,
                     length: 0,
-                    stack: [init(), init(), init(), init(), init(), init(), init(), init(),
-                            init(), init(), init(), init(), init(), init(), init(), init()]
+                    stack: [zeroed(), zeroed(), zeroed(), zeroed(),
+                            zeroed(), zeroed(), zeroed(), zeroed(),
+                            zeroed(), zeroed(), zeroed(), zeroed(),
+                            zeroed(), zeroed(), zeroed(), zeroed()]
                 }
             }
         }
@@ -634,7 +637,7 @@ impl<'a> Iterator<uint> for SetItems<'a> {
 
 #[cfg(test)]
 mod test_map {
-    use super::{TrieMap, TrieNode, Internal, External};
+    use super::{TrieMap, TrieNode, Internal, External, Nothing};
     use std::iter::range_step;
     use std::uint;
 

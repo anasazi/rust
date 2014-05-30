@@ -28,13 +28,13 @@
 //! An example version number with all five components is
 //! `0.8.1-rc.3.0+20130922.linux`.
 
-#![crate_id = "semver#0.11-pre"]
+#![crate_id = "semver#0.11.0-pre"]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
 #![license = "MIT/ASL2"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-       html_root_url = "http://static.rust-lang.org/doc/master")]
+       html_root_url = "http://doc.rust-lang.org/")]
 #![deny(deprecated_owned_vector)]
 
 use std::char;
@@ -42,7 +42,7 @@ use std::cmp;
 use std::fmt;
 use std::fmt::Show;
 use std::option::{Option, Some, None};
-use std::strbuf::StrBuf;
+use std::string::String;
 
 /// An identifier in the pre-release or build metadata. If the identifier can
 /// be parsed as a decimal value, it will be represented with `Numeric`.
@@ -50,7 +50,7 @@ use std::strbuf::StrBuf;
 #[allow(missing_doc)]
 pub enum Identifier {
     Numeric(uint),
-    AlphaNumeric(~str)
+    AlphaNumeric(String)
 }
 
 impl cmp::Ord for Identifier {
@@ -96,18 +96,18 @@ pub struct Version {
 impl fmt::Show for Version {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        try!(write!(f.buf, "{}.{}.{}", self.major, self.minor, self.patch))
+        try!(write!(f, "{}.{}.{}", self.major, self.minor, self.patch))
         if !self.pre.is_empty() {
-            try!(write!(f.buf, "-"));
+            try!(write!(f, "-"));
             for (i, x) in self.pre.iter().enumerate() {
-                if i != 0 { try!(write!(f.buf, ".")) };
+                if i != 0 { try!(write!(f, ".")) };
                 try!(x.fmt(f));
             }
         }
         if !self.build.is_empty() {
-            try!(write!(f.buf, "+"));
+            try!(write!(f, "+"));
             for (i, x) in self.build.iter().enumerate() {
-                if i != 0 { try!(write!(f.buf, ".")) };
+                if i != 0 { try!(write!(f, ".")) };
                 try!(x.fmt(f));
             }
         }
@@ -158,8 +158,8 @@ impl cmp::Ord for Version {
 }
 
 fn take_nonempty_prefix<T:Iterator<char>>(rdr: &mut T, pred: |char| -> bool)
-                        -> (~str, Option<char>) {
-    let mut buf = StrBuf::new();
+                        -> (String, Option<char>) {
+    let mut buf = String::new();
     let mut ch = rdr.next();
     loop {
         match ch {
@@ -171,12 +171,12 @@ fn take_nonempty_prefix<T:Iterator<char>>(rdr: &mut T, pred: |char| -> bool)
             }
         }
     }
-    (buf.into_owned(), ch)
+    (buf, ch)
 }
 
 fn take_num<T: Iterator<char>>(rdr: &mut T) -> Option<(uint, Option<char>)> {
     let (s, ch) = take_nonempty_prefix(rdr, char::is_digit);
-    match from_str::<uint>(s) {
+    match from_str::<uint>(s.as_slice()) {
         None => None,
         Some(i) => Some((i, ch))
     }
@@ -184,8 +184,8 @@ fn take_num<T: Iterator<char>>(rdr: &mut T) -> Option<(uint, Option<char>)> {
 
 fn take_ident<T: Iterator<char>>(rdr: &mut T) -> Option<(Identifier, Option<char>)> {
     let (s,ch) = take_nonempty_prefix(rdr, char::is_alphanumeric);
-    if s.chars().all(char::is_digit) {
-        match from_str::<uint>(s) {
+    if s.as_slice().chars().all(char::is_digit) {
+        match from_str::<uint>(s.as_slice()) {
             None => None,
             Some(i) => Some((Numeric(i), ch))
         }
@@ -308,14 +308,14 @@ fn test_parse() {
         major: 1u,
         minor: 2u,
         patch: 3u,
-        pre: vec!(AlphaNumeric("alpha1".to_owned())),
+        pre: vec!(AlphaNumeric("alpha1".to_string())),
         build: vec!(),
     }));
     assert!(parse("  1.2.3-alpha1  ") == Some(Version {
         major: 1u,
         minor: 2u,
         patch: 3u,
-        pre: vec!(AlphaNumeric("alpha1".to_owned())),
+        pre: vec!(AlphaNumeric("alpha1".to_string())),
         build: vec!()
     }));
     assert!(parse("1.2.3+build5") == Some(Version {
@@ -323,37 +323,37 @@ fn test_parse() {
         minor: 2u,
         patch: 3u,
         pre: vec!(),
-        build: vec!(AlphaNumeric("build5".to_owned()))
+        build: vec!(AlphaNumeric("build5".to_string()))
     }));
     assert!(parse("  1.2.3+build5  ") == Some(Version {
         major: 1u,
         minor: 2u,
         patch: 3u,
         pre: vec!(),
-        build: vec!(AlphaNumeric("build5".to_owned()))
+        build: vec!(AlphaNumeric("build5".to_string()))
     }));
     assert!(parse("1.2.3-alpha1+build5") == Some(Version {
         major: 1u,
         minor: 2u,
         patch: 3u,
-        pre: vec!(AlphaNumeric("alpha1".to_owned())),
-        build: vec!(AlphaNumeric("build5".to_owned()))
+        pre: vec!(AlphaNumeric("alpha1".to_string())),
+        build: vec!(AlphaNumeric("build5".to_string()))
     }));
     assert!(parse("  1.2.3-alpha1+build5  ") == Some(Version {
         major: 1u,
         minor: 2u,
         patch: 3u,
-        pre: vec!(AlphaNumeric("alpha1".to_owned())),
-        build: vec!(AlphaNumeric("build5".to_owned()))
+        pre: vec!(AlphaNumeric("alpha1".to_string())),
+        build: vec!(AlphaNumeric("build5".to_string()))
     }));
     assert!(parse("1.2.3-1.alpha1.9+build5.7.3aedf  ") == Some(Version {
         major: 1u,
         minor: 2u,
         patch: 3u,
-        pre: vec!(Numeric(1),AlphaNumeric("alpha1".to_owned()),Numeric(9)),
-        build: vec!(AlphaNumeric("build5".to_owned()),
+        pre: vec!(Numeric(1),AlphaNumeric("alpha1".to_string()),Numeric(9)),
+        build: vec!(AlphaNumeric("build5".to_string()),
                  Numeric(7),
-                 AlphaNumeric("3aedf".to_owned()))
+                 AlphaNumeric("3aedf".to_string()))
     }));
 
 }
@@ -377,18 +377,22 @@ fn test_ne() {
 
 #[test]
 fn test_show() {
-    assert_eq!(format!("{}", parse("1.2.3").unwrap()), "1.2.3".to_owned());
-    assert_eq!(format!("{}", parse("1.2.3-alpha1").unwrap()), "1.2.3-alpha1".to_owned());
-    assert_eq!(format!("{}", parse("1.2.3+build.42").unwrap()), "1.2.3+build.42".to_owned());
-    assert_eq!(format!("{}", parse("1.2.3-alpha1+42").unwrap()), "1.2.3-alpha1+42".to_owned());
+    assert_eq!(format!("{}", parse("1.2.3").unwrap()),
+               "1.2.3".to_string());
+    assert_eq!(format!("{}", parse("1.2.3-alpha1").unwrap()),
+               "1.2.3-alpha1".to_string());
+    assert_eq!(format!("{}", parse("1.2.3+build.42").unwrap()),
+               "1.2.3+build.42".to_string());
+    assert_eq!(format!("{}", parse("1.2.3-alpha1+42").unwrap()),
+               "1.2.3-alpha1+42".to_string());
 }
 
 #[test]
 fn test_to_str() {
-    assert_eq!(parse("1.2.3").unwrap().to_str(), "1.2.3".to_owned());
-    assert_eq!(parse("1.2.3-alpha1").unwrap().to_str(), "1.2.3-alpha1".to_owned());
-    assert_eq!(parse("1.2.3+build.42").unwrap().to_str(), "1.2.3+build.42".to_owned());
-    assert_eq!(parse("1.2.3-alpha1+42").unwrap().to_str(), "1.2.3-alpha1+42".to_owned());
+    assert_eq!(parse("1.2.3").unwrap().to_str(), "1.2.3".to_string());
+    assert_eq!(parse("1.2.3-alpha1").unwrap().to_str(), "1.2.3-alpha1".to_string());
+    assert_eq!(parse("1.2.3+build.42").unwrap().to_str(), "1.2.3+build.42".to_string());
+    assert_eq!(parse("1.2.3-alpha1+42").unwrap().to_str(), "1.2.3-alpha1+42".to_string());
 }
 
 #[test]

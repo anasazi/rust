@@ -10,13 +10,13 @@
 
 //! Types/fns concerning URLs (see RFC 3986)
 
-#![crate_id = "url#0.11-pre"]
+#![crate_id = "url#0.11.0-pre"]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
 #![license = "MIT/ASL2"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-       html_root_url = "http://static.rust-lang.org/doc/master")]
+       html_root_url = "http://doc.rust-lang.org/")]
 #![feature(default_type_params)]
 
 extern crate collections;
@@ -27,7 +27,7 @@ use std::fmt;
 use std::from_str::FromStr;
 use std::hash::Hash;
 use std::io::BufReader;
-use std::strbuf::StrBuf;
+use std::string::String;
 use std::uint;
 
 /// A Uniform Resource Locator (URL).  A URL is a form of URI (Uniform Resource
@@ -39,65 +39,67 @@ use std::uint;
 /// ```rust
 /// use url::{Url, UserInfo};
 ///
-/// let url = Url { scheme: "https".to_owned(),
-///                 user: Some(UserInfo { user: "username".to_owned(), pass: None }),
-///                 host: "example.com".to_owned(),
-///                 port: Some("8080".to_owned()),
-///                 path: "/foo/bar".to_owned(),
-///                 query: vec!(("baz".to_owned(), "qux".to_owned())),
-///                 fragment: Some("quz".to_owned()) };
+/// let url = Url { scheme: "https".to_string(),
+///                 user: Some(UserInfo { user: "username".to_string(), pass: None }),
+///                 host: "example.com".to_string(),
+///                 port: Some("8080".to_string()),
+///                 path: "/foo/bar".to_string(),
+///                 query: vec!(("baz".to_string(), "qux".to_string())),
+///                 fragment: Some("quz".to_string()) };
 /// // https://username@example.com:8080/foo/bar?baz=qux#quz
 /// ```
 #[deriving(Clone, Eq, TotalEq)]
 pub struct Url {
     /// The scheme part of a URL, such as `https` in the above example.
-    pub scheme: ~str,
+    pub scheme: String,
     /// A URL subcomponent for user authentication.  `username` in the above example.
     pub user: Option<UserInfo>,
     /// A domain name or IP address.  For example, `example.com`.
-    pub host: ~str,
+    pub host: String,
     /// A TCP port number, for example `8080`.
-    pub port: Option<~str>,
+    pub port: Option<String>,
     /// The path component of a URL, for example `/foo/bar`.
-    pub path: ~str,
-    /// The query component of a URL.  `vec!(("baz".to_owned(), "qux".to_owned()))` represents the
-    /// fragment `baz=qux` in the above example.
+    pub path: String,
+    /// The query component of a URL.
+    /// `vec!(("baz".to_string(), "qux".to_string()))` represents the fragment
+    /// `baz=qux` in the above example.
     pub query: Query,
     /// The fragment component, such as `quz`.  Doesn't include the leading `#` character.
-    pub fragment: Option<~str>
+    pub fragment: Option<String>
 }
 
 #[deriving(Clone, Eq)]
 pub struct Path {
     /// The path component of a URL, for example `/foo/bar`.
-    pub path: ~str,
-    /// The query component of a URL.  `vec!(("baz".to_owned(), "qux".to_owned()))` represents the
-    /// fragment `baz=qux` in the above example.
+    pub path: String,
+    /// The query component of a URL.
+    /// `vec!(("baz".to_string(), "qux".to_string()))` represents the fragment
+    /// `baz=qux` in the above example.
     pub query: Query,
     /// The fragment component, such as `quz`.  Doesn't include the leading `#` character.
-    pub fragment: Option<~str>
+    pub fragment: Option<String>
 }
 
 /// An optional subcomponent of a URI authority component.
 #[deriving(Clone, Eq, TotalEq)]
 pub struct UserInfo {
     /// The user name.
-    pub user: ~str,
+    pub user: String,
     /// Password or other scheme-specific authentication information.
-    pub pass: Option<~str>
+    pub pass: Option<String>
 }
 
 /// Represents the query component of a URI.
-pub type Query = Vec<(~str, ~str)>;
+pub type Query = Vec<(String, String)>;
 
 impl Url {
-    pub fn new(scheme: ~str,
+    pub fn new(scheme: String,
                user: Option<UserInfo>,
-               host: ~str,
-               port: Option<~str>,
-               path: ~str,
+               host: String,
+               port: Option<String>,
+               path: String,
                query: Query,
-               fragment: Option<~str>)
+               fragment: Option<String>)
                -> Url {
         Url {
             scheme: scheme,
@@ -112,9 +114,9 @@ impl Url {
 }
 
 impl Path {
-    pub fn new(path: ~str,
+    pub fn new(path: String,
                query: Query,
-               fragment: Option<~str>)
+               fragment: Option<String>)
                -> Path {
         Path {
             path: path,
@@ -126,14 +128,14 @@ impl Path {
 
 impl UserInfo {
     #[inline]
-    pub fn new(user: ~str, pass: Option<~str>) -> UserInfo {
+    pub fn new(user: String, pass: Option<String>) -> UserInfo {
         UserInfo { user: user, pass: pass }
     }
 }
 
-fn encode_inner(s: &str, full_url: bool) -> ~str {
+fn encode_inner(s: &str, full_url: bool) -> String {
     let mut rdr = BufReader::new(s.as_bytes());
-    let mut out = StrBuf::new();
+    let mut out = String::new();
 
     loop {
         let mut buf = [0];
@@ -162,16 +164,16 @@ fn encode_inner(s: &str, full_url: bool) -> ~str {
                     out.push_char(ch);
                   }
 
-                  _ => out.push_str(format!("%{:X}", ch as uint))
+                  _ => out.push_str(format!("%{:X}", ch as uint).as_slice())
                 }
             } else {
-                out.push_str(format!("%{:X}", ch as uint));
+                out.push_str(format!("%{:X}", ch as uint).as_slice());
             }
           }
         }
     }
 
-    out.into_owned()
+    out
 }
 
 /**
@@ -185,11 +187,11 @@ fn encode_inner(s: &str, full_url: bool) -> ~str {
  * ```rust
  * use url::encode;
  *
- * let url = encode(&"https://example.com/Rust (programming language)");
+ * let url = encode("https://example.com/Rust (programming language)");
  * println!("{}", url); // https://example.com/Rust%20(programming%20language)
  * ```
  */
-pub fn encode(s: &str) -> ~str {
+pub fn encode(s: &str) -> String {
     encode_inner(s, true)
 }
 
@@ -200,13 +202,13 @@ pub fn encode(s: &str) -> ~str {
  * This function is compliant with RFC 3986.
  */
 
-pub fn encode_component(s: &str) -> ~str {
+pub fn encode_component(s: &str) -> String {
     encode_inner(s, false)
 }
 
-fn decode_inner(s: &str, full_url: bool) -> ~str {
+fn decode_inner(s: &str, full_url: bool) -> String {
     let mut rdr = BufReader::new(s.as_bytes());
-    let mut out = StrBuf::new();
+    let mut out = String::new();
 
     loop {
         let mut buf = [0];
@@ -247,7 +249,7 @@ fn decode_inner(s: &str, full_url: bool) -> ~str {
         }
     }
 
-    out.into_owned()
+    out
 }
 
 /**
@@ -260,24 +262,24 @@ fn decode_inner(s: &str, full_url: bool) -> ~str {
  * ```rust
  * use url::decode;
  *
- * let url = decode(&"https://example.com/Rust%20(programming%20language)");
+ * let url = decode("https://example.com/Rust%20(programming%20language)");
  * println!("{}", url); // https://example.com/Rust (programming language)
  * ```
  */
-pub fn decode(s: &str) -> ~str {
+pub fn decode(s: &str) -> String {
     decode_inner(s, true)
 }
 
 /**
  * Decode a string encoded with percent encoding.
  */
-pub fn decode_component(s: &str) -> ~str {
+pub fn decode_component(s: &str) -> String {
     decode_inner(s, false)
 }
 
-fn encode_plus(s: &str) -> ~str {
+fn encode_plus(s: &str) -> String {
     let mut rdr = BufReader::new(s.as_bytes());
-    let mut out = StrBuf::new();
+    let mut out = String::new();
 
     loop {
         let mut buf = [0];
@@ -290,22 +292,22 @@ fn encode_plus(s: &str) -> ~str {
             out.push_char(ch);
           }
           ' ' => out.push_char('+'),
-          _ => out.push_str(format!("%{:X}", ch as uint))
+          _ => out.push_str(format!("%{:X}", ch as uint).as_slice())
         }
     }
 
-    out.into_owned()
+    out
 }
 
 /**
  * Encode a hashmap to the 'application/x-www-form-urlencoded' media type.
  */
-pub fn encode_form_urlencoded(m: &HashMap<~str, Vec<~str>>) -> ~str {
-    let mut out = StrBuf::new();
+pub fn encode_form_urlencoded(m: &HashMap<String, Vec<String>>) -> String {
+    let mut out = String::new();
     let mut first = true;
 
     for (key, values) in m.iter() {
-        let key = encode_plus(*key);
+        let key = encode_plus(key.as_slice());
 
         for value in values.iter() {
             if first {
@@ -315,11 +317,13 @@ pub fn encode_form_urlencoded(m: &HashMap<~str, Vec<~str>>) -> ~str {
                 first = false;
             }
 
-            out.push_str(format!("{}={}", key, encode_plus(*value)));
+            out.push_str(format!("{}={}",
+                                 key,
+                                 encode_plus(value.as_slice())).as_slice());
         }
     }
 
-    out.into_owned()
+    out
 }
 
 /**
@@ -327,11 +331,11 @@ pub fn encode_form_urlencoded(m: &HashMap<~str, Vec<~str>>) -> ~str {
  * type into a hashmap.
  */
 #[allow(experimental)]
-pub fn decode_form_urlencoded(s: &[u8]) -> HashMap<~str, Vec<~str>> {
+pub fn decode_form_urlencoded(s: &[u8]) -> HashMap<String, Vec<String>> {
     let mut rdr = BufReader::new(s);
-    let mut m: HashMap<~str,Vec<~str>> = HashMap::new();
-    let mut key = StrBuf::new();
-    let mut value = StrBuf::new();
+    let mut m: HashMap<String,Vec<String>> = HashMap::new();
+    let mut key = String::new();
+    let mut value = String::new();
     let mut parsing_key = true;
 
     loop {
@@ -348,13 +352,13 @@ pub fn decode_form_urlencoded(s: &[u8]) -> HashMap<~str, Vec<~str>> {
                         None => vec!(),
                     };
 
-                    values.push(value.into_owned());
-                    m.insert(key.into_owned(), values);
+                    values.push(value);
+                    m.insert(key, values);
                 }
 
                 parsing_key = true;
-                key = StrBuf::new();
-                value = StrBuf::new();
+                key = String::new();
+                value = String::new();
             }
             '=' => parsing_key = false,
             ch => {
@@ -386,15 +390,15 @@ pub fn decode_form_urlencoded(s: &[u8]) -> HashMap<~str, Vec<~str>> {
             None => vec!(),
         };
 
-        values.push(value.into_owned());
-        m.insert(key.into_owned(), values);
+        values.push(value);
+        m.insert(key, values);
     }
 
     m
 }
 
 
-fn split_char_first(s: &str, c: char) -> (~str, ~str) {
+fn split_char_first(s: &str, c: char) -> (String, String) {
     let len = s.len();
     let mut index = len;
     let mut mat = 0;
@@ -413,18 +417,18 @@ fn split_char_first(s: &str, c: char) -> (~str, ~str) {
         }
     }
     if index+mat == len {
-        return (s.slice(0, index).to_owned(), "".to_owned());
+        return (s.slice(0, index).to_string(), "".to_string());
     } else {
-        return (s.slice(0, index).to_owned(),
-             s.slice(index + mat, s.len()).to_owned());
+        return (s.slice(0, index).to_string(),
+                s.slice(index + mat, s.len()).to_string());
     }
 }
 
 impl fmt::Show for UserInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.pass {
-            Some(ref pass) => write!(f.buf, "{}:{}@", self.user, *pass),
-            None => write!(f.buf, "{}@", self.user),
+            Some(ref pass) => write!(f, "{}:{}@", self.user, *pass),
+            None => write!(f, "{}@", self.user),
         }
     }
 }
@@ -434,7 +438,8 @@ fn query_from_str(rawquery: &str) -> Query {
     if !rawquery.is_empty() {
         for p in rawquery.split('&') {
             let (k, v) = split_char_first(p, '=');
-            query.push((decode_component(k), decode_component(v)));
+            query.push((decode_component(k.as_slice()),
+                        decode_component(v.as_slice())));
         };
     }
     return query;
@@ -446,24 +451,24 @@ fn query_from_str(rawquery: &str) -> Query {
  * # Example
  *
  * ```rust
- * let query = vec!(("title".to_owned(), "The Village".to_owned()),
-                    ("north".to_owned(), "52.91".to_owned()),
-                    ("west".to_owned(), "4.10".to_owned()));
+ * let query = vec!(("title".to_string(), "The Village".to_string()),
+                    ("north".to_string(), "52.91".to_string()),
+                    ("west".to_string(), "4.10".to_string()));
  * println!("{}", url::query_to_str(&query));  // title=The%20Village&north=52.91&west=4.10
  * ```
  */
 #[allow(unused_must_use)]
-pub fn query_to_str(query: &Query) -> ~str {
+pub fn query_to_str(query: &Query) -> String {
     use std::io::MemWriter;
     use std::str;
 
     let mut writer = MemWriter::new();
     for (i, &(ref k, ref v)) in query.iter().enumerate() {
         if i != 0 { write!(&mut writer, "&"); }
-        write!(&mut writer, "{}={}", encode_component(*k),
-               encode_component(*v));
+        write!(&mut writer, "{}={}", encode_component(k.as_slice()),
+               encode_component(v.as_slice()));
     }
-    str::from_utf8_lossy(writer.unwrap().as_slice()).into_owned()
+    str::from_utf8_lossy(writer.unwrap().as_slice()).to_string()
 }
 
 /**
@@ -478,35 +483,36 @@ pub fn query_to_str(query: &Query) -> ~str {
  *
  * let scheme = match get_scheme("https://example.com/") {
  *     Ok((sch, _)) => sch,
- *     Err(_) => "(None)".to_owned(),
+ *     Err(_) => "(None)".to_string(),
  * };
  * println!("Scheme in use: {}.", scheme); // Scheme in use: https.
  * ```
  */
-pub fn get_scheme(rawurl: &str) -> Result<(~str, ~str), ~str> {
+pub fn get_scheme(rawurl: &str) -> Result<(String, String), String> {
     for (i,c) in rawurl.chars().enumerate() {
         match c {
           'A' .. 'Z' | 'a' .. 'z' => continue,
           '0' .. '9' | '+' | '-' | '.' => {
             if i == 0 {
-                return Err("url: Scheme must begin with a letter.".to_owned());
+                return Err("url: Scheme must begin with a \
+                            letter.".to_string());
             }
             continue;
           }
           ':' => {
             if i == 0 {
-                return Err("url: Scheme cannot be empty.".to_owned());
+                return Err("url: Scheme cannot be empty.".to_string());
             } else {
-                return Ok((rawurl.slice(0,i).to_owned(),
-                                rawurl.slice(i+1,rawurl.len()).to_owned()));
+                return Ok((rawurl.slice(0,i).to_string(),
+                           rawurl.slice(i+1,rawurl.len()).to_string()));
             }
           }
           _ => {
-            return Err("url: Invalid character in scheme.".to_owned());
+            return Err("url: Invalid character in scheme.".to_string());
           }
         }
     };
-    return Err("url: Scheme must be terminated with a colon.".to_owned());
+    return Err("url: Scheme must be terminated with a colon.".to_string());
 }
 
 #[deriving(Clone, Eq)]
@@ -518,10 +524,10 @@ enum Input {
 
 // returns userinfo, host, port, and unparsed part, or an error
 fn get_authority(rawurl: &str) ->
-    Result<(Option<UserInfo>, ~str, Option<~str>, ~str), ~str> {
+    Result<(Option<UserInfo>, String, Option<String>, String), String> {
     if !rawurl.starts_with("//") {
         // there is no authority.
-        return Ok((None, "".to_owned(), None, rawurl.to_str()));
+        return Ok((None, "".to_string(), None, rawurl.to_str().to_string()));
     }
 
     enum State {
@@ -538,7 +544,7 @@ fn get_authority(rawurl: &str) ->
     let mut input = Digit; // most restricted, start here.
 
     let mut userinfo = None;
-    let mut host = "".to_owned();
+    let mut host = "".to_string();
     let mut port = None;
 
     let mut colon_count = 0;
@@ -565,7 +571,7 @@ fn get_authority(rawurl: &str) ->
             // separators, don't change anything
           }
           _ => {
-            return Err("Illegal character in authority".to_owned());
+            return Err("Illegal character in authority".to_string());
           }
         }
 
@@ -582,7 +588,7 @@ fn get_authority(rawurl: &str) ->
                 // multiple colons means ipv6 address.
                 if input == Unreserved {
                     return Err(
-                        "Illegal characters in IPv6 address.".to_owned());
+                        "Illegal characters in IPv6 address.".to_string());
                 }
                 st = Ip6Host;
               }
@@ -590,7 +596,7 @@ fn get_authority(rawurl: &str) ->
                 pos = i;
                 if input == Unreserved {
                     // must be port
-                    host = rawurl.slice(begin, i).to_owned();
+                    host = rawurl.slice(begin, i).to_string();
                     st = InPort;
                 } else {
                     // can't be sure whether this is an ipv6 address or a port
@@ -599,19 +605,20 @@ fn get_authority(rawurl: &str) ->
               }
               Ip6Port => {
                 if input == Unreserved {
-                    return Err("Illegal characters in authority.".to_owned());
+                    return Err("Illegal characters in \
+                                authority.".to_string());
                 }
                 st = Ip6Host;
               }
               Ip6Host => {
                 if colon_count > 7 {
-                    host = rawurl.slice(begin, i).to_owned();
+                    host = rawurl.slice(begin, i).to_string();
                     pos = i;
                     st = InPort;
                 }
               }
               _ => {
-                return Err("Invalid ':' in authority.".to_owned());
+                return Err("Invalid ':' in authority.".to_string());
               }
             }
             input = Digit; // reset input class
@@ -622,18 +629,18 @@ fn get_authority(rawurl: &str) ->
             colon_count = 0; // reset count
             match st {
               Start => {
-                let user = rawurl.slice(begin, i).to_owned();
+                let user = rawurl.slice(begin, i).to_string();
                 userinfo = Some(UserInfo::new(user, None));
                 st = InHost;
               }
               PassHostPort => {
-                let user = rawurl.slice(begin, pos).to_owned();
-                let pass = rawurl.slice(pos+1, i).to_owned();
+                let user = rawurl.slice(begin, pos).to_string();
+                let pass = rawurl.slice(pos+1, i).to_string();
                 userinfo = Some(UserInfo::new(user, Some(pass)));
                 st = InHost;
               }
               _ => {
-                return Err("Invalid '@' in authority.".to_owned());
+                return Err("Invalid '@' in authority.".to_string());
               }
             }
             begin = i+1;
@@ -650,34 +657,34 @@ fn get_authority(rawurl: &str) ->
     // finish up
     match st {
       Start => {
-        host = rawurl.slice(begin, end).to_owned();
+        host = rawurl.slice(begin, end).to_string();
       }
       PassHostPort | Ip6Port => {
         if input != Digit {
-            return Err("Non-digit characters in port.".to_owned());
+            return Err("Non-digit characters in port.".to_string());
         }
-        host = rawurl.slice(begin, pos).to_owned();
-        port = Some(rawurl.slice(pos+1, end).to_owned());
+        host = rawurl.slice(begin, pos).to_string();
+        port = Some(rawurl.slice(pos+1, end).to_string());
       }
       Ip6Host | InHost => {
-        host = rawurl.slice(begin, end).to_owned();
+        host = rawurl.slice(begin, end).to_string();
       }
       InPort => {
         if input != Digit {
-            return Err("Non-digit characters in port.".to_owned());
+            return Err("Non-digit characters in port.".to_string());
         }
-        port = Some(rawurl.slice(pos+1, end).to_owned());
+        port = Some(rawurl.slice(pos+1, end).to_string());
       }
     }
 
-    let rest = rawurl.slice(end, len).to_owned();
+    let rest = rawurl.slice(end, len).to_string();
     return Ok((userinfo, host, port, rest));
 }
 
 
 // returns the path and unparsed part of url, or an error
 fn get_path(rawurl: &str, authority: bool) ->
-    Result<(~str, ~str), ~str> {
+    Result<(String, String), String> {
     let len = rawurl.len();
     let mut end = len;
     for (i,c) in rawurl.chars().enumerate() {
@@ -691,24 +698,24 @@ fn get_path(rawurl: &str, authority: bool) ->
             end = i;
             break;
           }
-          _ => return Err("Invalid character in path.".to_owned())
+          _ => return Err("Invalid character in path.".to_string())
         }
     }
 
     if authority {
         if end != 0 && !rawurl.starts_with("/") {
             return Err("Non-empty path must begin with\
-                              '/' in presence of authority.".to_owned());
+                              '/' in presence of authority.".to_string());
         }
     }
 
     return Ok((decode_component(rawurl.slice(0, end)),
-                    rawurl.slice(end, len).to_owned()));
+                    rawurl.slice(end, len).to_string()));
 }
 
 // returns the parsed query and the fragment, if present
 fn get_query_fragment(rawurl: &str) ->
-    Result<(Query, Option<~str>), ~str> {
+    Result<(Query, Option<String>), String> {
     if !rawurl.starts_with("?") {
         if rawurl.starts_with("#") {
             let f = decode_component(rawurl.slice(
@@ -721,8 +728,11 @@ fn get_query_fragment(rawurl: &str) ->
     }
     let (q, r) = split_char_first(rawurl.slice(1, rawurl.len()), '#');
     let f = if r.len() != 0 {
-        Some(decode_component(r)) } else { None };
-    return Ok((query_from_str(q), f));
+        Some(decode_component(r.as_slice()))
+    } else {
+        None
+    };
+    return Ok((query_from_str(q.as_slice()), f));
 }
 
 /**
@@ -736,7 +746,7 @@ fn get_query_fragment(rawurl: &str) ->
  *
  * A `Url` struct type representing the URL.
  */
-pub fn from_str(rawurl: &str) -> Result<Url, ~str> {
+pub fn from_str(rawurl: &str) -> Result<Url, String> {
     // scheme
     let (scheme, rest) = match get_scheme(rawurl) {
         Ok(val) => val,
@@ -744,20 +754,20 @@ pub fn from_str(rawurl: &str) -> Result<Url, ~str> {
     };
 
     // authority
-    let (userinfo, host, port, rest) = match get_authority(rest) {
+    let (userinfo, host, port, rest) = match get_authority(rest.as_slice()) {
         Ok(val) => val,
         Err(e) => return Err(e),
     };
 
     // path
-    let has_authority = if host == "".to_owned() { false } else { true };
-    let (path, rest) = match get_path(rest, has_authority) {
+    let has_authority = host.len() > 0;
+    let (path, rest) = match get_path(rest.as_slice(), has_authority) {
         Ok(val) => val,
         Err(e) => return Err(e),
     };
 
     // query and fragment
-    let (query, fragment) = match get_query_fragment(rest) {
+    let (query, fragment) = match get_query_fragment(rest.as_slice()) {
         Ok(val) => val,
         Err(e) => return Err(e),
     };
@@ -765,14 +775,14 @@ pub fn from_str(rawurl: &str) -> Result<Url, ~str> {
     Ok(Url::new(scheme, userinfo, host, port, path, query, fragment))
 }
 
-pub fn path_from_str(rawpath: &str) -> Result<Path, ~str> {
+pub fn path_from_str(rawpath: &str) -> Result<Path, String> {
     let (path, rest) = match get_path(rawpath, false) {
         Ok(val) => val,
         Err(e) => return Err(e)
     };
 
     // query and fragment
-    let (query, fragment) = match get_query_fragment(rest) {
+    let (query, fragment) = match get_query_fragment(rest.as_slice()) {
         Ok(val) => val,
         Err(e) => return Err(e),
     };
@@ -814,30 +824,31 @@ impl fmt::Show for Url {
      * result in just "http://somehost.com".
      */
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        try!(write!(f.buf, "{}:", self.scheme));
+        try!(write!(f, "{}:", self.scheme));
 
         if !self.host.is_empty() {
-            try!(write!(f.buf, "//"));
+            try!(write!(f, "//"));
             match self.user {
-                Some(ref user) => try!(write!(f.buf, "{}", *user)),
+                Some(ref user) => try!(write!(f, "{}", *user)),
                 None => {}
             }
             match self.port {
-                Some(ref port) => try!(write!(f.buf, "{}:{}", self.host,
+                Some(ref port) => try!(write!(f, "{}:{}", self.host,
                                                 *port)),
-                None => try!(write!(f.buf, "{}", self.host)),
+                None => try!(write!(f, "{}", self.host)),
             }
         }
 
-        try!(write!(f.buf, "{}", self.path));
+        try!(write!(f, "{}", self.path));
 
         if !self.query.is_empty() {
-            try!(write!(f.buf, "?{}", query_to_str(&self.query)));
+            try!(write!(f, "?{}", query_to_str(&self.query)));
         }
 
         match self.fragment {
-            Some(ref fragment) => write!(f.buf, "\\#{}",
-                                         encode_component(*fragment)),
+            Some(ref fragment) => {
+                write!(f, "\\#{}", encode_component(fragment.as_slice()))
+            }
             None => Ok(()),
         }
     }
@@ -845,14 +856,14 @@ impl fmt::Show for Url {
 
 impl fmt::Show for Path {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        try!(write!(f.buf, "{}", self.path));
+        try!(write!(f, "{}", self.path));
         if !self.query.is_empty() {
-            try!(write!(f.buf, "?{}", self.query))
+            try!(write!(f, "?{}", self.query))
         }
 
         match self.fragment {
             Some(ref fragment) => {
-                write!(f.buf, "\\#{}", encode_component(*fragment))
+                write!(f, "\\#{}", encode_component(fragment.as_slice()))
             }
             None => Ok(())
         }
@@ -877,53 +888,53 @@ impl<S: Writer> Hash<S> for Path {
 #[test]
 fn test_split_char_first() {
     let (u,v) = split_char_first("hello, sweet world", ',');
-    assert_eq!(u, "hello".to_owned());
-    assert_eq!(v, " sweet world".to_owned());
+    assert_eq!(u, "hello".to_string());
+    assert_eq!(v, " sweet world".to_string());
 
     let (u,v) = split_char_first("hello sweet world", ',');
-    assert_eq!(u, "hello sweet world".to_owned());
-    assert_eq!(v, "".to_owned());
+    assert_eq!(u, "hello sweet world".to_string());
+    assert_eq!(v, "".to_string());
 }
 
 #[test]
 fn test_get_authority() {
     let (u, h, p, r) = get_authority(
         "//user:pass@rust-lang.org/something").unwrap();
-    assert_eq!(u, Some(UserInfo::new("user".to_owned(), Some("pass".to_owned()))));
-    assert_eq!(h, "rust-lang.org".to_owned());
+    assert_eq!(u, Some(UserInfo::new("user".to_string(), Some("pass".to_string()))));
+    assert_eq!(h, "rust-lang.org".to_string());
     assert!(p.is_none());
-    assert_eq!(r, "/something".to_owned());
+    assert_eq!(r, "/something".to_string());
 
     let (u, h, p, r) = get_authority(
         "//rust-lang.org:8000?something").unwrap();
     assert!(u.is_none());
-    assert_eq!(h, "rust-lang.org".to_owned());
-    assert_eq!(p, Some("8000".to_owned()));
-    assert_eq!(r, "?something".to_owned());
+    assert_eq!(h, "rust-lang.org".to_string());
+    assert_eq!(p, Some("8000".to_string()));
+    assert_eq!(r, "?something".to_string());
 
     let (u, h, p, r) = get_authority(
         "//rust-lang.org#blah").unwrap();
     assert!(u.is_none());
-    assert_eq!(h, "rust-lang.org".to_owned());
+    assert_eq!(h, "rust-lang.org".to_string());
     assert!(p.is_none());
-    assert_eq!(r, "#blah".to_owned());
+    assert_eq!(r, "#blah".to_string());
 
     // ipv6 tests
     let (_, h, _, _) = get_authority(
         "//2001:0db8:85a3:0042:0000:8a2e:0370:7334#blah").unwrap();
-    assert_eq!(h, "2001:0db8:85a3:0042:0000:8a2e:0370:7334".to_owned());
+    assert_eq!(h, "2001:0db8:85a3:0042:0000:8a2e:0370:7334".to_string());
 
     let (_, h, p, _) = get_authority(
         "//2001:0db8:85a3:0042:0000:8a2e:0370:7334:8000#blah").unwrap();
-    assert_eq!(h, "2001:0db8:85a3:0042:0000:8a2e:0370:7334".to_owned());
-    assert_eq!(p, Some("8000".to_owned()));
+    assert_eq!(h, "2001:0db8:85a3:0042:0000:8a2e:0370:7334".to_string());
+    assert_eq!(p, Some("8000".to_string()));
 
     let (u, h, p, _) = get_authority(
         "//us:p@2001:0db8:85a3:0042:0000:8a2e:0370:7334:8000#blah"
     ).unwrap();
-    assert_eq!(u, Some(UserInfo::new("us".to_owned(), Some("p".to_owned()))));
-    assert_eq!(h, "2001:0db8:85a3:0042:0000:8a2e:0370:7334".to_owned());
-    assert_eq!(p, Some("8000".to_owned()));
+    assert_eq!(u, Some(UserInfo::new("us".to_string(), Some("p".to_string()))));
+    assert_eq!(h, "2001:0db8:85a3:0042:0000:8a2e:0370:7334".to_string());
+    assert_eq!(p, Some("8000".to_string()));
 
     // invalid authorities;
     assert!(get_authority("//user:pass@rust-lang:something").is_err());
@@ -935,22 +946,22 @@ fn test_get_authority() {
 
     // these parse as empty, because they don't start with '//'
     let (_, h, _, _) = get_authority("user:pass@rust-lang").unwrap();
-    assert_eq!(h, "".to_owned());
+    assert_eq!(h, "".to_string());
     let (_, h, _, _) = get_authority("rust-lang.org").unwrap();
-    assert_eq!(h, "".to_owned());
+    assert_eq!(h, "".to_string());
 }
 
 #[test]
 fn test_get_path() {
     let (p, r) = get_path("/something+%20orother", true).unwrap();
-    assert_eq!(p, "/something+ orother".to_owned());
-    assert_eq!(r, "".to_owned());
+    assert_eq!(p, "/something+ orother".to_string());
+    assert_eq!(r, "".to_string());
     let (p, r) = get_path("test@email.com#fragment", false).unwrap();
-    assert_eq!(p, "test@email.com".to_owned());
-    assert_eq!(r, "#fragment".to_owned());
+    assert_eq!(p, "test@email.com".to_string());
+    assert_eq!(r, "#fragment".to_string());
     let (p, r) = get_path("/gen/:addr=?q=v", false).unwrap();
-    assert_eq!(p, "/gen/:addr=".to_owned());
-    assert_eq!(r, "?q=v".to_owned());
+    assert_eq!(p, "/gen/:addr=".to_string());
+    assert_eq!(r, "?q=v".to_string());
 
     //failure cases
     assert!(get_path("something?q", true).is_err());
@@ -966,87 +977,88 @@ mod tests {
 
     #[test]
     fn test_url_parse() {
-        let url = "http://user:pass@rust-lang.org:8080/doc/~u?s=v#something".to_owned();
+        let url = "http://user:pass@rust-lang.org:8080/doc/~u?s=v#something";
 
         let up = from_str(url);
         let u = up.unwrap();
-        assert_eq!(&u.scheme, &"http".to_owned());
-        assert_eq!(&u.user, &Some(UserInfo::new("user".to_owned(), Some("pass".to_owned()))));
-        assert_eq!(&u.host, &"rust-lang.org".to_owned());
-        assert_eq!(&u.port, &Some("8080".to_owned()));
-        assert_eq!(&u.path, &"/doc/~u".to_owned());
-        assert_eq!(&u.query, &vec!(("s".to_owned(), "v".to_owned())));
-        assert_eq!(&u.fragment, &Some("something".to_owned()));
+        assert_eq!(&u.scheme, &"http".to_string());
+        assert_eq!(&u.user, &Some(UserInfo::new("user".to_string(), Some("pass".to_string()))));
+        assert_eq!(&u.host, &"rust-lang.org".to_string());
+        assert_eq!(&u.port, &Some("8080".to_string()));
+        assert_eq!(&u.path, &"/doc/~u".to_string());
+        assert_eq!(&u.query, &vec!(("s".to_string(), "v".to_string())));
+        assert_eq!(&u.fragment, &Some("something".to_string()));
     }
 
     #[test]
     fn test_path_parse() {
-        let path = "/doc/~u?s=v#something".to_owned();
+        let path = "/doc/~u?s=v#something";
 
         let up = path_from_str(path);
         let u = up.unwrap();
-        assert_eq!(&u.path, &"/doc/~u".to_owned());
-        assert_eq!(&u.query, &vec!(("s".to_owned(), "v".to_owned())));
-        assert_eq!(&u.fragment, &Some("something".to_owned()));
+        assert_eq!(&u.path, &"/doc/~u".to_string());
+        assert_eq!(&u.query, &vec!(("s".to_string(), "v".to_string())));
+        assert_eq!(&u.fragment, &Some("something".to_string()));
     }
 
     #[test]
     fn test_url_parse_host_slash() {
-        let urlstr = "http://0.42.42.42/".to_owned();
+        let urlstr = "http://0.42.42.42/";
         let url = from_str(urlstr).unwrap();
-        assert!(url.host == "0.42.42.42".to_owned());
-        assert!(url.path == "/".to_owned());
+        assert!(url.host == "0.42.42.42".to_string());
+        assert!(url.path == "/".to_string());
     }
 
     #[test]
     fn test_path_parse_host_slash() {
-        let pathstr = "/".to_owned();
+        let pathstr = "/";
         let path = path_from_str(pathstr).unwrap();
-        assert!(path.path == "/".to_owned());
+        assert!(path.path == "/".to_string());
     }
 
     #[test]
     fn test_url_host_with_port() {
-        let urlstr = "scheme://host:1234".to_owned();
+        let urlstr = "scheme://host:1234";
         let url = from_str(urlstr).unwrap();
-        assert_eq!(&url.scheme, &"scheme".to_owned());
-        assert_eq!(&url.host, &"host".to_owned());
-        assert_eq!(&url.port, &Some("1234".to_owned()));
-        assert_eq!(&url.path, &"".to_owned()); // is empty path really correct? Other tests think so
-        let urlstr = "scheme://host:1234/".to_owned();
+        assert_eq!(&url.scheme, &"scheme".to_string());
+        assert_eq!(&url.host, &"host".to_string());
+        assert_eq!(&url.port, &Some("1234".to_string()));
+        // is empty path really correct? Other tests think so
+        assert_eq!(&url.path, &"".to_string());
+        let urlstr = "scheme://host:1234/";
         let url = from_str(urlstr).unwrap();
-        assert_eq!(&url.scheme, &"scheme".to_owned());
-        assert_eq!(&url.host, &"host".to_owned());
-        assert_eq!(&url.port, &Some("1234".to_owned()));
-        assert_eq!(&url.path, &"/".to_owned());
+        assert_eq!(&url.scheme, &"scheme".to_string());
+        assert_eq!(&url.host, &"host".to_string());
+        assert_eq!(&url.port, &Some("1234".to_string()));
+        assert_eq!(&url.path, &"/".to_string());
     }
 
     #[test]
     fn test_url_with_underscores() {
-        let urlstr = "http://dotcom.com/file_name.html".to_owned();
+        let urlstr = "http://dotcom.com/file_name.html";
         let url = from_str(urlstr).unwrap();
-        assert!(url.path == "/file_name.html".to_owned());
+        assert!(url.path == "/file_name.html".to_string());
     }
 
     #[test]
     fn test_path_with_underscores() {
-        let pathstr = "/file_name.html".to_owned();
+        let pathstr = "/file_name.html";
         let path = path_from_str(pathstr).unwrap();
-        assert!(path.path == "/file_name.html".to_owned());
+        assert!(path.path == "/file_name.html".to_string());
     }
 
     #[test]
     fn test_url_with_dashes() {
-        let urlstr = "http://dotcom.com/file-name.html".to_owned();
+        let urlstr = "http://dotcom.com/file-name.html";
         let url = from_str(urlstr).unwrap();
-        assert!(url.path == "/file-name.html".to_owned());
+        assert!(url.path == "/file-name.html".to_string());
     }
 
     #[test]
     fn test_path_with_dashes() {
-        let pathstr = "/file-name.html".to_owned();
+        let pathstr = "/file-name.html";
         let path = path_from_str(pathstr).unwrap();
-        assert!(path.path == "/file-name.html".to_owned());
+        assert!(path.path == "/file-name.html".to_string());
     }
 
     #[test]
@@ -1062,217 +1074,217 @@ mod tests {
 
     #[test]
     fn test_full_url_parse_and_format() {
-        let url = "http://user:pass@rust-lang.org/doc?s=v#something".to_owned();
-        assert_eq!(from_str(url).unwrap().to_str(), url);
+        let url = "http://user:pass@rust-lang.org/doc?s=v#something";
+        assert_eq!(from_str(url).unwrap().to_str().as_slice(), url);
     }
 
     #[test]
     fn test_userless_url_parse_and_format() {
-        let url = "http://rust-lang.org/doc?s=v#something".to_owned();
-        assert_eq!(from_str(url).unwrap().to_str(), url);
+        let url = "http://rust-lang.org/doc?s=v#something";
+        assert_eq!(from_str(url).unwrap().to_str().as_slice(), url);
     }
 
     #[test]
     fn test_queryless_url_parse_and_format() {
-        let url = "http://user:pass@rust-lang.org/doc#something".to_owned();
-        assert_eq!(from_str(url).unwrap().to_str(), url);
+        let url = "http://user:pass@rust-lang.org/doc#something";
+        assert_eq!(from_str(url).unwrap().to_str().as_slice(), url);
     }
 
     #[test]
     fn test_empty_query_url_parse_and_format() {
-        let url = "http://user:pass@rust-lang.org/doc?#something".to_owned();
-        let should_be = "http://user:pass@rust-lang.org/doc#something".to_owned();
-        assert_eq!(from_str(url).unwrap().to_str(), should_be);
+        let url = "http://user:pass@rust-lang.org/doc?#something";
+        let should_be = "http://user:pass@rust-lang.org/doc#something";
+        assert_eq!(from_str(url).unwrap().to_str().as_slice(), should_be);
     }
 
     #[test]
     fn test_fragmentless_url_parse_and_format() {
-        let url = "http://user:pass@rust-lang.org/doc?q=v".to_owned();
-        assert_eq!(from_str(url).unwrap().to_str(), url);
+        let url = "http://user:pass@rust-lang.org/doc?q=v";
+        assert_eq!(from_str(url).unwrap().to_str().as_slice(), url);
     }
 
     #[test]
     fn test_minimal_url_parse_and_format() {
-        let url = "http://rust-lang.org/doc".to_owned();
-        assert_eq!(from_str(url).unwrap().to_str(), url);
+        let url = "http://rust-lang.org/doc";
+        assert_eq!(from_str(url).unwrap().to_str().as_slice(), url);
     }
 
     #[test]
     fn test_url_with_port_parse_and_format() {
-        let url = "http://rust-lang.org:80/doc".to_owned();
-        assert_eq!(from_str(url).unwrap().to_str(), url);
+        let url = "http://rust-lang.org:80/doc";
+        assert_eq!(from_str(url).unwrap().to_str().as_slice(), url);
     }
 
     #[test]
     fn test_scheme_host_only_url_parse_and_format() {
-        let url = "http://rust-lang.org".to_owned();
-        assert_eq!(from_str(url).unwrap().to_str(), url);
+        let url = "http://rust-lang.org";
+        assert_eq!(from_str(url).unwrap().to_str().as_slice(), url);
     }
 
     #[test]
     fn test_pathless_url_parse_and_format() {
-        let url = "http://user:pass@rust-lang.org?q=v#something".to_owned();
-        assert_eq!(from_str(url).unwrap().to_str(), url);
+        let url = "http://user:pass@rust-lang.org?q=v#something";
+        assert_eq!(from_str(url).unwrap().to_str().as_slice(), url);
     }
 
     #[test]
     fn test_scheme_host_fragment_only_url_parse_and_format() {
-        let url = "http://rust-lang.org#something".to_owned();
-        assert_eq!(from_str(url).unwrap().to_str(), url);
+        let url = "http://rust-lang.org#something";
+        assert_eq!(from_str(url).unwrap().to_str().as_slice(), url);
     }
 
     #[test]
     fn test_url_component_encoding() {
-        let url = "http://rust-lang.org/doc%20uments?ba%25d%20=%23%26%2B".to_owned();
+        let url = "http://rust-lang.org/doc%20uments?ba%25d%20=%23%26%2B";
         let u = from_str(url).unwrap();
-        assert!(u.path == "/doc uments".to_owned());
-        assert!(u.query == vec!(("ba%d ".to_owned(), "#&+".to_owned())));
+        assert!(u.path == "/doc uments".to_string());
+        assert!(u.query == vec!(("ba%d ".to_string(), "#&+".to_string())));
     }
 
     #[test]
     fn test_path_component_encoding() {
-        let path = "/doc%20uments?ba%25d%20=%23%26%2B".to_owned();
+        let path = "/doc%20uments?ba%25d%20=%23%26%2B";
         let p = path_from_str(path).unwrap();
-        assert!(p.path == "/doc uments".to_owned());
-        assert!(p.query == vec!(("ba%d ".to_owned(), "#&+".to_owned())));
+        assert!(p.path == "/doc uments".to_string());
+        assert!(p.query == vec!(("ba%d ".to_string(), "#&+".to_string())));
     }
 
     #[test]
     fn test_url_without_authority() {
-        let url = "mailto:test@email.com".to_owned();
-        assert_eq!(from_str(url).unwrap().to_str(), url);
+        let url = "mailto:test@email.com";
+        assert_eq!(from_str(url).unwrap().to_str().as_slice(), url);
     }
 
     #[test]
     fn test_encode() {
-        assert_eq!(encode(""), "".to_owned());
-        assert_eq!(encode("http://example.com"), "http://example.com".to_owned());
-        assert_eq!(encode("foo bar% baz"), "foo%20bar%25%20baz".to_owned());
-        assert_eq!(encode(" "), "%20".to_owned());
-        assert_eq!(encode("!"), "!".to_owned());
-        assert_eq!(encode("\""), "\"".to_owned());
-        assert_eq!(encode("#"), "#".to_owned());
-        assert_eq!(encode("$"), "$".to_owned());
-        assert_eq!(encode("%"), "%25".to_owned());
-        assert_eq!(encode("&"), "&".to_owned());
-        assert_eq!(encode("'"), "%27".to_owned());
-        assert_eq!(encode("("), "(".to_owned());
-        assert_eq!(encode(")"), ")".to_owned());
-        assert_eq!(encode("*"), "*".to_owned());
-        assert_eq!(encode("+"), "+".to_owned());
-        assert_eq!(encode(","), ",".to_owned());
-        assert_eq!(encode("/"), "/".to_owned());
-        assert_eq!(encode(":"), ":".to_owned());
-        assert_eq!(encode(";"), ";".to_owned());
-        assert_eq!(encode("="), "=".to_owned());
-        assert_eq!(encode("?"), "?".to_owned());
-        assert_eq!(encode("@"), "@".to_owned());
-        assert_eq!(encode("["), "[".to_owned());
-        assert_eq!(encode("]"), "]".to_owned());
+        assert_eq!(encode(""), "".to_string());
+        assert_eq!(encode("http://example.com"), "http://example.com".to_string());
+        assert_eq!(encode("foo bar% baz"), "foo%20bar%25%20baz".to_string());
+        assert_eq!(encode(" "), "%20".to_string());
+        assert_eq!(encode("!"), "!".to_string());
+        assert_eq!(encode("\""), "\"".to_string());
+        assert_eq!(encode("#"), "#".to_string());
+        assert_eq!(encode("$"), "$".to_string());
+        assert_eq!(encode("%"), "%25".to_string());
+        assert_eq!(encode("&"), "&".to_string());
+        assert_eq!(encode("'"), "%27".to_string());
+        assert_eq!(encode("("), "(".to_string());
+        assert_eq!(encode(")"), ")".to_string());
+        assert_eq!(encode("*"), "*".to_string());
+        assert_eq!(encode("+"), "+".to_string());
+        assert_eq!(encode(","), ",".to_string());
+        assert_eq!(encode("/"), "/".to_string());
+        assert_eq!(encode(":"), ":".to_string());
+        assert_eq!(encode(";"), ";".to_string());
+        assert_eq!(encode("="), "=".to_string());
+        assert_eq!(encode("?"), "?".to_string());
+        assert_eq!(encode("@"), "@".to_string());
+        assert_eq!(encode("["), "[".to_string());
+        assert_eq!(encode("]"), "]".to_string());
     }
 
     #[test]
     fn test_encode_component() {
-        assert_eq!(encode_component(""), "".to_owned());
+        assert_eq!(encode_component(""), "".to_string());
         assert!(encode_component("http://example.com") ==
-            "http%3A%2F%2Fexample.com".to_owned());
+            "http%3A%2F%2Fexample.com".to_string());
         assert!(encode_component("foo bar% baz") ==
-            "foo%20bar%25%20baz".to_owned());
-        assert_eq!(encode_component(" "), "%20".to_owned());
-        assert_eq!(encode_component("!"), "%21".to_owned());
-        assert_eq!(encode_component("#"), "%23".to_owned());
-        assert_eq!(encode_component("$"), "%24".to_owned());
-        assert_eq!(encode_component("%"), "%25".to_owned());
-        assert_eq!(encode_component("&"), "%26".to_owned());
-        assert_eq!(encode_component("'"), "%27".to_owned());
-        assert_eq!(encode_component("("), "%28".to_owned());
-        assert_eq!(encode_component(")"), "%29".to_owned());
-        assert_eq!(encode_component("*"), "%2A".to_owned());
-        assert_eq!(encode_component("+"), "%2B".to_owned());
-        assert_eq!(encode_component(","), "%2C".to_owned());
-        assert_eq!(encode_component("/"), "%2F".to_owned());
-        assert_eq!(encode_component(":"), "%3A".to_owned());
-        assert_eq!(encode_component(";"), "%3B".to_owned());
-        assert_eq!(encode_component("="), "%3D".to_owned());
-        assert_eq!(encode_component("?"), "%3F".to_owned());
-        assert_eq!(encode_component("@"), "%40".to_owned());
-        assert_eq!(encode_component("["), "%5B".to_owned());
-        assert_eq!(encode_component("]"), "%5D".to_owned());
+            "foo%20bar%25%20baz".to_string());
+        assert_eq!(encode_component(" "), "%20".to_string());
+        assert_eq!(encode_component("!"), "%21".to_string());
+        assert_eq!(encode_component("#"), "%23".to_string());
+        assert_eq!(encode_component("$"), "%24".to_string());
+        assert_eq!(encode_component("%"), "%25".to_string());
+        assert_eq!(encode_component("&"), "%26".to_string());
+        assert_eq!(encode_component("'"), "%27".to_string());
+        assert_eq!(encode_component("("), "%28".to_string());
+        assert_eq!(encode_component(")"), "%29".to_string());
+        assert_eq!(encode_component("*"), "%2A".to_string());
+        assert_eq!(encode_component("+"), "%2B".to_string());
+        assert_eq!(encode_component(","), "%2C".to_string());
+        assert_eq!(encode_component("/"), "%2F".to_string());
+        assert_eq!(encode_component(":"), "%3A".to_string());
+        assert_eq!(encode_component(";"), "%3B".to_string());
+        assert_eq!(encode_component("="), "%3D".to_string());
+        assert_eq!(encode_component("?"), "%3F".to_string());
+        assert_eq!(encode_component("@"), "%40".to_string());
+        assert_eq!(encode_component("["), "%5B".to_string());
+        assert_eq!(encode_component("]"), "%5D".to_string());
     }
 
     #[test]
     fn test_decode() {
-        assert_eq!(decode(""), "".to_owned());
-        assert_eq!(decode("abc/def 123"), "abc/def 123".to_owned());
-        assert_eq!(decode("abc%2Fdef%20123"), "abc%2Fdef 123".to_owned());
-        assert_eq!(decode("%20"), " ".to_owned());
-        assert_eq!(decode("%21"), "%21".to_owned());
-        assert_eq!(decode("%22"), "%22".to_owned());
-        assert_eq!(decode("%23"), "%23".to_owned());
-        assert_eq!(decode("%24"), "%24".to_owned());
-        assert_eq!(decode("%25"), "%".to_owned());
-        assert_eq!(decode("%26"), "%26".to_owned());
-        assert_eq!(decode("%27"), "'".to_owned());
-        assert_eq!(decode("%28"), "%28".to_owned());
-        assert_eq!(decode("%29"), "%29".to_owned());
-        assert_eq!(decode("%2A"), "%2A".to_owned());
-        assert_eq!(decode("%2B"), "%2B".to_owned());
-        assert_eq!(decode("%2C"), "%2C".to_owned());
-        assert_eq!(decode("%2F"), "%2F".to_owned());
-        assert_eq!(decode("%3A"), "%3A".to_owned());
-        assert_eq!(decode("%3B"), "%3B".to_owned());
-        assert_eq!(decode("%3D"), "%3D".to_owned());
-        assert_eq!(decode("%3F"), "%3F".to_owned());
-        assert_eq!(decode("%40"), "%40".to_owned());
-        assert_eq!(decode("%5B"), "%5B".to_owned());
-        assert_eq!(decode("%5D"), "%5D".to_owned());
+        assert_eq!(decode(""), "".to_string());
+        assert_eq!(decode("abc/def 123"), "abc/def 123".to_string());
+        assert_eq!(decode("abc%2Fdef%20123"), "abc%2Fdef 123".to_string());
+        assert_eq!(decode("%20"), " ".to_string());
+        assert_eq!(decode("%21"), "%21".to_string());
+        assert_eq!(decode("%22"), "%22".to_string());
+        assert_eq!(decode("%23"), "%23".to_string());
+        assert_eq!(decode("%24"), "%24".to_string());
+        assert_eq!(decode("%25"), "%".to_string());
+        assert_eq!(decode("%26"), "%26".to_string());
+        assert_eq!(decode("%27"), "'".to_string());
+        assert_eq!(decode("%28"), "%28".to_string());
+        assert_eq!(decode("%29"), "%29".to_string());
+        assert_eq!(decode("%2A"), "%2A".to_string());
+        assert_eq!(decode("%2B"), "%2B".to_string());
+        assert_eq!(decode("%2C"), "%2C".to_string());
+        assert_eq!(decode("%2F"), "%2F".to_string());
+        assert_eq!(decode("%3A"), "%3A".to_string());
+        assert_eq!(decode("%3B"), "%3B".to_string());
+        assert_eq!(decode("%3D"), "%3D".to_string());
+        assert_eq!(decode("%3F"), "%3F".to_string());
+        assert_eq!(decode("%40"), "%40".to_string());
+        assert_eq!(decode("%5B"), "%5B".to_string());
+        assert_eq!(decode("%5D"), "%5D".to_string());
     }
 
     #[test]
     fn test_decode_component() {
-        assert_eq!(decode_component(""), "".to_owned());
-        assert_eq!(decode_component("abc/def 123"), "abc/def 123".to_owned());
-        assert_eq!(decode_component("abc%2Fdef%20123"), "abc/def 123".to_owned());
-        assert_eq!(decode_component("%20"), " ".to_owned());
-        assert_eq!(decode_component("%21"), "!".to_owned());
-        assert_eq!(decode_component("%22"), "\"".to_owned());
-        assert_eq!(decode_component("%23"), "#".to_owned());
-        assert_eq!(decode_component("%24"), "$".to_owned());
-        assert_eq!(decode_component("%25"), "%".to_owned());
-        assert_eq!(decode_component("%26"), "&".to_owned());
-        assert_eq!(decode_component("%27"), "'".to_owned());
-        assert_eq!(decode_component("%28"), "(".to_owned());
-        assert_eq!(decode_component("%29"), ")".to_owned());
-        assert_eq!(decode_component("%2A"), "*".to_owned());
-        assert_eq!(decode_component("%2B"), "+".to_owned());
-        assert_eq!(decode_component("%2C"), ",".to_owned());
-        assert_eq!(decode_component("%2F"), "/".to_owned());
-        assert_eq!(decode_component("%3A"), ":".to_owned());
-        assert_eq!(decode_component("%3B"), ";".to_owned());
-        assert_eq!(decode_component("%3D"), "=".to_owned());
-        assert_eq!(decode_component("%3F"), "?".to_owned());
-        assert_eq!(decode_component("%40"), "@".to_owned());
-        assert_eq!(decode_component("%5B"), "[".to_owned());
-        assert_eq!(decode_component("%5D"), "]".to_owned());
+        assert_eq!(decode_component(""), "".to_string());
+        assert_eq!(decode_component("abc/def 123"), "abc/def 123".to_string());
+        assert_eq!(decode_component("abc%2Fdef%20123"), "abc/def 123".to_string());
+        assert_eq!(decode_component("%20"), " ".to_string());
+        assert_eq!(decode_component("%21"), "!".to_string());
+        assert_eq!(decode_component("%22"), "\"".to_string());
+        assert_eq!(decode_component("%23"), "#".to_string());
+        assert_eq!(decode_component("%24"), "$".to_string());
+        assert_eq!(decode_component("%25"), "%".to_string());
+        assert_eq!(decode_component("%26"), "&".to_string());
+        assert_eq!(decode_component("%27"), "'".to_string());
+        assert_eq!(decode_component("%28"), "(".to_string());
+        assert_eq!(decode_component("%29"), ")".to_string());
+        assert_eq!(decode_component("%2A"), "*".to_string());
+        assert_eq!(decode_component("%2B"), "+".to_string());
+        assert_eq!(decode_component("%2C"), ",".to_string());
+        assert_eq!(decode_component("%2F"), "/".to_string());
+        assert_eq!(decode_component("%3A"), ":".to_string());
+        assert_eq!(decode_component("%3B"), ";".to_string());
+        assert_eq!(decode_component("%3D"), "=".to_string());
+        assert_eq!(decode_component("%3F"), "?".to_string());
+        assert_eq!(decode_component("%40"), "@".to_string());
+        assert_eq!(decode_component("%5B"), "[".to_string());
+        assert_eq!(decode_component("%5D"), "]".to_string());
     }
 
     #[test]
     fn test_encode_form_urlencoded() {
         let mut m = HashMap::new();
-        assert_eq!(encode_form_urlencoded(&m), "".to_owned());
+        assert_eq!(encode_form_urlencoded(&m), "".to_string());
 
-        m.insert("".to_owned(), vec!());
-        m.insert("foo".to_owned(), vec!());
-        assert_eq!(encode_form_urlencoded(&m), "".to_owned());
-
-        let mut m = HashMap::new();
-        m.insert("foo".to_owned(), vec!("bar".to_owned(), "123".to_owned()));
-        assert_eq!(encode_form_urlencoded(&m), "foo=bar&foo=123".to_owned());
+        m.insert("".to_string(), vec!());
+        m.insert("foo".to_string(), vec!());
+        assert_eq!(encode_form_urlencoded(&m), "".to_string());
 
         let mut m = HashMap::new();
-        m.insert("foo bar".to_owned(), vec!("abc".to_owned(), "12 = 34".to_owned()));
+        m.insert("foo".to_string(), vec!("bar".to_string(), "123".to_string()));
+        assert_eq!(encode_form_urlencoded(&m), "foo=bar&foo=123".to_string());
+
+        let mut m = HashMap::new();
+        m.insert("foo bar".to_string(), vec!("abc".to_string(), "12 = 34".to_string()));
         assert!(encode_form_urlencoded(&m) ==
-            "foo+bar=abc&foo+bar=12+%3D+34".to_owned());
+            "foo+bar=abc&foo+bar=12+%3D+34".to_string());
     }
 
     #[test]
@@ -1282,7 +1294,8 @@ mod tests {
         let s = "a=1&foo+bar=abc&foo+bar=12+%3D+34".as_bytes();
         let form = decode_form_urlencoded(s);
         assert_eq!(form.len(), 2);
-        assert_eq!(form.get(&"a".to_owned()), &vec!("1".to_owned()));
-        assert_eq!(form.get(&"foo bar".to_owned()), &vec!("abc".to_owned(), "12 = 34".to_owned()));
+        assert_eq!(form.get(&"a".to_string()), &vec!("1".to_string()));
+        assert_eq!(form.get(&"foo bar".to_string()),
+                   &vec!("abc".to_string(), "12 = 34".to_string()));
     }
 }

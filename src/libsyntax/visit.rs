@@ -61,7 +61,17 @@ pub fn generics_of_fn(fk: &FnKind) -> Generics {
     }
 }
 
+/// Each method of the Visitor trait is a hook to be potentially
+/// overriden.  Each method's default implementation recursively visits
+/// the substructure of the input via the corresponding `walk` method;
+/// e.g. the `visit_mod` method by default calls `visit::walk_mod`.
+///
+/// If you want to ensure that your code handles every variant
+/// explicitly, you need to override each method.  (And you also need
+/// to monitor future changes to `Visitor` in case a new method with a
+/// new default implementation gets introduced.)
 pub trait Visitor<E: Clone> {
+
     fn visit_ident(&mut self, _sp: Span, _ident: Ident, _e: E) {
         /*! Visit the idents */
     }
@@ -79,13 +89,13 @@ pub trait Visitor<E: Clone> {
     fn visit_expr_post(&mut self, _ex: &Expr, _e: E) { }
     fn visit_ty(&mut self, t: &Ty, e: E) { walk_ty(self, t, e) }
     fn visit_generics(&mut self, g: &Generics, e: E) { walk_generics(self, g, e) }
-    fn visit_fn(&mut self, fk: &FnKind, fd: &FnDecl, b: &Block, s: Span, n: NodeId, e: E) {
-        walk_fn(self, fk, fd, b, s, n , e)
+    fn visit_fn(&mut self, fk: &FnKind, fd: &FnDecl, b: &Block, s: Span, _: NodeId, e: E) {
+        walk_fn(self, fk, fd, b, s, e)
     }
     fn visit_ty_method(&mut self, t: &TypeMethod, e: E) { walk_ty_method(self, t, e) }
     fn visit_trait_method(&mut self, t: &TraitMethod, e: E) { walk_trait_method(self, t, e) }
-    fn visit_struct_def(&mut self, s: &StructDef, i: Ident, g: &Generics, n: NodeId, e: E) {
-        walk_struct_def(self, s, i, g, n, e)
+    fn visit_struct_def(&mut self, s: &StructDef, _: Ident, _: &Generics, _: NodeId, e: E) {
+        walk_struct_def(self, s, e)
     }
     fn visit_struct_field(&mut self, s: &StructField, e: E) { walk_struct_field(self, s, e) }
     fn visit_variant(&mut self, v: &Variant, g: &Generics, e: E) { walk_variant(self, v, g, e) }
@@ -179,9 +189,9 @@ pub fn walk_local<E: Clone, V: Visitor<E>>(visitor: &mut V, local: &Local, env: 
     }
 }
 
-fn walk_explicit_self<E: Clone, V: Visitor<E>>(visitor: &mut V,
-                                               explicit_self: &ExplicitSelf,
-                                               env: E) {
+pub fn walk_explicit_self<E: Clone, V: Visitor<E>>(visitor: &mut V,
+                                                   explicit_self: &ExplicitSelf,
+                                                   env: E) {
     match explicit_self.node {
         SelfStatic | SelfValue | SelfUniq => {}
         SelfRegion(ref lifetime, _) => {
@@ -419,7 +429,7 @@ pub fn walk_pat<E: Clone, V: Visitor<E>>(visitor: &mut V, pattern: &Pat, env: E)
                 visitor.visit_pat(*tuple_element, env.clone())
             }
         }
-        PatUniq(subpattern) |
+        PatBox(subpattern) |
         PatRegion(subpattern) => {
             visitor.visit_pat(subpattern, env)
         }
@@ -447,6 +457,7 @@ pub fn walk_pat<E: Clone, V: Visitor<E>>(visitor: &mut V, pattern: &Pat, env: E)
                 visitor.visit_pat(*postpattern, env.clone())
             }
         }
+        PatMac(ref macro) => visitor.visit_mac(macro, env),
     }
 }
 
@@ -472,7 +483,8 @@ pub fn walk_ty_param_bounds<E: Clone, V: Visitor<E>>(visitor: &mut V,
             TraitTyParamBound(ref typ) => {
                 walk_trait_ref_helper(visitor, typ, env.clone())
             }
-            RegionTyParamBound => {}
+            StaticRegionTyParamBound => {}
+            OtherRegionTyParamBound(..) => {}
         }
     }
 }
@@ -521,7 +533,6 @@ pub fn walk_fn<E: Clone, V: Visitor<E>>(visitor: &mut V,
                                         function_declaration: &FnDecl,
                                         function_body: &Block,
                                         _span: Span,
-                                        _: NodeId,
                                         env: E) {
     walk_fn_decl(visitor, function_declaration, env.clone());
 
@@ -565,9 +576,6 @@ pub fn walk_trait_method<E: Clone, V: Visitor<E>>(visitor: &mut V,
 
 pub fn walk_struct_def<E: Clone, V: Visitor<E>>(visitor: &mut V,
                                                 struct_definition: &StructDef,
-                                                _: Ident,
-                                                _: &Generics,
-                                                _: NodeId,
                                                 env: E) {
     match struct_definition.super_struct {
         Some(t) => visitor.visit_ty(t, env.clone()),

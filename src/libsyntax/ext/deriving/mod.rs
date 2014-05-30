@@ -22,6 +22,7 @@ use ast::{Item, MetaItem, MetaList, MetaNameValue, MetaWord};
 use ext::base::ExtCtxt;
 use codemap::Span;
 
+pub mod bounds;
 pub mod clone;
 pub mod encodable;
 pub mod decodable;
@@ -76,9 +77,10 @@ pub fn expand_meta_deriving(cx: &mut ExtCtxt,
                             "Encodable" => expand!(encodable::expand_deriving_encodable),
                             "Decodable" => expand!(decodable::expand_deriving_decodable),
 
-                            "Eq" => expand!(eq::expand_deriving_eq),
+                            // NOTE this needs treatment after a stage0 snap
+                            "PartialEq" | "Eq" => expand!(eq::expand_deriving_eq),
                             "TotalEq" => expand!(totaleq::expand_deriving_totaleq),
-                            "Ord" => expand!(ord::expand_deriving_ord),
+                            "PartialOrd" | "Ord" => expand!(ord::expand_deriving_ord),
                             "TotalOrd" => expand!(totalord::expand_deriving_totalord),
 
                             "Rand" => expand!(rand::expand_deriving_rand),
@@ -90,9 +92,15 @@ pub fn expand_meta_deriving(cx: &mut ExtCtxt,
 
                             "FromPrimitive" => expand!(primitive::expand_deriving_from_primitive),
 
+                            "Send" => expand!(bounds::expand_deriving_bound),
+                            "Share" => expand!(bounds::expand_deriving_bound),
+                            "Copy" => expand!(bounds::expand_deriving_bound),
+
                             ref tname => {
-                                cx.span_err(titem.span, format!("unknown \
-                                    `deriving` trait: `{}`", *tname));
+                                cx.span_err(titem.span,
+                                            format!("unknown `deriving` \
+                                                     trait: `{}`",
+                                                    *tname).as_slice());
                             }
                         };
                     }

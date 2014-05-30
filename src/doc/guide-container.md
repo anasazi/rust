@@ -81,7 +81,7 @@ impl Iterator<int> for ZeroStream {
         Some(0)
     }
 }
-~~~~
+~~~
 
 Reaching the end of the iterator is signalled by returning `None` instead of
 `Some(item)`:
@@ -120,12 +120,13 @@ differently.
 Containers implement iteration over the contained elements by returning an
 iterator object. For example, vector slices several iterators available:
 
-* `iter()` and `rev_iter()`, for immutable references to the elements
-* `mut_iter()` and `mut_rev_iter()`, for mutable references to the elements
-* `move_iter()` and `move_rev_iter()`, to move the elements out by-value
+* `iter()` for immutable references to the elements
+* `mut_iter()` for mutable references to the elements
+* `move_iter()` to move the elements out by-value
 
 A typical mutable container will implement at least `iter()`, `mut_iter()` and
-`move_iter()` along with the reverse variants if it maintains an order.
+`move_iter()`. If it maintains an order, the returned iterators will be
+`DoubleEndedIterator`s, which are described below.
 
 ### Freezing
 
@@ -253,7 +254,7 @@ for (x, y) in it {
 }
 
 // yield and print the last pair from the iterator
-println!("last: {:?}", it.next());
+println!("last: {}", it.next());
 
 // the iterator is now fully consumed
 assert!(it.next().is_none());
@@ -265,8 +266,8 @@ Iterators offer generic conversion to containers with the `collect` adaptor:
 
 ~~~
 let xs = [0, 1, 1, 2, 3, 5, 8];
-let ys = xs.rev_iter().skip(1).map(|&x| x * 2).collect::<~[int]>();
-assert_eq!(ys, ~[10, 6, 4, 2, 2, 0]);
+let ys = xs.iter().rev().skip(1).map(|&x| x * 2).collect::<Vec<int>>();
+assert_eq!(ys, vec![10, 6, 4, 2, 2, 0]);
 ~~~
 
 The method requires a type hint for the container type, if the surrounding code
@@ -277,14 +278,14 @@ implementing the `FromIterator` trait. For example, the implementation for
 vectors is as follows:
 
 ~~~ {.ignore}
-impl<A> FromIterator<A> for ~[A] {
-    pub fn from_iter<T: Iterator<A>>(iterator: &mut T) -> ~[A] {
+impl<T> FromIterator<T> for Vec<T> {
+    fn from_iter<I:Iterator<A>>(mut iterator: I) -> Vec<T> {
         let (lower, _) = iterator.size_hint();
-        let mut xs = with_capacity(lower);
-        for x in iterator {
-            xs.push(x);
+        let mut vector = Vec::with_capacity(lower);
+        for element in iterator {
+            vector.push(element);
         }
-        xs
+        vector
     }
 }
 ~~~
@@ -348,18 +349,15 @@ returning another `DoubleEndedIterator` with `next` and `next_back` exchanged.
 ~~~
 let xs = [1, 2, 3, 4, 5, 6];
 let mut it = xs.iter();
-println!("{:?}", it.next()); // prints `Some(&1)`
-println!("{:?}", it.next()); // prints `Some(&2)`
-println!("{:?}", it.next_back()); // prints `Some(&6)`
+println!("{}", it.next()); // prints `Some(1)`
+println!("{}", it.next()); // prints `Some(2)`
+println!("{}", it.next_back()); // prints `Some(6)`
 
 // prints `5`, `4` and `3`
 for &x in it.rev() {
     println!("{}", x)
 }
 ~~~
-
-The `rev_iter` and `mut_rev_iter` methods on vectors just return an inverted
-version of the standard immutable and mutable vector iterators.
 
 The `chain`, `map`, `filter`, `filter_map` and `inspect` adaptors are
 `DoubleEndedIterator` implementations if the underlying iterators are.
@@ -369,7 +367,7 @@ let xs = [1, 2, 3, 4];
 let ys = [5, 6, 7, 8];
 let mut it = xs.iter().chain(ys.iter()).map(|&x| x * 2);
 
-println!("{:?}", it.next()); // prints `Some(2)`
+println!("{}", it.next()); // prints `Some(2)`
 
 // prints `16`, `14`, `12`, `10`, `8`, `6`, `4`
 for x in it.rev() {
@@ -400,17 +398,17 @@ underlying iterators are.
 let xs = [1, 2, 3, 4, 5];
 let ys = ~[7, 9, 11];
 let mut it = xs.iter().chain(ys.iter());
-println!("{:?}", it.idx(0)); // prints `Some(&1)`
-println!("{:?}", it.idx(5)); // prints `Some(&7)`
-println!("{:?}", it.idx(7)); // prints `Some(&11)`
-println!("{:?}", it.idx(8)); // prints `None`
+println!("{}", it.idx(0)); // prints `Some(1)`
+println!("{}", it.idx(5)); // prints `Some(7)`
+println!("{}", it.idx(7)); // prints `Some(11)`
+println!("{}", it.idx(8)); // prints `None`
 
 // yield two elements from the beginning, and one from the end
 it.next();
 it.next();
 it.next_back();
 
-println!("{:?}", it.idx(0)); // prints `Some(&3)`
-println!("{:?}", it.idx(4)); // prints `Some(&9)`
-println!("{:?}", it.idx(6)); // prints `None`
+println!("{}", it.idx(0)); // prints `Some(3)`
+println!("{}", it.idx(4)); // prints `Some(9)`
+println!("{}", it.idx(6)); // prints `None`
 ~~~

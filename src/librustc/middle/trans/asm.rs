@@ -23,7 +23,7 @@ use middle::trans::type_of;
 use middle::trans::type_::Type;
 
 use std::c_str::ToCStr;
-use std::strbuf::StrBuf;
+use std::string::String;
 use syntax::ast;
 
 // Take an inline assembly expression and splat it out via LLVM
@@ -64,16 +64,15 @@ pub fn trans_inline_asm<'a>(bcx: &'a Block<'a>, ia: &ast::InlineAsm)
     fcx.pop_custom_cleanup_scope(temp_scope);
 
     let mut constraints =
-        StrBuf::from_str(constraints.iter()
-                                    .map(|s| s.get().to_str())
-                                    .collect::<Vec<~str>>()
-                                    .connect(","));
+        String::from_str(constraints.iter()
+                                    .map(|s| s.get().to_string())
+                                    .collect::<Vec<String>>()
+                                    .connect(",")
+                                    .as_slice());
 
-    let mut clobbers = StrBuf::from_str(getClobbers());
+    let mut clobbers = getClobbers();
     if !ia.clobbers.get().is_empty() && !clobbers.is_empty() {
-        clobbers = StrBuf::from_owned_str(format!("{},{}",
-                                                  ia.clobbers.get(),
-                                                  clobbers));
+        clobbers = format!("{},{}", ia.clobbers.get(), clobbers);
     } else {
         clobbers.push_str(ia.clobbers.get());
     }
@@ -136,12 +135,12 @@ pub fn trans_inline_asm<'a>(bcx: &'a Block<'a>, ia: &ast::InlineAsm)
 
 #[cfg(target_arch = "arm")]
 #[cfg(target_arch = "mips")]
-fn getClobbers() -> ~str {
-    "".to_owned()
+fn getClobbers() -> String {
+    "".to_string()
 }
 
 #[cfg(target_arch = "x86")]
 #[cfg(target_arch = "x86_64")]
-fn getClobbers() -> ~str {
-    "~{dirflag},~{fpsr},~{flags}".to_owned()
+fn getClobbers() -> String {
+    "~{dirflag},~{fpsr},~{flags}".to_string()
 }

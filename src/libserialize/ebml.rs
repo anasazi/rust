@@ -34,8 +34,8 @@ impl<'doc> Doc<'doc> {
         str::from_utf8(self.data.slice(self.start, self.end)).unwrap()
     }
 
-    pub fn as_str(&self) -> ~str {
-        self.as_str_slice().to_owned()
+    pub fn as_str(&self) -> String {
+        self.as_str_slice().to_string()
     }
 }
 
@@ -44,6 +44,7 @@ pub struct TaggedDoc<'a> {
     pub doc: Doc<'a>,
 }
 
+#[deriving(Show)]
 pub enum EbmlEncoderTag {
     EsUint,     // 0
     EsU64,      // 1
@@ -80,7 +81,7 @@ pub enum EbmlEncoderTag {
 #[deriving(Show)]
 pub enum Error {
     IntTooBig(uint),
-    Expected(~str),
+    Expected(String),
     IoError(io::IoError)
 }
 // --------------------------------------
@@ -88,7 +89,7 @@ pub enum Error {
 pub mod reader {
     use std::char;
 
-    use std::cast::transmute;
+    use std::mem::transmute;
     use std::int;
     use std::option::{None, Option, Some};
     use std::io::extensions::u64_from_be_bytes;
@@ -312,7 +313,8 @@ pub mod reader {
                     self.pos = r_doc.end;
                     let str = r_doc.as_str_slice();
                     if lbl != str {
-                        return Err(Expected(format!("Expected label {} but found {}", lbl, str)));
+                        return Err(Expected(format!("Expected label {} but \
+                                                     found {}", lbl, str)));
                     }
                 }
             }
@@ -320,9 +322,10 @@ pub mod reader {
         }
 
         fn next_doc(&mut self, exp_tag: EbmlEncoderTag) -> DecodeResult<Doc<'doc>> {
-            debug!(". next_doc(exp_tag={:?})", exp_tag);
+            debug!(". next_doc(exp_tag={})", exp_tag);
             if self.pos >= self.parent.end {
-                return Err(Expected(format!("no more documents in current node!")));
+                return Err(Expected(format!("no more documents in \
+                                             current node!")));
             }
             let TaggedDoc { tag: r_tag, doc: r_doc } =
                 try!(doc_at(self.parent.data, self.pos));
@@ -334,12 +337,13 @@ pub mod reader {
                    r_doc.start,
                    r_doc.end);
             if r_tag != (exp_tag as uint) {
-                return Err(Expected(format!("expected EBML doc with tag {:?} but found tag {:?}",
-                       exp_tag, r_tag)));
+                return Err(Expected(format!("expected EBML doc with tag {} but \
+                                             found tag {}", exp_tag, r_tag)));
             }
             if r_doc.end > self.parent.end {
-                return Err(Expected(format!("invalid EBML, child extends to {:#x}, parent to {:#x}",
-                      r_doc.end, self.parent.end)));
+                return Err(Expected(format!("invalid EBML, child extends to \
+                                             {:#x}, parent to {:#x}",
+                                            r_doc.end, self.parent.end)));
             }
             self.pos = r_doc.end;
             Ok(r_doc)
@@ -360,7 +364,7 @@ pub mod reader {
 
         fn _next_uint(&mut self, exp_tag: EbmlEncoderTag) -> DecodeResult<uint> {
             let r = doc_as_u32(try!(self.next_doc(exp_tag)));
-            debug!("_next_uint exp_tag={:?} result={}", exp_tag, r);
+            debug!("_next_uint exp_tag={} result={}", exp_tag, r);
             Ok(r as uint)
         }
 
@@ -433,7 +437,7 @@ pub mod reader {
         fn read_char(&mut self) -> DecodeResult<char> {
             Ok(char::from_u32(doc_as_u32(try!(self.next_doc(EsChar)))).unwrap())
         }
-        fn read_str(&mut self) -> DecodeResult<~str> {
+        fn read_str(&mut self) -> DecodeResult<String> {
             Ok(try!(self.next_doc(EsStr)).as_str())
         }
 
@@ -570,7 +574,9 @@ pub mod reader {
                     match idx {
                         0 => f(this, false),
                         1 => f(this, true),
-                        _ => Err(Expected(format!("Expected None or Some"))),
+                        _ => {
+                            Err(Expected(format!("Expected None or Some")))
+                        }
                     }
                 })
             })
@@ -617,11 +623,11 @@ pub mod reader {
 }
 
 pub mod writer {
-    use std::cast;
     use std::clone::Clone;
-    use std::io;
-    use std::io::{Writer, Seek};
     use std::io::extensions::u64_to_be_bytes;
+    use std::io::{Writer, Seek};
+    use std::io;
+    use std::mem;
 
     use super::{ EsVec, EsMap, EsEnum, EsVecLen, EsVecElt, EsMapLen, EsMapKey,
         EsEnumVid, EsU64, EsU32, EsU16, EsU8, EsInt, EsI64, EsI32, EsI16, EsI8,
@@ -679,7 +685,7 @@ pub mod writer {
         /// FIXME(pcwalton): Workaround for badness in trans. DO NOT USE ME.
         pub unsafe fn unsafe_clone(&self) -> Encoder<'a, W> {
             Encoder {
-                writer: cast::transmute_copy(&self.writer),
+                writer: mem::transmute_copy(&self.writer),
                 size_positions: self.size_positions.clone(),
             }
         }
@@ -853,11 +859,11 @@ pub mod writer {
         }
 
         fn emit_f64(&mut self, v: f64) -> EncodeResult {
-            let bits = unsafe { cast::transmute(v) };
+            let bits = unsafe { mem::transmute(v) };
             self.wr_tagged_u64(EsF64 as uint, bits)
         }
         fn emit_f32(&mut self, v: f32) -> EncodeResult {
-            let bits = unsafe { cast::transmute(v) };
+            let bits = unsafe { mem::transmute(v) };
             self.wr_tagged_u32(EsF32 as uint, bits)
         }
         fn emit_char(&mut self, v: char) -> EncodeResult {
@@ -1072,7 +1078,7 @@ mod tests {
     #[test]
     fn test_option_int() {
         fn test_v(v: Option<int>) {
-            debug!("v == {:?}", v);
+            debug!("v == {}", v);
             let mut wr = MemWriter::new();
             {
                 let mut ebml_w = writer::Encoder(&mut wr);
@@ -1081,7 +1087,7 @@ mod tests {
             let ebml_doc = reader::Doc(wr.get_ref());
             let mut deser = reader::Decoder(ebml_doc);
             let v1 = Decodable::decode(&mut deser).unwrap();
-            debug!("v1 == {:?}", v1);
+            debug!("v1 == {}", v1);
             assert_eq!(v, v1);
         }
 

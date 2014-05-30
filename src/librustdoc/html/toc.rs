@@ -11,7 +11,7 @@
 //! Table-of-contents creation.
 
 use std::fmt;
-use std::strbuf::StrBuf;
+use std::string::String;
 
 /// A (recursive) table of contents
 #[deriving(Eq)]
@@ -39,9 +39,9 @@ impl Toc {
 #[deriving(Eq)]
 pub struct TocEntry {
     level: u32,
-    sec_number: ~str,
-    name: ~str,
-    id: ~str,
+    sec_number: String,
+    name: String,
+    id: String,
     children: Toc,
 }
 
@@ -125,7 +125,7 @@ impl TocBuilder {
     /// Push a level `level` heading into the appropriate place in the
     /// heirarchy, returning a string containing the section number in
     /// `<num>.<num>.<num>` format.
-    pub fn push<'a>(&'a mut self, level: u32, name: ~str, id: ~str) -> &'a str {
+    pub fn push<'a>(&'a mut self, level: u32, name: String, id: String) -> &'a str {
         assert!(level >= 1);
 
         // collapse all previous sections into their parents until we
@@ -137,11 +137,12 @@ impl TocBuilder {
         {
             let (toc_level, toc) = match self.chain.last() {
                 None => {
-                    sec_number = StrBuf::new();
+                    sec_number = String::new();
                     (0, &self.top_level)
                 }
                 Some(entry) => {
-                    sec_number = StrBuf::from_str(entry.sec_number.clone());
+                    sec_number = String::from_str(entry.sec_number
+                                                       .as_slice());
                     sec_number.push_str(".");
                     (entry.level, &entry.children)
                 }
@@ -153,13 +154,13 @@ impl TocBuilder {
                 sec_number.push_str("0.");
             }
             let number = toc.count_entries_with_level(level);
-            sec_number.push_str(format!("{}", number + 1))
+            sec_number.push_str(format!("{}", number + 1).as_slice())
         }
 
         self.chain.push(TocEntry {
             level: level,
             name: name,
-            sec_number: sec_number.into_owned(),
+            sec_number: sec_number,
             id: id,
             children: Toc { entries: Vec::new() }
         });
@@ -173,17 +174,17 @@ impl TocBuilder {
 
 impl fmt::Show for Toc {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        try!(write!(fmt.buf, "<ul>"));
+        try!(write!(fmt, "<ul>"));
         for entry in self.entries.iter() {
             // recursively format this table of contents (the
             // `{children}` is the key).
-            try!(write!(fmt.buf,
+            try!(write!(fmt,
                         "\n<li><a href=\"\\#{id}\">{num} {name}</a>{children}</li>",
                         id = entry.id,
                         num = entry.sec_number, name = entry.name,
                         children = entry.children))
         }
-        write!(fmt.buf, "</ul>")
+        write!(fmt, "</ul>")
     }
 }
 
@@ -200,7 +201,10 @@ mod test {
         // there's been no macro mistake.
         macro_rules! push {
             ($level: expr, $name: expr) => {
-                assert_eq!(builder.push($level, $name.to_owned(), "".to_owned()), $name);
+                assert_eq!(builder.push($level,
+                                        $name.to_string(),
+                                        "".to_string()),
+                           $name);
             }
         }
         push!(2, "0.1");
@@ -238,9 +242,9 @@ mod test {
                         $(
                             TocEntry {
                                 level: $level,
-                                name: $name.to_owned(),
-                                sec_number: $name.to_owned(),
-                                id: "".to_owned(),
+                                name: $name.to_string(),
+                                sec_number: $name.to_string(),
+                                id: "".to_string(),
                                 children: toc!($($sub),*)
                             }
                             ),*

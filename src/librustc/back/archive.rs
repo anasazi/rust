@@ -15,14 +15,14 @@ use driver::session::Session;
 use metadata::filesearch;
 use lib::llvm::{ArchiveRef, llvm};
 
-use std::cast;
-use std::io;
-use std::io::{fs, TempDir};
 use libc;
+use std::io::process::{Command, ProcessOutput};
+use std::io::{fs, TempDir};
+use std::io;
+use std::mem;
 use std::os;
-use std::io::process::{ProcessConfig, Process, ProcessOutput};
-use std::str;
 use std::raw;
+use std::str;
 use syntax::abi;
 
 pub static METADATA_FILENAME: &'static str = "rust.metadata.bin";
@@ -39,36 +39,41 @@ pub struct ArchiveRO {
 fn run_ar(sess: &Session, args: &str, cwd: Option<&Path>,
           paths: &[&Path]) -> ProcessOutput {
     let ar = get_ar_prog(sess);
+    let mut cmd = Command::new(ar.as_slice());
 
-    let mut args = vec!(args.to_owned());
-    let paths = paths.iter().map(|p| p.as_str().unwrap().to_owned());
-    args.extend(paths);
-    debug!("{} {}", ar, args.connect(" "));
+    cmd.arg(args).args(paths);
+    debug!("{}", cmd);
+
     match cwd {
-        Some(p) => { debug!("inside {}", p.display()); }
+        Some(p) => {
+            cmd.cwd(p);
+            debug!("inside {}", p.display());
+        }
         None => {}
     }
-    match Process::configure(ProcessConfig {
-        program: ar.as_slice(),
-        args: args.as_slice(),
-        cwd: cwd.map(|a| &*a),
-        .. ProcessConfig::new()
-    }) {
-        Ok(mut prog) => {
-            let o = prog.wait_with_output();
+
+    match cmd.spawn() {
+        Ok(prog) => {
+            let o = prog.wait_with_output().unwrap();
             if !o.status.success() {
-                sess.err(format!("{} {} failed with: {}", ar, args.connect(" "),
-                                 o.status));
+                sess.err(format!("{} failed with: {}",
+                                 cmd,
+                                 o.status).as_slice());
                 sess.note(format!("stdout ---\n{}",
-                                  str::from_utf8(o.output.as_slice()).unwrap()));
+                                  str::from_utf8(o.output
+                                                  .as_slice()).unwrap())
+                          .as_slice());
                 sess.note(format!("stderr ---\n{}",
-                                  str::from_utf8(o.error.as_slice()).unwrap()));
+                                  str::from_utf8(o.error
+                                                  .as_slice()).unwrap())
+                          .as_slice());
                 sess.abort_if_errors();
             }
             o
         },
         Err(e) => {
-            sess.err(format!("could not exec `{}`: {}", ar, e));
+            sess.err(format!("could not exec `{}`: {}", ar.as_slice(),
+                             e).as_slice());
             sess.abort_if_errors();
             fail!("rustc::back::archive::run_ar() should not reach this point");
         }
@@ -129,12 +134,12 @@ impl<'a> Archive<'a> {
     }
 
     /// Lists all files in an archive
-    pub fn files(&self) -> Vec<~str> {
+    pub fn files(&self) -> Vec<String> {
         let output = run_ar(self.sess, "t", None, [&self.dst]);
         let output = str::from_utf8(output.output.as_slice()).unwrap();
         // use lines_any because windows delimits output with `\r\n` instead of
         // just `\n`
-        output.lines_any().map(|s| s.to_owned()).collect()
+        output.lines_any().map(|s| s.to_string()).collect()
     }
 
     fn add_archive(&mut self, archive: &Path, name: &str,
@@ -196,7 +201,8 @@ impl<'a> Archive<'a> {
             }
         }
         self.sess.fatal(format!("could not find native static library `{}`, \
-                                 perhaps an -L flag is missing?", name));
+                                 perhaps an -L flag is missing?",
+                                name).as_slice());
     }
 }
 
@@ -230,7 +236,7 @@ impl ArchiveRO {
             if ptr.is_null() {
                 None
             } else {
-                Some(cast::transmute(raw::Slice {
+                Some(mem::transmute(raw::Slice {
                     data: ptr,
                     len: size as uint,
                 }))

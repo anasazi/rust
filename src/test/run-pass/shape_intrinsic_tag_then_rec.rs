@@ -10,8 +10,10 @@
 
 #![feature(managed_boxes)]
 
+extern crate debug;
+
 // Exercises a bug in the shape code that was exposed
-// on x86_64: when there is a enum embedded in an
+// on x86_64: when there is an enum embedded in an
 // interior record which is then itself interior to
 // something else, shape calculations were off.
 
@@ -41,7 +43,7 @@ type ty_ = uint;
 #[deriving(Clone)]
 struct Path_ {
     global: bool,
-    idents: Vec<~str> ,
+    idents: Vec<String> ,
     types: Vec<@ty>,
 }
 
@@ -59,7 +61,7 @@ pub fn main() {
     let t: @ty = @Spanned { data: 3u, span: sp };
     let p_: Path_ = Path_ {
         global: true,
-        idents: vec!("hi".to_owned()),
+        idents: vec!("hi".to_string()),
         types: vec!(t),
     };
     let p: path = Spanned { data: p_, span: sp };

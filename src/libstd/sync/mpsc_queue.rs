@@ -38,12 +38,14 @@
 // http://www.1024cores.net/home/lock-free-algorithms
 //                         /queues/non-intrusive-mpsc-node-based-queue
 
-use cast;
 use kinds::Send;
+use mem;
 use ops::Drop;
 use option::{Option, None, Some};
+use owned::Box;
 use ptr::RawPtr;
 use sync::atomics::{AtomicPtr, Release, Acquire, AcqRel, Relaxed};
+use ty::Unsafe;
 
 /// A result of the `pop` function.
 pub enum PopResult<T> {
@@ -68,12 +70,12 @@ struct Node<T> {
 /// popper at a time (many pushers are allowed).
 pub struct Queue<T> {
     head: AtomicPtr<Node<T>>,
-    tail: *mut Node<T>,
+    tail: Unsafe<*mut Node<T>>,
 }
 
 impl<T> Node<T> {
     unsafe fn new(v: Option<T>) -> *mut Node<T> {
-        cast::transmute(~Node {
+        mem::transmute(box Node {
             next: AtomicPtr::new(0 as *mut Node<T>),
             value: v,
         })
@@ -87,12 +89,12 @@ impl<T: Send> Queue<T> {
         let stub = unsafe { Node::new(None) };
         Queue {
             head: AtomicPtr::new(stub),
-            tail: stub,
+            tail: Unsafe::new(stub),
         }
     }
 
     /// Pushes a new value onto this queue.
-    pub fn push(&mut self, t: T) {
+    pub fn push(&self, t: T) {
         unsafe {
             let n = Node::new(Some(t));
             let prev = self.head.swap(n, AcqRel);
@@ -110,17 +112,17 @@ impl<T: Send> Queue<T> {
     ///
     /// This inconsistent state means that this queue does indeed have data, but
     /// it does not currently have access to it at this time.
-    pub fn pop(&mut self) -> PopResult<T> {
+    pub fn pop(&self) -> PopResult<T> {
         unsafe {
-            let tail = self.tail;
+            let tail = *self.tail.get();
             let next = (*tail).next.load(Acquire);
 
             if !next.is_null() {
-                self.tail = next;
+                *self.tail.get() = next;
                 assert!((*tail).value.is_none());
                 assert!((*next).value.is_some());
                 let ret = (*next).value.take_unwrap();
-                let _: ~Node<T> = cast::transmute(tail);
+                let _: Box<Node<T>> = mem::transmute(tail);
                 return Data(ret);
             }
 
@@ -130,7 +132,7 @@ impl<T: Send> Queue<T> {
 
     /// Attempts to pop data from this queue, but doesn't attempt too hard. This
     /// will canonicalize inconsistent states to a `None` value.
-    pub fn casual_pop(&mut self) -> Option<T> {
+    pub fn casual_pop(&self) -> Option<T> {
         match self.pop() {
             Data(t) => Some(t),
             Empty | Inconsistent => None,
@@ -142,10 +144,10 @@ impl<T: Send> Queue<T> {
 impl<T: Send> Drop for Queue<T> {
     fn drop(&mut self) {
         unsafe {
-            let mut cur = self.tail;
+            let mut cur = *self.tail.get();
             while !cur.is_null() {
                 let next = (*cur).next.load(Relaxed);
-                let _: ~Node<T> = cast::transmute(cur);
+                let _: Box<Node<T>> = mem::transmute(cur);
                 cur = next;
             }
         }
@@ -156,35 +158,36 @@ impl<T: Send> Drop for Queue<T> {
 mod tests {
     use prelude::*;
 
+    use alloc::arc::Arc;
+
     use native;
     use super::{Queue, Data, Empty, Inconsistent};
-    use sync::arc::UnsafeArc;
 
     #[test]
     fn test_full() {
-        let mut q = Queue::new();
-        q.push(~1);
-        q.push(~2);
+        let q = Queue::new();
+        q.push(box 1);
+        q.push(box 2);
     }
 
     #[test]
     fn test() {
         let nthreads = 8u;
         let nmsgs = 1000u;
-        let mut q = Queue::new();
+        let q = Queue::new();
         match q.pop() {
             Empty => {}
             Inconsistent | Data(..) => fail!()
         }
         let (tx, rx) = channel();
-        let q = UnsafeArc::new(q);
+        let q = Arc::new(q);
 
         for _ in range(0, nthreads) {
             let tx = tx.clone();
             let q = q.clone();
             native::task::spawn(proc() {
                 for i in range(0, nmsgs) {
-                    unsafe { (*q.get()).push(i); }
+                    q.push(i);
                 }
                 tx.send(());
             });
@@ -192,7 +195,7 @@ mod tests {
 
         let mut i = 0u;
         while i < nthreads * nmsgs {
-            match unsafe { (*q.get()).pop() } {
+            match q.pop() {
                 Empty | Inconsistent => {},
                 Data(_) => { i += 1 }
             }

@@ -624,11 +624,11 @@ impl<K:KindOps> Datum<K> {
     }
 
     #[allow(dead_code)] // useful for debugging
-    pub fn to_str(&self, ccx: &CrateContext) -> ~str {
+    pub fn to_str(&self, ccx: &CrateContext) -> String {
         format!("Datum({}, {}, {:?})",
-             ccx.tn.val_to_str(self.val),
-             ty_to_str(ccx.tcx(), self.ty),
-             self.kind)
+                ccx.tn.val_to_str(self.val),
+                ty_to_str(ccx.tcx(), self.ty),
+                self.kind)
     }
 
     pub fn appropriate_rvalue_mode(&self, ccx: &CrateContext) -> RvalueMode {
@@ -679,6 +679,6 @@ impl<'a> DatumBlock<'a, Expr> {
 
     pub fn to_llbool(self) -> Result<'a> {
         let DatumBlock { datum, bcx } = self;
-        rslt(bcx, datum.to_llbool(bcx))
+        Result::new(bcx, datum.to_llbool(bcx))
     }
 }

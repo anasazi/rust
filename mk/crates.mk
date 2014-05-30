@@ -38,7 +38,7 @@
 #   DEPS_<crate>
 #	These lists are the dependencies of the <crate> that is to be built.
 #	Rust dependencies are listed bare (i.e. std, green) and native
-#	dependencies have a "native:" prefix (i.e. native:sundown). All deps
+#	dependencies have a "native:" prefix (i.e. native:hoedown). All deps
 #	will be built before the crate itself is built.
 #
 #   TOOL_DEPS_<tool>/TOOL_SOURCE_<tool>
@@ -51,41 +51,48 @@
 
 TARGET_CRATES := libc std green rustuv native flate arena glob term semver \
                  uuid serialize sync getopts collections num test time rand \
-		 workcache url log regex
-HOST_CRATES := syntax rustc rustdoc fourcc hexfloat regex_macros
+		 workcache url log regex graphviz core rlibc alloc debug
+HOST_CRATES := syntax rustc rustdoc fourcc hexfloat regex_macros fmt_macros
 CRATES := $(TARGET_CRATES) $(HOST_CRATES)
 TOOLS := compiletest rustdoc rustc
 
-DEPS_std := libc native:rustrt native:compiler-rt native:backtrace
+DEPS_core :=
+DEPS_rlibc :=
+DEPS_alloc := core libc native:jemalloc
+DEPS_debug := std
+DEPS_std := core libc alloc native:rustrt native:backtrace
+DEPS_graphviz := std
 DEPS_green := std rand native:context_switch
 DEPS_rustuv := std native:uv native:uv_support
 DEPS_native := std
-DEPS_syntax := std term serialize collections log
+DEPS_syntax := std term serialize collections log fmt_macros debug
 DEPS_rustc := syntax native:rustllvm flate arena serialize sync getopts \
-              collections time log
-DEPS_rustdoc := rustc native:sundown serialize sync getopts collections \
-                test time
+              collections time log graphviz debug
+DEPS_rustdoc := rustc native:hoedown serialize sync getopts collections \
+                test time debug
 DEPS_flate := std native:miniz
 DEPS_arena := std collections
+DEPS_graphviz := std
 DEPS_glob := std
 DEPS_serialize := std collections log
-DEPS_term := std collections
+DEPS_term := std collections log
 DEPS_semver := std
 DEPS_uuid := std serialize rand
-DEPS_sync := std
+DEPS_sync := std alloc
 DEPS_getopts := std
-DEPS_collections := std rand
+DEPS_collections := std rand debug
 DEPS_fourcc := syntax std
 DEPS_hexfloat := syntax std
 DEPS_num := std rand
-DEPS_test := std collections getopts serialize term time
-DEPS_time := std serialize
+DEPS_test := std collections getopts serialize term time regex
+DEPS_time := std serialize sync
 DEPS_rand := std
 DEPS_url := std collections
 DEPS_workcache := std serialize collections log
 DEPS_log := std sync
 DEPS_regex := std collections
 DEPS_regex_macros = syntax std regex
+DEPS_fmt_macros = std
 
 TOOL_DEPS_compiletest := test green rustuv getopts
 TOOL_DEPS_rustdoc := rustdoc native
@@ -93,6 +100,10 @@ TOOL_DEPS_rustc := rustc native
 TOOL_SOURCE_compiletest := $(S)src/compiletest/compiletest.rs
 TOOL_SOURCE_rustdoc := $(S)src/driver/driver.rs
 TOOL_SOURCE_rustc := $(S)src/driver/driver.rs
+
+ONLY_RLIB_core := 1
+ONLY_RLIB_rlibc := 1
+ONLY_RLIB_alloc := 1
 
 ################################################################################
 # You should not need to edit below this line

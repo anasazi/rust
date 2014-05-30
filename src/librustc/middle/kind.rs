@@ -127,10 +127,12 @@ fn check_impl_of_trait(cx: &mut Context, it: &Item, trait_ref: &TraitRef, self_t
     check_builtin_bounds(cx, self_ty, trait_def.bounds, |missing| {
         cx.tcx.sess.span_err(self_type.span,
             format!("the type `{}', which does not fulfill `{}`, cannot implement this \
-                  trait", ty_to_str(cx.tcx, self_ty), missing.user_string(cx.tcx)));
+                    trait",
+                    ty_to_str(cx.tcx, self_ty),
+                    missing.user_string(cx.tcx)).as_slice());
         cx.tcx.sess.span_note(self_type.span,
             format!("types implementing this trait must fulfill `{}`",
-                 trait_def.bounds.user_string(cx.tcx)));
+                    trait_def.bounds.user_string(cx.tcx)).as_slice());
     });
 
     // If this is a destructor, check kinds.
@@ -198,11 +200,11 @@ fn with_appropriate_checker(cx: &Context,
 
     let fty = ty::node_id_to_type(cx.tcx, id);
     match ty::get(fty).sty {
-        ty::ty_closure(~ty::ClosureTy {
+        ty::ty_closure(box ty::ClosureTy {
             store: ty::UniqTraitStore, bounds, ..
         }) => b(|cx, fv| check_for_uniq(cx, fv, bounds)),
 
-        ty::ty_closure(~ty::ClosureTy {
+        ty::ty_closure(box ty::ClosureTy {
             store: ty::RegionTraitStore(region, _), bounds, ..
         }) => b(|cx, fv| check_for_block(cx, fv, bounds, region)),
 
@@ -210,8 +212,9 @@ fn with_appropriate_checker(cx: &Context,
             b(check_for_bare)
         }
         ref s => {
-            cx.tcx.sess.bug(
-                format!("expect fn type in kind checker, not {:?}", s));
+            cx.tcx.sess.bug(format!("expect fn type in kind checker, not \
+                                     {:?}",
+                                    s).as_slice());
         }
     }
 }
@@ -228,14 +231,14 @@ fn check_fn(
 
     // Check kinds on free variables:
     with_appropriate_checker(cx, fn_id, |chk| {
-        freevars::with_freevars(cx.tcx, fn_id, |r| {
-            for fv in r.iter() {
+        freevars::with_freevars(cx.tcx, fn_id, |freevars| {
+            for fv in freevars.iter() {
                 chk(cx, fv);
             }
-        })
+        });
     });
 
-    visit::walk_fn(cx, fk, decl, body, sp, fn_id, ());
+    visit::walk_fn(cx, fk, decl, body, sp, ());
 }
 
 pub fn check_expr(cx: &mut Context, e: &Expr) {
@@ -245,10 +248,10 @@ pub fn check_expr(cx: &mut Context, e: &Expr) {
     {
         let method_map = cx.tcx.method_map.borrow();
         let method = method_map.find(&typeck::MethodCall::expr(e.id));
-        let node_type_substs = cx.tcx.node_type_substs.borrow();
+        let item_substs = cx.tcx.item_substs.borrow();
         let r = match method {
             Some(method) => Some(&method.substs.tps),
-            None => node_type_substs.find(&e.id)
+            None => item_substs.find(&e.id).map(|s| &s.substs.tps)
         };
         for ts in r.iter() {
             let def_map = cx.tcx.def_map.borrow();
@@ -331,7 +334,7 @@ pub fn check_expr(cx: &mut Context, e: &Expr) {
 fn check_trait_cast(cx: &mut Context, source_ty: ty::t, target_ty: ty::t, span: Span) {
     check_cast_for_escaping_regions(cx, source_ty, target_ty, span);
     match ty::get(target_ty).sty {
-        ty::ty_trait(~ty::TyTrait { bounds, .. }) => {
+        ty::ty_trait(box ty::TyTrait { bounds, .. }) => {
             check_trait_cast_bounds(cx, span, source_ty, bounds);
         }
         _ => {}
@@ -341,15 +344,19 @@ fn check_trait_cast(cx: &mut Context, source_ty: ty::t, target_ty: ty::t, span: 
 fn check_ty(cx: &mut Context, aty: &Ty) {
     match aty.node {
         TyPath(_, _, id) => {
-            let node_type_substs = cx.tcx.node_type_substs.borrow();
-            let r = node_type_substs.find(&id);
-            for ts in r.iter() {
-                let def_map = cx.tcx.def_map.borrow();
-                let did = ast_util::def_id_of_def(def_map.get_copy(&id));
-                let generics = ty::lookup_item_type(cx.tcx, did).generics;
-                let type_param_defs = generics.type_param_defs();
-                for (&ty, type_param_def) in ts.iter().zip(type_param_defs.iter()) {
-                    check_typaram_bounds(cx, aty.span, ty, type_param_def)
+            match cx.tcx.item_substs.borrow().find(&id) {
+                None => { }
+                Some(ref item_substs) => {
+                    let def_map = cx.tcx.def_map.borrow();
+                    let did = ast_util::def_id_of_def(def_map.get_copy(&id));
+                    let generics = ty::lookup_item_type(cx.tcx, did).generics;
+                    let type_param_defs = generics.type_param_defs();
+                    for (&ty, type_param_def) in
+                        item_substs.substs.tps.iter().zip(
+                            type_param_defs.iter())
+                    {
+                        check_typaram_bounds(cx, aty.span, ty, type_param_def)
+                    }
                 }
             }
         }
@@ -386,9 +393,9 @@ pub fn check_typaram_bounds(cx: &Context,
         cx.tcx.sess.span_err(
             sp,
             format!("instantiating a type parameter with an incompatible type \
-                  `{}`, which does not fulfill `{}`",
-                 ty_to_str(cx.tcx, ty),
-                 missing.user_string(cx.tcx)));
+                     `{}`, which does not fulfill `{}`",
+                    ty_to_str(cx.tcx, ty),
+                    missing.user_string(cx.tcx)).as_slice());
     });
 }
 
@@ -399,19 +406,26 @@ pub fn check_freevar_bounds(cx: &Context, sp: Span, ty: ty::t,
         // Will be Some if the freevar is implicitly borrowed (stack closure).
         // Emit a less mysterious error message in this case.
         match referenced_ty {
-            Some(rty) => cx.tcx.sess.span_err(sp,
-                format!("cannot implicitly borrow variable of type `{}` in a bounded \
-                      stack closure (implicit reference does not fulfill `{}`)",
-                     ty_to_str(cx.tcx, rty), missing.user_string(cx.tcx))),
-            None => cx.tcx.sess.span_err(sp,
+            Some(rty) => {
+                cx.tcx.sess.span_err(sp,
+                format!("cannot implicitly borrow variable of type `{}` in a \
+                         bounded stack closure (implicit reference does not \
+                         fulfill `{}`)",
+                        ty_to_str(cx.tcx, rty),
+                        missing.user_string(cx.tcx)).as_slice())
+            }
+            None => {
+                cx.tcx.sess.span_err(sp,
                 format!("cannot capture variable of type `{}`, which does \
-                      not fulfill `{}`, in a bounded closure",
-                     ty_to_str(cx.tcx, ty), missing.user_string(cx.tcx))),
+                         not fulfill `{}`, in a bounded closure",
+                        ty_to_str(cx.tcx, ty),
+                        missing.user_string(cx.tcx)).as_slice())
+            }
         }
         cx.tcx.sess.span_note(
             sp,
             format!("this closure's environment must satisfy `{}`",
-                 bounds.user_string(cx.tcx)));
+                    bounds.user_string(cx.tcx)).as_slice());
     });
 }
 
@@ -420,9 +434,9 @@ pub fn check_trait_cast_bounds(cx: &Context, sp: Span, ty: ty::t,
     check_builtin_bounds(cx, ty, bounds, |missing| {
         cx.tcx.sess.span_err(sp,
             format!("cannot pack type `{}`, which does not fulfill \
-                  `{}`, as a trait bounded by {}",
-                 ty_to_str(cx.tcx, ty), missing.user_string(cx.tcx),
-                 bounds.user_string(cx.tcx)));
+                     `{}`, as a trait bounded by {}",
+                    ty_to_str(cx.tcx, ty), missing.user_string(cx.tcx),
+                    bounds.user_string(cx.tcx)).as_slice());
     });
 }
 
@@ -432,9 +446,10 @@ fn check_copy(cx: &Context, ty: ty::t, sp: Span, reason: &str) {
            ty::type_contents(cx.tcx, ty).to_str());
     if ty::type_moves_by_default(cx.tcx, ty) {
         cx.tcx.sess.span_err(
-            sp, format!("copying a value of non-copyable type `{}`",
-                     ty_to_str(cx.tcx, ty)));
-        cx.tcx.sess.span_note(sp, format!("{}", reason));
+            sp,
+            format!("copying a value of non-copyable type `{}`",
+                    ty_to_str(cx.tcx, ty)).as_slice());
+        cx.tcx.sess.span_note(sp, format!("{}", reason).as_slice());
     }
 }
 
@@ -444,7 +459,8 @@ pub fn check_static(tcx: &ty::ctxt, ty: ty::t, sp: Span) -> bool {
           ty::ty_param(..) => {
             tcx.sess.span_err(sp,
                 format!("value may contain references; \
-                         add `'static` bound to `{}`", ty_to_str(tcx, ty)));
+                         add `'static` bound to `{}`",
+                        ty_to_str(tcx, ty)).as_slice());
           }
           _ => {
             tcx.sess.span_err(sp, "value may contain references");
@@ -558,18 +574,21 @@ pub fn check_cast_for_escaping_regions(
 }
 
 // Ensure that `ty` has a statically known size (i.e., it has the `Sized` bound).
-fn check_sized(tcx: &ty::ctxt, ty: ty::t, name: ~str, sp: Span) {
+fn check_sized(tcx: &ty::ctxt, ty: ty::t, name: String, sp: Span) {
     if !ty::type_is_sized(tcx, ty) {
-        tcx.sess.span_err(sp, format!("variable `{}` has dynamically sized type `{}`",
-                                      name, ty_to_str(tcx, ty)));
+        tcx.sess.span_err(sp,
+                          format!("variable `{}` has dynamically sized type \
+                                   `{}`",
+                                  name,
+                                  ty_to_str(tcx, ty)).as_slice());
     }
 }
 
 // Check that any variables in a pattern have types with statically known size.
 fn check_pat(cx: &mut Context, pat: &Pat) {
     let var_name = match pat.node {
-        PatWild => Some("_".to_owned()),
-        PatIdent(_, ref path, _) => Some(path_to_str(path)),
+        PatWild => Some("_".to_string()),
+        PatIdent(_, ref path, _) => Some(path_to_str(path).to_string()),
         _ => None
     };
 

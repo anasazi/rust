@@ -85,9 +85,8 @@ pub fn monomorphic_fn(ccx: &CrateContext,
     }
 
     let psubsts = param_substs {
-        tys: real_substs.tps.clone(),
+        substs: (*real_substs).clone(),
         vtables: vtables,
-        self_ty: real_substs.self_ty.clone(),
         self_vtables: self_vtables
     };
 
@@ -109,9 +108,12 @@ pub fn monomorphic_fn(ccx: &CrateContext,
     let map_node = session::expect(
         ccx.sess(),
         ccx.tcx.map.find(fn_id.node),
-        || format!("while monomorphizing {:?}, couldn't find it in the \
-                    item map (may have attempted to monomorphize an item \
-                    defined in a different crate?)", fn_id));
+        || {
+            format!("while monomorphizing {:?}, couldn't find it in \
+                     the item map (may have attempted to monomorphize \
+                     an item defined in a different crate?)",
+                    fn_id)
+        });
 
     match map_node {
         ast_map::NodeForeignItem(_) => {
@@ -137,8 +139,7 @@ pub fn monomorphic_fn(ccx: &CrateContext,
 
     debug!("monomorphic_fn about to subst into {}", llitem_ty.repr(ccx.tcx()));
     let mono_ty = match is_static_provided {
-        None => ty::subst_tps(ccx.tcx(), real_substs.tps.as_slice(),
-                              real_substs.self_ty, llitem_ty),
+        None => ty::subst(ccx.tcx(), real_substs, llitem_ty),
         Some(num_method_ty_params) => {
             // Static default methods are a little unfortunate, in
             // that the "internal" and "external" type of them differ.
@@ -155,21 +156,20 @@ pub fn monomorphic_fn(ccx: &CrateContext,
             // This is a bit unfortunate.
 
             let idx = real_substs.tps.len() - num_method_ty_params;
-            let substs = real_substs.tps.slice(0, idx) +
-            &[real_substs.self_ty.unwrap()] + real_substs.tps.tailn(idx);
+            let mut tps = Vec::new();
+            tps.push_all(real_substs.tps.slice(0, idx));
+            tps.push(real_substs.self_ty.unwrap());
+            tps.push_all(real_substs.tps.tailn(idx));
+
+            let substs = ty::substs { regions: ty::ErasedRegions,
+                                      self_ty: None,
+                                      tps: tps };
+
             debug!("static default: changed substitution to {}",
                    substs.repr(ccx.tcx()));
 
-            ty::subst_tps(ccx.tcx(), substs, None, llitem_ty)
+            ty::subst(ccx.tcx(), &substs, llitem_ty)
         }
-    };
-
-    let f = match ty::get(mono_ty).sty {
-        ty::ty_bare_fn(ref f) => {
-            assert!(f.abi == abi::Rust || f.abi == abi::RustIntrinsic);
-            f
-        }
-        _ => fail!("expected bare rust fn or an intrinsic")
     };
 
     ccx.stats.n_monos.set(ccx.stats.n_monos.get() + 1);
@@ -197,7 +197,8 @@ pub fn monomorphic_fn(ccx: &CrateContext,
         hash_id.hash(&mut state);
         mono_ty.hash(&mut state);
 
-        exported_name(path, format!("h{}", state.result()),
+        exported_name(path,
+                      format!("h{}", state.result()).as_slice(),
                       ccx.link_meta.crateid.version_or_default())
     });
     debug!("monomorphize_fn mangled to {}", s);
@@ -205,9 +206,7 @@ pub fn monomorphic_fn(ccx: &CrateContext,
     // This shouldn't need to option dance.
     let mut hash_id = Some(hash_id);
     let mk_lldecl = || {
-        let lldecl = decl_internal_rust_fn(ccx, false,
-                                           f.sig.inputs.as_slice(),
-                                           f.sig.output, s);
+        let lldecl = decl_internal_rust_fn(ccx, mono_ty, s.as_slice());
         ccx.monomorphized.borrow_mut().insert(hash_id.take_unwrap(), lldecl);
         lldecl
     };
@@ -277,7 +276,7 @@ pub fn monomorphic_fn(ccx: &CrateContext,
                 }
                 _ => {
                     ccx.sess().bug(format!("can't monomorphize a {:?}",
-                                           map_node))
+                                           map_node).as_slice())
                 }
             }
         }
@@ -299,8 +298,10 @@ pub fn monomorphic_fn(ccx: &CrateContext,
         ast_map::NodeStmt(..) |
         ast_map::NodeArg(..) |
         ast_map::NodeBlock(..) |
+        ast_map::NodePat(..) |
         ast_map::NodeLocal(..) => {
-            ccx.sess().bug(format!("can't monomorphize a {:?}", map_node))
+            ccx.sess().bug(format!("can't monomorphize a {:?}",
+                                   map_node).as_slice())
         }
     };
 
@@ -331,7 +332,10 @@ pub fn make_vtable_id(ccx: &CrateContext,
         &typeck::vtable_static(impl_id, ref substs, ref sub_vtables) => {
             MonoId {
                 def: impl_id,
-                params: sub_vtables.iter().zip(substs.iter()).map(|(vtable, subst)| {
+                // FIXME(NDM) -- this is pretty bogus. It ignores self-type,
+                // and vtables are not necessary, AND they are not guaranteed
+                // to be same length as the number of TPS ANYHOW!
+                params: sub_vtables.iter().zip(substs.tps.iter()).map(|(vtable, subst)| {
                     MonoParamId {
                         subst: *subst,
                         // Do we really need the vtables to be hashed? Isn't the type enough?

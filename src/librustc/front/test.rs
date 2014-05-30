@@ -125,27 +125,23 @@ impl<'a> fold::Folder for TestHarnessGenerator<'a> {
         // Remove any #[main] from the AST so it doesn't clash with
         // the one we're going to add. Only if compiling an executable.
 
-        fn nomain(cx: &TestCtxt, item: @ast::Item) -> @ast::Item {
-            if !cx.sess.building_library.get() {
-                @ast::Item {
-                    attrs: item.attrs.iter().filter_map(|attr| {
-                        if !attr.name().equiv(&("main")) {
-                            Some(*attr)
-                        } else {
-                            None
-                        }
-                    }).collect(),
-                    .. (*item).clone()
-                }
-            } else {
-                item
+        fn nomain(item: @ast::Item) -> @ast::Item {
+            @ast::Item {
+                attrs: item.attrs.iter().filter_map(|attr| {
+                    if !attr.name().equiv(&("main")) {
+                        Some(*attr)
+                    } else {
+                        None
+                    }
+                }).collect(),
+                .. (*item).clone()
             }
         }
 
         let mod_nomain = ast::Mod {
             inner: m.inner,
             view_items: m.view_items.clone(),
-            items: m.items.iter().map(|i| nomain(&self.cx, *i)).collect(),
+            items: m.items.iter().map(|i| nomain(*i)).collect(),
         };
 
         fold::noop_fold_mod(&mod_nomain, self)
@@ -172,7 +168,7 @@ fn generate_test_harness(sess: &Session, krate: ast::Crate)
     cx.ext_cx.bt_push(ExpnInfo {
         call_site: DUMMY_SP,
         callee: NameAndSpan {
-            name: "test".to_owned(),
+            name: "test".to_string(),
             format: MacroAttribute,
             span: None
         }
@@ -257,7 +253,7 @@ fn is_bench_fn(cx: &TestCtxt, i: @ast::Item) -> bool {
 fn is_ignored(cx: &TestCtxt, i: @ast::Item) -> bool {
     i.attrs.iter().any(|attr| {
         // check ignore(cfg(foo, bar))
-        attr.name().equiv(&("ignore")) && match attr.meta_item_list() {
+        attr.check_name("ignore") && match attr.meta_item_list() {
             Some(ref cfgs) => {
                 attr::test_cfg(cx.config.as_slice(), cfgs.iter().map(|x| *x))
             }
@@ -286,7 +282,7 @@ mod __test {
   #![!resolve_unexported]
   extern crate test (name = "test", vers = "...");
   fn main() {
-    test::test_main_static(::os::args(), tests)
+    test::test_main_static(::os::args().as_slice(), tests)
   }
 
   static tests : &'static [test::TestDescAndFn] = &[
@@ -330,8 +326,8 @@ fn mk_test_module(cx: &TestCtxt) -> @ast::Item {
     let mainfn = (quote_item!(&cx.ext_cx,
         pub fn main() {
             #![main]
-            #![allow(deprecated_owned_vector)]
-            test::test_main_static(::std::os::args(), TESTS);
+            use std::slice::Vector;
+            test::test_main_static(::std::os::args().as_slice(), TESTS);
         }
     )).unwrap();
 
@@ -345,7 +341,8 @@ fn mk_test_module(cx: &TestCtxt) -> @ast::Item {
     // This attribute tells resolve to let us call unexported functions
     let resolve_unexported_str = InternedString::new("!resolve_unexported");
     let resolve_unexported_attr =
-        attr::mk_attr(attr::mk_word_item(resolve_unexported_str));
+        attr::mk_attr_inner(attr::mk_attr_id(),
+                            attr::mk_word_item(resolve_unexported_str));
 
     let item = ast::Item {
         ident: token::str_to_ident("__test"),
@@ -402,7 +399,7 @@ fn mk_tests(cx: &TestCtxt) -> @ast::Item {
 
 fn is_test_crate(krate: &ast::Crate) -> bool {
     match attr::find_crateid(krate.attrs.as_slice()) {
-        Some(ref s) if "test" == s.name => true,
+        Some(ref s) if "test" == s.name.as_slice() => true,
         _ => false
     }
 }
@@ -431,7 +428,7 @@ fn mk_test_desc_and_fn_rec(cx: &TestCtxt, test: &Test) -> @ast::Expr {
 
     let name_lit: ast::Lit =
         nospan(ast::LitStr(token::intern_and_get_ident(
-                    ast_util::path_name_i(path.as_slice())),
+                    ast_util::path_name_i(path.as_slice()).as_slice()),
                     ast::CookedStr));
 
     let name_expr = @ast::Expr {

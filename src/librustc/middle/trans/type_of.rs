@@ -155,7 +155,7 @@ pub fn sizing_type_of(cx: &CrateContext, t: ty::t) -> Type {
         ty::ty_self(_) | ty::ty_infer(..) | ty::ty_param(..) |
         ty::ty_err(..) | ty::ty_vec(_, None) | ty::ty_str => {
             cx.sess().bug(format!("fictitious type {:?} in sizing_type_of()",
-                                  ty::get(t).sty))
+                                  ty::get(t).sty).as_slice())
         }
     };
 
@@ -206,7 +206,7 @@ pub fn type_of(cx: &CrateContext, t: ty::t) -> Type {
         // of the enum's variants refers to the enum itself.
         let repr = adt::represent_type(cx, t);
         let name = llvm_type_name(cx, an_enum, did, substs.tps.as_slice());
-        adt::incomplete_type_of(cx, &*repr, name)
+        adt::incomplete_type_of(cx, &*repr, name.as_slice())
       }
       ty::ty_box(typ) => {
           Type::at_box(cx, type_of(cx, typ)).ptr_to()
@@ -264,7 +264,7 @@ pub fn type_of(cx: &CrateContext, t: ty::t) -> Type {
                                         a_struct,
                                         did,
                                         substs.tps.as_slice());
-              adt::incomplete_type_of(cx, &*repr, name)
+              adt::incomplete_type_of(cx, &*repr, name.as_slice())
           }
       }
 
@@ -301,14 +301,20 @@ pub enum named_ty { a_struct, an_enum }
 pub fn llvm_type_name(cx: &CrateContext,
                       what: named_ty,
                       did: ast::DefId,
-                      tps: &[ty::t]) -> ~str {
+                      tps: &[ty::t])
+                      -> String {
     let name = match what {
         a_struct => { "struct" }
         an_enum => { "enum" }
     };
-    let tstr = ppaux::parameterized(cx.tcx(), ty::item_path_str(cx.tcx(), did),
-                                    &ty::NonerasedRegions(OwnedSlice::empty()),
-                                    tps, did, false);
+    let tstr = ppaux::parameterized(cx.tcx(),
+                                    ty::item_path_str(cx.tcx(),
+                                                      did).as_slice(),
+                                    &ty::NonerasedRegions(
+                                        OwnedSlice::empty()),
+                                    tps,
+                                    did,
+                                    false);
     if did.krate == 0 {
         format!("{}.{}", name, tstr)
     } else {

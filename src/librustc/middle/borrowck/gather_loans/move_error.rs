@@ -100,6 +100,7 @@ fn group_errors_with_same_origin(errors: &Vec<MoveError>)
     fn append_to_grouped_errors(grouped_errors: &mut Vec<GroupedMoveErrors>,
                                 error: &MoveError) {
         let move_from_id = error.move_from.id;
+        debug!("append_to_grouped_errors(move_from_id={})", move_from_id);
         let move_to = if error.move_to.is_some() {
             vec!(error.move_to.clone().unwrap())
         } else {
@@ -107,10 +108,12 @@ fn group_errors_with_same_origin(errors: &Vec<MoveError>)
         };
         for ge in grouped_errors.mut_iter() {
             if move_from_id == ge.move_from.id && error.move_to.is_some() {
+                debug!("appending move_to to list");
                 ge.move_to_places.push_all_move(move_to);
                 return
             }
         }
+        debug!("found a new move from location");
         grouped_errors.push(GroupedMoveErrors {
             move_from: error.move_from.clone(),
             move_to_places: move_to
@@ -128,7 +131,7 @@ fn report_cannot_move_out_of(bccx: &BorrowckCtxt, move_from: mc::cmt) {
             bccx.span_err(
                 move_from.span,
                 format!("cannot move out of {}",
-                        bccx.cmt_to_str(&*move_from)));
+                        bccx.cmt_to_str(&*move_from)).as_slice());
         }
 
         mc::cat_downcast(ref b) |
@@ -140,7 +143,7 @@ fn report_cannot_move_out_of(bccx: &BorrowckCtxt, move_from: mc::cmt) {
                         move_from.span,
                         format!("cannot move out of type `{}`, \
                                  which defines the `Drop` trait",
-                                b.ty.user_string(bccx.tcx)));
+                                b.ty.user_string(bccx.tcx)).as_slice());
                 },
                 _ => fail!("this path should not cause illegal move")
             }
@@ -160,10 +163,10 @@ fn note_move_destination(bccx: &BorrowckCtxt,
             format!("attempting to move value to here (to prevent the move, \
                      use `ref {0}` or `ref mut {0}` to capture value by \
                      reference)",
-                    pat_name));
+                    pat_name).as_slice());
     } else {
         bccx.span_note(move_to_span,
                        format!("and here (use `ref {0}` or `ref mut {0}`)",
-                               pat_name));
+                               pat_name).as_slice());
     }
 }

@@ -15,11 +15,10 @@
 //! `sync` crate which wrap values directly and provide safer abstractions for
 //! containing data.
 
-use std::cast;
 use std::kinds::marker;
-use std::mem::replace;
+use std::mem;
 use std::sync::atomics;
-use std::unstable::finally::Finally;
+use std::finally::Finally;
 
 use mutex;
 
@@ -109,7 +108,7 @@ struct SemGuard<'a, Q> {
 impl<Q: Send> Sem<Q> {
     fn new(count: int, q: Q) -> Sem<Q> {
         let inner = unsafe {
-            cast::transmute(~SemInner {
+            mem::transmute(box SemInner {
                 waiters: WaitQueue::new(),
                 count: count,
                 blocked: q,
@@ -167,7 +166,9 @@ impl<Q: Send> Sem<Q> {
 #[unsafe_destructor]
 impl<Q: Send> Drop for Sem<Q> {
     fn drop(&mut self) {
-        let _waiters: ~SemInner<Q> = unsafe { cast::transmute(self.inner) };
+        let _waiters: Box<SemInner<Q>> = unsafe {
+            mem::transmute(self.inner)
+        };
         self.inner = 0 as *();
     }
 }
@@ -315,8 +316,8 @@ impl<'a> Condvar<'a> {
                     // To avoid :broadcast_heavy, we make a new waitqueue,
                     // swap it out with the old one, and broadcast on the
                     // old one outside of the little-lock.
-                    queue = Some(replace(state.blocked.get_mut(condvar_id),
-                                               WaitQueue::new()));
+                    queue = Some(mem::replace(state.blocked.get_mut(condvar_id),
+                                              WaitQueue::new()));
                 } else {
                     out_of_bounds = Some(state.blocked.len());
                 }
@@ -576,7 +577,7 @@ impl<'a> RWLockWriteGuard<'a> {
         let lock = self.lock;
         // Don't run the destructor of the write guard, we're in charge of
         // things from now on
-        unsafe { cast::forget(self) }
+        unsafe { mem::forget(self) }
 
         let old_count = lock.read_count.fetch_add(1, atomics::Release);
         // If another reader was already blocking, we need to hand-off
@@ -621,10 +622,10 @@ impl<'a> Drop for RWLockReadGuard<'a> {
 
 #[cfg(test)]
 mod tests {
-    use arc::Arc;
+    use Arc;
     use super::{Semaphore, Mutex, RWLock, Condvar};
 
-    use std::cast;
+    use std::mem;
     use std::result;
     use std::task;
 
@@ -726,7 +727,7 @@ mod tests {
         let (tx, rx) = channel();
         let m = Arc::new(Mutex::new());
         let m2 = m.clone();
-        let mut sharedstate = ~0;
+        let mut sharedstate = box 0;
         {
             let ptr: *mut int = &mut *sharedstate;
             task::spawn(proc() {
@@ -835,7 +836,7 @@ mod tests {
         let m = Arc::new(Mutex::new());
         let m2 = m.clone();
 
-        let result: result::Result<(), ~Any:Send> = task::try(proc() {
+        let result: result::Result<(), Box<Any:Send>> = task::try(proc() {
             let _lock = m2.lock();
             fail!();
         });
@@ -895,12 +896,12 @@ mod tests {
         // mutex mutual exclusion test, a ways above.
         let (tx, rx) = channel();
         let x2 = x.clone();
-        let mut sharedstate = ~0;
+        let mut sharedstate = box 0;
         {
             let ptr: *int = &*sharedstate;
             task::spawn(proc() {
                 let sharedstate: &mut int =
-                    unsafe { cast::transmute(ptr) };
+                    unsafe { mem::transmute(ptr) };
                 access_shared(sharedstate, &x2, mode1, 10);
                 tx.send(());
             });
@@ -1075,7 +1076,7 @@ mod tests {
         let x = Arc::new(RWLock::new());
         let x2 = x.clone();
 
-        let result: result::Result<(), ~Any:Send> = task::try(proc() {
+        let result: result::Result<(), Box<Any:Send>> = task::try(proc() {
             lock_rwlock_in_mode(&x2, mode1, || {
                 fail!();
             })

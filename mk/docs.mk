@@ -29,8 +29,8 @@
 DOCS := index intro tutorial guide-ffi guide-macros guide-lifetimes \
 	guide-tasks guide-container guide-pointers guide-testing \
 	guide-runtime complement-bugreport complement-cheatsheet \
-	complement-lang-faq complement-project-faq rust rustdoc \
-	guide-unsafe
+	complement-lang-faq complement-design-faq complement-project-faq rust \
+    rustdoc guide-unsafe
 
 PDF_DOCS := tutorial rust
 
@@ -42,9 +42,10 @@ L10N_LANGS := ja
 # Generally no need to edit below here.
 
 # The options are passed to the documentation generators.
-RUSTDOC_HTML_OPTS = --markdown-css rust.css \
-	--markdown-before-content=doc/version_info.html \
+RUSTDOC_HTML_OPTS_NO_CSS = --markdown-before-content=doc/version_info.html \
 	--markdown-in-header=doc/favicon.inc --markdown-after-content=doc/footer.inc
+
+RUSTDOC_HTML_OPTS = $(RUSTDOC_HTML_OPTS_NO_CSS) --markdown-css rust.css
 
 PANDOC_BASE_OPTS := --standalone --toc --number-sections
 PANDOC_TEX_OPTS = $(PANDOC_BASE_OPTS) --include-before-body=doc/version.tex \
@@ -141,26 +142,6 @@ doc/footer.inc: $(D)/footer.inc | doc/
 	@$(call E, cp: $@)
 	$(Q)cp -a $< $@ 2> /dev/null
 
-doc/FiraSans-Regular.woff: $(D)/FiraSans-Regular.woff | doc/
-	@$(call E, cp: $@)
-	$(Q)cp -a $< $@ 2> /dev/null
-
-doc/FiraSans-Medium.woff: $(D)/FiraSans-Medium.woff | doc/
-	@$(call E, cp: $@)
-	$(Q)cp -a $< $@ 2> /dev/null
-
-doc/Heuristica-Regular.woff: $(D)/Heuristica-Regular.woff | doc/
-	@$(call E, cp: $@)
-	$(Q)cp -a $< $@ 2> /dev/null
-
-doc/Heuristica-Italic.woff: $(D)/Heuristica-Italic.woff | doc/
-	@$(call E, cp: $@)
-	$(Q)cp -a $< $@ 2> /dev/null
-
-doc/Heuristica-Bold.woff: $(D)/Heuristica-Bold.woff | doc/
-	@$(call E, cp: $@)
-	$(Q)cp -a $< $@ 2> /dev/null
-
 # The (english) documentation for each doc item.
 
 define DEF_SHOULD_BUILD_PDF_DOC
@@ -171,6 +152,11 @@ $(foreach docname,$(PDF_DOCS),$(eval $(call DEF_SHOULD_BUILD_PDF_DOC,$(docname))
 doc/footer.tex: $(D)/footer.inc | doc/
 	@$(call E, pandoc: $@)
 	$(CFG_PANDOC) --from=html --to=latex $< --output=$@
+
+# HTML (rustdoc)
+DOC_TARGETS += doc/not_found.html
+doc/not_found.html: $(D)/not_found.md $(HTML_DEPS) | doc/
+	$(RUSTDOC) $(RUSTDOC_HTML_OPTS_NO_CSS) --markdown-css http://doc.rust-lang.org/rust.css $<
 
 define DEF_DOC
 
@@ -301,6 +287,7 @@ $(foreach crate,$(COMPILER_DOC_CRATES),$(eval $(call DEF_LIB_DOC,$(crate),COMPIL
 ifdef CFG_DISABLE_DOCS
   $(info cfg: disabling doc build (CFG_DISABLE_DOCS))
   DOC_TARGETS :=
+  COMPILER_DOC_TARGETS :=
 endif
 
 docs: $(DOC_TARGETS)

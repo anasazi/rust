@@ -108,7 +108,7 @@ pub trait Decoder<E> {
     fn read_f64(&mut self) -> Result<f64, E>;
     fn read_f32(&mut self) -> Result<f32, E>;
     fn read_char(&mut self) -> Result<char, E>;
-    fn read_str(&mut self) -> Result<~str, E>;
+    fn read_str(&mut self) -> Result<String, E>;
 
     // Compound types:
     fn read_enum<T>(&mut self, name: &str, f: |&mut Self| -> Result<T, E>) -> Result<T, E>;
@@ -170,10 +170,6 @@ pub trait Encodable<S:Encoder<E>, E> {
 pub trait Decodable<D:Decoder<E>, E> {
     fn decode(d: &mut D) -> Result<Self, E>;
 }
-
-macro_rules! try ( ($e:expr) => (
-    match $e { Ok(v) => v, Err(e) => return Err(e) }
-))
 
 impl<E, S:Encoder<E>> Encodable<S, E> for uint {
     fn encode(&self, s: &mut S) -> Result<(), E> {
@@ -301,15 +297,15 @@ impl<'a, E, S:Encoder<E>> Encodable<S, E> for &'a str {
     }
 }
 
-impl<E, S:Encoder<E>> Encodable<S, E> for ~str {
+impl<E, S:Encoder<E>> Encodable<S, E> for String {
     fn encode(&self, s: &mut S) -> Result<(), E> {
-        s.emit_str(*self)
+        s.emit_str(self.as_slice())
     }
 }
 
-impl<E, D:Decoder<E>> Decodable<D, E> for ~str {
-    fn decode(d: &mut D) -> Result<~str, E> {
-        d.read_str()
+impl<E, D:Decoder<E>> Decodable<D, E> for String {
+    fn decode(d: &mut D) -> Result<String, E> {
+        Ok(String::from_str(try!(d.read_str()).as_slice()))
     }
 }
 
@@ -379,15 +375,15 @@ impl<'a, E, S:Encoder<E>,T:Encodable<S, E>> Encodable<S, E> for &'a T {
     }
 }
 
-impl<E, S:Encoder<E>,T:Encodable<S, E>> Encodable<S, E> for ~T {
+impl<E, S:Encoder<E>,T:Encodable<S, E>> Encodable<S, E> for Box<T> {
     fn encode(&self, s: &mut S) -> Result<(), E> {
         (**self).encode(s)
     }
 }
 
-impl<E, D:Decoder<E>,T:Decodable<D, E>> Decodable<D, E> for ~T {
-    fn decode(d: &mut D) -> Result<~T, E> {
-        Ok(~try!(Decodable::decode(d)))
+impl<E, D:Decoder<E>,T:Decodable<D, E>> Decodable<D, E> for Box<T> {
+    fn decode(d: &mut D) -> Result<Box<T>, E> {
+        Ok(box try!(Decodable::decode(d)))
     }
 }
 
@@ -441,12 +437,14 @@ impl<E, S:Encoder<E>,T:Encodable<S, E>> Encodable<S, E> for ~[T] {
 
 impl<E, D:Decoder<E>,T:Decodable<D, E>> Decodable<D, E> for ~[T] {
     fn decode(d: &mut D) -> Result<~[T], E> {
+        use std::vec::FromVec;
+
         d.read_seq(|d, len| {
             let mut v: Vec<T> = Vec::with_capacity(len);
             for i in range(0, len) {
                 v.push(try!(d.read_seq_elt(i, |d| Decodable::decode(d))));
             }
-            let k = v.move_iter().collect::<~[T]>();
+            let k: ~[T] = FromVec::from_vec(v);
             Ok(k)
         })
     }
@@ -545,7 +543,7 @@ impl<E, S: Encoder<E>> Encodable<S, E> for path::posix::Path {
 
 impl<E, D: Decoder<E>> Decodable<D, E> for path::posix::Path {
     fn decode(d: &mut D) -> Result<path::posix::Path, E> {
-        let bytes: ~[u8] = try!(Decodable::decode(d));
+        let bytes: Vec<u8> = try!(Decodable::decode(d));
         Ok(path::posix::Path::new(bytes))
     }
 }
@@ -558,7 +556,7 @@ impl<E, S: Encoder<E>> Encodable<S, E> for path::windows::Path {
 
 impl<E, D: Decoder<E>> Decodable<D, E> for path::windows::Path {
     fn decode(d: &mut D) -> Result<path::windows::Path, E> {
-        let bytes: ~[u8] = try!(Decodable::decode(d));
+        let bytes: Vec<u8> = try!(Decodable::decode(d));
         Ok(path::windows::Path::new(bytes))
     }
 }
@@ -588,17 +586,17 @@ impl<E, S:Encoder<E>> EncoderHelpers<E> for S {
 }
 
 pub trait DecoderHelpers<E> {
-    fn read_to_vec<T>(&mut self, f: |&mut Self| -> Result<T, E>) -> Result<~[T], E>;
+    fn read_to_vec<T>(&mut self, f: |&mut Self| -> Result<T, E>) -> Result<Vec<T>, E>;
 }
 
 impl<E, D:Decoder<E>> DecoderHelpers<E> for D {
-    fn read_to_vec<T>(&mut self, f: |&mut D| -> Result<T, E>) -> Result<~[T], E> {
+    fn read_to_vec<T>(&mut self, f: |&mut D| -> Result<T, E>) -> Result<Vec<T>, E> {
         self.read_seq(|this, len| {
             let mut v = Vec::with_capacity(len);
             for i in range(0, len) {
                 v.push(try!(this.read_seq_elt(i, |this| f(this))));
             }
-            Ok(v.move_iter().collect())
+            Ok(v)
         })
     }
 }

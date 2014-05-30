@@ -8,8 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use attr;
 use ast;
-use codemap::{spanned, Spanned, mk_sp};
+use codemap::{spanned, Spanned, mk_sp, Span};
 use parse::common::*; //resolve bug?
 use parse::token;
 use parse::parser::Parser;
@@ -39,6 +40,7 @@ impl<'a> ParserAttr for Parser<'a> {
               }
               token::DOC_COMMENT(s) => {
                 let attr = ::attr::mk_sugared_doc_attr(
+                    attr::mk_attr_id(),
                     self.id_to_interned_str(s),
                     self.span.lo,
                     self.span.hi
@@ -88,7 +90,7 @@ impl<'a> ParserAttr for Parser<'a> {
             _ => {
                 let token_str = self.this_token_to_str();
                 self.fatal(format!("expected `\\#` but found `{}`",
-                                   token_str));
+                                   token_str).as_slice());
             }
         };
 
@@ -101,6 +103,7 @@ impl<'a> ParserAttr for Parser<'a> {
         return Spanned {
             span: span,
             node: ast::Attribute_ {
+                id: attr::mk_attr_id(),
                 style: style,
                 value: value,
                 is_sugared_doc: false
@@ -108,7 +111,8 @@ impl<'a> ParserAttr for Parser<'a> {
         };
     }
 
-    // Parse attributes that appear after the opening of an item, each
+    // Parse attributes that appear after the opening of an item. These should
+    // be preceded by an exclaimation mark, but we accept and warn about one
     // terminated by a semicolon. In addition to a vector of inner attributes,
     // this function also returns a vector that may contain the first outer
     // attribute of the next item (since we can't know whether the attribute
@@ -128,10 +132,13 @@ impl<'a> ParserAttr for Parser<'a> {
                     self.parse_attribute(true)
                 }
                 token::DOC_COMMENT(s) => {
+                    // we need to get the position of this token before we bump.
+                    let Span { lo, hi, .. } = self.span;
                     self.bump();
-                    ::attr::mk_sugared_doc_attr(self.id_to_interned_str(s),
-                                                self.span.lo,
-                                                self.span.hi)
+                    attr::mk_sugared_doc_attr(attr::mk_attr_id(),
+                                              self.id_to_interned_str(s),
+                                              lo,
+                                              hi)
                 }
                 _ => {
                     break;

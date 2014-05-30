@@ -45,7 +45,7 @@ pub type PublicItems = NodeSet;
 /// Result of a checking operation - None => no errors were found. Some => an
 /// error and contains the span and message for reporting that error and
 /// optionally the same for a note about the error.
-type CheckResult = Option<(Span, ~str, Option<(Span, ~str)>)>;
+type CheckResult = Option<(Span, String, Option<(Span, String)>)>;
 
 ////////////////////////////////////////////////////////////////////////////////
 /// The parent visitor, used to determine what's the parent of what (node-wise)
@@ -107,11 +107,11 @@ impl Visitor<()> for ParentVisitor {
         if !self.parents.contains_key(&id) {
             self.parents.insert(id, self.curparent);
         }
-        visit::walk_fn(self, a, b, c, d, id, ());
+        visit::walk_fn(self, a, b, c, d, ());
     }
 
-    fn visit_struct_def(&mut self, s: &ast::StructDef, i: ast::Ident,
-                        g: &ast::Generics, n: ast::NodeId, _: ()) {
+    fn visit_struct_def(&mut self, s: &ast::StructDef, _: ast::Ident,
+                        _: &ast::Generics, n: ast::NodeId, _: ()) {
         // Struct constructors are parented to their struct definitions because
         // they essentially are the struct definitions.
         match s.ctor_id {
@@ -124,7 +124,7 @@ impl Visitor<()> for ParentVisitor {
         for field in s.fields.iter() {
             self.parents.insert(field.node.id, self.curparent);
         }
-        visit::walk_struct_def(self, s, i, g, n, ())
+        visit::walk_struct_def(self, s, ())
     }
 }
 
@@ -297,6 +297,23 @@ impl<'a> Visitor<()> for EmbargoVisitor<'a> {
                 }
             }
 
+            ast::ItemTy(ref ty, _) if public_first => {
+                match ty.node {
+                    ast::TyPath(_, _, id) => {
+                        match self.tcx.def_map.borrow().get_copy(&id) {
+                            ast::DefPrimTy(..) => {},
+                            def => {
+                                let did = def_id_of_def(def);
+                                if is_local(did) {
+                                    self.exported_items.insert(did.node);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
             _ => {}
         }
 
@@ -356,8 +373,8 @@ enum FieldName {
 
 impl<'a> PrivacyVisitor<'a> {
     // used when debugging
-    fn nodestr(&self, id: ast::NodeId) -> ~str {
-        self.tcx.map.node_to_str(id)
+    fn nodestr(&self, id: ast::NodeId) -> String {
+        self.tcx.map.node_to_str(id).to_string()
     }
 
     // Determines whether the given definition is public from the point of view
@@ -511,9 +528,11 @@ impl<'a> PrivacyVisitor<'a> {
         match result {
             None => true,
             Some((span, msg, note)) => {
-                self.tcx.sess.span_err(span, msg);
+                self.tcx.sess.span_err(span, msg.as_slice());
                 match note {
-                    Some((span, msg)) => self.tcx.sess.span_note(span, msg),
+                    Some((span, msg)) => {
+                        self.tcx.sess.span_note(span, msg.as_slice())
+                    }
                     None => {},
                 }
                 false
@@ -625,7 +644,7 @@ impl<'a> PrivacyVisitor<'a> {
             UnnamedField(idx) => format!("field \\#{} of {} is private",
                                          idx + 1, struct_desc),
         };
-        self.tcx.sess.span_err(span, msg);
+        self.tcx.sess.span_err(span, msg.as_slice());
     }
 
     // Given the ID of a method, checks to ensure it's in scope.
@@ -640,7 +659,8 @@ impl<'a> PrivacyVisitor<'a> {
         self.report_error(self.ensure_public(span,
                                              method_id,
                                              None,
-                                             format!("method `{}`", string)));
+                                             format!("method `{}`",
+                                                     string).as_slice()));
     }
 
     // Checks that a path is in scope.
@@ -654,8 +674,12 @@ impl<'a> PrivacyVisitor<'a> {
                                                 .unwrap()
                                                 .identifier);
                 let origdid = def_id_of_def(orig_def);
-                self.ensure_public(span, def, Some(origdid),
-                                   format!("{} `{}`", tyname, name))
+                self.ensure_public(span,
+                                   def,
+                                   Some(origdid),
+                                   format!("{} `{}`",
+                                           tyname,
+                                           name).as_slice())
             };
 
             match *self.last_private_map.get(&path_id) {
@@ -999,10 +1023,10 @@ impl<'a> Visitor<()> for SanePrivacyVisitor<'a> {
     }
 
     fn visit_fn(&mut self, fk: &visit::FnKind, fd: &ast::FnDecl,
-                b: &ast::Block, s: Span, n: ast::NodeId, _: ()) {
+                b: &ast::Block, s: Span, _: ast::NodeId, _: ()) {
         // This catches both functions and methods
         let orig_in_fn = replace(&mut self.in_fn, true);
-        visit::walk_fn(self, fk, fd, b, s, n, ());
+        visit::walk_fn(self, fk, fd, b, s, ());
         self.in_fn = orig_in_fn;
     }
 
@@ -1087,7 +1111,10 @@ impl<'a> SanePrivacyVisitor<'a> {
                             check_inherited(m.span, m.vis,
                                             "unnecessary visibility");
                         }
-                        ast::Required(..) => {}
+                        ast::Required(ref m) => {
+                            check_inherited(m.span, m.vis,
+                                            "unnecessary visibility");
+                        }
                     }
                 }
             }
@@ -1356,7 +1383,7 @@ impl<'a> Visitor<()> for VisiblePrivateTypesVisitor<'a> {
                 _: ()) {
         // needs special handling for methods.
         if self.exported_items.contains(&id) {
-            visit::walk_fn(self, fk, fd, b, s, id, ());
+            visit::walk_fn(self, fk, fd, b, s, ());
         }
     }
 
@@ -1364,9 +1391,11 @@ impl<'a> Visitor<()> for VisiblePrivateTypesVisitor<'a> {
         match t.node {
             ast::TyPath(ref p, _, path_id) => {
                 if self.path_is_private_type(path_id) {
-                    self.tcx.sess.add_lint(lint::VisiblePrivateTypes,
-                                           path_id, p.span,
-                                           "private type in exported type signature".to_owned());
+                    self.tcx.sess.add_lint(
+                        lint::VisiblePrivateTypes,
+                        path_id, p.span,
+                        "private type in exported type \
+                         signature".to_string());
                 }
             }
             _ => {}

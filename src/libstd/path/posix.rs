@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -16,11 +16,11 @@ use clone::Clone;
 use cmp::{Eq, TotalEq};
 use from_str::FromStr;
 use io::Writer;
-use iter::{AdditiveIterator, Extendable, Iterator, Map};
+use iter::{DoubleEndedIterator, AdditiveIterator, Extendable, Iterator, Map};
 use option::{Option, None, Some};
 use str;
 use str::Str;
-use slice::{CloneableVector, RevSplits, Splits, Vector, VectorVector,
+use slice::{CloneableVector, Splits, Vector, VectorVector,
             ImmutableEqVector, OwnedVector, ImmutableVector};
 use vec::Vec;
 
@@ -28,15 +28,10 @@ use super::{BytesContainer, GenericPath, GenericPathUnsafe};
 
 /// Iterator that yields successive components of a Path as &[u8]
 pub type Components<'a> = Splits<'a, u8>;
-/// Iterator that yields components of a Path in reverse as &[u8]
-pub type RevComponents<'a> = RevSplits<'a, u8>;
 
 /// Iterator that yields successive components of a Path as Option<&str>
 pub type StrComponents<'a> = Map<'a, &'a [u8], Option<&'a str>,
                                        Components<'a>>;
-/// Iterator that yields components of a Path in reverse as Option<&str>
-pub type RevStrComponents<'a> = Map<'a, &'a [u8], Option<&'a str>,
-                                          RevComponents<'a>>;
 
 /// Represents a POSIX file path
 #[deriving(Clone)]
@@ -78,16 +73,35 @@ impl FromStr for Path {
     }
 }
 
+// FIXME (#12938): Until DST lands, we cannot decompose &str into & and str, so
+// we cannot usefully take ToCStr arguments by reference (without forcing an
+// additional & around &str). So we are instead temporarily adding an instance
+// for &Path, so that we can take ToCStr as owned. When DST lands, the &Path
+// instance should be removed, and arguments bound by ToCStr should be passed by
+// reference.
+
 impl ToCStr for Path {
     #[inline]
     fn to_c_str(&self) -> CString {
         // The Path impl guarantees no internal NUL
-        unsafe { self.as_vec().to_c_str_unchecked() }
+        unsafe { self.to_c_str_unchecked() }
     }
 
     #[inline]
     unsafe fn to_c_str_unchecked(&self) -> CString {
         self.as_vec().to_c_str_unchecked()
+    }
+}
+
+impl<'a> ToCStr for &'a Path {
+    #[inline]
+    fn to_c_str(&self) -> CString {
+        (*self).to_c_str()
+    }
+
+    #[inline]
+    unsafe fn to_c_str_unchecked(&self) -> CString {
+        (*self).to_c_str_unchecked()
     }
 }
 
@@ -308,8 +322,8 @@ impl GenericPath for Path {
 
     fn ends_with_path(&self, child: &Path) -> bool {
         if !child.is_relative() { return false; }
-        let mut selfit = self.rev_components();
-        let mut childit = child.rev_components();
+        let mut selfit = self.components().rev();
+        let mut childit = child.components().rev();
         loop {
             match (selfit.next(), childit.next()) {
                 (Some(a), Some(b)) => if a != b { return false; },
@@ -394,30 +408,10 @@ impl Path {
         ret
     }
 
-    /// Returns an iterator that yields each component of the path in reverse.
-    /// See components() for details.
-    pub fn rev_components<'a>(&'a self) -> RevComponents<'a> {
-        let v = if *self.repr.get(0) == SEP_BYTE {
-            self.repr.slice_from(1)
-        } else { self.repr.as_slice() };
-        let mut ret = v.rsplit(is_sep_byte);
-        if v.is_empty() {
-            // consume the empty "" component
-            ret.next();
-        }
-        ret
-    }
-
     /// Returns an iterator that yields each component of the path as Option<&str>.
     /// See components() for details.
     pub fn str_components<'a>(&'a self) -> StrComponents<'a> {
         self.components().map(str::from_utf8)
-    }
-
-    /// Returns an iterator that yields each component of the path in reverse as Option<&str>.
-    /// See components() for details.
-    pub fn rev_str_components<'a>(&'a self) -> RevStrComponents<'a> {
-        self.rev_components().map(str::from_utf8)
     }
 }
 
@@ -560,7 +554,7 @@ mod tests {
             ($path:expr, $disp:ident, $exp:expr) => (
                 {
                     let path = Path::new($path);
-                    assert!(path.$disp().to_str() == ~$exp);
+                    assert!(path.$disp().to_str().as_slice() == $exp);
                 }
             )
         )
@@ -767,7 +761,7 @@ mod tests {
         t!(s: "a/b/c", ["d", "e"], "a/b/c/d/e");
         t!(s: "a/b/c", ["d", "/e"], "/e");
         t!(s: "a/b/c", ["d", "/e", "f"], "/e/f");
-        t!(s: "a/b/c", ["d".to_owned(), "e".to_owned()], "a/b/c/d/e");
+        t!(s: "a/b/c", ["d".to_string(), "e".to_string()], "a/b/c/d/e");
         t!(v: b!("a/b/c"), [b!("d"), b!("e")], b!("a/b/c/d/e"));
         t!(v: b!("a/b/c"), [b!("d"), b!("/e"), b!("f")], b!("/e/f"));
         t!(v: b!("a/b/c"), [Vec::from_slice(b!("d")), Vec::from_slice(b!("e"))], b!("a/b/c/d/e"));
@@ -872,7 +866,7 @@ mod tests {
         t!(s: "a/b/c", ["d", "e"], "a/b/c/d/e");
         t!(s: "a/b/c", ["..", "d"], "a/b/d");
         t!(s: "a/b/c", ["d", "/e", "f"], "/e/f");
-        t!(s: "a/b/c", ["d".to_owned(), "e".to_owned()], "a/b/c/d/e");
+        t!(s: "a/b/c", ["d".to_string(), "e".to_string()], "a/b/c/d/e");
         t!(v: b!("a/b/c"), [b!("d"), b!("e")], b!("a/b/c/d/e"));
         t!(v: b!("a/b/c"), [Vec::from_slice(b!("d")), Vec::from_slice(b!("e"))], b!("a/b/c/d/e"));
     }
@@ -1192,7 +1186,7 @@ mod tests {
                     let exps = exp.iter().map(|x| x.as_bytes()).collect::<Vec<&[u8]>>();
                     assert!(comps == exps, "components: Expected {:?}, found {:?}",
                             comps, exps);
-                    let comps = path.rev_components().collect::<Vec<&[u8]>>();
+                    let comps = path.components().rev().collect::<Vec<&[u8]>>();
                     let exps = exps.move_iter().rev().collect::<Vec<&[u8]>>();
                     assert!(comps == exps, "rev_components: Expected {:?}, found {:?}",
                             comps, exps);
@@ -1204,8 +1198,8 @@ mod tests {
                     let comps = path.components().collect::<Vec<&[u8]>>();
                     let exp: &[&[u8]] = [$(b!($($exp),*)),*];
                     assert_eq!(comps.as_slice(), exp);
-                    let comps = path.rev_components().collect::<Vec<&[u8]>>();
-                    let exp = exp.rev_iter().map(|&x|x).collect::<Vec<&[u8]>>();
+                    let comps = path.components().rev().collect::<Vec<&[u8]>>();
+                    let exp = exp.iter().rev().map(|&x|x).collect::<Vec<&[u8]>>();
                     assert_eq!(comps, exp)
                 }
             )
@@ -1236,8 +1230,8 @@ mod tests {
                     let comps = path.str_components().collect::<Vec<Option<&str>>>();
                     let exp: &[Option<&str>] = $exp;
                     assert_eq!(comps.as_slice(), exp);
-                    let comps = path.rev_str_components().collect::<Vec<Option<&str>>>();
-                    let exp = exp.rev_iter().map(|&x|x).collect::<Vec<Option<&str>>>();
+                    let comps = path.str_components().rev().collect::<Vec<Option<&str>>>();
+                    let exp = exp.iter().rev().map(|&x|x).collect::<Vec<Option<&str>>>();
                     assert_eq!(comps, exp);
                 }
             )

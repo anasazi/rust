@@ -8,13 +8,79 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![crate_id = "workcache#0.11-pre"]
+//! A simple function caching system.
+//!
+//! This is a loose clone of the [fbuild build system](https://github.com/felix-lang/fbuild),
+//! made a touch more generic (not wired to special cases on files) and much
+//! less metaprogram-y due to rust's comparative weakness there, relative to
+//! python.
+//!
+//! It's based around _imperative builds_ that happen to have some function
+//! calls cached. That is, it's _just_ a mechanism for describing cached
+//! functions. This makes it much simpler and smaller than a "build system"
+//! that produces an IR and evaluates it. The evaluation order is normal
+//! function calls. Some of them just return really quickly.
+//!
+//! A cached function consumes and produces a set of _works_. A work has a
+//! name, a kind (that determines how the value is to be checked for
+//! freshness) and a value. Works must also be (de)serializable. Some
+//! examples of works:
+//!
+//!    kind   name    value
+//!   ------------------------
+//!    cfg    os      linux
+//!    file   foo.c   <sha1>
+//!    url    foo.com <etag>
+//!
+//! Works are conceptually single units, but we store them most of the time
+//! in maps of the form (type,name) => value. These are WorkMaps.
+//!
+//! A cached function divides the works it's interested in into inputs and
+//! outputs, and subdivides those into declared (input) works and
+//! discovered (input and output) works.
+//!
+//! A _declared_ input or is one that is given to the workcache before
+//! any work actually happens, in the "prep" phase. Even when a function's
+//! work-doing part (the "exec" phase) never gets called, it has declared
+//! inputs, which can be checked for freshness (and potentially
+//! used to determine that the function can be skipped).
+//!
+//! The workcache checks _all_ works for freshness, but uses the set of
+//! discovered outputs from the _previous_ exec (which it will re-discover
+//! and re-record each time the exec phase runs).
+//!
+//! Therefore the discovered works cached in the db might be a
+//! mis-approximation of the current discoverable works, but this is ok for
+//! the following reason: we assume that if an artifact A changed from
+//! depending on B,C,D to depending on B,C,D,E, then A itself changed (as
+//! part of the change-in-dependencies), so we will be ok.
+//!
+//! Each function has a single discriminated output work called its _result_.
+//! This is only different from other works in that it is returned, by value,
+//! from a call to the cacheable function; the other output works are used in
+//! passing to invalidate dependencies elsewhere in the cache, but do not
+//! otherwise escape from a function invocation. Most functions only have one
+//! output work anyways.
+//!
+//! A database (the central store of a workcache) stores a mappings:
+//!
+//! (fn_name,{declared_input}) => ({discovered_input},
+//!                                {discovered_output},result)
+//!
+//! (Note: fbuild, which workcache is based on, has the concept of a declared
+//! output as separate from a discovered output. This distinction exists only
+//! as an artifact of how fbuild works: via annotations on function types
+//! and metaprogramming, with explicit dependency declaration as a fallback.
+//! Workcache is more explicit about dependencies, and as such treats all
+//! outputs the same, as discovered-during-the-last-run.)
+
+#![crate_id = "workcache#0.11.0-pre"]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
 #![license = "MIT/ASL2"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-       html_root_url = "http://static.rust-lang.org/doc/master")]
+       html_root_url = "http://doc.rust-lang.org/")]
 #![feature(phase)]
 #![allow(visible_private_types)]
 #![deny(deprecated_owned_vector)]
@@ -33,101 +99,33 @@ use std::str;
 use std::io;
 use std::io::{File, MemWriter};
 
-/**
-*
-* This is a loose clone of the [fbuild build system](https://github.com/felix-lang/fbuild),
-* made a touch more generic (not wired to special cases on files) and much
-* less metaprogram-y due to rust's comparative weakness there, relative to
-* python.
-*
-* It's based around _imperative builds_ that happen to have some function
-* calls cached. That is, it's _just_ a mechanism for describing cached
-* functions. This makes it much simpler and smaller than a "build system"
-* that produces an IR and evaluates it. The evaluation order is normal
-* function calls. Some of them just return really quickly.
-*
-* A cached function consumes and produces a set of _works_. A work has a
-* name, a kind (that determines how the value is to be checked for
-* freshness) and a value. Works must also be (de)serializable. Some
-* examples of works:
-*
-*    kind   name    value
-*   ------------------------
-*    cfg    os      linux
-*    file   foo.c   <sha1>
-*    url    foo.com <etag>
-*
-* Works are conceptually single units, but we store them most of the time
-* in maps of the form (type,name) => value. These are WorkMaps.
-*
-* A cached function divides the works it's interested in into inputs and
-* outputs, and subdivides those into declared (input) works and
-* discovered (input and output) works.
-*
-* A _declared_ input or is one that is given to the workcache before
-* any work actually happens, in the "prep" phase. Even when a function's
-* work-doing part (the "exec" phase) never gets called, it has declared
-* inputs, which can be checked for freshness (and potentially
-* used to determine that the function can be skipped).
-*
-* The workcache checks _all_ works for freshness, but uses the set of
-* discovered outputs from the _previous_ exec (which it will re-discover
-* and re-record each time the exec phase runs).
-*
-* Therefore the discovered works cached in the db might be a
-* mis-approximation of the current discoverable works, but this is ok for
-* the following reason: we assume that if an artifact A changed from
-* depending on B,C,D to depending on B,C,D,E, then A itself changed (as
-* part of the change-in-dependencies), so we will be ok.
-*
-* Each function has a single discriminated output work called its _result_.
-* This is only different from other works in that it is returned, by value,
-* from a call to the cacheable function; the other output works are used in
-* passing to invalidate dependencies elsewhere in the cache, but do not
-* otherwise escape from a function invocation. Most functions only have one
-* output work anyways.
-*
-* A database (the central store of a workcache) stores a mappings:
-*
-* (fn_name,{declared_input}) => ({discovered_input},
-*                                {discovered_output},result)
-*
-* (Note: fbuild, which workcache is based on, has the concept of a declared
-* output as separate from a discovered output. This distinction exists only
-* as an artifact of how fbuild works: via annotations on function types
-* and metaprogramming, with explicit dependency declaration as a fallback.
-* Workcache is more explicit about dependencies, and as such treats all
-* outputs the same, as discovered-during-the-last-run.)
-*
-*/
-
 #[deriving(Clone, Eq, Encodable, Decodable, Ord, TotalOrd, TotalEq)]
 struct WorkKey {
-    kind: ~str,
-    name: ~str
+    kind: String,
+    name: String
 }
 
 impl WorkKey {
     pub fn new(kind: &str, name: &str) -> WorkKey {
         WorkKey {
-            kind: kind.to_owned(),
-            name: name.to_owned(),
+            kind: kind.to_string(),
+            name: name.to_string(),
         }
     }
 }
 
-// FIXME #8883: The key should be a WorkKey and not a ~str.
+// FIXME #8883: The key should be a WorkKey and not a String.
 // This is working around some JSON weirdness.
 #[deriving(Clone, Eq, Encodable, Decodable)]
-struct WorkMap(TreeMap<~str, KindMap>);
+struct WorkMap(TreeMap<String, KindMap>);
 
 #[deriving(Clone, Eq, Encodable, Decodable)]
-struct KindMap(TreeMap<~str, ~str>);
+struct KindMap(TreeMap<String, String>);
 
 impl WorkMap {
     fn new() -> WorkMap { WorkMap(TreeMap::new()) }
 
-    fn insert_work_key(&mut self, k: WorkKey, val: ~str) {
+    fn insert_work_key(&mut self, k: WorkKey, val: String) {
         let WorkKey { kind, name } = k;
         let WorkMap(ref mut map) = *self;
         match map.find_mut(&name) {
@@ -142,7 +140,7 @@ impl WorkMap {
 
 pub struct Database {
     db_filename: Path,
-    db_cache: TreeMap<~str, ~str>,
+    db_cache: TreeMap<String, String>,
     pub db_dirty: bool,
 }
 
@@ -163,11 +161,11 @@ impl Database {
     pub fn prepare(&self,
                    fn_name: &str,
                    declared_inputs: &WorkMap)
-                   -> Option<(WorkMap, WorkMap, ~str)> {
+                   -> Option<(WorkMap, WorkMap, String)> {
         let k = json_encode(&(fn_name, declared_inputs));
         match self.db_cache.find(&k) {
             None => None,
-            Some(v) => Some(json_decode(*v))
+            Some(v) => Some(json_decode(v.as_slice()))
         }
     }
 
@@ -188,7 +186,14 @@ impl Database {
     // FIXME #4330: This should have &mut self and should set self.db_dirty to false.
     fn save(&self) -> io::IoResult<()> {
         let mut f = File::create(&self.db_filename);
-        self.db_cache.to_json().to_pretty_writer(&mut f)
+
+        // FIXME(pcwalton): Yuck.
+        let mut new_db_cache = TreeMap::new();
+        for (ref k, ref v) in self.db_cache.iter() {
+            new_db_cache.insert((*k).to_string(), (*v).to_string());
+        }
+
+        new_db_cache.to_json().to_pretty_writer(&mut f)
     }
 
     fn load(&mut self) {
@@ -222,7 +227,7 @@ impl Drop for Database {
     }
 }
 
-pub type FreshnessMap = TreeMap<~str,extern fn(&str,&str)->bool>;
+pub type FreshnessMap = TreeMap<String,extern fn(&str,&str)->bool>;
 
 #[deriving(Clone)]
 pub struct Context {
@@ -253,15 +258,15 @@ enum Work<'a, T> {
     WorkFromTask(&'a Prep<'a>, Receiver<(Exec, T)>),
 }
 
-fn json_encode<'a, T:Encodable<json::Encoder<'a>, io::IoError>>(t: &T) -> ~str {
+fn json_encode<'a, T:Encodable<json::Encoder<'a>, io::IoError>>(t: &T) -> String {
     let mut writer = MemWriter::new();
     let mut encoder = json::Encoder::new(&mut writer as &mut io::Writer);
     let _ = t.encode(&mut encoder);
-    str::from_utf8(writer.unwrap().as_slice()).unwrap().to_owned()
+    str::from_utf8(writer.unwrap().as_slice()).unwrap().to_string()
 }
 
 // FIXME(#5121)
-fn json_decode<T:Decodable<json::Decoder, json::Error>>(s: &str) -> T {
+fn json_decode<T:Decodable<json::Decoder, json::DecoderError>>(s: &str) -> T {
     debug!("json decoding: {}", s);
     let j = json::from_str(s).unwrap();
     let mut decoder = json::Decoder::new(j);
@@ -308,7 +313,7 @@ impl Exec {
                           dependency_val: &str) {
         debug!("Discovering input {} {} {}", dependency_kind, dependency_name, dependency_val);
         self.discovered_inputs.insert_work_key(WorkKey::new(dependency_kind, dependency_name),
-                                 dependency_val.to_owned());
+                                 dependency_val.to_string());
     }
     pub fn discover_output(&mut self,
                            dependency_kind: &str,
@@ -316,11 +321,11 @@ impl Exec {
                            dependency_val: &str) {
         debug!("Discovering output {} {} {}", dependency_kind, dependency_name, dependency_val);
         self.discovered_outputs.insert_work_key(WorkKey::new(dependency_kind, dependency_name),
-                                 dependency_val.to_owned());
+                                 dependency_val.to_string());
     }
 
     // returns pairs of (kind, name)
-    pub fn lookup_discovered_inputs(&self) -> Vec<(~str, ~str)> {
+    pub fn lookup_discovered_inputs(&self) -> Vec<(String, String)> {
         let mut rs = vec![];
         let WorkMap(ref discovered_inputs) = self.discovered_inputs;
         for (k, v) in discovered_inputs.iter() {
@@ -342,7 +347,7 @@ impl<'a> Prep<'a> {
         }
     }
 
-    pub fn lookup_declared_inputs(&self) -> Vec<~str> {
+    pub fn lookup_declared_inputs(&self) -> Vec<String> {
         let mut rs = vec![];
         let WorkMap(ref declared_inputs) = self.declared_inputs;
         for (_, v) in declared_inputs.iter() {
@@ -359,12 +364,11 @@ impl<'a> Prep<'a> {
     pub fn declare_input(&mut self, kind: &str, name: &str, val: &str) {
         debug!("Declaring input {} {} {}", kind, name, val);
         self.declared_inputs.insert_work_key(WorkKey::new(kind, name),
-                                 val.to_owned());
+                                 val.to_string());
     }
 
-    fn is_fresh(&self, cat: &str, kind: &str,
-                name: &str, val: &str) -> bool {
-        let k = kind.to_owned();
+    fn is_fresh(&self, cat: &str, kind: &str, name: &str, val: &str) -> bool {
+        let k = kind.to_string();
         let f = self.ctxt.freshness.deref().find(&k);
         debug!("freshness for: {}/{}/{}/{}", cat, kind, name, val)
         let fresh = match f {
@@ -384,7 +388,10 @@ impl<'a> Prep<'a> {
         for (k_name, kindmap) in map.iter() {
             let KindMap(ref kindmap_) = *kindmap;
             for (k_kind, v) in kindmap_.iter() {
-               if ! self.is_fresh(cat, *k_kind, *k_name, *v) {
+               if !self.is_fresh(cat,
+                                 k_kind.as_slice(),
+                                 k_name.as_slice(),
+                                 v.as_slice()) {
                   return false;
             }
           }
@@ -394,19 +401,18 @@ impl<'a> Prep<'a> {
 
     pub fn exec<'a, T:Send +
         Encodable<json::Encoder<'a>, io::IoError> +
-        Decodable<json::Decoder, json::Error>>(
+        Decodable<json::Decoder, json::DecoderError>>(
             &'a self, blk: proc(&mut Exec):Send -> T) -> T {
         self.exec_work(blk).unwrap()
     }
 
     fn exec_work<'a, T:Send +
         Encodable<json::Encoder<'a>, io::IoError> +
-        Decodable<json::Decoder, json::Error>>( // FIXME(#5121)
+        Decodable<json::Decoder, json::DecoderError>>( // FIXME(#5121)
             &'a self, blk: proc(&mut Exec):Send -> T) -> Work<'a, T> {
         let mut bo = Some(blk);
 
-        debug!("exec_work: looking up {} and {:?}", self.fn_name,
-               self.declared_inputs);
+        debug!("exec_work: looking up {}", self.fn_name);
         let cached = {
             let db = self.ctxt.db.deref().read();
             db.deref().prepare(self.fn_name, &self.declared_inputs)
@@ -418,9 +424,8 @@ impl<'a> Prep<'a> {
                self.all_fresh("discovered input", disc_in) &&
                self.all_fresh("discovered output", disc_out) => {
                 debug!("Cache hit!");
-                debug!("Trying to decode: {:?} / {:?} / {}",
-                       disc_in, disc_out, *res);
-                Work::from_value(json_decode(*res))
+                debug!("Trying to decode: {}", *res);
+                Work::from_value(json_decode(res.as_slice()))
             }
 
             _ => {
@@ -445,7 +450,7 @@ impl<'a> Prep<'a> {
 
 impl<'a, T:Send +
        Encodable<json::Encoder<'a>, io::IoError> +
-       Decodable<json::Decoder, json::Error>>
+       Decodable<json::Decoder, json::DecoderError>>
     Work<'a, T> { // FIXME(#5121)
 
     pub fn from_value(elt: T) -> Work<'a, T> {
@@ -467,7 +472,7 @@ impl<'a, T:Send +
                                      &prep.declared_inputs,
                                      &exe.discovered_inputs,
                                      &exe.discovered_outputs,
-                                     s);
+                                     s.as_slice());
                 v
             }
         }
@@ -479,12 +484,12 @@ impl<'a, T:Send +
 #[cfg(not(target_os="android"))] // FIXME(#10455)
 fn test() {
     use std::os;
-    use std::io::{fs, Process};
+    use std::io::{fs, Command};
     use std::str::from_utf8;
 
     // Create a path to a new file 'filename' in the directory in which
     // this test is running.
-    fn make_path(filename: ~str) -> Path {
+    fn make_path(filename: String) -> Path {
         let pth = os::self_exe_path().expect("workcache::test failed").with_filename(filename);
         if pth.exists() {
             fs::unlink(&pth).unwrap();
@@ -492,10 +497,10 @@ fn test() {
         return pth;
     }
 
-    let pth = make_path("foo.c".to_owned());
+    let pth = make_path("foo.c".to_string());
     File::create(&pth).write(bytes!("int main() { return 0; }")).unwrap();
 
-    let db_path = make_path("db.json".to_owned());
+    let db_path = make_path("db.json".to_string());
 
     let cx = Context::new(Arc::new(RWLock::new(Database::new(db_path))),
                           Arc::new(TreeMap::new()));
@@ -506,23 +511,23 @@ fn test() {
         let pth = pth.clone();
 
         let contents = File::open(&pth).read_to_end().unwrap();
-        let file_content = from_utf8(contents.as_slice()).unwrap().to_owned();
+        let file_content = from_utf8(contents.as_slice()).unwrap()
+                                                         .to_string();
 
         // FIXME (#9639): This needs to handle non-utf8 paths
-        prep.declare_input("file", pth.as_str().unwrap(), file_content);
+        prep.declare_input("file",
+                           pth.as_str().unwrap(),
+                           file_content.as_slice());
         prep.exec(proc(_exe) {
-            let out = make_path("foo.o".to_owned());
+            let out = make_path("foo.o".to_string());
             let compiler = if cfg!(windows) {"gcc"} else {"cc"};
-            // FIXME (#9639): This needs to handle non-utf8 paths
-            Process::status(compiler, [pth.as_str().unwrap().to_owned(),
-                                    "-o".to_owned(),
-                                    out.as_str().unwrap().to_owned()]).unwrap();
+            Command::new(compiler).arg(pth).arg("-o").arg(out.clone()).status().unwrap();
 
             let _proof_of_concept = subcx.prep("subfn");
             // Could run sub-rules inside here.
 
             // FIXME (#9639): This needs to handle non-utf8 paths
-            out.as_str().unwrap().to_owned()
+            out.as_str().unwrap().to_string()
         })
     });
 

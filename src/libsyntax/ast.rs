@@ -106,7 +106,7 @@ impl<S: Encoder<E>, E> Encodable<S, E> for Ident {
 
 impl<D:Decoder<E>, E> Decodable<D, E> for Ident {
     fn decode(d: &mut D) -> Result<Ident, E> {
-        Ok(str_to_ident(try!(d.read_str())))
+        Ok(str_to_ident(try!(d.read_str()).as_slice()))
     }
 }
 
@@ -173,7 +173,8 @@ pub static DUMMY_NODE_ID: NodeId = -1;
 #[deriving(Clone, Eq, TotalEq, Encodable, Decodable, Hash)]
 pub enum TyParamBound {
     TraitTyParamBound(TraitRef),
-    RegionTyParamBound
+    StaticRegionTyParamBound,
+    OtherRegionTyParamBound(Span) // FIXME -- just here until work for #5723 lands
 }
 
 #[deriving(Clone, Eq, TotalEq, Encodable, Decodable, Hash)]
@@ -346,13 +347,14 @@ pub enum Pat_ {
                                      * we don't bind the fields to names */
     PatStruct(Path, Vec<FieldPat> , bool),
     PatTup(Vec<@Pat> ),
-    PatUniq(@Pat),
+    PatBox(@Pat),
     PatRegion(@Pat), // reference pattern
     PatLit(@Expr),
     PatRange(@Expr, @Expr),
     // [a, b, ..i, y, z] is represented as
     // PatVec(~[a, b], Some(i), ~[y, z])
-    PatVec(Vec<@Pat> , Option<@Pat>, Vec<@Pat> )
+    PatVec(Vec<@Pat> , Option<@Pat>, Vec<@Pat> ),
+    PatMac(Mac),
 }
 
 #[deriving(Clone, Eq, TotalEq, Encodable, Decodable, Hash, Show)]
@@ -416,6 +418,14 @@ pub enum Stmt_ {
     StmtMac(Mac, bool),
 }
 
+/// Where a local declaration came from: either a true `let ... =
+/// ...;`, or one desugared from the pattern of a for loop.
+#[deriving(Clone, Eq, TotalEq, Encodable, Decodable, Hash)]
+pub enum LocalSource {
+    LocalLet,
+    LocalFor,
+}
+
 // FIXME (pending discussion of #1697, #2178...): local should really be
 // a refinement on pat.
 /// Local represents a `let` statement, e.g., `let <pat>:<ty> = <expr>;`
@@ -426,6 +436,7 @@ pub struct Local {
     pub init: Option<@Expr>,
     pub id: NodeId,
     pub span: Span,
+    pub source: LocalSource,
 }
 
 pub type Decl = Spanned<Decl_>;
@@ -653,7 +664,7 @@ pub type Lit = Spanned<Lit_>;
 pub enum Lit_ {
     LitStr(InternedString, StrStyle),
     LitBinary(Rc<Vec<u8> >),
-    LitChar(u32),
+    LitChar(char),
     LitInt(i64, IntTy),
     LitUint(u64, UintTy),
     LitIntUnsuffixed(i64),
@@ -688,6 +699,7 @@ pub struct TypeMethod {
     pub explicit_self: ExplicitSelf,
     pub id: NodeId,
     pub span: Span,
+    pub vis: Visibility,
 }
 
 // A trait method is either required (meaning it doesn't have an
@@ -710,7 +722,8 @@ pub enum IntTy {
 
 impl fmt::Show for IntTy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f.buf, "{}", ast_util::int_ty_to_str(*self, None))
+        write!(f, "{}",
+               ast_util::int_ty_to_str(*self, None, ast_util::AutoSuffix))
     }
 }
 
@@ -725,7 +738,8 @@ pub enum UintTy {
 
 impl fmt::Show for UintTy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f.buf, "{}", ast_util::uint_ty_to_str(*self, None))
+        write!(f, "{}",
+               ast_util::uint_ty_to_str(*self, None, ast_util::AutoSuffix))
     }
 }
 
@@ -738,7 +752,7 @@ pub enum FloatTy {
 
 impl fmt::Show for FloatTy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f.buf, "{}", ast_util::float_ty_to_str(*self))
+        write!(f, "{}", ast_util::float_ty_to_str(*self))
     }
 }
 
@@ -875,7 +889,6 @@ pub struct FnDecl {
 pub enum FnStyle {
     UnsafeFn, // declared with "unsafe fn"
     NormalFn, // declared with "fn"
-    ExternFn, // declared with "extern fn"
 }
 
 impl fmt::Show for FnStyle {
@@ -883,7 +896,6 @@ impl fmt::Show for FnStyle {
         match *self {
             NormalFn => "normal".fmt(f),
             UnsafeFn => "unsafe".fmt(f),
-            ExternFn => "extern".fmt(f),
         }
     }
 }
@@ -1022,9 +1034,13 @@ pub enum AttrStyle {
     AttrInner,
 }
 
+#[deriving(Clone, Eq, TotalEq, Encodable, Decodable, Hash)]
+pub struct AttrId(pub uint);
+
 // doc-comments are promoted to attributes that have is_sugared_doc = true
 #[deriving(Clone, Eq, TotalEq, Encodable, Decodable, Hash)]
 pub struct Attribute_ {
+    pub id: AttrId,
     pub style: AttrStyle,
     pub value: @MetaItem,
     pub is_sugared_doc: bool,

@@ -26,14 +26,11 @@ impl<'a> MyIter for &'a str {
 }
 
 pub fn main() {
-    // NB: Associativity of ~, etc. in this context is surprising. These must be parenthesized
-
     ([1]).test_imm();
     (vec!(1)).as_slice().test_imm();
     (&[1]).test_imm();
     ("test").test_imm();
-    ("test".to_owned()).test_imm();
-    (&"test").test_imm();
+    ("test").test_imm();
 
     // FIXME: Other types of mutable vecs don't currently exist
 

@@ -18,19 +18,19 @@ use parse::token::InternedString;
 use parse::token;
 use rsparse = parse;
 
-use std::fmt::parse;
+use parse = fmt_macros;
 use collections::{HashMap, HashSet};
 
 #[deriving(Eq)]
 enum ArgumentType {
-    Known(~str),
+    Known(String),
     Unsigned,
     String,
 }
 
 enum Position {
     Exact(uint),
-    Named(~str),
+    Named(String),
 }
 
 struct Context<'a, 'b> {
@@ -45,18 +45,23 @@ struct Context<'a, 'b> {
     // Note that we keep a side-array of the ordering of the named arguments
     // found to be sure that we can translate them in the same order that they
     // were declared in.
-    names: HashMap<~str, @ast::Expr>,
-    name_types: HashMap<~str, ArgumentType>,
-    name_ordering: Vec<~str>,
+    names: HashMap<String, @ast::Expr>,
+    name_types: HashMap<String, ArgumentType>,
+    name_ordering: Vec<String>,
 
     // Collection of the compiled `rt::Piece` structures
     pieces: Vec<@ast::Expr> ,
-    name_positions: HashMap<~str, uint>,
+    name_positions: HashMap<String, uint>,
     method_statics: Vec<@ast::Item> ,
 
     // Updated as arguments are consumed or methods are entered
     nest_level: uint,
     next_arg: uint,
+}
+
+pub enum Invocation {
+    Call(@ast::Expr),
+    MethodCall(@ast::Expr, ast::Ident),
 }
 
 /// Parses the arguments from the given list of tokens, returning None
@@ -67,11 +72,12 @@ struct Context<'a, 'b> {
 ///
 ///     Some((fmtstr, unnamed arguments, ordering of named arguments,
 ///           named arguments))
-fn parse_args(ecx: &mut ExtCtxt, sp: Span, tts: &[ast::TokenTree])
-    -> (@ast::Expr, Option<(@ast::Expr, Vec<@ast::Expr>, Vec<~str>,
-                            HashMap<~str, @ast::Expr>)>) {
+fn parse_args(ecx: &mut ExtCtxt, sp: Span, allow_method: bool,
+              tts: &[ast::TokenTree])
+    -> (Invocation, Option<(@ast::Expr, Vec<@ast::Expr>, Vec<String>,
+                            HashMap<String, @ast::Expr>)>) {
     let mut args = Vec::new();
-    let mut names = HashMap::<~str, @ast::Expr>::new();
+    let mut names = HashMap::<String, @ast::Expr>::new();
     let mut order = Vec::new();
 
     let mut p = rsparse::new_parser_from_tts(ecx.parse_sess(),
@@ -80,22 +86,31 @@ fn parse_args(ecx: &mut ExtCtxt, sp: Span, tts: &[ast::TokenTree])
                                                 .map(|x| (*x).clone())
                                                 .collect());
     // Parse the leading function expression (maybe a block, maybe a path)
-    let extra = p.parse_expr();
+    let invocation = if allow_method {
+        let e = p.parse_expr();
+        if !p.eat(&token::COMMA) {
+            ecx.span_err(sp, "expected token: `,`");
+            return (Call(e), None);
+        }
+        MethodCall(e, p.parse_ident())
+    } else {
+        Call(p.parse_expr())
+    };
     if !p.eat(&token::COMMA) {
         ecx.span_err(sp, "expected token: `,`");
-        return (extra, None);
+        return (invocation, None);
     }
 
     if p.token == token::EOF {
         ecx.span_err(sp, "requires at least a format string argument");
-        return (extra, None);
+        return (invocation, None);
     }
     let fmtstr = p.parse_expr();
     let mut named = false;
     while p.token != token::EOF {
         if !p.eat(&token::COMMA) {
             ecx.span_err(sp, "expected token: `,`");
-            return (extra, None);
+            return (invocation, None);
         }
         if p.token == token::EOF { break } // accept trailing commas
         if named || (token::is_ident(&p.token) &&
@@ -110,13 +125,13 @@ fn parse_args(ecx: &mut ExtCtxt, sp: Span, tts: &[ast::TokenTree])
                     ecx.span_err(p.span,
                                  "expected ident, positional arguments \
                                  cannot follow named arguments");
-                    return (extra, None);
+                    return (invocation, None);
                 }
                 _ => {
                     ecx.span_err(p.span,
                                  format!("expected ident for named argument, but found `{}`",
-                                         p.this_token_to_str()));
-                    return (extra, None);
+                                         p.this_token_to_str()).as_slice());
+                    return (invocation, None);
                 }
             };
             let interned_name = token::get_ident(ident);
@@ -126,18 +141,20 @@ fn parse_args(ecx: &mut ExtCtxt, sp: Span, tts: &[ast::TokenTree])
             match names.find_equiv(&name) {
                 None => {}
                 Some(prev) => {
-                    ecx.span_err(e.span, format!("duplicate argument named `{}`", name));
+                    ecx.span_err(e.span,
+                                 format!("duplicate argument named `{}`",
+                                         name).as_slice());
                     ecx.parse_sess.span_diagnostic.span_note(prev.span, "previously here");
                     continue
                 }
             }
-            order.push(name.to_str());
-            names.insert(name.to_str(), e);
+            order.push(name.to_string());
+            names.insert(name.to_string(), e);
         } else {
             args.push(p.parse_expr());
         }
     }
-    return (extra, Some((fmtstr, args, order, names)));
+    return (invocation, Some((fmtstr, args, order, names)));
 }
 
 impl<'a, 'b> Context<'a, 'b> {
@@ -171,13 +188,13 @@ impl<'a, 'b> Context<'a, 'b> {
                         Exact(i)
                     }
                     parse::ArgumentIs(i) => Exact(i),
-                    parse::ArgumentNamed(s) => Named(s.to_str()),
+                    parse::ArgumentNamed(s) => Named(s.to_string()),
                 };
 
                 // and finally the method being applied
                 match arg.method {
                     None => {
-                        let ty = Known(arg.format.ty.to_str());
+                        let ty = Known(arg.format.ty.to_string());
                         self.verify_arg_type(pos, ty);
                     }
                     Some(ref method) => { self.verify_method(pos, *method); }
@@ -199,7 +216,7 @@ impl<'a, 'b> Context<'a, 'b> {
                 self.verify_arg_type(Exact(i), Unsigned);
             }
             parse::CountIsName(s) => {
-                self.verify_arg_type(Named(s.to_str()), Unsigned);
+                self.verify_arg_type(Named(s.to_string()), Unsigned);
             }
             parse::CountIsNextParam => {
                 if self.check_positional_ok() {
@@ -231,13 +248,15 @@ impl<'a, 'b> Context<'a, 'b> {
                         match arm.selector {
                             parse::Keyword(name) => {
                                 self.ecx.span_err(self.fmtsp,
-                                                  format!("duplicate selector \
-                                                           `{:?}`", name));
+                                                  format!("duplicate \
+                                                           selector `{}`",
+                                                          name).as_slice());
                             }
                             parse::Literal(idx) => {
                                 self.ecx.span_err(self.fmtsp,
-                                                  format!("duplicate selector \
-                                                           `={}`", idx));
+                                                  format!("duplicate \
+                                                           selector `={}`",
+                                                          idx).as_slice());
                             }
                         }
                     }
@@ -252,7 +271,7 @@ impl<'a, 'b> Context<'a, 'b> {
                     if !seen_cases.insert(arm.selector) {
                         self.ecx.span_err(self.fmtsp,
                                           format!("duplicate selector `{}`",
-                                               arm.selector));
+                                                  arm.selector).as_slice());
                     } else if arm.selector == "" {
                         self.ecx.span_err(self.fmtsp,
                                           "empty selector in `select`");
@@ -268,10 +287,10 @@ impl<'a, 'b> Context<'a, 'b> {
     fn verify_arg_type(&mut self, arg: Position, ty: ArgumentType) {
         match arg {
             Exact(arg) => {
-                if arg < 0 || self.args.len() <= arg {
+                if self.args.len() <= arg {
                     let msg = format!("invalid reference to argument `{}` (there \
                                     are {} arguments)", arg, self.args.len());
-                    self.ecx.span_err(self.fmtsp, msg);
+                    self.ecx.span_err(self.fmtsp, msg.as_slice());
                     return;
                 }
                 {
@@ -291,7 +310,7 @@ impl<'a, 'b> Context<'a, 'b> {
                     Some(e) => e.span,
                     None => {
                         let msg = format!("there is no argument named `{}`", name);
-                        self.ecx.span_err(self.fmtsp, msg);
+                        self.ecx.span_err(self.fmtsp, msg.as_slice());
                         return;
                     }
                 };
@@ -334,19 +353,19 @@ impl<'a, 'b> Context<'a, 'b> {
                                   format!("argument redeclared with type `{}` when \
                                            it was previously `{}`",
                                           *ty,
-                                          *cur));
+                                          *cur).as_slice());
             }
             (&Known(ref cur), _) => {
                 self.ecx.span_err(sp,
                                   format!("argument used to format with `{}` was \
                                            attempted to not be used for formatting",
-                                           *cur));
+                                           *cur).as_slice());
             }
             (_, &Known(ref ty)) => {
                 self.ecx.span_err(sp,
                                   format!("argument previously used as a format \
                                            argument attempted to be used as `{}`",
-                                           *ty));
+                                           *ty).as_slice());
             }
             (_, _) => {
                 self.ecx.span_err(sp, "argument declared with multiple formats");
@@ -375,19 +394,9 @@ impl<'a, 'b> Context<'a, 'b> {
         return vec!(unnamed, allow_dead_code);
     }
 
-    fn parsepath(&self, s: &str) -> Vec<ast::Ident> {
-        vec!(self.ecx.ident_of("std"), self.ecx.ident_of("fmt"),
-          self.ecx.ident_of("parse"), self.ecx.ident_of(s))
-    }
-
     fn rtpath(&self, s: &str) -> Vec<ast::Ident> {
         vec!(self.ecx.ident_of("std"), self.ecx.ident_of("fmt"),
           self.ecx.ident_of("rt"), self.ecx.ident_of(s))
-    }
-
-    fn ctpath(&self, s: &str) -> Vec<ast::Ident> {
-        vec!(self.ecx.ident_of("std"), self.ecx.ident_of("fmt"),
-          self.ecx.ident_of("parse"), self.ecx.ident_of(s))
     }
 
     fn none(&self) -> @ast::Expr {
@@ -475,7 +484,7 @@ impl<'a, 'b> Context<'a, 'b> {
                             }).collect();
                         let (lr, selarg) = match arm.selector {
                             parse::Keyword(t) => {
-                                let p = self.ctpath(format!("{:?}", t));
+                                let p = self.rtpath(t.to_str().as_slice());
                                 let p = self.ecx.path_global(sp, p);
                                 (self.rtpath("Keyword"), self.ecx.expr_path(p))
                             }
@@ -511,7 +520,8 @@ impl<'a, 'b> Context<'a, 'b> {
                     ), None);
         let st = ast::ItemStatic(ty, ast::MutImmutable, method);
         let static_name = self.ecx.ident_of(format!("__STATIC_METHOD_{}",
-                                                    self.method_statics.len()));
+                                                    self.method_statics
+                                                        .len()).as_slice());
         let item = self.ecx.item(sp, static_name, self.static_attrs(), st);
         self.method_statics.push(item);
         self.ecx.expr_ident(sp, static_name)
@@ -561,16 +571,16 @@ impl<'a, 'b> Context<'a, 'b> {
 
                 // Translate the format
                 let fill = match arg.format.fill { Some(c) => c, None => ' ' };
-                let fill = self.ecx.expr_lit(sp, ast::LitChar(fill as u32));
+                let fill = self.ecx.expr_lit(sp, ast::LitChar(fill));
                 let align = match arg.format.align {
                     parse::AlignLeft => {
-                        self.ecx.path_global(sp, self.parsepath("AlignLeft"))
+                        self.ecx.path_global(sp, self.rtpath("AlignLeft"))
                     }
                     parse::AlignRight => {
-                        self.ecx.path_global(sp, self.parsepath("AlignRight"))
+                        self.ecx.path_global(sp, self.rtpath("AlignRight"))
                     }
                     parse::AlignUnknown => {
-                        self.ecx.path_global(sp, self.parsepath("AlignUnknown"))
+                        self.ecx.path_global(sp, self.rtpath("AlignUnknown"))
                     }
                 };
                 let align = self.ecx.expr_path(align);
@@ -605,7 +615,7 @@ impl<'a, 'b> Context<'a, 'b> {
 
     /// Actually builds the expression which the iformat! block will be expanded
     /// to
-    fn to_expr(&self, extra: @ast::Expr) -> @ast::Expr {
+    fn to_expr(&self, invocation: Invocation) -> @ast::Expr {
         let mut lets = Vec::new();
         let mut locals = Vec::new();
         let mut names = Vec::from_fn(self.name_positions.len(), |_| None);
@@ -657,7 +667,7 @@ impl<'a, 'b> Context<'a, 'b> {
                 continue // error already generated
             }
 
-            let name = self.ecx.ident_of(format!("__arg{}", i));
+            let name = self.ecx.ident_of(format!("__arg{}", i).as_slice());
             pats.push(self.ecx.pat_ident(e.span, name));
             heads.push(self.ecx.expr_addr_of(e.span, e));
             locals.push(self.format_arg(e.span, Exact(i),
@@ -669,7 +679,8 @@ impl<'a, 'b> Context<'a, 'b> {
                 Some(..) | None => continue
             };
 
-            let lname = self.ecx.ident_of(format!("__arg{}", *name));
+            let lname = self.ecx.ident_of(format!("__arg{}",
+                                                  *name).as_slice());
             pats.push(self.ecx.pat_ident(e.span, lname));
             heads.push(self.ecx.expr_addr_of(e.span, e));
             *names.get_mut(*self.name_positions.get(name)) =
@@ -709,8 +720,16 @@ impl<'a, 'b> Context<'a, 'b> {
         let resname = self.ecx.ident_of("__args");
         lets.push(self.ecx.stmt_let(self.fmtsp, false, resname, result));
         let res = self.ecx.expr_ident(self.fmtsp, resname);
-        let result = self.ecx.expr_call(extra.span, extra, vec!(
-                            self.ecx.expr_addr_of(extra.span, res)));
+        let result = match invocation {
+            Call(e) => {
+                self.ecx.expr_call(e.span, e,
+                                   vec!(self.ecx.expr_addr_of(e.span, res)))
+            }
+            MethodCall(e, m) => {
+                self.ecx.expr_method_call(e.span, e, m,
+                                          vec!(self.ecx.expr_addr_of(e.span, res)))
+            }
+        };
         let body = self.ecx.expr_block(self.ecx.block(self.fmtsp, lets,
                                                       Some(result)));
 
@@ -754,28 +773,30 @@ impl<'a, 'b> Context<'a, 'b> {
             Named(ref s) => self.name_types.get(s)
         };
 
-        let fmt_fn = match *ty {
+        let (krate, fmt_fn) = match *ty {
             Known(ref tyname) => {
                 match tyname.as_slice() {
-                    ""  => "secret_show",
-                    "?" => "secret_poly",
-                    "b" => "secret_bool",
-                    "c" => "secret_char",
-                    "d" | "i" => "secret_signed",
-                    "e" => "secret_lower_exp",
-                    "E" => "secret_upper_exp",
-                    "f" => "secret_float",
-                    "o" => "secret_octal",
-                    "p" => "secret_pointer",
-                    "s" => "secret_string",
-                    "t" => "secret_binary",
-                    "u" => "secret_unsigned",
-                    "x" => "secret_lower_hex",
-                    "X" => "secret_upper_hex",
+                    ""  => ("std", "secret_show"),
+                    "?" => ("debug", "secret_poly"),
+                    "b" => ("std", "secret_bool"),
+                    "c" => ("std", "secret_char"),
+                    "d" | "i" => ("std", "secret_signed"),
+                    "e" => ("std", "secret_lower_exp"),
+                    "E" => ("std", "secret_upper_exp"),
+                    "f" => ("std", "secret_float"),
+                    "o" => ("std", "secret_octal"),
+                    "p" => ("std", "secret_pointer"),
+                    "s" => ("std", "secret_string"),
+                    "t" => ("std", "secret_binary"),
+                    "u" => ("std", "secret_unsigned"),
+                    "x" => ("std", "secret_lower_hex"),
+                    "X" => ("std", "secret_upper_hex"),
                     _ => {
-                        self.ecx.span_err(sp, format!("unknown format trait `{}`",
-                                                      *tyname));
-                        "dummy"
+                        self.ecx
+                            .span_err(sp,
+                                      format!("unknown format trait `{}`",
+                                              *tyname).as_slice());
+                        ("std", "dummy")
                     }
                 }
             }
@@ -794,7 +815,7 @@ impl<'a, 'b> Context<'a, 'b> {
         };
 
         let format_fn = self.ecx.path_global(sp, vec!(
-                self.ecx.ident_of("std"),
+                self.ecx.ident_of(krate),
                 self.ecx.ident_of("fmt"),
                 self.ecx.ident_of(fmt_fn)));
         self.ecx.expr_call_global(sp, vec!(
@@ -804,13 +825,25 @@ impl<'a, 'b> Context<'a, 'b> {
     }
 }
 
-pub fn expand_args(ecx: &mut ExtCtxt, sp: Span,
-                   tts: &[ast::TokenTree]) -> ~base::MacResult {
+pub fn expand_format_args(ecx: &mut ExtCtxt, sp: Span,
+                          tts: &[ast::TokenTree]) -> Box<base::MacResult> {
 
-    match parse_args(ecx, sp, tts) {
-        (extra, Some((efmt, args, order, names))) => {
-            MacExpr::new(expand_preparsed_format_args(ecx, sp, extra, efmt, args,
-                                                order, names))
+    match parse_args(ecx, sp, false, tts) {
+        (invocation, Some((efmt, args, order, names))) => {
+            MacExpr::new(expand_preparsed_format_args(ecx, sp, invocation, efmt,
+                                                      args, order, names))
+        }
+        (_, None) => MacExpr::new(ecx.expr_uint(sp, 2))
+    }
+}
+
+pub fn expand_format_args_method(ecx: &mut ExtCtxt, sp: Span,
+                                 tts: &[ast::TokenTree]) -> Box<base::MacResult> {
+
+    match parse_args(ecx, sp, true, tts) {
+        (invocation, Some((efmt, args, order, names))) => {
+            MacExpr::new(expand_preparsed_format_args(ecx, sp, invocation, efmt,
+                                                      args, order, names))
         }
         (_, None) => MacExpr::new(ecx.expr_uint(sp, 2))
     }
@@ -820,10 +853,10 @@ pub fn expand_args(ecx: &mut ExtCtxt, sp: Span,
 /// name=names...)` and construct the appropriate formatting
 /// expression.
 pub fn expand_preparsed_format_args(ecx: &mut ExtCtxt, sp: Span,
-                                    extra: @ast::Expr,
+                                    invocation: Invocation,
                                     efmt: @ast::Expr, args: Vec<@ast::Expr>,
-                                    name_ordering: Vec<~str>,
-                                    names: HashMap<~str, @ast::Expr>) -> @ast::Expr {
+                                    name_ordering: Vec<String>,
+                                    names: HashMap<String, @ast::Expr>) -> @ast::Expr {
     let arg_types = Vec::from_fn(args.len(), |_| None);
     let mut cx = Context {
         ecx: ecx,
@@ -861,7 +894,9 @@ pub fn expand_preparsed_format_args(ecx: &mut ExtCtxt, sp: Span,
     }
     match parser.errors.shift() {
         Some(error) => {
-            cx.ecx.span_err(efmt.span, "invalid format string: " + error);
+            cx.ecx.span_err(efmt.span,
+                            format!("invalid format string: {}",
+                                    error).as_slice());
             return DummyResult::raw_expr(sp);
         }
         None => {}
@@ -879,5 +914,5 @@ pub fn expand_preparsed_format_args(ecx: &mut ExtCtxt, sp: Span,
         }
     }
 
-    cx.to_expr(extra)
+    cx.to_expr(invocation)
 }

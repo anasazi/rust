@@ -17,13 +17,11 @@ use util::interner::{RcStr, StrInterner};
 use util::interner;
 
 use serialize::{Decodable, Decoder, Encodable, Encoder};
-use std::cast;
-use std::char;
 use std::fmt;
-use std::local_data;
 use std::path::BytesContainer;
+use std::mem;
 use std::rc::Rc;
-use std::strbuf::StrBuf;
+use std::string::String;
 
 #[allow(non_camel_case_types)]
 #[deriving(Clone, Encodable, Decodable, Eq, TotalEq, Hash, Show)]
@@ -69,7 +67,6 @@ pub enum Token {
     MOD_SEP,
     RARROW,
     LARROW,
-    DARROW,
     FAT_ARROW,
     LPAREN,
     RPAREN,
@@ -81,7 +78,7 @@ pub enum Token {
     DOLLAR,
 
     /* Literals */
-    LIT_CHAR(u32),
+    LIT_CHAR(char),
     LIT_INT(i64, ast::IntTy),
     LIT_UINT(u64, ast::UintTy),
     LIT_INT_UNSUFFIXED(i64),
@@ -114,9 +111,9 @@ pub enum Nonterminal {
     NtPat( @ast::Pat),
     NtExpr(@ast::Expr),
     NtTy(  P<ast::Ty>),
-    NtIdent(~ast::Ident, bool),
+    NtIdent(Box<ast::Ident>, bool),
     NtMeta(@ast::MetaItem), // stuff inside brackets for attributes
-    NtPath(~ast::Path),
+    NtPath(Box<ast::Path>),
     NtTT(  @ast::TokenTree), // needs @ed to break a circularity
     NtMatchers(Vec<ast::Matcher> )
 }
@@ -139,123 +136,129 @@ impl fmt::Show for Nonterminal {
     }
 }
 
-pub fn binop_to_str(o: BinOp) -> ~str {
+pub fn binop_to_str(o: BinOp) -> String {
     match o {
-      PLUS => "+".to_owned(),
-      MINUS => "-".to_owned(),
-      STAR => "*".to_owned(),
-      SLASH => "/".to_owned(),
-      PERCENT => "%".to_owned(),
-      CARET => "^".to_owned(),
-      AND => "&".to_owned(),
-      OR => "|".to_owned(),
-      SHL => "<<".to_owned(),
-      SHR => ">>".to_owned()
+      PLUS => "+".to_string(),
+      MINUS => "-".to_string(),
+      STAR => "*".to_string(),
+      SLASH => "/".to_string(),
+      PERCENT => "%".to_string(),
+      CARET => "^".to_string(),
+      AND => "&".to_string(),
+      OR => "|".to_string(),
+      SHL => "<<".to_string(),
+      SHR => ">>".to_string()
     }
 }
 
-pub fn to_str(t: &Token) -> ~str {
+pub fn to_str(t: &Token) -> String {
     match *t {
-      EQ => "=".to_owned(),
-      LT => "<".to_owned(),
-      LE => "<=".to_owned(),
-      EQEQ => "==".to_owned(),
-      NE => "!=".to_owned(),
-      GE => ">=".to_owned(),
-      GT => ">".to_owned(),
-      NOT => "!".to_owned(),
-      TILDE => "~".to_owned(),
-      OROR => "||".to_owned(),
-      ANDAND => "&&".to_owned(),
+      EQ => "=".to_string(),
+      LT => "<".to_string(),
+      LE => "<=".to_string(),
+      EQEQ => "==".to_string(),
+      NE => "!=".to_string(),
+      GE => ">=".to_string(),
+      GT => ">".to_string(),
+      NOT => "!".to_string(),
+      TILDE => "~".to_string(),
+      OROR => "||".to_string(),
+      ANDAND => "&&".to_string(),
       BINOP(op) => binop_to_str(op),
-      BINOPEQ(op) => binop_to_str(op) + "=",
+      BINOPEQ(op) => {
+          let mut s = binop_to_str(op);
+          s.push_str("=");
+          s
+      }
 
       /* Structural symbols */
-      AT => "@".to_owned(),
-      DOT => ".".to_owned(),
-      DOTDOT => "..".to_owned(),
-      DOTDOTDOT => "...".to_owned(),
-      COMMA => ",".to_owned(),
-      SEMI => ";".to_owned(),
-      COLON => ":".to_owned(),
-      MOD_SEP => "::".to_owned(),
-      RARROW => "->".to_owned(),
-      LARROW => "<-".to_owned(),
-      DARROW => "<->".to_owned(),
-      FAT_ARROW => "=>".to_owned(),
-      LPAREN => "(".to_owned(),
-      RPAREN => ")".to_owned(),
-      LBRACKET => "[".to_owned(),
-      RBRACKET => "]".to_owned(),
-      LBRACE => "{".to_owned(),
-      RBRACE => "}".to_owned(),
-      POUND => "#".to_owned(),
-      DOLLAR => "$".to_owned(),
+      AT => "@".to_string(),
+      DOT => ".".to_string(),
+      DOTDOT => "..".to_string(),
+      DOTDOTDOT => "...".to_string(),
+      COMMA => ",".to_string(),
+      SEMI => ";".to_string(),
+      COLON => ":".to_string(),
+      MOD_SEP => "::".to_string(),
+      RARROW => "->".to_string(),
+      LARROW => "<-".to_string(),
+      FAT_ARROW => "=>".to_string(),
+      LPAREN => "(".to_string(),
+      RPAREN => ")".to_string(),
+      LBRACKET => "[".to_string(),
+      RBRACKET => "]".to_string(),
+      LBRACE => "{".to_string(),
+      RBRACE => "}".to_string(),
+      POUND => "#".to_string(),
+      DOLLAR => "$".to_string(),
 
       /* Literals */
       LIT_CHAR(c) => {
-          let mut res = StrBuf::from_str("'");
-          char::from_u32(c).unwrap().escape_default(|c| {
+          let mut res = String::from_str("'");
+          c.escape_default(|c| {
               res.push_char(c);
           });
           res.push_char('\'');
-          res.into_owned()
+          res
       }
-      LIT_INT(i, t) => ast_util::int_ty_to_str(t, Some(i)),
-      LIT_UINT(u, t) => ast_util::uint_ty_to_str(t, Some(u)),
-      LIT_INT_UNSUFFIXED(i) => { i.to_str() }
+      LIT_INT(i, t) => ast_util::int_ty_to_str(t, Some(i),
+                                               ast_util::ForceSuffix),
+      LIT_UINT(u, t) => ast_util::uint_ty_to_str(t, Some(u),
+                                                 ast_util::ForceSuffix),
+      LIT_INT_UNSUFFIXED(i) => { (i as u64).to_str().to_string() }
       LIT_FLOAT(s, t) => {
-        let mut body = StrBuf::from_str(get_ident(s).get());
+        let mut body = String::from_str(get_ident(s).get());
         if body.as_slice().ends_with(".") {
             body.push_char('0');  // `10.f` is not a float literal
         }
-        body.push_str(ast_util::float_ty_to_str(t));
-        body.into_owned()
+        body.push_str(ast_util::float_ty_to_str(t).as_slice());
+        body
       }
       LIT_FLOAT_UNSUFFIXED(s) => {
-        let mut body = StrBuf::from_str(get_ident(s).get());
+        let mut body = String::from_str(get_ident(s).get());
         if body.as_slice().ends_with(".") {
             body.push_char('0');  // `10.f` is not a float literal
         }
-        body.into_owned()
+        body
       }
       LIT_STR(s) => {
-          format!("\"{}\"", get_ident(s).get().escape_default())
+          (format!("\"{}\"", get_ident(s).get().escape_default())).to_string()
       }
       LIT_STR_RAW(s, n) => {
-          format!("r{delim}\"{string}\"{delim}",
-                  delim="#".repeat(n), string=get_ident(s))
+          (format!("r{delim}\"{string}\"{delim}",
+                  delim="#".repeat(n), string=get_ident(s))).to_string()
       }
 
       /* Name components */
-      IDENT(s, _) => get_ident(s).get().to_str(),
+      IDENT(s, _) => get_ident(s).get().to_string(),
       LIFETIME(s) => {
-          format!("'{}", get_ident(s))
+          (format!("'{}", get_ident(s))).to_string()
       }
-      UNDERSCORE => "_".to_owned(),
+      UNDERSCORE => "_".to_string(),
 
       /* Other */
-      DOC_COMMENT(s) => get_ident(s).get().to_str(),
-      EOF => "<eof>".to_owned(),
+      DOC_COMMENT(s) => get_ident(s).get().to_string(),
+      EOF => "<eof>".to_string(),
       INTERPOLATED(ref nt) => {
         match nt {
             &NtExpr(e) => ::print::pprust::expr_to_str(e),
             &NtMeta(e) => ::print::pprust::meta_item_to_str(e),
             _ => {
-                "an interpolated ".to_owned() +
-                    match *nt {
-                        NtItem(..) => "item".to_owned(),
-                        NtBlock(..) => "block".to_owned(),
-                        NtStmt(..) => "statement".to_owned(),
-                        NtPat(..) => "pattern".to_owned(),
-                        NtMeta(..) => fail!("should have been handled"),
-                        NtExpr(..) => fail!("should have been handled above"),
-                        NtTy(..) => "type".to_owned(),
-                        NtIdent(..) => "identifier".to_owned(),
-                        NtPath(..) => "path".to_owned(),
-                        NtTT(..) => "tt".to_owned(),
-                        NtMatchers(..) => "matcher sequence".to_owned()
-                    }
+                let mut s = "an interpolated ".to_string();
+                match *nt {
+                    NtItem(..) => s.push_str("item"),
+                    NtBlock(..) => s.push_str("block"),
+                    NtStmt(..) => s.push_str("statement"),
+                    NtPat(..) => s.push_str("pattern"),
+                    NtMeta(..) => fail!("should have been handled"),
+                    NtExpr(..) => fail!("should have been handled above"),
+                    NtTy(..) => s.push_str("type"),
+                    NtIdent(..) => s.push_str("identifier"),
+                    NtPath(..) => s.push_str("path"),
+                    NtTT(..) => s.push_str("tt"),
+                    NtMatchers(..) => s.push_str("matcher sequence")
+                };
+                s
             }
         }
       }
@@ -444,45 +447,45 @@ declare_special_idents_and_keywords! {
         'strict:
         (9,                          As,         "as");
         (10,                         Break,      "break");
-        (11,                         Const,      "const");
-        (12,                         Crate,      "crate");
-        (13,                         Else,       "else");
-        (14,                         Enum,       "enum");
-        (15,                         Extern,     "extern");
-        (16,                         False,      "false");
-        (17,                         Fn,         "fn");
-        (18,                         For,        "for");
-        (19,                         If,         "if");
-        (20,                         Impl,       "impl");
-        (21,                         In,         "in");
-        (22,                         Let,        "let");
-        (23,                         Loop,       "loop");
-        (24,                         Match,      "match");
-        (25,                         Mod,        "mod");
-        (26,                         Mut,        "mut");
-        (27,                         Once,       "once");
-        (28,                         Pub,        "pub");
-        (29,                         Ref,        "ref");
-        (30,                         Return,     "return");
+        (11,                         Crate,      "crate");
+        (12,                         Else,       "else");
+        (13,                         Enum,       "enum");
+        (14,                         Extern,     "extern");
+        (15,                         False,      "false");
+        (16,                         Fn,         "fn");
+        (17,                         For,        "for");
+        (18,                         If,         "if");
+        (19,                         Impl,       "impl");
+        (20,                         In,         "in");
+        (21,                         Let,        "let");
+        (22,                         Loop,       "loop");
+        (23,                         Match,      "match");
+        (24,                         Mod,        "mod");
+        (25,                         Mut,        "mut");
+        (26,                         Once,       "once");
+        (27,                         Pub,        "pub");
+        (28,                         Ref,        "ref");
+        (29,                         Return,     "return");
         // Static and Self are also special idents (prefill de-dupes)
         (super::STATIC_KEYWORD_NAME, Static,     "static");
         (super::SELF_KEYWORD_NAME,   Self,       "self");
-        (31,                         Struct,     "struct");
-        (32,                         Super,      "super");
-        (33,                         True,       "true");
-        (34,                         Trait,      "trait");
-        (35,                         Type,       "type");
-        (36,                         Unsafe,     "unsafe");
-        (37,                         Use,        "use");
-        (38,                         Virtual,    "virtual");
-        (39,                         While,      "while");
-        (40,                         Continue,   "continue");
-        (41,                         Proc,       "proc");
-        (42,                         Box,        "box");
+        (30,                         Struct,     "struct");
+        (31,                         Super,      "super");
+        (32,                         True,       "true");
+        (33,                         Trait,      "trait");
+        (34,                         Type,       "type");
+        (35,                         Unsafe,     "unsafe");
+        (36,                         Use,        "use");
+        (37,                         Virtual,    "virtual");
+        (38,                         While,      "while");
+        (39,                         Continue,   "continue");
+        (40,                         Proc,       "proc");
+        (41,                         Box,        "box");
 
         'reserved:
-        (43,                         Alignof,    "alignof");
-        (44,                         Be,         "be");
+        (42,                         Alignof,    "alignof");
+        (43,                         Be,         "be");
+        (44,                         Const,      "const");
         (45,                         Offsetof,   "offsetof");
         (46,                         Priv,       "priv");
         (47,                         Pure,       "pure");
@@ -530,11 +533,11 @@ pub type IdentInterner = StrInterner;
 // FIXME(eddyb) #8726 This should probably use a task-local reference.
 pub fn get_ident_interner() -> Rc<IdentInterner> {
     local_data_key!(key: Rc<::parse::token::IdentInterner>)
-    match local_data::get(key, |k| k.map(|k| k.clone())) {
-        Some(interner) => interner,
+    match key.get() {
+        Some(interner) => interner.clone(),
         None => {
             let interner = Rc::new(mk_fresh_ident_interner());
-            local_data::set(key, interner.clone());
+            key.replace(Some(interner.clone()));
             interner
         }
     }
@@ -582,14 +585,14 @@ impl BytesContainer for InternedString {
         // DST.
         unsafe {
             let this = self.get();
-            cast::transmute(this.container_as_bytes())
+            mem::transmute(this.container_as_bytes())
         }
     }
 }
 
 impl fmt::Show for InternedString {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f.buf, "{}", self.string.as_slice())
+        write!(f, "{}", self.string.as_slice())
     }
 }
 
@@ -601,7 +604,8 @@ impl<'a> Equiv<&'a str> for InternedString {
 
 impl<D:Decoder<E>, E> Decodable<D, E> for InternedString {
     fn decode(d: &mut D) -> Result<InternedString, E> {
-        Ok(get_name(get_ident_interner().intern(try!(d.read_str()))))
+        Ok(get_name(get_ident_interner().intern(
+                    try!(d.read_str()).as_slice())))
     }
 }
 

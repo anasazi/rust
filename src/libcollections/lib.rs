@@ -12,19 +12,20 @@
  * Collection types.
  */
 
-#![crate_id = "collections#0.11-pre"]
+#![crate_id = "collections#0.11.0-pre"]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
 #![license = "MIT/ASL2"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-       html_root_url = "http://static.rust-lang.org/doc/master")]
+       html_root_url = "http://doc.rust-lang.org/")]
 
 #![feature(macro_rules, managed_boxes, default_type_params, phase)]
 
 #![deny(deprecated_owned_vector)]
 
 extern crate rand;
+extern crate debug;
 
 #[cfg(test)] extern crate test;
 #[cfg(test)] #[phase(syntax, link)] extern crate log;

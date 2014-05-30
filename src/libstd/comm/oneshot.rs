@@ -15,7 +15,7 @@
 /// this type is to have one and exactly one allocation when the chan/port pair
 /// is created.
 ///
-/// Another possible optimization would be to not use an UnsafeArc box because
+/// Another possible optimization would be to not use an Arc box because
 /// in theory we know when the shared packet can be deallocated (no real need
 /// for the atomic reference counting), but I was having trouble how to destroy
 /// the data early in a drop of a Port.
@@ -37,6 +37,7 @@ use kinds::Send;
 use mem;
 use ops::Drop;
 use option::{Some, None, Option};
+use owned::Box;
 use result::{Result, Ok, Err};
 use rt::local::Local;
 use rt::task::{Task, BlockedTask};
@@ -137,7 +138,7 @@ impl<T: Send> Packet<T> {
         // Attempt to not block the task (it's a little expensive). If it looks
         // like we're not empty, then immediately go through to `try_recv`.
         if self.state.load(atomics::SeqCst) == EMPTY {
-            let t: ~Task = Local::take();
+            let t: Box<Task> = Local::take();
             t.deschedule(1, |task| {
                 let n = unsafe { task.cast_to_uint() };
                 match self.state.compare_and_swap(EMPTY, n, atomics::SeqCst) {

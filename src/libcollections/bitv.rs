@@ -13,10 +13,10 @@
 
 use std::cmp;
 use std::iter::RandomAccessIterator;
-use std::iter::{Rev, Enumerate, Repeat, Map, Zip};
+use std::iter::{Enumerate, Repeat, Map, Zip};
 use std::ops;
 use std::slice;
-use std::strbuf::StrBuf;
+use std::string::String;
 use std::uint;
 
 #[deriving(Clone)]
@@ -225,6 +225,32 @@ enum BitvVariant { Big(BigBitv), Small(SmallBitv) }
 enum Op {Union, Intersect, Assign, Difference}
 
 /// The bitvector type
+///
+/// # Example
+///
+/// ```rust
+/// use collections::bitv::Bitv;
+///
+/// let mut bv = Bitv::new(10, false);
+///
+/// // insert all primes less than 10
+/// bv.set(2, true);
+/// bv.set(3, true);
+/// bv.set(5, true);
+/// bv.set(7, true);
+/// println!("{}", bv.to_str());
+/// println!("total bits set to true: {}", bv.iter().count(|x| x));
+///
+/// // flip all values in bitvector, producing non-primes less than 10
+/// bv.negate();
+/// println!("{}", bv.to_str());
+/// println!("total bits set to true: {}", bv.iter().count(|x| x));
+///
+/// // reset bitvector to empty
+/// bv.clear();
+/// println!("{}", bv.to_str());
+/// println!("total bits set to true: {}", bv.iter().count(|x| x));
+/// ```
 #[deriving(Clone)]
 pub struct Bitv {
     /// Internal representation of the bit vector (small or large)
@@ -264,10 +290,11 @@ impl Bitv {
           }
         }
     }
-
 }
 
 impl Bitv {
+    /// Creates an empty Bitv that holds `nbits` elements, setting each element
+    /// to `init`.
     pub fn new(nbits: uint, init: bool) -> Bitv {
         let rep = if nbits < uint::BITS {
             Small(SmallBitv::new(if init {(1<<nbits)-1} else {0}))
@@ -419,14 +446,24 @@ impl Bitv {
       }
     }
 
+    /// Returns an iterator over the elements of the vector in order.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use collections::bitv::Bitv;
+    /// let mut bv = Bitv::new(10, false);
+    /// bv.set(1, true);
+    /// bv.set(2, true);
+    /// bv.set(3, true);
+    /// bv.set(5, true);
+    /// bv.set(8, true);
+    /// // Count bits set to 1; result should be 5
+    /// println!("{}", bv.iter().count(|x| x));
+    /// ```
     #[inline]
     pub fn iter<'a>(&'a self) -> Bits<'a> {
         Bits {bitv: self, next_idx: 0, end_idx: self.nbits}
-    }
-
-    #[inline]
-    pub fn rev_iter<'a>(&'a self) -> Rev<Bits<'a>> {
-        self.iter().rev()
     }
 
     /// Returns `true` if all bits are 0
@@ -443,17 +480,13 @@ impl Bitv {
         !self.none()
     }
 
-    pub fn init_to_vec(&self, i: uint) -> uint {
-      return if self.get(i) { 1 } else { 0 };
-    }
-
     /**
      * Converts `self` to a vector of `uint` with the same length.
      *
      * Each `uint` in the resulting vector has either value `0u` or `1u`.
      */
     pub fn to_vec(&self) -> Vec<uint> {
-        Vec::from_fn(self.nbits, |x| self.init_to_vec(x))
+        Vec::from_fn(self.nbits, |i| if self.get(i) { 1 } else { 0 })
     }
 
     /**
@@ -499,8 +532,8 @@ impl Bitv {
      * The resulting string has the same length as `self`, and each
      * character is either '0' or '1'.
      */
-     pub fn to_str(&self) -> ~str {
-        let mut rs = StrBuf::new();
+     pub fn to_str(&self) -> String {
+        let mut rs = String::new();
         for i in self.iter() {
             if i {
                 rs.push_char('1');
@@ -508,7 +541,7 @@ impl Bitv {
                 rs.push_char('0');
             }
         };
-        rs.into_owned()
+        rs
      }
 
 
@@ -955,10 +988,10 @@ mod tests {
     #[test]
     fn test_to_str() {
         let zerolen = Bitv::new(0u, false);
-        assert_eq!(zerolen.to_str(), "".to_owned());
+        assert_eq!(zerolen.to_str(), "".to_string());
 
         let eightbits = Bitv::new(8u, false);
-        assert_eq!(eightbits.to_str(), "00000000".to_owned());
+        assert_eq!(eightbits.to_str(), "00000000".to_string());
     }
 
     #[test]
@@ -981,7 +1014,7 @@ mod tests {
         let mut b = bitv::Bitv::new(2, false);
         b.set(0, true);
         b.set(1, false);
-        assert_eq!(b.to_str(), "10".to_owned());
+        assert_eq!(b.to_str(), "10".to_string());
     }
 
     #[test]
@@ -1291,7 +1324,7 @@ mod tests {
     #[test]
     fn test_from_bytes() {
         let bitv = from_bytes([0b10110110, 0b00000000, 0b11111111]);
-        let str = "10110110".to_owned() + "00000000" + "11111111";
+        let str = format!("{}{}{}", "10110110", "00000000", "11111111");
         assert_eq!(bitv.to_str(), str);
     }
 
@@ -1310,7 +1343,7 @@ mod tests {
     #[test]
     fn test_from_bools() {
         assert!(from_bools([true, false, true, true]).to_str() ==
-            "1011".to_owned());
+            "1011".to_string());
     }
 
     #[test]

@@ -15,23 +15,25 @@
 //! This implementation is also used as the fallback implementation of an event
 //! loop if no other one is provided (and M:N scheduling is desired).
 
-use std::cast;
-use std::mem::replace;
-use std::rt::rtio::{EventLoop, IoFactory, RemoteCallback, PausableIdleCallback,
-                    Callback};
+use alloc::arc::Arc;
+use std::sync::atomics;
+use std::mem;
+use std::rt::rtio::{EventLoop, IoFactory, RemoteCallback};
+use std::rt::rtio::{PausableIdleCallback, Callback};
 use std::unstable::sync::Exclusive;
 
 /// This is the only exported function from this module.
-pub fn event_loop() -> ~EventLoop:Send {
-    ~BasicLoop::new() as ~EventLoop:Send
+pub fn event_loop() -> Box<EventLoop:Send> {
+    box BasicLoop::new() as Box<EventLoop:Send>
 }
 
 struct BasicLoop {
     work: Vec<proc():Send>,             // pending work
-    idle: Option<*mut BasicPausable>, // only one is allowed
-    remotes: Vec<(uint, ~Callback:Send)>,
+    remotes: Vec<(uint, Box<Callback:Send>)>,
     next_remote: uint,
     messages: Exclusive<Vec<Message>>,
+    idle: Option<Box<Callback:Send>>,
+    idle_active: Option<Arc<atomics::AtomicBool>>,
 }
 
 enum Message { RunRemote(uint), RemoveRemote(uint) }
@@ -41,6 +43,7 @@ impl BasicLoop {
         BasicLoop {
             work: vec![],
             idle: None,
+            idle_active: None,
             next_remote: 0,
             remotes: vec![],
             messages: Exclusive::new(vec![]),
@@ -50,7 +53,7 @@ impl BasicLoop {
     /// Process everything in the work queue (continually)
     fn work(&mut self) {
         while self.work.len() > 0 {
-            for work in replace(&mut self.work, vec![]).move_iter() {
+            for work in mem::replace(&mut self.work, vec![]).move_iter() {
                 work();
             }
         }
@@ -60,7 +63,7 @@ impl BasicLoop {
         let messages = unsafe {
             self.messages.with(|messages| {
                 if messages.len() > 0 {
-                    Some(replace(messages, vec![]))
+                    Some(mem::replace(messages, vec![]))
                 } else {
                     None
                 }
@@ -93,20 +96,18 @@ impl BasicLoop {
 
     /// Run the idle callback if one is registered
     fn idle(&mut self) {
-        unsafe {
-            match self.idle {
-                Some(idle) => {
-                    if (*idle).active {
-                        (*idle).work.call();
-                    }
+        match self.idle {
+            Some(ref mut idle) => {
+                if self.idle_active.get_ref().load(atomics::SeqCst) {
+                    idle.call();
                 }
-                None => {}
             }
+            None => {}
         }
     }
 
     fn has_idle(&self) -> bool {
-        unsafe { self.idle.is_some() && (**self.idle.get_ref()).active }
+        self.idle.is_some() && self.idle_active.get_ref().load(atomics::SeqCst)
     }
 }
 
@@ -140,23 +141,22 @@ impl EventLoop for BasicLoop {
     }
 
     // FIXME: Seems like a really weird requirement to have an event loop provide.
-    fn pausable_idle_callback(&mut self, cb: ~Callback:Send)
-        -> ~PausableIdleCallback:Send
-    {
-        let callback = ~BasicPausable::new(self, cb);
+    fn pausable_idle_callback(&mut self, cb: Box<Callback:Send>)
+                              -> Box<PausableIdleCallback:Send> {
         rtassert!(self.idle.is_none());
-        unsafe {
-            let cb_ptr: &*mut BasicPausable = cast::transmute(&callback);
-            self.idle = Some(*cb_ptr);
-        }
-        callback as ~PausableIdleCallback:Send
+        self.idle = Some(cb);
+        let a = Arc::new(atomics::AtomicBool::new(true));
+        self.idle_active = Some(a.clone());
+        box BasicPausable { active: a } as Box<PausableIdleCallback:Send>
     }
 
-    fn remote_callback(&mut self, f: ~Callback:Send) -> ~RemoteCallback:Send {
+    fn remote_callback(&mut self, f: Box<Callback:Send>)
+                       -> Box<RemoteCallback:Send> {
         let id = self.next_remote;
         self.next_remote += 1;
         self.remotes.push((id, f));
-        ~BasicRemote::new(self.messages.clone(), id) as ~RemoteCallback:Send
+        box BasicRemote::new(self.messages.clone(), id) as
+            Box<RemoteCallback:Send>
     }
 
     fn io<'a>(&'a mut self) -> Option<&'a mut IoFactory> { None }
@@ -196,35 +196,21 @@ impl Drop for BasicRemote {
 }
 
 struct BasicPausable {
-    eloop: *mut BasicLoop,
-    work: ~Callback:Send,
-    active: bool,
-}
-
-impl BasicPausable {
-    fn new(eloop: &mut BasicLoop, cb: ~Callback:Send) -> BasicPausable {
-        BasicPausable {
-            active: false,
-            work: cb,
-            eloop: eloop,
-        }
-    }
+    active: Arc<atomics::AtomicBool>,
 }
 
 impl PausableIdleCallback for BasicPausable {
     fn pause(&mut self) {
-        self.active = false;
+        self.active.store(false, atomics::SeqCst);
     }
     fn resume(&mut self) {
-        self.active = true;
+        self.active.store(true, atomics::SeqCst);
     }
 }
 
 impl Drop for BasicPausable {
     fn drop(&mut self) {
-        unsafe {
-            (*self.eloop).idle = None;
-        }
+        self.active.store(false, atomics::SeqCst);
     }
 }
 

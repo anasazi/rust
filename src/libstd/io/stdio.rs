@@ -34,6 +34,7 @@ use libc;
 use kinds::Send;
 use mem::replace;
 use option::{Option, Some, None};
+use owned::Box;
 use prelude::drop;
 use result::{Ok, Err};
 use rt;
@@ -71,8 +72,8 @@ use str::StrSlice;
 // tl;dr; TTY works on everything but when windows stdout is redirected, in that
 //        case pipe also doesn't work, but magically file does!
 enum StdSource {
-    TTY(~RtioTTY:Send),
-    File(~RtioFileStream:Send),
+    TTY(Box<RtioTTY:Send>),
+    File(Box<RtioFileStream:Send>),
 }
 
 fn src<T>(fd: libc::c_int, readable: bool, f: |StdSource| -> T) -> T {
@@ -91,7 +92,7 @@ fn src<T>(fd: libc::c_int, readable: bool, f: |StdSource| -> T) -> T {
 /// provided unbuffered access to stdin.
 ///
 /// Care should be taken when creating multiple handles to the stdin of a
-/// process. Beause this is a buffered reader by default, it's possible for
+/// process. Because this is a buffered reader by default, it's possible for
 /// pending input to be unconsumed in one reader and unavailable to other
 /// readers. It is recommended that only one handle at a time is created for the
 /// stdin of a process.
@@ -153,10 +154,9 @@ pub fn stderr_raw() -> StdWriter {
     src(libc::STDERR_FILENO, false, |src| StdWriter { inner: src })
 }
 
-fn reset_helper(w: ~Writer:Send,
-                f: |&mut Task, ~Writer:Send| -> Option<~Writer:Send>)
-    -> Option<~Writer:Send>
-{
+fn reset_helper(w: Box<Writer:Send>,
+                f: |&mut Task, Box<Writer:Send>| -> Option<Box<Writer:Send>>)
+                -> Option<Box<Writer:Send>> {
     let mut t = Local::borrow(None::<Task>);
     // Be sure to flush any pending output from the writer
     match f(&mut *t, w) {
@@ -178,7 +178,7 @@ fn reset_helper(w: ~Writer:Send,
 ///
 /// Note that this does not need to be called for all new tasks; the default
 /// output handle is to the process's stdout stream.
-pub fn set_stdout(stdout: ~Writer:Send) -> Option<~Writer:Send> {
+pub fn set_stdout(stdout: Box<Writer:Send>) -> Option<Box<Writer:Send>> {
     reset_helper(stdout, |t, w| replace(&mut t.stdout, Some(w)))
 }
 
@@ -190,7 +190,7 @@ pub fn set_stdout(stdout: ~Writer:Send) -> Option<~Writer:Send> {
 ///
 /// Note that this does not need to be called for all new tasks; the default
 /// output handle is to the process's stderr stream.
-pub fn set_stderr(stderr: ~Writer:Send) -> Option<~Writer:Send> {
+pub fn set_stderr(stderr: Box<Writer:Send>) -> Option<Box<Writer:Send>> {
     reset_helper(stderr, |t, w| replace(&mut t.stderr, Some(w)))
 }
 
@@ -205,7 +205,7 @@ pub fn set_stderr(stderr: ~Writer:Send) -> Option<~Writer:Send> {
 //      })
 //  })
 fn with_task_stdout(f: |&mut Writer| -> IoResult<()> ) {
-    let task: Option<~Task> = Local::try_take();
+    let task: Option<Box<Task>> = Local::try_take();
     let result = match task {
         Some(mut task) => {
             // Printing may run arbitrary code, so ensure that the task is in
@@ -216,7 +216,7 @@ fn with_task_stdout(f: |&mut Writer| -> IoResult<()> ) {
             Local::put(task);
 
             if my_stdout.is_none() {
-                my_stdout = Some(~stdout() as ~Writer:Send);
+                my_stdout = Some(box stdout() as Box<Writer:Send>);
             }
             let ret = f(*my_stdout.get_mut_ref());
 
@@ -276,18 +276,28 @@ pub fn println(s: &str) {
 /// Similar to `print`, but takes a `fmt::Arguments` structure to be compatible
 /// with the `format_args!` macro.
 pub fn print_args(fmt: &fmt::Arguments) {
-    with_task_stdout(|io| fmt::write(io, fmt))
+    with_task_stdout(|io| write!(io, "{}", fmt))
 }
 
 /// Similar to `println`, but takes a `fmt::Arguments` structure to be
 /// compatible with the `format_args!` macro.
 pub fn println_args(fmt: &fmt::Arguments) {
-    with_task_stdout(|io| fmt::writeln(io, fmt))
+    with_task_stdout(|io| writeln!(io, "{}", fmt))
 }
 
 /// Representation of a reader of a standard input stream
 pub struct StdReader {
     inner: StdSource
+}
+
+impl StdReader {
+    /// Returns whether this stream is attached to a TTY instance or not.
+    pub fn isatty(&self) -> bool {
+        match self.inner {
+            TTY(..) => true,
+            File(..) => false,
+        }
+    }
 }
 
 impl Reader for StdReader {
@@ -396,10 +406,10 @@ mod tests {
         let (tx, rx) = channel();
         let (mut r, w) = (ChanReader::new(rx), ChanWriter::new(tx));
         spawn(proc() {
-            set_stdout(~w);
+            set_stdout(box w);
             println!("hello!");
         });
-        assert_eq!(r.read_to_str().unwrap(), "hello!\n".to_owned());
+        assert_eq!(r.read_to_str().unwrap(), "hello!\n".to_string());
     })
 
     iotest!(fn capture_stderr() {
@@ -408,10 +418,10 @@ mod tests {
         let (tx, rx) = channel();
         let (mut r, w) = (ChanReader::new(rx), ChanWriter::new(tx));
         spawn(proc() {
-            set_stderr(~w);
+            set_stderr(box w);
             fail!("my special message");
         });
         let s = r.read_to_str().unwrap();
-        assert!(s.contains("my special message"));
+        assert!(s.as_slice().contains("my special message"));
     })
 }

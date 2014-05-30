@@ -37,7 +37,6 @@
 //! assert!(cache.get(&2).is_none());
 //! ```
 
-use std::cast;
 use std::container::Container;
 use std::hash::Hash;
 use std::fmt;
@@ -57,7 +56,7 @@ struct LruEntry<K, V> {
 
 /// An LRU Cache.
 pub struct LruCache<K, V> {
-    map: HashMap<KeyRef<K>, ~LruEntry<K, V>>,
+    map: HashMap<KeyRef<K>, Box<LruEntry<K, V>>>,
     max_size: uint,
     head: *mut LruEntry<K, V>,
 }
@@ -93,7 +92,7 @@ impl<K: Hash + TotalEq, V> LruCache<K, V> {
         let cache = LruCache {
             map: HashMap::new(),
             max_size: capacity,
-            head: unsafe{ cast::transmute(~mem::uninit::<LruEntry<K, V>>()) },
+            head: unsafe{ mem::transmute(box mem::uninitialized::<LruEntry<K, V>>()) },
         };
         unsafe {
             (*cache.head).next = cache.head;
@@ -111,7 +110,7 @@ impl<K: Hash + TotalEq, V> LruCache<K, V> {
                 (node_ptr, None)
             }
             None => {
-                let mut node = ~LruEntry::new(k, v);
+                let mut node = box LruEntry::new(k, v);
                 let node_ptr: *mut LruEntry<K, V> = &mut *node;
                 (node_ptr, Some(node))
             }
@@ -206,20 +205,20 @@ impl<A: fmt::Show + Hash + TotalEq, B: fmt::Show> fmt::Show for LruCache<A, B> {
     /// Return a string that lists the key-value pairs from most-recently
     /// used to least-recently used.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        try!(write!(f.buf, r"\{"));
+        try!(write!(f, r"\{"));
         let mut cur = self.head;
         for i in range(0, self.len()) {
-            if i > 0 { try!(write!(f.buf, ", ")) }
+            if i > 0 { try!(write!(f, ", ")) }
             unsafe {
                 cur = (*cur).next;
-                try!(write!(f.buf, "{}", (*cur).key));
+                try!(write!(f, "{}", (*cur).key));
             }
-            try!(write!(f.buf, ": "));
+            try!(write!(f, ": "));
             unsafe {
-                try!(write!(f.buf, "{}", (*cur).value));
+                try!(write!(f, "{}", (*cur).value));
             }
         }
-        write!(f.buf, r"\}")
+        write!(f, r"\}")
     }
 }
 
@@ -241,11 +240,11 @@ impl<K: Hash + TotalEq, V> Mutable for LruCache<K, V> {
 impl<K, V> Drop for LruCache<K, V> {
     fn drop(&mut self) {
         unsafe {
-            let node: ~LruEntry<K, V> = cast::transmute(self.head);
+            let node: Box<LruEntry<K, V>> = mem::transmute(self.head);
             // Prevent compiler from trying to drop the un-initialized field in the sigil node.
-            let ~LruEntry { key: k, value: v, .. } = node;
-            cast::forget(k);
-            cast::forget(v);
+            let box LruEntry { key: k, value: v, .. } = node;
+            mem::forget(k);
+            mem::forget(v);
         }
     }
 }
@@ -271,23 +270,23 @@ mod tests {
 
     #[test]
     fn test_put_update() {
-        let mut cache: LruCache<~str, Vec<u8>> = LruCache::new(1);
-        cache.put("1".to_owned(), vec![10, 10]);
-        cache.put("1".to_owned(), vec![10, 19]);
-        assert_opt_eq(cache.get(&"1".to_owned()), vec![10, 19]);
+        let mut cache: LruCache<String, Vec<u8>> = LruCache::new(1);
+        cache.put("1".to_string(), vec![10, 10]);
+        cache.put("1".to_string(), vec![10, 19]);
+        assert_opt_eq(cache.get(&"1".to_string()), vec![10, 19]);
         assert_eq!(cache.len(), 1);
     }
 
     #[test]
     fn test_expire_lru() {
-        let mut cache: LruCache<~str, ~str> = LruCache::new(2);
-        cache.put("foo1".to_owned(), "bar1".to_owned());
-        cache.put("foo2".to_owned(), "bar2".to_owned());
-        cache.put("foo3".to_owned(), "bar3".to_owned());
-        assert!(cache.get(&"foo1".to_owned()).is_none());
-        cache.put("foo2".to_owned(), "bar2update".to_owned());
-        cache.put("foo4".to_owned(), "bar4".to_owned());
-        assert!(cache.get(&"foo3".to_owned()).is_none());
+        let mut cache: LruCache<String, String> = LruCache::new(2);
+        cache.put("foo1".to_string(), "bar1".to_string());
+        cache.put("foo2".to_string(), "bar2".to_string());
+        cache.put("foo3".to_string(), "bar3".to_string());
+        assert!(cache.get(&"foo1".to_string()).is_none());
+        cache.put("foo2".to_string(), "bar2update".to_string());
+        cache.put("foo4".to_string(), "bar4".to_string());
+        assert!(cache.get(&"foo3".to_string()).is_none());
     }
 
     #[test]
@@ -320,15 +319,15 @@ mod tests {
         cache.put(1, 10);
         cache.put(2, 20);
         cache.put(3, 30);
-        assert_eq!(cache.to_str(), "{3: 30, 2: 20, 1: 10}".to_owned());
+        assert_eq!(cache.to_str(), "{3: 30, 2: 20, 1: 10}".to_string());
         cache.put(2, 22);
-        assert_eq!(cache.to_str(), "{2: 22, 3: 30, 1: 10}".to_owned());
+        assert_eq!(cache.to_str(), "{2: 22, 3: 30, 1: 10}".to_string());
         cache.put(6, 60);
-        assert_eq!(cache.to_str(), "{6: 60, 2: 22, 3: 30}".to_owned());
+        assert_eq!(cache.to_str(), "{6: 60, 2: 22, 3: 30}".to_string());
         cache.get(&3);
-        assert_eq!(cache.to_str(), "{3: 30, 6: 60, 2: 22}".to_owned());
+        assert_eq!(cache.to_str(), "{3: 30, 6: 60, 2: 22}".to_string());
         cache.change_capacity(2);
-        assert_eq!(cache.to_str(), "{3: 30, 6: 60}".to_owned());
+        assert_eq!(cache.to_str(), "{3: 30, 6: 60}".to_string());
     }
 
     #[test]
@@ -339,6 +338,6 @@ mod tests {
         cache.clear();
         assert!(cache.get(&1).is_none());
         assert!(cache.get(&2).is_none());
-        assert_eq!(cache.to_str(), "{}".to_owned());
+        assert_eq!(cache.to_str(), "{}".to_string());
     }
 }

@@ -11,15 +11,16 @@
 use std::cell::RefCell;
 use std::char;
 use std::io;
-use std::io::{Process, TempDir};
-use std::local_data;
+use std::io::{Command, TempDir};
 use std::os;
 use std::str;
-use std::strbuf::StrBuf;
+use std::string::String;
+use std::unstable::dynamic_lib::DynamicLibrary;
 
-use collections::HashSet;
+use collections::{HashSet, HashMap};
 use testing;
 use rustc::back::link;
+use rustc::driver::config;
 use rustc::driver::driver;
 use rustc::driver::session;
 use rustc::metadata::creader::Loader;
@@ -36,31 +37,34 @@ use html::markdown;
 use passes;
 use visit_ast::RustdocVisitor;
 
-pub fn run(input: &str, cfgs: Vec<~str>,
-           libs: HashSet<Path>, mut test_args: Vec<~str>) -> int {
+pub fn run(input: &str,
+           cfgs: Vec<String>,
+           libs: HashSet<Path>,
+           mut test_args: Vec<String>)
+           -> int {
     let input_path = Path::new(input);
     let input = driver::FileInput(input_path.clone());
 
-    let sessopts = session::Options {
+    let sessopts = config::Options {
         maybe_sysroot: Some(os::self_exe_path().unwrap().dir_path()),
         addl_lib_search_paths: RefCell::new(libs.clone()),
-        crate_types: vec!(session::CrateTypeDylib),
-        ..session::basic_options().clone()
+        crate_types: vec!(config::CrateTypeDylib),
+        ..config::basic_options().clone()
     };
 
 
     let codemap = CodeMap::new();
-    let diagnostic_handler = diagnostic::default_handler();
+    let diagnostic_handler = diagnostic::default_handler(diagnostic::Auto);
     let span_diagnostic_handler =
     diagnostic::mk_span_handler(diagnostic_handler, codemap);
 
-    let sess = driver::build_session_(sessopts,
-                                      Some(input_path),
+    let sess = session::build_session_(sessopts,
+                                      Some(input_path.clone()),
                                       span_diagnostic_handler);
 
-    let mut cfg = driver::build_configuration(&sess);
+    let mut cfg = config::build_configuration(&sess);
     cfg.extend(cfgs.move_iter().map(|cfg_| {
-        let cfg_ = token::intern_and_get_ident(cfg_);
+        let cfg_ = token::intern_and_get_ident(cfg_.as_slice());
         @dummy_spanned(ast::MetaWord(cfg_))
     }));
     let krate = driver::phase_1_parse_input(&sess, cfg, &input);
@@ -70,8 +74,13 @@ pub fn run(input: &str, cfgs: Vec<~str>,
     let ctx = @core::DocContext {
         krate: krate,
         maybe_typed: core::NotTyped(sess),
+        src: input_path,
+        external_paths: RefCell::new(Some(HashMap::new())),
+        external_traits: RefCell::new(None),
+        external_typarams: RefCell::new(None),
+        inlined: RefCell::new(None),
     };
-    local_data::set(super::ctxtkey, ctx);
+    super::ctxtkey.replace(Some(ctx));
 
     let mut v = RustdocVisitor::new(ctx, None);
     v.visit(&ctx.krate);
@@ -79,13 +88,13 @@ pub fn run(input: &str, cfgs: Vec<~str>,
     let (krate, _) = passes::unindent_comments(krate);
     let (krate, _) = passes::collapse_docs(krate);
 
-    let mut collector = Collector::new(krate.name.to_owned(),
+    let mut collector = Collector::new(krate.name.to_string(),
                                        libs,
                                        false,
                                        false);
     collector.fold_crate(krate);
 
-    test_args.unshift("rustdoctest".to_owned());
+    test_args.unshift("rustdoctest".to_string());
 
     testing::test_main(test_args.as_slice(),
                        collector.tests.move_iter().collect());
@@ -95,18 +104,19 @@ pub fn run(input: &str, cfgs: Vec<~str>,
 fn runtest(test: &str, cratename: &str, libs: HashSet<Path>, should_fail: bool,
            no_run: bool, loose_feature_gating: bool) {
     let test = maketest(test, cratename, loose_feature_gating);
-    let input = driver::StrInput(test);
+    let input = driver::StrInput(test.to_string());
 
-    let sessopts = session::Options {
+    let sessopts = config::Options {
         maybe_sysroot: Some(os::self_exe_path().unwrap().dir_path()),
         addl_lib_search_paths: RefCell::new(libs),
-        crate_types: vec!(session::CrateTypeExecutable),
+        crate_types: vec!(config::CrateTypeExecutable),
         output_types: vec!(link::OutputTypeExe),
-        cg: session::CodegenOptions {
+        no_trans: no_run,
+        cg: config::CodegenOptions {
             prefer_dynamic: true,
-            .. session::basic_codegen_options()
+            .. config::basic_codegen_options()
         },
-        ..session::basic_options().clone()
+        ..config::basic_options().clone()
     };
 
     // Shuffle around a few input and output handles here. We're going to pass
@@ -123,35 +133,58 @@ fn runtest(test: &str, cratename: &str, libs: HashSet<Path>, should_fail: bool,
     let (tx, rx) = channel();
     let w1 = io::ChanWriter::new(tx);
     let w2 = w1.clone();
-    let old = io::stdio::set_stderr(~w1);
+    let old = io::stdio::set_stderr(box w1);
     spawn(proc() {
         let mut p = io::ChanReader::new(rx);
-        let mut err = old.unwrap_or(~io::stderr() as ~Writer:Send);
+        let mut err = old.unwrap_or(box io::stderr() as Box<Writer:Send>);
         io::util::copy(&mut p, &mut err).unwrap();
     });
-    let emitter = diagnostic::EmitterWriter::new(~w2);
+    let emitter = diagnostic::EmitterWriter::new(box w2);
 
     // Compile the code
     let codemap = CodeMap::new();
-    let diagnostic_handler = diagnostic::mk_handler(~emitter);
+    let diagnostic_handler = diagnostic::mk_handler(box emitter);
     let span_diagnostic_handler =
         diagnostic::mk_span_handler(diagnostic_handler, codemap);
 
-    let sess = driver::build_session_(sessopts,
+    let sess = session::build_session_(sessopts,
                                       None,
                                       span_diagnostic_handler);
 
     let outdir = TempDir::new("rustdoctest").expect("rustdoc needs a tempdir");
     let out = Some(outdir.path().clone());
-    let cfg = driver::build_configuration(&sess);
+    let cfg = config::build_configuration(&sess);
+    let libdir = sess.target_filesearch().get_lib_path();
     driver::compile_input(sess, cfg, &input, &out, &None);
 
     if no_run { return }
 
     // Run the code!
+    //
+    // We're careful to prepend the *target* dylib search path to the child's
+    // environment to ensure that the target loads the right libraries at
+    // runtime. It would be a sad day if the *host* libraries were loaded as a
+    // mistake.
     let exe = outdir.path().join("rust_out");
-    let out = Process::output(exe.as_str().unwrap(), []);
-    match out {
+    let env = {
+        let mut path = DynamicLibrary::search_path();
+        path.insert(0, libdir.clone());
+
+        // Remove the previous dylib search path var
+        let var = DynamicLibrary::envvar();
+        let mut env: Vec<(String,String)> = os::env().move_iter().collect();
+        match env.iter().position(|&(ref k, _)| k.as_slice() == var) {
+            Some(i) => { env.remove(i); }
+            None => {}
+        };
+
+        // Add the new dylib search path var
+        let newpath = DynamicLibrary::create_path(path.as_slice());
+        env.push((var.to_string(),
+                  str::from_utf8(newpath.as_slice()).unwrap().to_string()));
+        env
+    };
+    match Command::new(exe).env(env.as_slice()).output() {
         Err(e) => fail!("couldn't run the test: {}{}", e,
                         if e.kind == io::PermissionDenied {
                             " - maybe your tempdir is mounted with noexec?"
@@ -167,8 +200,8 @@ fn runtest(test: &str, cratename: &str, libs: HashSet<Path>, should_fail: bool,
     }
 }
 
-fn maketest(s: &str, cratename: &str, loose_feature_gating: bool) -> ~str {
-    let mut prog = StrBuf::from_str(r"
+fn maketest(s: &str, cratename: &str, loose_feature_gating: bool) -> String {
+    let mut prog = String::from_str(r"
 #![deny(warnings)]
 #![allow(unused_variable, dead_assignment, unused_mut, attribute_usage, dead_code)]
 ");
@@ -181,7 +214,8 @@ fn maketest(s: &str, cratename: &str, loose_feature_gating: bool) -> ~str {
 
     if !s.contains("extern crate") {
         if s.contains(cratename) {
-            prog.push_str(format!("extern crate {};\n", cratename));
+            prog.push_str(format!("extern crate {};\n",
+                                  cratename).as_slice());
         }
     }
     if s.contains("fn main") {
@@ -192,23 +226,23 @@ fn maketest(s: &str, cratename: &str, loose_feature_gating: bool) -> ~str {
         prog.push_str("\n}");
     }
 
-    return prog.into_owned();
+    return prog
 }
 
 pub struct Collector {
     pub tests: Vec<testing::TestDescAndFn>,
-    names: Vec<~str>,
+    names: Vec<String>,
     libs: HashSet<Path>,
     cnt: uint,
     use_headers: bool,
-    current_header: Option<~str>,
-    cratename: ~str,
+    current_header: Option<String>,
+    cratename: String,
 
     loose_feature_gating: bool
 }
 
 impl Collector {
-    pub fn new(cratename: ~str, libs: HashSet<Path>,
+    pub fn new(cratename: String, libs: HashSet<Path>,
                use_headers: bool, loose_feature_gating: bool) -> Collector {
         Collector {
             tests: Vec::new(),
@@ -223,7 +257,7 @@ impl Collector {
         }
     }
 
-    pub fn add_test(&mut self, test: ~str, should_fail: bool, no_run: bool, should_ignore: bool) {
+    pub fn add_test(&mut self, test: String, should_fail: bool, no_run: bool, should_ignore: bool) {
         let name = if self.use_headers {
             let s = self.current_header.as_ref().map(|s| s.as_slice()).unwrap_or("");
             format!("{}_{}", s, self.cnt)
@@ -232,7 +266,7 @@ impl Collector {
         };
         self.cnt += 1;
         let libs = self.libs.clone();
-        let cratename = self.cratename.to_owned();
+        let cratename = self.cratename.to_string();
         let loose_feature_gating = self.loose_feature_gating;
         debug!("Creating test {}: {}", name, test);
         self.tests.push(testing::TestDescAndFn {
@@ -242,7 +276,12 @@ impl Collector {
                 should_fail: false, // compiler failures are test failures
             },
             testfn: testing::DynTestFn(proc() {
-                runtest(test, cratename, libs, should_fail, no_run, loose_feature_gating);
+                runtest(test.as_slice(),
+                        cratename.as_slice(),
+                        libs,
+                        should_fail,
+                        no_run,
+                        loose_feature_gating);
             }),
         });
     }
@@ -258,7 +297,7 @@ impl Collector {
                     } else {
                         '_'
                     }
-                }).collect::<~str>();
+                }).collect::<String>();
 
             // new header => reset count.
             self.cnt = 0;
@@ -271,7 +310,7 @@ impl DocFolder for Collector {
     fn fold_item(&mut self, item: clean::Item) -> Option<clean::Item> {
         let pushed = match item.name {
             Some(ref name) if name.len() == 0 => false,
-            Some(ref name) => { self.names.push(name.to_owned()); true }
+            Some(ref name) => { self.names.push(name.to_string()); true }
             None => false
         };
         match item.doc_value() {

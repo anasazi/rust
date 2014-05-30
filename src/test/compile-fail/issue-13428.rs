@@ -10,7 +10,7 @@
 
 // Regression test for #13428
 
-fn foo() -> ~str {  //~ ERROR not all control paths return a value
+fn foo() -> String {  //~ ERROR not all control paths return a value
     format!("Hello {}",
             "world")
     // Put the trailing semicolon on its own line to test that the
@@ -18,8 +18,8 @@ fn foo() -> ~str {  //~ ERROR not all control paths return a value
     ;   //~ NOTE consider removing this semicolon
 }
 
-fn bar() -> ~str {  //~ ERROR not all control paths return a value
-    "foobar".to_owned()
+fn bar() -> String {  //~ ERROR not all control paths return a value
+    "foobar".to_string()
     ;   //~ NOTE consider removing this semicolon
 }
 

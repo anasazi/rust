@@ -15,9 +15,7 @@
 
 use std::cell::RefCell;
 use collections::HashMap;
-use std::io;
 use std::io::MemWriter;
-use std::fmt;
 
 use middle::ty::param_ty;
 use middle::ty;
@@ -28,14 +26,12 @@ use syntax::ast::*;
 use syntax::diagnostic::SpanHandler;
 use syntax::parse::token;
 
-macro_rules! mywrite( ($wr:expr, $($arg:tt)*) => (
-    format_args!(|a| { mywrite($wr, a) }, $($arg)*)
-) )
+macro_rules! mywrite( ($($arg:tt)*) => ({ write!($($arg)*); }) )
 
 pub struct ctxt<'a> {
     pub diag: &'a SpanHandler,
     // Def -> str Callback:
-    pub ds: fn(DefId) -> ~str,
+    pub ds: fn(DefId) -> String,
     // The type context.
     pub tcx: &'a ty::ctxt,
     pub abbrevs: &'a abbrev_map
@@ -47,14 +43,10 @@ pub struct ctxt<'a> {
 pub struct ty_abbrev {
     pos: uint,
     len: uint,
-    s: ~str
+    s: String
 }
 
 pub type abbrev_map = RefCell<HashMap<ty::t, ty_abbrev>>;
-
-fn mywrite(w: &mut MemWriter, fmt: &fmt::Arguments) {
-    fmt::write(&mut *w as &mut io::Writer, fmt);
-}
 
 pub fn enc_ty(w: &mut MemWriter, cx: &ctxt, t: ty::t) {
     match cx.abbrevs.borrow_mut().find(&t) {
@@ -229,7 +221,12 @@ fn enc_sty(w: &mut MemWriter, cx: &ctxt, st: &ty::sty) {
             enc_substs(w, cx, substs);
             mywrite!(w, "]");
         }
-        ty::ty_trait(~ty::TyTrait { def_id, ref substs, store, bounds }) => {
+        ty::ty_trait(box ty::TyTrait {
+                def_id,
+                ref substs,
+                store,
+                bounds
+            }) => {
             mywrite!(w, "x[{}|", (cx.ds)(def_id));
             enc_substs(w, cx, substs);
             enc_trait_store(w, cx, store);
@@ -293,7 +290,6 @@ fn enc_fn_style(w: &mut MemWriter, p: FnStyle) {
     match p {
         NormalFn => mywrite!(w, "n"),
         UnsafeFn => mywrite!(w, "u"),
-        ExternFn => mywrite!(w, "c")
     }
 }
 

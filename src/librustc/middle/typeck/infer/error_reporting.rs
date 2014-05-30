@@ -77,7 +77,7 @@ use middle::typeck::infer::region_inference::SameRegions;
 use std::cell::{Cell, RefCell};
 use std::char::from_u32;
 use std::rc::Rc;
-use std::strbuf::StrBuf;
+use std::string::String;
 use syntax::ast;
 use syntax::ast_map;
 use syntax::ast_util;
@@ -103,12 +103,12 @@ pub trait ErrorReporting {
                                      trace: TypeTrace,
                                      terr: &ty::type_err);
 
-    fn values_str(&self, values: &ValuePairs) -> Option<~str>;
+    fn values_str(&self, values: &ValuePairs) -> Option<String>;
 
     fn expected_found_str<T:UserString+Resolvable>(
         &self,
         exp_found: &ty::expected_found<T>)
-        -> Option<~str>;
+        -> Option<String>;
 
     fn report_concrete_failure(&self,
                                origin: SubregionOrigin,
@@ -355,7 +355,7 @@ impl<'a> ErrorReporting for InferCtxt<'a> {
             format!("{}: {} ({})",
                  message_root_str,
                  expected_found_str,
-                 ty::type_err_to_str(self.tcx, terr)));
+                 ty::type_err_to_str(self.tcx, terr)).as_slice());
     }
 
     fn report_and_explain_type_error(&self,
@@ -365,7 +365,7 @@ impl<'a> ErrorReporting for InferCtxt<'a> {
         ty::note_and_explain_type_err(self.tcx, terr);
     }
 
-    fn values_str(&self, values: &ValuePairs) -> Option<~str> {
+    fn values_str(&self, values: &ValuePairs) -> Option<String> {
         /*!
          * Returns a string of the form "expected `{}` but found `{}`",
          * or None if this is a derived error.
@@ -383,7 +383,7 @@ impl<'a> ErrorReporting for InferCtxt<'a> {
     fn expected_found_str<T:UserString+Resolvable>(
         &self,
         exp_found: &ty::expected_found<T>)
-        -> Option<~str>
+        -> Option<String>
     {
         let expected = exp_found.expected.resolve(self);
         if expected.contains_error() {
@@ -396,8 +396,8 @@ impl<'a> ErrorReporting for InferCtxt<'a> {
         }
 
         Some(format!("expected `{}` but found `{}`",
-                  expected.user_string(self.tcx),
-                  found.user_string(self.tcx)))
+                     expected.user_string(self.tcx),
+                     found.user_string(self.tcx)))
     }
 
     fn report_concrete_failure(&self,
@@ -430,7 +430,10 @@ impl<'a> ErrorReporting for InferCtxt<'a> {
                     span,
                     format!("lifetime of borrowed pointer outlives \
                             lifetime of captured variable `{}`...",
-                            ty::local_var_name_str(self.tcx, upvar_id.var_id).get().to_str()));
+                            ty::local_var_name_str(self.tcx,
+                                                   upvar_id.var_id)
+                                .get()
+                                .to_str()).as_slice());
                 note_and_explain_region(
                     self.tcx,
                     "...the borrowed pointer is valid for ",
@@ -439,7 +442,10 @@ impl<'a> ErrorReporting for InferCtxt<'a> {
                 note_and_explain_region(
                     self.tcx,
                     format!("...but `{}` is only valid for ",
-                            ty::local_var_name_str(self.tcx, upvar_id.var_id).get().to_str()),
+                            ty::local_var_name_str(self.tcx,
+                                                   upvar_id.var_id)
+                                .get()
+                                .to_str()).as_slice(),
                     sup,
                     "");
             }
@@ -483,7 +489,9 @@ impl<'a> ErrorReporting for InferCtxt<'a> {
                     span,
                     format!("captured variable `{}` does not \
                             outlive the enclosing closure",
-                            ty::local_var_name_str(self.tcx, id).get().to_str()));
+                            ty::local_var_name_str(self.tcx,
+                                                   id).get()
+                                                      .to_str()).as_slice());
                 note_and_explain_region(
                     self.tcx,
                     "captured variable is valid for ",
@@ -496,9 +504,8 @@ impl<'a> ErrorReporting for InferCtxt<'a> {
                     "");
             }
             infer::IndexSlice(span) => {
-                self.tcx.sess.span_err(
-                    span,
-                    format!("index of slice outside its lifetime"));
+                self.tcx.sess.span_err(span,
+                                       "index of slice outside its lifetime");
                 note_and_explain_region(
                     self.tcx,
                     "the slice is only valid for ",
@@ -591,7 +598,7 @@ impl<'a> ErrorReporting for InferCtxt<'a> {
                     span,
                     format!("in type `{}`, pointer has a longer lifetime than \
                           the data it references",
-                         ty.user_string(self.tcx)));
+                         ty.user_string(self.tcx)).as_slice());
                 note_and_explain_region(
                     self.tcx,
                     "the pointer is valid for ",
@@ -801,7 +808,7 @@ impl<'a> Rebuilder<'a> {
             // choice of lifetime name deterministic and thus easier to test.
             let mut names = Vec::new();
             for rn in region_names.iter() {
-                let lt_name = token::get_name(*rn).get().to_owned();
+                let lt_name = token::get_name(*rn).get().to_string();
                 names.push(lt_name);
             }
             names.sort();
@@ -893,7 +900,8 @@ impl<'a> Rebuilder<'a> {
                                -> OwnedSlice<ast::TyParamBound> {
         ty_param_bounds.map(|tpb| {
             match tpb {
-                &ast::RegionTyParamBound => ast::RegionTyParamBound,
+                &ast::StaticRegionTyParamBound => ast::StaticRegionTyParamBound,
+                &ast::OtherRegionTyParamBound(s) => ast::OtherRegionTyParamBound(s),
                 &ast::TraitTyParamBound(ref tr) => {
                     let last_seg = tr.path.segments.last().unwrap();
                     let mut insert = Vec::new();
@@ -1021,8 +1029,13 @@ impl<'a> Rebuilder<'a> {
                 }
                 ast::TyPath(ref path, _, id) => {
                     let a_def = match self.tcx.def_map.borrow().find(&id) {
-                        None => self.tcx.sess.fatal(format!("unbound path {}",
-                                                    pprust::path_to_str(path))),
+                        None => {
+                            self.tcx
+                                .sess
+                                .fatal(format!(
+                                        "unbound path {}",
+                                        pprust::path_to_str(path)).as_slice())
+                        }
                         Some(&d) => d
                     };
                     match a_def {
@@ -1208,18 +1221,18 @@ impl<'a> ErrorReportingHelpers for InferCtxt<'a> {
                                               opt_explicit_self, generics);
         let msg = format!("consider using an explicit lifetime \
                            parameter as shown: {}", suggested_fn);
-        self.tcx.sess.span_note(span, msg);
+        self.tcx.sess.span_note(span, msg.as_slice());
     }
 
     fn report_inference_failure(&self,
                                 var_origin: RegionVariableOrigin) {
         let var_description = match var_origin {
-            infer::MiscVariable(_) => "".to_owned(),
-            infer::PatternRegion(_) => " for pattern".to_owned(),
-            infer::AddrOfRegion(_) => " for borrow expression".to_owned(),
-            infer::AddrOfSlice(_) => " for slice expression".to_owned(),
-            infer::Autoref(_) => " for autoref".to_owned(),
-            infer::Coercion(_) => " for automatic coercion".to_owned(),
+            infer::MiscVariable(_) => "".to_string(),
+            infer::PatternRegion(_) => " for pattern".to_string(),
+            infer::AddrOfRegion(_) => " for borrow expression".to_string(),
+            infer::AddrOfSlice(_) => " for slice expression".to_string(),
+            infer::Autoref(_) => " for autoref".to_string(),
+            infer::Coercion(_) => " for automatic coercion".to_string(),
             infer::LateBoundRegion(_, br) => {
                 format!(" for {}in function call",
                         bound_region_to_str(self.tcx, "lifetime parameter ", true, br))
@@ -1246,7 +1259,7 @@ impl<'a> ErrorReportingHelpers for InferCtxt<'a> {
             var_origin.span(),
             format!("cannot infer an appropriate lifetime{} \
                     due to conflicting requirements",
-                    var_description));
+                    var_description).as_slice());
     }
 
     fn note_region_origin(&self, origin: SubregionOrigin) {
@@ -1281,7 +1294,7 @@ impl<'a> ErrorReportingHelpers for InferCtxt<'a> {
                         self.tcx.sess.span_note(
                             trace.origin.span(),
                             format!("...so that {} ({})",
-                                    desc, values_str));
+                                    desc, values_str).as_slice());
                     }
                     None => {
                         // Really should avoid printing this error at
@@ -1290,7 +1303,7 @@ impl<'a> ErrorReportingHelpers for InferCtxt<'a> {
                         // doing right now. - nmatsakis
                         self.tcx.sess.span_note(
                             trace.origin.span(),
-                            format!("...so that {}", desc));
+                            format!("...so that {}", desc).as_slice());
                     }
                 }
             }
@@ -1303,8 +1316,11 @@ impl<'a> ErrorReportingHelpers for InferCtxt<'a> {
             infer::ReborrowUpvar(span, ref upvar_id) => {
                 self.tcx.sess.span_note(
                     span,
-                    format!("...so that closure can access `{}`",
-                            ty::local_var_name_str(self.tcx, upvar_id.var_id).get().to_str()))
+                    format!(
+                        "...so that closure can access `{}`",
+                        ty::local_var_name_str(self.tcx, upvar_id.var_id)
+                            .get()
+                            .to_str()).as_slice())
             }
             infer::InfStackClosure(span) => {
                 self.tcx.sess.span_note(
@@ -1327,7 +1343,9 @@ impl<'a> ErrorReportingHelpers for InferCtxt<'a> {
                     span,
                     format!("...so that captured variable `{}` \
                             does not outlive the enclosing closure",
-                            ty::local_var_name_str(self.tcx, id).get().to_str()));
+                            ty::local_var_name_str(
+                                self.tcx,
+                                id).get().to_str()).as_slice());
             }
             infer::IndexSlice(span) => {
                 self.tcx.sess.span_note(
@@ -1448,7 +1466,7 @@ fn lifetimes_in_scope(tcx: &ty::ctxt,
 
 // LifeGiver is responsible for generating fresh lifetime names
 struct LifeGiver {
-    taken: HashSet<~str>,
+    taken: HashSet<String>,
     counter: Cell<uint>,
     generated: RefCell<Vec<ast::Lifetime>>,
 }
@@ -1457,7 +1475,7 @@ impl LifeGiver {
     fn with_taken(taken: &[ast::Lifetime]) -> LifeGiver {
         let mut taken_ = HashSet::new();
         for lt in taken.iter() {
-            let lt_name = token::get_name(lt.name).get().to_owned();
+            let lt_name = token::get_name(lt.name).get().to_string();
             taken_.insert(lt_name);
         }
         LifeGiver {
@@ -1488,14 +1506,14 @@ impl LifeGiver {
         return lifetime;
 
         // 0 .. 25 generates a .. z, 26 .. 51 generates aa .. zz, and so on
-        fn num_to_str(counter: uint) -> ~str {
-            let mut s = StrBuf::new();
+        fn num_to_str(counter: uint) -> String {
+            let mut s = String::new();
             let (n, r) = (counter/26 + 1, counter % 26);
             let letter: char = from_u32((r+97) as u32).unwrap();
             for _ in range(0, n) {
                 s.push_char(letter);
             }
-            s.into_owned()
+            s
         }
     }
 

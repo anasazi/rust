@@ -9,11 +9,11 @@
 // except according to those terms.
 
 use ai = std::io::net::addrinfo;
-use std::c_str::CString;
-use std::cast;
-use std::io::IoError;
-use libc;
 use libc::{c_char, c_int};
+use libc;
+use std::c_str::CString;
+use std::io::IoError;
+use std::mem;
 use std::ptr::{null, mut_null};
 
 use super::net::sockaddr_to_addr;
@@ -22,7 +22,7 @@ pub struct GetAddrInfoRequest;
 
 impl GetAddrInfoRequest {
     pub fn run(host: Option<&str>, servname: Option<&str>,
-               hint: Option<ai::Hint>) -> Result<~[ai::Info], IoError> {
+               hint: Option<ai::Hint>) -> Result<Vec<ai::Info>, IoError> {
         assert!(host.is_some() || servname.is_some());
 
         let c_host = host.map_or(unsafe { CString::new(null(), true) }, |x| x.to_c_str());
@@ -61,7 +61,7 @@ impl GetAddrInfoRequest {
         let mut rp = res;
         while rp.is_not_null() {
             unsafe {
-                let addr = match sockaddr_to_addr(cast::transmute((*rp).ai_addr),
+                let addr = match sockaddr_to_addr(mem::transmute((*rp).ai_addr),
                                                   (*rp).ai_addrlen as uint) {
                     Ok(a) => a,
                     Err(e) => return Err(e)
@@ -80,7 +80,7 @@ impl GetAddrInfoRequest {
 
         unsafe { freeaddrinfo(res); }
 
-        Ok(addrs.move_iter().collect())
+        Ok(addrs)
     }
 }
 
@@ -104,9 +104,10 @@ fn get_error(_: c_int) -> IoError {
 #[cfg(not(windows))]
 fn get_error(s: c_int) -> IoError {
     use std::io;
-    use std::str::raw::from_c_str;
 
-    let err_str = unsafe { from_c_str(gai_strerror(s)) };
+    let err_str = unsafe {
+        CString::new(gai_strerror(s), false).as_str().unwrap().to_string()
+    };
     IoError {
         kind: io::OtherIoError,
         desc: "unable to resolve host",

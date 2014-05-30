@@ -38,14 +38,14 @@ pub enum MetadataBlob {
 }
 
 pub struct crate_metadata {
-    pub name: ~str,
+    pub name: String,
     pub data: MetadataBlob,
     pub cnum_map: cnum_map,
     pub cnum: ast::CrateNum,
     pub span: Span,
 }
 
-#[deriving(Eq)]
+#[deriving(Show, Eq, Clone)]
 pub enum LinkagePreference {
     RequireDynamic,
     RequireStatic,
@@ -71,8 +71,8 @@ pub struct CStore {
     metas: RefCell<HashMap<ast::CrateNum, Rc<crate_metadata>>>,
     extern_mod_crate_map: RefCell<extern_mod_crate_map>,
     used_crate_sources: RefCell<Vec<CrateSource>>,
-    used_libraries: RefCell<Vec<(~str, NativeLibaryKind)>>,
-    used_link_args: RefCell<Vec<~str>>,
+    used_libraries: RefCell<Vec<(String, NativeLibaryKind)>>,
+    used_link_args: RefCell<Vec<String>>,
     pub intr: Rc<IdentInterner>,
 }
 
@@ -111,6 +111,17 @@ impl CStore {
     pub fn iter_crate_data(&self, i: |ast::CrateNum, &crate_metadata|) {
         for (&k, v) in self.metas.borrow().iter() {
             i(k, &**v);
+        }
+    }
+
+    /// Like `iter_crate_data`, but passes source paths (if available) as well.
+    pub fn iter_crate_data_origins(&self, i: |ast::CrateNum,
+                                              &crate_metadata,
+                                              Option<CrateSource>|) {
+        for (&k, v) in self.metas.borrow().iter() {
+            let origin = self.get_used_crate_source(k);
+            origin.as_ref().map(|cs| { assert!(k == cs.cnum); });
+            i(k, &**v, origin);
         }
     }
 
@@ -178,23 +189,23 @@ impl CStore {
         libs
     }
 
-    pub fn add_used_library(&self, lib: ~str, kind: NativeLibaryKind) {
+    pub fn add_used_library(&self, lib: String, kind: NativeLibaryKind) {
         assert!(!lib.is_empty());
         self.used_libraries.borrow_mut().push((lib, kind));
     }
 
     pub fn get_used_libraries<'a>(&'a self)
-                              -> &'a RefCell<Vec<(~str, NativeLibaryKind)> > {
+                              -> &'a RefCell<Vec<(String, NativeLibaryKind)> > {
         &self.used_libraries
     }
 
     pub fn add_used_link_args(&self, args: &str) {
         for s in args.split(' ') {
-            self.used_link_args.borrow_mut().push(s.to_owned());
+            self.used_link_args.borrow_mut().push(s.to_string());
         }
     }
 
-    pub fn get_used_link_args<'a>(&'a self) -> &'a RefCell<Vec<~str> > {
+    pub fn get_used_link_args<'a>(&'a self) -> &'a RefCell<Vec<String> > {
         &self.used_link_args
     }
 

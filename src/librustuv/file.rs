@@ -8,16 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::c_str::CString;
-use std::c_str;
-use std::cast::transmute;
-use std::cast;
 use libc::{c_int, c_char, c_void, ssize_t};
 use libc;
-use std::rt::task::BlockedTask;
+use std::c_str::CString;
+use std::c_str;
 use std::io::{FileStat, IoError};
 use std::io;
+use std::mem;
 use std::rt::rtio;
+use std::rt::task::BlockedTask;
 
 use homing::{HomingIO, HomeHandle};
 use super::{Loop, UvError, uv_error_to_io_error, wait_until_woken_after, wakeup};
@@ -68,6 +67,12 @@ impl FsRequest {
         execute(|req, cb| unsafe {
             uvll::uv_fs_stat(loop_.handle, req, path.with_ref(|p| p),
                              cb)
+        }).map(|req| req.mkstat())
+    }
+
+    pub fn fstat(loop_: &Loop, fd: c_int) -> Result<FileStat, UvError> {
+        execute(|req, cb| unsafe {
+            uvll::uv_fs_fstat(loop_.handle, req, fd, cb)
         }).map(|req| req.mkstat())
     }
 
@@ -263,8 +268,6 @@ impl FsRequest {
     }
 
     pub fn mkstat(&self) -> FileStat {
-        let path = unsafe { uvll::get_path_from_fs_req(self.req) };
-        let path = unsafe { Path::new(CString::new(path, false)) };
         let stat = self.get_stat();
         fn to_msec(stat: uvll::uv_timespec_t) -> u64 {
             // Be sure to cast to u64 first to prevent overflowing if the tv_sec
@@ -280,10 +283,9 @@ impl FsRequest {
             _ => io::TypeUnknown,
         };
         FileStat {
-            path: path,
             size: stat.st_size as u64,
             kind: kind,
-            perm: (stat.st_mode as io::FilePermission) & io::AllPermissions,
+            perm: io::FilePermission::from_bits_truncate(stat.st_mode as u32),
             created: to_msec(stat.st_birthtim),
             modified: to_msec(stat.st_mtim),
             accessed: to_msec(stat.st_atim),
@@ -339,7 +341,7 @@ fn execute(f: |*uvll::uv_fs_t, uvll::uv_fs_cb| -> c_int)
 
     extern fn fs_cb(req: *uvll::uv_fs_t) {
         let slot: &mut Option<BlockedTask> = unsafe {
-            cast::transmute(uvll::get_data_for_req(req))
+            mem::transmute(uvll::get_data_for_req(req))
         };
         wakeup(slot);
     }
@@ -375,7 +377,7 @@ impl FileWatcher {
         let r = FsRequest::write(&self.loop_, self.fd, buf, offset);
         r.map_err(uv_error_to_io_error)
     }
-    fn seek_common(&mut self, pos: i64, whence: c_int) ->
+    fn seek_common(&self, pos: i64, whence: c_int) ->
         Result<u64, IoError>{
         unsafe {
             match libc::lseek(self.fd, pos as libc::off_t, whence) {
@@ -444,9 +446,8 @@ impl rtio::RtioFileStream for FileWatcher {
     }
     fn tell(&self) -> Result<u64, IoError> {
         use libc::SEEK_CUR;
-        // this is temporary
-        let self_ = unsafe { cast::transmute_mut(self) };
-        self_.seek_common(0, SEEK_CUR)
+
+        self.seek_common(0, SEEK_CUR)
     }
     fn fsync(&mut self) -> Result<(), IoError> {
         let _m = self.fire_homing_missile();
@@ -460,6 +461,11 @@ impl rtio::RtioFileStream for FileWatcher {
         let _m = self.fire_homing_missile();
         let r = FsRequest::truncate(&self.loop_, self.fd, offset);
         r.map_err(uv_error_to_io_error)
+    }
+
+    fn fstat(&mut self) -> Result<FileStat, IoError> {
+        let _m = self.fire_homing_missile();
+        FsRequest::fstat(&self.loop_, self.fd).map_err(uv_error_to_io_error)
     }
 }
 
@@ -532,6 +538,10 @@ mod test {
         assert!(result.is_ok());
 
         let result = FsRequest::stat(l(), path);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().size, 5);
+
+        let result = FsRequest::fstat(l(), file.fd);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().size, 5);
 

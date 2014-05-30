@@ -20,38 +20,40 @@ fn bench_assert_match(b: &mut Bencher, re: Regex, text: &str) {
 #[bench]
 fn no_exponential(b: &mut Bencher) {
     let n = 100;
-    let re = Regex::new("a?".repeat(n) + "a".repeat(n)).unwrap();
+    let re = Regex::new(format!("{}{}",
+                                "a?".repeat(n),
+                                "a".repeat(n)).as_slice()).unwrap();
     let text = "a".repeat(n);
-    bench_assert_match(b, re, text);
+    bench_assert_match(b, re, text.as_slice());
 }
 
 #[bench]
 fn literal(b: &mut Bencher) {
     let re = regex!("y");
-    let text = "x".repeat(50) + "y";
-    bench_assert_match(b, re, text);
+    let text = format!("{}y", "x".repeat(50));
+    bench_assert_match(b, re, text.as_slice());
 }
 
 #[bench]
 fn not_literal(b: &mut Bencher) {
     let re = regex!(".y");
-    let text = "x".repeat(50) + "y";
-    bench_assert_match(b, re, text);
+    let text = format!("{}y", "x".repeat(50));
+    bench_assert_match(b, re, text.as_slice());
 }
 
 #[bench]
 fn match_class(b: &mut Bencher) {
     let re = regex!("[abcdw]");
-    let text = "xxxx".repeat(20) + "w";
-    bench_assert_match(b, re, text);
+    let text = format!("{}w", "xxxx".repeat(20));
+    bench_assert_match(b, re, text.as_slice());
 }
 
 #[bench]
 fn match_class_in_range(b: &mut Bencher) {
     // 'b' is between 'a' and 'c', so the class range checking doesn't help.
     let re = regex!("[ac]");
-    let text = "bbbb".repeat(20) + "c";
-    bench_assert_match(b, re, text);
+    let text = format!("{}c", "bbbb".repeat(20));
+    bench_assert_match(b, re, text.as_slice());
 }
 
 #[bench]
@@ -75,7 +77,7 @@ fn anchored_literal_short_non_match(b: &mut Bencher) {
 fn anchored_literal_long_non_match(b: &mut Bencher) {
     let re = regex!("^zbc(d|e)");
     let text = "abcdefghijklmnopqrstuvwxyz".repeat(15);
-    b.iter(|| re.is_match(text));
+    b.iter(|| re.is_match(text.as_slice()));
 }
 
 #[bench]
@@ -89,7 +91,7 @@ fn anchored_literal_short_match(b: &mut Bencher) {
 fn anchored_literal_long_match(b: &mut Bencher) {
     let re = regex!("^.bc(d|e)");
     let text = "abcdefghijklmnopqrstuvwxyz".repeat(15);
-    b.iter(|| re.is_match(text));
+    b.iter(|| re.is_match(text.as_slice()));
 }
 
 #[bench]
@@ -140,7 +142,7 @@ macro_rules! throughput(
         fn $name(b: &mut Bencher) {
             let text = gen_text($size);
             b.bytes = $size;
-            b.iter(|| if $regex.is_match(text) { fail!("match") });
+            b.iter(|| if $regex.is_match(text.as_slice()) { fail!("match") });
         }
     );
 )
@@ -150,7 +152,8 @@ fn easy1() -> Regex { regex!("A[AB]B[BC]C[CD]D[DE]E[EF]F[FG]G[GH]H[HI]I[IJ]J$") 
 fn medium() -> Regex { regex!("[XYZ]ABCDEFGHIJKLMNOPQRSTUVWXYZ$") }
 fn hard() -> Regex { regex!("[ -~]*ABCDEFGHIJKLMNOPQRSTUVWXYZ$") }
 
-fn gen_text(n: uint) -> ~str {
+#[allow(deprecated_owned_vector)]
+fn gen_text(n: uint) -> String {
     let mut rng = task_rng();
     let mut bytes = rng.gen_ascii_str(n).into_bytes();
     for (i, b) in bytes.mut_iter().enumerate() {
@@ -158,7 +161,7 @@ fn gen_text(n: uint) -> ~str {
             *b = '\n' as u8
         }
     }
-    str::from_utf8(bytes).unwrap().to_owned()
+    str::from_utf8(bytes.as_slice()).unwrap().to_string()
 }
 
 throughput!(easy0_32, easy0(), 32)
@@ -176,4 +179,3 @@ throughput!(medium_32K,medium(), 32<<10)
 throughput!(hard_32, hard(), 32)
 throughput!(hard_1K, hard(), 1<<10)
 throughput!(hard_32K,hard(), 32<<10)
-

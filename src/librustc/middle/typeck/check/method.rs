@@ -30,7 +30,7 @@ itself (note that inherent impls can only be defined in the same
 module as the type itself).
 
 Inherent candidates are not always derived from impls.  If you have a
-trait instance, such as a value of type `~ToStr`, then the trait
+trait instance, such as a value of type `Box<ToStr>`, then the trait
 methods (`to_str()`, in this case) are inherently associated with it.
 Another case is type parameters, in which case the methods of their
 bounds are inherent.
@@ -72,9 +72,9 @@ Both the inherent candidate collection and the candidate selection
 proceed by progressively deref'ing the receiver type, after all.  The
 answer is that two phases are needed to elegantly deal with explicit
 self.  After all, if there is an impl for the type `Foo`, it can
-define a method with the type `~self`, which means that it expects a
-receiver of type `~Foo`.  If we have a receiver of type `~Foo`, but we
-waited to search for that impl until we have deref'd the `~` away and
+define a method with the type `Box<self>`, which means that it expects a
+receiver of type `Box<Foo>`.  If we have a receiver of type `Box<Foo>`, but we
+waited to search for that impl until we have deref'd the `Box` away and
 obtained the type `Foo`, we would never match this method.
 
 */
@@ -118,6 +118,12 @@ pub enum AutoderefReceiverFlag {
     DontAutoderefReceiver,
 }
 
+#[deriving(Eq)]
+pub enum StaticMethodsFlag {
+    ReportStaticMethods,
+    IgnoreStaticMethods,
+}
+
 pub fn lookup<'a>(
         fcx: &'a FnCtxt<'a>,
 
@@ -129,7 +135,8 @@ pub fn lookup<'a>(
         supplied_tps: &'a [ty::t],          // The list of types X, Y, ... .
         deref_args: check::DerefArgs,       // Whether we autopointer first.
         check_traits: CheckTraitsFlag,      // Whether we check traits only.
-        autoderef_receiver: AutoderefReceiverFlag)
+        autoderef_receiver: AutoderefReceiverFlag,
+        report_statics: StaticMethodsFlag)
      -> Option<MethodCallee> {
     let mut lcx = LookupContext {
         fcx: fcx,
@@ -143,6 +150,7 @@ pub fn lookup<'a>(
         deref_args: deref_args,
         check_traits: check_traits,
         autoderef_receiver: autoderef_receiver,
+        report_statics: report_statics,
     };
 
     debug!("method lookup(self_ty={}, expr={}, self_expr={})",
@@ -173,7 +181,8 @@ pub fn lookup_in_trait<'a>(
         trait_did: DefId,                   // The trait to limit the lookup to.
         self_ty: ty::t,                     // The type of `a`.
         supplied_tps: &'a [ty::t],          // The list of types X, Y, ... .
-        autoderef_receiver: AutoderefReceiverFlag)
+        autoderef_receiver: AutoderefReceiverFlag,
+        report_statics: StaticMethodsFlag)
      -> Option<MethodCallee> {
     let mut lcx = LookupContext {
         fcx: fcx,
@@ -187,6 +196,7 @@ pub fn lookup_in_trait<'a>(
         deref_args: check::DoDerefArgs,
         check_traits: CheckTraitsOnly,
         autoderef_receiver: autoderef_receiver,
+        report_statics: report_statics,
     };
 
     debug!("method lookup_in_trait(self_ty={}, self_expr={})",
@@ -196,8 +206,6 @@ pub fn lookup_in_trait<'a>(
     lcx.push_extension_candidate(trait_did);
     lcx.search(self_ty)
 }
-
-
 
 // Determine the index of a method in the list of all methods belonging
 // to a trait and its supertraits.
@@ -235,15 +243,15 @@ fn construct_transformed_self_ty_for_object(
         *
         *     trait Foo {
         *         fn r_method<'a>(&'a self);
-        *         fn u_method(~self);
+        *         fn u_method(Box<self>);
         *     }
         *
         * Now, assuming that `r_method` is being called, we want the
         * result to be `&'a Foo`. Assuming that `u_method` is being
-        * called, we want the result to be `~Foo`. Of course,
+        * called, we want the result to be `Box<Foo>`. Of course,
         * this transformation has already been done as part of
         * `method_ty.fty.sig.inputs[0]`, but there the type
-        * is expressed in terms of `Self` (i.e., `&'a Self`, `~Self`).
+        * is expressed in terms of `Self` (i.e., `&'a Self`, `Box<Self>`).
         * Because objects are not standalone types, we can't just substitute
         * `s/Self/Foo/`, so we must instead perform this kind of hokey
         * match below.
@@ -276,7 +284,7 @@ fn construct_transformed_self_ty_for_object(
                 _ => {
                     tcx.sess.span_bug(span,
                         format!("'impossible' transformed_self_ty: {}",
-                                transformed_self_ty.repr(tcx)));
+                                transformed_self_ty.repr(tcx)).as_slice());
                 }
             }
         }
@@ -301,6 +309,7 @@ struct LookupContext<'a> {
     deref_args: check::DerefArgs,
     check_traits: CheckTraitsFlag,
     autoderef_receiver: AutoderefReceiverFlag,
+    report_statics: StaticMethodsFlag,
 }
 
 /**
@@ -319,8 +328,8 @@ struct Candidate {
 /// considered to "match" a given method candidate. Typically the test
 /// is whether the receiver is of a particular type. However, this
 /// type is the type of the receiver *after accounting for the
-/// method's self type* (e.g., if the method is an `~self` method, we
-/// have *already verified* that the receiver is of some type `~T` and
+/// method's self type* (e.g., if the method is an `Box<self>` method, we
+/// have *already verified* that the receiver is of some type `Box<T>` and
 /// now we must check that the type `T` is correct).  Unfortunately,
 /// because traits are not types, this is a pain to do.
 #[deriving(Clone)]
@@ -412,14 +421,14 @@ impl<'a> LookupContext<'a> {
          * `self.inherent_candidates`.  See comment at the start of
          * the file.  To find the inherent candidates, we repeatedly
          * deref the self-ty to find the "base-type".  So, for
-         * example, if the receiver is ~~C where `C` is a struct type,
+         * example, if the receiver is Box<Box<C>> where `C` is a struct type,
          * we'll want to find the inherent impls for `C`.
          */
 
         let span = self.self_expr.map_or(self.span, |e| e.span);
         check::autoderef(self.fcx, span, self_ty, None, PreferMutLvalue, |self_ty, _| {
             match get(self_ty).sty {
-                ty_trait(~TyTrait { def_id, ref substs, .. }) => {
+                ty_trait(box TyTrait { def_id, ref substs, .. }) => {
                     self.push_inherent_candidates_from_object(def_id, substs);
                     self.push_inherent_impl_candidates_for_type(def_id);
                 }
@@ -546,17 +555,13 @@ impl<'a> LookupContext<'a> {
                                            param_ty: param_ty) {
         debug!("push_inherent_candidates_from_param(param_ty={:?})",
                param_ty);
-        self.push_inherent_candidates_from_bounds(
-            rcvr_ty,
-            self.fcx
-                .inh
-                .param_env
-                .type_param_bounds
-                .get(param_ty.idx)
-                .trait_bounds
-                .as_slice(),
-            restrict_to,
-            param_numbered(param_ty.idx));
+        let i = param_ty.idx;
+        match self.fcx.inh.param_env.type_param_bounds.as_slice().get(i) {
+            Some(b) => self.push_inherent_candidates_from_bounds(
+                            rcvr_ty, b.trait_bounds.as_slice(), restrict_to,
+                            param_numbered(param_ty.idx)),
+            None => {}
+        }
     }
 
 
@@ -661,7 +666,17 @@ impl<'a> LookupContext<'a> {
                                  impl_did: DefId,
                                  impl_methods: &[DefId],
                                  is_extension: bool) {
-        if !self.impl_dups.insert(impl_did) {
+        let did = if self.report_statics == ReportStaticMethods {
+            // we only want to report each base trait once
+            match ty::impl_trait_ref(self.tcx(), impl_did) {
+                Some(trait_ref) => trait_ref.def_id,
+                None => impl_did
+            }
+        } else {
+            impl_did
+        };
+
+        if !self.impl_dups.insert(did) {
             return; // already visited
         }
 
@@ -748,9 +763,9 @@ impl<'a> LookupContext<'a> {
          * consuming the original pointer.
          *
          * You might think that this would be a natural byproduct of
-         * the auto-deref/auto-ref process.  This is true for `~T`
-         * but not for an `&mut T` receiver.  With `~T`, we would
-         * begin by testing for methods with a self type `~T`,
+         * the auto-deref/auto-ref process.  This is true for `Box<T>`
+         * but not for an `&mut T` receiver.  With `Box<T>`, we would
+         * begin by testing for methods with a self type `Box<T>`,
          * then autoderef to `T`, then autoref to `&mut T`.  But with
          * an `&mut T` receiver the process begins with `&mut T`, only
          * without any autoadjustments.
@@ -778,7 +793,7 @@ impl<'a> LookupContext<'a> {
                      autoref: Some(auto)})
             }
 
-            ty::ty_trait(~ty::TyTrait {
+            ty::ty_trait(box ty::TyTrait {
                 def_id, ref substs, store: ty::RegionTraitStore(_, mutbl), bounds
             }) => {
                 let region =
@@ -883,8 +898,13 @@ impl<'a> LookupContext<'a> {
             },
             ty_vec(mt, Some(_)) => self.auto_slice_vec(mt, autoderefs),
 
-            ty_trait(~ty::TyTrait { def_id: trt_did, substs: trt_substs, bounds: b, .. }) => {
-                // Coerce ~/&Trait instances to &Trait.
+            ty_trait(box ty::TyTrait {
+                    def_id: trt_did,
+                    substs: trt_substs,
+                    bounds: b,
+                    ..
+                }) => {
+                // Coerce Box/&Trait instances to &Trait.
 
                 self.search_for_some_kind_of_autorefd_method(
                     AutoBorrowObj, autoderefs, [MutImmutable, MutMutable],
@@ -930,7 +950,7 @@ impl<'a> LookupContext<'a> {
 
             ty_infer(TyVar(_)) => {
                 self.bug(format!("unexpected type: {}",
-                              self.ty_to_str(self_ty)));
+                                 self.ty_to_str(self_ty)).as_slice());
             }
         }
     }
@@ -1016,6 +1036,25 @@ impl<'a> LookupContext<'a> {
 
         if relevant_candidates.len() == 0 {
             return None;
+        }
+
+        if self.report_statics == ReportStaticMethods {
+            // lookup should only be called with ReportStaticMethods if a regular lookup failed
+            assert!(relevant_candidates.iter().all(|c| c.method_ty.explicit_self == SelfStatic));
+
+            self.tcx().sess.fileline_note(self.span,
+                                "found defined static methods, maybe a `self` is missing?");
+
+            for (idx, candidate) in relevant_candidates.iter().enumerate() {
+                self.report_candidate(idx, &candidate.origin);
+            }
+
+            // return something so we don't get errors for every mutability
+            return Some(MethodCallee {
+                origin: relevant_candidates.get(0).origin,
+                ty: ty::mk_err(),
+                substs: substs::empty()
+            });
         }
 
         if relevant_candidates.len() > 1 {
@@ -1196,9 +1235,10 @@ impl<'a> LookupContext<'a> {
                                 rcvr_ty, transformed_self_ty) {
             Ok(_) => {}
             Err(_) => {
-                self.bug(format!("{} was a subtype of {} but now is not?",
-                              self.ty_to_str(rcvr_ty),
-                              self.ty_to_str(transformed_self_ty)));
+                self.bug(format!(
+                        "{} was a subtype of {} but now is not?",
+                        self.ty_to_str(rcvr_ty),
+                        self.ty_to_str(transformed_self_ty)).as_slice());
             }
         }
 
@@ -1305,7 +1345,7 @@ impl<'a> LookupContext<'a> {
         return match candidate.method_ty.explicit_self {
             SelfStatic => {
                 debug!("(is relevant?) explicit self is static");
-                false
+                self.report_statics == ReportStaticMethods
             }
 
             SelfValue => {
@@ -1323,7 +1363,7 @@ impl<'a> LookupContext<'a> {
                         }
                     }
 
-                    ty::ty_trait(~ty::TyTrait {
+                    ty::ty_trait(box ty::TyTrait {
                         def_id: self_did, store: RegionTraitStore(_, self_m), ..
                     }) => {
                         mutability_matches(self_m, m) &&
@@ -1344,7 +1384,7 @@ impl<'a> LookupContext<'a> {
                         }
                     }
 
-                    ty::ty_trait(~ty::TyTrait {
+                    ty::ty_trait(box ty::TyTrait {
                         def_id: self_did, store: UniqTraitStore, ..
                     }) => {
                         rcvr_matches_object(self_did, candidate)
@@ -1391,11 +1431,20 @@ impl<'a> LookupContext<'a> {
     fn report_candidate(&self, idx: uint, origin: &MethodOrigin) {
         match *origin {
             MethodStatic(impl_did) => {
-                // If it is an instantiated default method, use the original
-                // default method for error reporting.
-                let did = match provided_source(self.tcx(), impl_did) {
-                    None => impl_did,
-                    Some(did) => did
+                let did = if self.report_statics == ReportStaticMethods {
+                    // If we're reporting statics, we want to report the trait
+                    // definition if possible, rather than an impl
+                    match ty::trait_method_of_method(self.tcx(), impl_did) {
+                        None => {debug!("(report candidate) No trait method found"); impl_did},
+                        Some(trait_did) => {debug!("(report candidate) Found trait ref"); trait_did}
+                    }
+                } else {
+                    // If it is an instantiated default method, use the original
+                    // default method for error reporting.
+                    match provided_source(self.tcx(), impl_did) {
+                        None => impl_did,
+                        Some(did) => did
+                    }
                 };
                 self.report_static_candidate(idx, did)
             }
@@ -1417,25 +1466,25 @@ impl<'a> LookupContext<'a> {
         self.tcx().sess.span_note(
             span,
             format!("candidate \\#{} is `{}`",
-                 idx+1u,
-                 ty::item_path_str(self.tcx(), did)));
+                    idx + 1u,
+                    ty::item_path_str(self.tcx(), did)).as_slice());
     }
 
     fn report_param_candidate(&self, idx: uint, did: DefId) {
         self.tcx().sess.span_note(
             self.span,
             format!("candidate \\#{} derives from the bound `{}`",
-                 idx+1u,
-                 ty::item_path_str(self.tcx(), did)));
+                    idx + 1u,
+                    ty::item_path_str(self.tcx(), did)).as_slice());
     }
 
     fn report_trait_candidate(&self, idx: uint, did: DefId) {
         self.tcx().sess.span_note(
             self.span,
             format!("candidate \\#{} derives from the type of the receiver, \
-                  which is the trait `{}`",
-                 idx+1u,
-                 ty::item_path_str(self.tcx(), did)));
+                     which is the trait `{}`",
+                    idx + 1u,
+                    ty::item_path_str(self.tcx(), did)).as_slice());
     }
 
     fn infcx(&'a self) -> &'a infer::InferCtxt<'a> {
@@ -1446,11 +1495,11 @@ impl<'a> LookupContext<'a> {
         self.fcx.tcx()
     }
 
-    fn ty_to_str(&self, t: ty::t) -> ~str {
+    fn ty_to_str(&self, t: ty::t) -> String {
         self.fcx.infcx().ty_to_str(t)
     }
 
-    fn did_to_str(&self, did: DefId) -> ~str {
+    fn did_to_str(&self, did: DefId) -> String {
         ty::item_path_str(self.tcx(), did)
     }
 
@@ -1460,8 +1509,9 @@ impl<'a> LookupContext<'a> {
 }
 
 impl Repr for Candidate {
-    fn repr(&self, tcx: &ty::ctxt) -> ~str {
-        format!("Candidate(rcvr_ty={}, rcvr_substs={}, method_ty={}, origin={:?})",
+    fn repr(&self, tcx: &ty::ctxt) -> String {
+        format!("Candidate(rcvr_ty={}, rcvr_substs={}, method_ty={}, \
+                 origin={:?})",
                 self.rcvr_match_condition.repr(tcx),
                 self.rcvr_substs.repr(tcx),
                 self.method_ty.repr(tcx),
@@ -1470,7 +1520,7 @@ impl Repr for Candidate {
 }
 
 impl Repr for RcvrMatchCondition {
-    fn repr(&self, tcx: &ty::ctxt) -> ~str {
+    fn repr(&self, tcx: &ty::ctxt) -> String {
         match *self {
             RcvrMatchesIfObject(d) => {
                 format!("RcvrMatchesIfObject({})", d.repr(tcx))

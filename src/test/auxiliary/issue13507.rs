@@ -48,7 +48,7 @@ pub mod testtypes {
     // Tests ty_float (does not test all variants of FloatTy)
     pub type FooFloat = f64;
 
-    // For ty_str, what kind of string should I use? &'static str? ~str? Raw str?
+    // For ty_str, what kind of string should I use? &'static str? String? Raw str?
 
     // Tests ty_enum
     pub enum FooEnum {
@@ -59,7 +59,7 @@ pub mod testtypes {
     // Skipping ty_box
 
     // Tests ty_uniq (of u8)
-    pub type FooUniq = ~u8;
+    pub type FooUniq = Box<u8>;
 
     // As with ty_str, what type should be used for ty_vec?
 

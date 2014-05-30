@@ -13,7 +13,10 @@
 use back::svh::Svh;
 use driver::session::Session;
 use metadata::csearch;
+use mc = middle::mem_categorization;
+use middle::lint;
 use middle::const_eval;
+use middle::dependency_format;
 use middle::lang_items::{ExchangeHeapLangItem, OpaqueStructLangItem};
 use middle::lang_items::{TyDescStructLangItem, TyVisitorTraitLangItem};
 use middle::freevars;
@@ -24,7 +27,7 @@ use middle::subst::Subst;
 use middle::typeck;
 use middle::typeck::MethodCall;
 use middle::ty_fold;
-use middle::ty_fold::TypeFolder;
+use middle::ty_fold::{TypeFoldable,TypeFolder};
 use middle;
 use util::ppaux::{note_and_explain_region, bound_region_ptr_to_str};
 use util::ppaux::{trait_store_to_str, ty_to_str};
@@ -32,13 +35,13 @@ use util::ppaux::{Repr, UserString};
 use util::common::{indenter};
 use util::nodemap::{NodeMap, NodeSet, DefIdMap, DefIdSet, FnvHashMap};
 
-use std::cast;
 use std::cell::{Cell, RefCell};
 use std::cmp;
 use std::fmt::Show;
 use std::fmt;
 use std::hash::{Hash, sip};
 use std::iter::AdditiveIterator;
+use std::mem;
 use std::ops;
 use std::rc::Rc;
 use collections::{HashMap, HashSet};
@@ -126,7 +129,7 @@ pub struct mt {
 
 #[deriving(Clone, Eq, TotalEq, Hash, Encodable, Decodable, Show)]
 pub enum TraitStore {
-    /// ~Trait
+    /// Box<Trait>
     UniqTraitStore,
     /// &Trait and &mut Trait
     RegionTraitStore(Region, ast::Mutability),
@@ -218,16 +221,16 @@ pub enum AutoRef {
     /// Convert from T to &T
     AutoPtr(Region, ast::Mutability),
 
-    /// Convert from ~[]/&[] to &[] (or str)
+    /// Convert from ~[]/&[] to &[] or str
     AutoBorrowVec(Region, ast::Mutability),
 
-    /// Convert from ~[]/&[] to &&[] (or str)
+    /// Convert from ~[]/&[] to &&[] or str
     AutoBorrowVecRef(Region, ast::Mutability),
 
     /// Convert from T to *T
     AutoUnsafe(ast::Mutability),
 
-    /// Convert from ~Trait/&Trait to &Trait
+    /// Convert from Box<Trait>/&Trait to &Trait
     AutoBorrowObj(Region, ast::Mutability),
 }
 
@@ -235,9 +238,9 @@ pub enum AutoRef {
 /// generates so that so that it can be reused and doesn't have to be redone
 /// later on.
 pub struct ctxt {
-    // Specifically use a speedy hash algorithm for this hash map, it's used
-    // quite often.
-    pub interner: RefCell<FnvHashMap<intern_key, ~t_box_>>,
+    /// Specifically use a speedy hash algorithm for this hash map, it's used
+    /// quite often.
+    pub interner: RefCell<FnvHashMap<intern_key, Box<t_box_>>>,
     pub next_id: Cell<uint>,
     pub sess: Session,
     pub def_map: resolve::DefMap,
@@ -246,24 +249,24 @@ pub struct ctxt {
 
     pub region_maps: middle::region::RegionMaps,
 
-    // Stores the types for various nodes in the AST.  Note that this table
-    // is not guaranteed to be populated until after typeck.  See
-    // typeck::check::fn_ctxt for details.
+    /// Stores the types for various nodes in the AST.  Note that this table
+    /// is not guaranteed to be populated until after typeck.  See
+    /// typeck::check::fn_ctxt for details.
     pub node_types: node_type_table,
 
-    // Stores the type parameters which were substituted to obtain the type
-    // of this node.  This only applies to nodes that refer to entities
-    // parameterized by type parameters, such as generic fns, types, or
-    // other items.
-    pub node_type_substs: RefCell<NodeMap<Vec<t>>>,
+    /// Stores the type parameters which were substituted to obtain the type
+    /// of this node.  This only applies to nodes that refer to entities
+    /// param<eterized by type parameters, such as generic fns, types, or
+    /// other items.
+    pub item_substs: RefCell<NodeMap<ItemSubsts>>,
 
-    // Maps from a method to the method "descriptor"
+    /// Maps from a method to the method "descriptor"
     pub methods: RefCell<DefIdMap<Rc<Method>>>,
 
-    // Maps from a trait def-id to a list of the def-ids of its methods
+    /// Maps from a trait def-id to a list of the def-ids of its methods
     pub trait_method_def_ids: RefCell<DefIdMap<Rc<Vec<DefId>>>>,
 
-    // A cache for the trait_methods() routine
+    /// A cache for the trait_methods() routine
     pub trait_methods_cache: RefCell<DefIdMap<Rc<Vec<Rc<Method>>>>>,
 
     pub impl_trait_cache: RefCell<DefIdMap<Option<Rc<ty::TraitRef>>>>,
@@ -276,7 +279,7 @@ pub struct ctxt {
     pub freevars: RefCell<freevars::freevar_map>,
     pub tcache: type_cache,
     pub rcache: creader_cache,
-    pub short_names_cache: RefCell<HashMap<t, ~str>>,
+    pub short_names_cache: RefCell<HashMap<t, String>>,
     pub needs_unwind_cleanup_cache: RefCell<HashMap<t, bool>>,
     pub tc_cache: RefCell<HashMap<uint, TypeContents>>,
     pub ast_ty_to_ty_cache: RefCell<NodeMap<ast_ty_to_ty_cache_entry>>,
@@ -285,69 +288,74 @@ pub struct ctxt {
     pub adjustments: RefCell<NodeMap<AutoAdjustment>>,
     pub normalized_cache: RefCell<HashMap<t, t>>,
     pub lang_items: middle::lang_items::LanguageItems,
-    // A mapping of fake provided method def_ids to the default implementation
+    /// A mapping of fake provided method def_ids to the default implementation
     pub provided_method_sources: RefCell<DefIdMap<ast::DefId>>,
     pub supertraits: RefCell<DefIdMap<Rc<Vec<Rc<TraitRef>>>>>,
     pub superstructs: RefCell<DefIdMap<Option<ast::DefId>>>,
     pub struct_fields: RefCell<DefIdMap<Rc<Vec<field_ty>>>>,
 
-    // Maps from def-id of a type or region parameter to its
-    // (inferred) variance.
+    /// Maps from def-id of a type or region parameter to its
+    /// (inferred) variance.
     pub item_variance_map: RefCell<DefIdMap<Rc<ItemVariances>>>,
 
-    // A mapping from the def ID of an enum or struct type to the def ID
-    // of the method that implements its destructor. If the type is not
-    // present in this map, it does not have a destructor. This map is
-    // populated during the coherence phase of typechecking.
+    /// A mapping from the def ID of an enum or struct type to the def ID
+    /// of the method that implements its destructor. If the type is not
+    /// present in this map, it does not have a destructor. This map is
+    /// populated during the coherence phase of typechecking.
     pub destructor_for_type: RefCell<DefIdMap<ast::DefId>>,
 
-    // A method will be in this list if and only if it is a destructor.
+    /// A method will be in this list if and only if it is a destructor.
     pub destructors: RefCell<DefIdSet>,
 
-    // Maps a trait onto a list of impls of that trait.
+    /// Maps a trait onto a list of impls of that trait.
     pub trait_impls: RefCell<DefIdMap<Rc<RefCell<Vec<ast::DefId>>>>>,
 
-    // Maps a DefId of a type to a list of its inherent impls.
-    // Contains implementations of methods that are inherent to a type.
-    // Methods in these implementations don't need to be exported.
+    /// Maps a DefId of a type to a list of its inherent impls.
+    /// Contains implementations of methods that are inherent to a type.
+    /// Methods in these implementations don't need to be exported.
     pub inherent_impls: RefCell<DefIdMap<Rc<RefCell<Vec<ast::DefId>>>>>,
 
-    // Maps a DefId of an impl to a list of its methods.
-    // Note that this contains all of the impls that we know about,
-    // including ones in other crates. It's not clear that this is the best
-    // way to do it.
+    /// Maps a DefId of an impl to a list of its methods.
+    /// Note that this contains all of the impls that we know about,
+    /// including ones in other crates. It's not clear that this is the best
+    /// way to do it.
     pub impl_methods: RefCell<DefIdMap<Vec<ast::DefId>>>,
 
-    // Set of used unsafe nodes (functions or blocks). Unsafe nodes not
-    // present in this set can be warned about.
+    /// Set of used unsafe nodes (functions or blocks). Unsafe nodes not
+    /// present in this set can be warned about.
     pub used_unsafe: RefCell<NodeSet>,
 
-    // Set of nodes which mark locals as mutable which end up getting used at
-    // some point. Local variable definitions not in this set can be warned
-    // about.
+    /// Set of nodes which mark locals as mutable which end up getting used at
+    /// some point. Local variable definitions not in this set can be warned
+    /// about.
     pub used_mut_nodes: RefCell<NodeSet>,
 
-    // vtable resolution information for impl declarations
+    /// vtable resolution information for impl declarations
     pub impl_vtables: typeck::impl_vtable_map,
 
-    // The set of external nominal types whose implementations have been read.
-    // This is used for lazy resolution of methods.
+    /// The set of external nominal types whose implementations have been read.
+    /// This is used for lazy resolution of methods.
     pub populated_external_types: RefCell<DefIdSet>,
 
-    // The set of external traits whose implementations have been read. This
-    // is used for lazy resolution of traits.
+    /// The set of external traits whose implementations have been read. This
+    /// is used for lazy resolution of traits.
     pub populated_external_traits: RefCell<DefIdSet>,
 
-    // Borrows
+    /// Borrows
     pub upvar_borrow_map: RefCell<UpvarBorrowMap>,
 
-    // These two caches are used by const_eval when decoding external statics
-    // and variants that are found.
+    /// These two caches are used by const_eval when decoding external statics
+    /// and variants that are found.
     pub extern_const_statics: RefCell<DefIdMap<Option<@ast::Expr>>>,
     pub extern_const_variants: RefCell<DefIdMap<Option<@ast::Expr>>>,
 
     pub method_map: typeck::MethodMap,
     pub vtable_map: typeck::vtable_map,
+
+    pub dependency_formats: RefCell<dependency_format::Dependencies>,
+
+    pub node_lint_levels: RefCell<HashMap<(ast::NodeId, lint::Lint),
+                                          (lint::Level, lint::LintSource)>>,
 }
 
 pub enum tbox_flag {
@@ -384,13 +392,13 @@ pub struct t { inner: *t_opaque }
 
 impl fmt::Show for t {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.buf.write_str("*t_opaque")
+        "*t_opaque".fmt(f)
     }
 }
 
 pub fn get(t: t) -> t_box {
     unsafe {
-        let t2: t_box = cast::transmute(t);
+        let t2: t_box = mem::transmute(t);
         t2
     }
 }
@@ -497,7 +505,7 @@ pub struct UpvarId {
     pub closure_expr_id: ast::NodeId,
 }
 
-#[deriving(Clone, Eq, TotalEq, Hash)]
+#[deriving(Clone, Eq, TotalEq, Hash, Show)]
 pub enum BorrowKind {
     /// Data must be immutable and is aliasable.
     ImmBorrow,
@@ -731,8 +739,8 @@ pub enum sty {
     ty_ptr(mt),
     ty_rptr(Region, mt),
     ty_bare_fn(BareFnTy),
-    ty_closure(~ClosureTy),
-    ty_trait(~TyTrait),
+    ty_closure(Box<ClosureTy>),
+    ty_trait(Box<TyTrait>),
     ty_struct(DefId, substs),
     ty_tup(Vec<t>),
 
@@ -850,7 +858,7 @@ impl CLike for BuiltinBound {
         *self as uint
     }
     fn from_uint(v: uint) -> BuiltinBound {
-        unsafe { cast::transmute(v) }
+        unsafe { mem::transmute(v) }
     }
 }
 
@@ -908,7 +916,7 @@ impl Vid for TyVid {
 
 impl fmt::Show for TyVid {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result{
-        write!(f.buf, "<generic \\#{}>", self.to_uint())
+        write!(f, "<generic \\#{}>", self.to_uint())
     }
 }
 
@@ -918,7 +926,7 @@ impl Vid for IntVid {
 
 impl fmt::Show for IntVid {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f.buf, "<generic integer \\#{}>", self.to_uint())
+        write!(f, "<generic integer \\#{}>", self.to_uint())
     }
 }
 
@@ -928,7 +936,7 @@ impl Vid for FloatVid {
 
 impl fmt::Show for FloatVid {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f.buf, "<generic float \\#{}>", self.to_uint())
+        write!(f, "<generic float \\#{}>", self.to_uint())
     }
 }
 
@@ -945,7 +953,7 @@ impl fmt::Show for RegionVid {
 impl fmt::Show for FnSig {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // grr, without tcx not much we can do.
-        write!(f.buf, "(...)")
+        write!(f, "(...)")
     }
 }
 
@@ -1030,7 +1038,7 @@ pub struct ParameterEnvironment {
     pub self_param_bound: Option<Rc<TraitRef>>,
 
     /// Bounds on each numbered type parameter
-    pub type_param_bounds: Vec<ParamBounds> ,
+    pub type_param_bounds: Vec<ParamBounds>,
 }
 
 /// A polytype.
@@ -1054,6 +1062,13 @@ pub struct TraitDef {
     pub generics: Generics,
     pub bounds: BuiltinBounds,
     pub trait_ref: Rc<ty::TraitRef>,
+}
+
+/// Records the substitutions used to translate the polytype for an
+/// item into the monotype of an item reference.
+#[deriving(Clone)]
+pub struct ItemSubsts {
+    pub substs: ty::substs,
 }
 
 pub struct ty_param_substs_and_ty {
@@ -1082,7 +1097,7 @@ pub fn mk_ctxt(s: Session,
         def_map: dm,
         region_maps: region_maps,
         node_types: RefCell::new(HashMap::new()),
-        node_type_substs: RefCell::new(NodeMap::new()),
+        item_substs: RefCell::new(NodeMap::new()),
         trait_refs: RefCell::new(NodeMap::new()),
         trait_defs: RefCell::new(DefIdMap::new()),
         map: map,
@@ -1122,6 +1137,8 @@ pub fn mk_ctxt(s: Session,
         extern_const_variants: RefCell::new(DefIdMap::new()),
         method_map: RefCell::new(FnvHashMap::new()),
         vtable_map: RefCell::new(FnvHashMap::new()),
+        dependency_formats: RefCell::new(HashMap::new()),
+        node_lint_levels: RefCell::new(HashMap::new()),
     }
 }
 
@@ -1146,7 +1163,7 @@ pub fn mk_t(cx: &ctxt, st: sty) -> t {
     let key = intern_key { sty: &st };
 
     match cx.interner.borrow().find(&key) {
-        Some(t) => unsafe { return cast::transmute(&t.sty); },
+        Some(t) => unsafe { return mem::transmute(&t.sty); },
         _ => ()
     }
 
@@ -1190,7 +1207,7 @@ pub fn mk_t(cx: &ctxt, st: sty) -> t {
       &ty_enum(_, ref substs) | &ty_struct(_, ref substs) => {
           flags |= sflags(substs);
       }
-      &ty_trait(~ty::TyTrait { ref substs, store, .. }) => {
+      &ty_trait(box ty::TyTrait { ref substs, store, .. }) => {
           flags |= sflags(substs);
           match store {
               RegionTraitStore(r, _) => {
@@ -1230,7 +1247,7 @@ pub fn mk_t(cx: &ctxt, st: sty) -> t {
       }
     }
 
-    let t = ~t_box_ {
+    let t = box t_box_ {
         sty: st,
         id: cx.next_id.get(),
         flags: flags,
@@ -1247,14 +1264,14 @@ pub fn mk_t(cx: &ctxt, st: sty) -> t {
     cx.next_id.set(cx.next_id.get() + 1);
 
     unsafe {
-        cast::transmute::<*sty, t>(sty_ptr)
+        mem::transmute::<*sty, t>(sty_ptr)
     }
 }
 
 #[inline]
 pub fn mk_prim_t(primitive: &'static t_box_) -> t {
     unsafe {
-        cast::transmute::<&'static t_box_, t>(primitive)
+        mem::transmute::<&'static t_box_, t>(primitive)
     }
 }
 
@@ -1399,7 +1416,7 @@ pub fn mk_slice(cx: &ctxt, r: Region, tm: mt) -> t {
 pub fn mk_tup(cx: &ctxt, ts: Vec<t>) -> t { mk_t(cx, ty_tup(ts)) }
 
 pub fn mk_closure(cx: &ctxt, fty: ClosureTy) -> t {
-    mk_t(cx, ty_closure(~fty))
+    mk_t(cx, ty_closure(box fty))
 }
 
 pub fn mk_bare_fn(cx: &ctxt, fty: BareFnTy) -> t {
@@ -1432,7 +1449,7 @@ pub fn mk_trait(cx: &ctxt,
                 bounds: BuiltinBounds)
              -> t {
     // take a copy of substs so that we own the vectors inside
-    let inner = ~TyTrait {
+    let inner = box TyTrait {
         def_id: did,
         substs: substs,
         store: store,
@@ -1477,7 +1494,7 @@ pub fn maybe_walk_ty(ty: t, f: |t| -> bool) {
             maybe_walk_ty(tm.ty, f);
         }
         ty_enum(_, ref substs) | ty_struct(_, ref substs) |
-        ty_trait(~TyTrait { ref substs, .. }) => {
+        ty_trait(box TyTrait { ref substs, .. }) => {
             for subty in (*substs).tps.iter() { maybe_walk_ty(*subty, |x| f(x)); }
         }
         ty_tup(ref ts) => { for tt in ts.iter() { maybe_walk_ty(*tt, |x| f(x)); } }
@@ -1505,47 +1522,15 @@ pub fn walk_regions_and_ty(cx: &ctxt, ty: t, fldr: |r: Region|, fldt: |t: t|)
                                    |t| { fldt(t); t }).fold_ty(ty)
 }
 
-// Substitute *only* type parameters.  Used in trans where regions are erased.
-pub fn subst_tps(tcx: &ctxt, tps: &[t], self_ty_opt: Option<t>, typ: t) -> t {
-    let mut subst = TpsSubst { tcx: tcx, self_ty_opt: self_ty_opt, tps: tps };
-    return subst.fold_ty(typ);
-
-    struct TpsSubst<'a> {
-        tcx: &'a ctxt,
-        self_ty_opt: Option<t>,
-        tps: &'a [t],
+impl ItemSubsts {
+    pub fn empty() -> ItemSubsts {
+        ItemSubsts {
+            substs: substs::empty(),
+        }
     }
 
-    impl<'a> TypeFolder for TpsSubst<'a> {
-        fn tcx<'a>(&'a self) -> &'a ctxt { self.tcx }
-
-        fn fold_ty(&mut self, t: ty::t) -> ty::t {
-            if self.tps.len() == 0u && self.self_ty_opt.is_none() {
-                return t;
-            }
-
-            let tb = ty::get(t);
-            if self.self_ty_opt.is_none() && !tbox_has_flag(tb, has_params) {
-                return t;
-            }
-
-            match ty::get(t).sty {
-                ty_param(p) => {
-                    self.tps[p.idx]
-                }
-
-                ty_self(_) => {
-                    match self.self_ty_opt {
-                        None => self.tcx.sess.bug("ty_self unexpected here"),
-                        Some(self_ty) => self_ty
-                    }
-                }
-
-                _ => {
-                    ty_fold::super_fold_ty(self, t)
-                }
-            }
-        }
+    pub fn is_noop(&self) -> bool {
+        ty::substs_is_noop(&self.substs)
     }
 }
 
@@ -1560,7 +1545,7 @@ pub fn substs_is_noop(substs: &substs) -> bool {
         substs.self_ty.is_none()
 }
 
-pub fn substs_to_str(cx: &ctxt, substs: &substs) -> ~str {
+pub fn substs_to_str(cx: &ctxt, substs: &substs) -> String {
     substs.repr(cx)
 }
 
@@ -1946,7 +1931,7 @@ impl TypeContents {
     pub fn owned_pointer(&self) -> TypeContents {
         /*!
          * Includes only those bits that still apply
-         * when indirected through a `~` pointer
+         * when indirected through a `Box` pointer
          */
         TC::OwnsOwned | (
             *self & (TC::OwnsAll | TC::ReachesAll))
@@ -2007,7 +1992,7 @@ impl ops::Sub<TypeContents,TypeContents> for TypeContents {
 
 impl fmt::Show for TypeContents {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f.buf, "TypeContents({:t})", self.bits)
+        write!(f, "TypeContents({:t})", self.bits)
     }
 }
 
@@ -2045,7 +2030,7 @@ pub fn type_contents(cx: &ctxt, ty: t) -> TypeContents {
         // private cache for this walk.  This is needed in the case of cyclic
         // types like:
         //
-        //     struct List { next: ~Option<List>, ... }
+        //     struct List { next: Box<Option<List>>, ... }
         //
         // When computing the type contents of such a type, we wind up deeply
         // recursing as we go.  So when we encounter the recursive reference
@@ -2095,7 +2080,7 @@ pub fn type_contents(cx: &ctxt, ty: t) -> TypeContents {
                 }
             }
 
-            ty_trait(~ty::TyTrait { store, bounds, .. }) => {
+            ty_trait(box ty::TyTrait { store, bounds, .. }) => {
                 object_contents(cx, store, bounds)
             }
 
@@ -2640,7 +2625,7 @@ pub fn node_id_to_trait_ref(cx: &ctxt, id: ast::NodeId) -> Rc<ty::TraitRef> {
         Some(t) => t.clone(),
         None => cx.sess.bug(
             format!("node_id_to_trait_ref: no trait ref for node `{}`",
-                cx.map.node_to_str(id)))
+                    cx.map.node_to_str(id)).as_slice())
     }
 }
 
@@ -2653,7 +2638,7 @@ pub fn node_id_to_type(cx: &ctxt, id: ast::NodeId) -> t {
        Some(t) => t,
        None => cx.sess.bug(
            format!("node_id_to_type: no type for node `{}`",
-               cx.map.node_to_str(id)))
+                   cx.map.node_to_str(id)).as_slice())
     }
 }
 
@@ -2664,11 +2649,10 @@ pub fn node_id_to_type_opt(cx: &ctxt, id: ast::NodeId) -> Option<t> {
     }
 }
 
-// FIXME(pcwalton): Makes a copy, bleh. Probably better to not do that.
-pub fn node_id_to_type_params(cx: &ctxt, id: ast::NodeId) -> Vec<t> {
-    match cx.node_type_substs.borrow().find(&id) {
-      None => return Vec::new(),
-      Some(ts) => return (*ts).clone(),
+pub fn node_id_item_substs(cx: &ctxt, id: ast::NodeId) -> ItemSubsts {
+    match cx.item_substs.borrow().find(&id) {
+      None => ItemSubsts::empty(),
+      Some(ts) => ts.clone(),
     }
 }
 
@@ -2738,7 +2722,8 @@ pub fn ty_region(tcx: &ctxt,
         ref s => {
             tcx.sess.span_bug(
                 span,
-                format!("ty_region() invoked on in appropriate ty: {:?}", s));
+                format!("ty_region() invoked on in appropriate ty: {:?}",
+                        s).as_slice());
         }
     }
 }
@@ -2795,11 +2780,12 @@ pub fn expr_span(cx: &ctxt, id: NodeId) -> Span {
         }
         Some(f) => {
             cx.sess.bug(format!("Node id {} is not an expr: {:?}",
-                                id, f));
+                                id,
+                                f).as_slice());
         }
         None => {
             cx.sess.bug(format!("Node id {} is not present \
-                                in the node map", id));
+                                in the node map", id).as_slice());
         }
     }
 }
@@ -2814,14 +2800,15 @@ pub fn local_var_name_str(cx: &ctxt, id: NodeId) -> InternedString {
                 _ => {
                     cx.sess.bug(
                         format!("Variable id {} maps to {:?}, not local",
-                                id, pat));
+                                id,
+                                pat).as_slice());
                 }
             }
         }
         r => {
-            cx.sess.bug(
-                format!("Variable id {} maps to {:?}, not local",
-                        id, r));
+            cx.sess.bug(format!("Variable id {} maps to {:?}, not local",
+                                id,
+                                r).as_slice());
         }
     }
 }
@@ -2853,7 +2840,7 @@ pub fn adjust_ty(cx: &ctxt,
                             cx.sess.bug(
                                 format!("add_env adjustment on non-bare-fn: \
                                          {:?}",
-                                        b));
+                                        b).as_slice());
                         }
                     }
                 }
@@ -2878,7 +2865,8 @@ pub fn adjust_ty(cx: &ctxt,
                                         format!("the {}th autoderef failed: \
                                                 {}",
                                                 i,
-                                                ty_to_str(cx, adjusted_ty)));
+                                                ty_to_str(cx, adjusted_ty))
+                                                          .as_slice());
                                 }
                             }
                         }
@@ -2944,7 +2932,8 @@ pub fn adjust_ty(cx: &ctxt,
                 _ => {
                     cx.sess.span_bug(
                         span,
-                        format!("borrow-vec associated with bad sty: {:?}", get(ty).sty));
+                        format!("borrow-vec associated with bad sty: {:?}",
+                                get(ty).sty).as_slice());
                 }
             },
             ty_vec(mt, Some(_)) => ty::mk_slice(cx, r, ty::mt {ty: mt.ty, mutbl: m}),
@@ -2952,7 +2941,8 @@ pub fn adjust_ty(cx: &ctxt,
             ref s => {
                 cx.sess.span_bug(
                     span,
-                    format!("borrow-vec associated with bad sty: {:?}", s));
+                    format!("borrow-vec associated with bad sty: {:?}",
+                            s).as_slice());
             }
         }
     }
@@ -2960,7 +2950,7 @@ pub fn adjust_ty(cx: &ctxt,
     fn borrow_obj(cx: &ctxt, span: Span, r: Region,
                   m: ast::Mutability, ty: ty::t) -> ty::t {
         match get(ty).sty {
-            ty_trait(~ty::TyTrait {def_id, ref substs, bounds, .. }) => {
+            ty_trait(box ty::TyTrait {def_id, ref substs, bounds, .. }) => {
                 ty::mk_trait(cx, def_id, substs.clone(),
                              RegionTraitStore(r, m), bounds)
             }
@@ -2968,7 +2958,7 @@ pub fn adjust_ty(cx: &ctxt,
                 cx.sess.span_bug(
                     span,
                     format!("borrow-trait-obj associated with bad sty: {:?}",
-                         s));
+                            s).as_slice());
             }
         }
     }
@@ -2983,21 +2973,6 @@ impl AutoRef {
             ty::AutoUnsafe(m) => ty::AutoUnsafe(m),
             ty::AutoBorrowObj(r, m) => ty::AutoBorrowObj(f(r), m),
         }
-    }
-}
-
-pub struct ParamsTy {
-    pub params: Vec<t>,
-    pub ty: t
-}
-
-#[allow(dead_code)] // this may be useful?
-pub fn expr_ty_params_and_ty(cx: &ctxt,
-                             expr: &ast::Expr)
-                          -> ParamsTy {
-    ParamsTy {
-        params: node_id_to_type_params(cx, expr.id),
-        ty: node_id_to_type(cx, expr.id)
     }
 }
 
@@ -3032,7 +3007,7 @@ pub fn resolve_expr(tcx: &ctxt, expr: &ast::Expr) -> ast::Def {
         Some(&def) => def,
         None => {
             tcx.sess.span_bug(expr.span, format!(
-                "no def-map entry for expr {:?}", expr.id));
+                "no def-map entry for expr {:?}", expr.id).as_slice());
         }
     }
 }
@@ -3106,9 +3081,11 @@ pub fn expr_kind(tcx: &ctxt, expr: &ast::Expr) -> ExprKind {
                 ast::DefLocal(..) => LvalueExpr,
 
                 def => {
-                    tcx.sess.span_bug(expr.span, format!(
-                        "uncategorized def for expr {:?}: {:?}",
-                        expr.id, def));
+                    tcx.sess.span_bug(
+                        expr.span,
+                        format!("uncategorized def for expr {:?}: {:?}",
+                                expr.id,
+                                def).as_slice());
                 }
             }
         }
@@ -3159,7 +3136,7 @@ pub fn expr_kind(tcx: &ctxt, expr: &ast::Expr) -> ExprKind {
                     // writing) it's not easy to distinguish casts to traits
                     // from other casts based on the AST.  This should be
                     // easier in the future, when casts to traits
-                    // would like @Foo, ~Foo, or &Foo.
+                    // would like @Foo, Box<Foo>, or &Foo.
                     RvalueDatumExpr
                 }
             }
@@ -3187,7 +3164,7 @@ pub fn expr_kind(tcx: &ctxt, expr: &ast::Expr) -> ExprKind {
         }
 
         ast::ExprBox(place, _) => {
-            // Special case `~T` for now:
+            // Special case `Box<T>` for now:
             let definition = match tcx.def_map.borrow().find(&place.id) {
                 Some(&def) => def,
                 None => fail!("no def for place"),
@@ -3227,7 +3204,9 @@ pub fn field_idx_strict(tcx: &ctxt, name: ast::Name, fields: &[field])
     tcx.sess.bug(format!(
         "no field named `{}` found in the list of fields `{:?}`",
         token::get_name(name),
-        fields.iter().map(|f| token::get_ident(f.ident).get().to_str()).collect::<Vec<~str>>()));
+        fields.iter()
+              .map(|f| token::get_ident(f.ident).get().to_string())
+              .collect::<Vec<String>>()).as_slice());
 }
 
 pub fn method_idx(id: ast::Ident, meths: &[Rc<Method>]) -> Option<uint> {
@@ -3250,7 +3229,7 @@ pub fn param_tys_in_type(ty: t) -> Vec<param_ty> {
     rslt
 }
 
-pub fn ty_sort_str(cx: &ctxt, t: t) -> ~str {
+pub fn ty_sort_str(cx: &ctxt, t: t) -> String {
     match get(t).sty {
         ty_nil | ty_bot | ty_bool | ty_char | ty_int(_) |
         ty_uint(_) | ty_float(_) | ty_str => {
@@ -3258,26 +3237,30 @@ pub fn ty_sort_str(cx: &ctxt, t: t) -> ~str {
         }
 
         ty_enum(id, _) => format!("enum {}", item_path_str(cx, id)),
-        ty_box(_) => "@-ptr".to_owned(),
-        ty_uniq(_) => "~-ptr".to_owned(),
-        ty_vec(_, _) => "vector".to_owned(),
-        ty_ptr(_) => "*-ptr".to_owned(),
-        ty_rptr(_, _) => "&-ptr".to_owned(),
-        ty_bare_fn(_) => "extern fn".to_owned(),
-        ty_closure(_) => "fn".to_owned(),
-        ty_trait(ref inner) => format!("trait {}", item_path_str(cx, inner.def_id)),
-        ty_struct(id, _) => format!("struct {}", item_path_str(cx, id)),
-        ty_tup(_) => "tuple".to_owned(),
-        ty_infer(TyVar(_)) => "inferred type".to_owned(),
-        ty_infer(IntVar(_)) => "integral variable".to_owned(),
-        ty_infer(FloatVar(_)) => "floating-point variable".to_owned(),
-        ty_param(_) => "type parameter".to_owned(),
-        ty_self(_) => "self".to_owned(),
-        ty_err => "type error".to_owned()
+        ty_box(_) => "@-ptr".to_string(),
+        ty_uniq(_) => "box".to_string(),
+        ty_vec(_, _) => "vector".to_string(),
+        ty_ptr(_) => "*-ptr".to_string(),
+        ty_rptr(_, _) => "&-ptr".to_string(),
+        ty_bare_fn(_) => "extern fn".to_string(),
+        ty_closure(_) => "fn".to_string(),
+        ty_trait(ref inner) => {
+            format!("trait {}", item_path_str(cx, inner.def_id))
+        }
+        ty_struct(id, _) => {
+            format!("struct {}", item_path_str(cx, id))
+        }
+        ty_tup(_) => "tuple".to_string(),
+        ty_infer(TyVar(_)) => "inferred type".to_string(),
+        ty_infer(IntVar(_)) => "integral variable".to_string(),
+        ty_infer(FloatVar(_)) => "floating-point variable".to_string(),
+        ty_param(_) => "type parameter".to_string(),
+        ty_self(_) => "self".to_string(),
+        ty_err => "type error".to_string(),
     }
 }
 
-pub fn type_err_to_str(cx: &ctxt, err: &type_err) -> ~str {
+pub fn type_err_to_str(cx: &ctxt, err: &type_err) -> String {
     /*!
      *
      * Explains the source of a type err in a short,
@@ -3287,121 +3270,131 @@ pub fn type_err_to_str(cx: &ctxt, err: &type_err) -> ~str {
      * to present additional details, particularly when
      * it comes to lifetime-related errors. */
 
-    fn tstore_to_closure(s: &TraitStore) -> ~str {
+    fn tstore_to_closure(s: &TraitStore) -> String {
         match s {
-            &UniqTraitStore => "proc".to_owned(),
-            &RegionTraitStore(..) => "closure".to_owned()
+            &UniqTraitStore => "proc".to_string(),
+            &RegionTraitStore(..) => "closure".to_string()
         }
     }
 
     match *err {
-        terr_mismatch => "types differ".to_owned(),
+        terr_mismatch => "types differ".to_string(),
         terr_fn_style_mismatch(values) => {
             format!("expected {} fn but found {} fn",
-                 values.expected.to_str(), values.found.to_str())
+                    values.expected.to_str(),
+                    values.found.to_str())
         }
         terr_abi_mismatch(values) => {
             format!("expected {} fn but found {} fn",
-                 values.expected.to_str(), values.found.to_str())
+                    values.expected.to_str(),
+                    values.found.to_str())
         }
         terr_onceness_mismatch(values) => {
             format!("expected {} fn but found {} fn",
-                 values.expected.to_str(), values.found.to_str())
+                    values.expected.to_str(),
+                    values.found.to_str())
         }
         terr_sigil_mismatch(values) => {
             format!("expected {}, found {}",
                     tstore_to_closure(&values.expected),
                     tstore_to_closure(&values.found))
         }
-        terr_mutability => "values differ in mutability".to_owned(),
-        terr_box_mutability => "boxed values differ in mutability".to_owned(),
-        terr_vec_mutability => "vectors differ in mutability".to_owned(),
-        terr_ptr_mutability => "pointers differ in mutability".to_owned(),
-        terr_ref_mutability => "references differ in mutability".to_owned(),
+        terr_mutability => "values differ in mutability".to_string(),
+        terr_box_mutability => {
+            "boxed values differ in mutability".to_string()
+        }
+        terr_vec_mutability => "vectors differ in mutability".to_string(),
+        terr_ptr_mutability => "pointers differ in mutability".to_string(),
+        terr_ref_mutability => "references differ in mutability".to_string(),
         terr_ty_param_size(values) => {
             format!("expected a type with {} type params \
-                  but found one with {} type params",
-                 values.expected, values.found)
+                     but found one with {} type params",
+                    values.expected,
+                    values.found)
         }
         terr_tuple_size(values) => {
             format!("expected a tuple with {} elements \
-                  but found one with {} elements",
-                 values.expected, values.found)
+                     but found one with {} elements",
+                    values.expected,
+                    values.found)
         }
         terr_record_size(values) => {
             format!("expected a record with {} fields \
-                  but found one with {} fields",
-                 values.expected, values.found)
+                     but found one with {} fields",
+                    values.expected,
+                    values.found)
         }
         terr_record_mutability => {
-            "record elements differ in mutability".to_owned()
+            "record elements differ in mutability".to_string()
         }
         terr_record_fields(values) => {
-            format!("expected a record with field `{}` but found one with field \
-                  `{}`",
-                 token::get_ident(values.expected),
-                 token::get_ident(values.found))
+            format!("expected a record with field `{}` but found one \
+                     with field `{}`",
+                    token::get_ident(values.expected),
+                    token::get_ident(values.found))
         }
-        terr_arg_count => "incorrect number of function parameters".to_owned(),
+        terr_arg_count => {
+            "incorrect number of function parameters".to_string()
+        }
         terr_regions_does_not_outlive(..) => {
-            format!("lifetime mismatch")
+            "lifetime mismatch".to_string()
         }
         terr_regions_not_same(..) => {
-            format!("lifetimes are not the same")
+            "lifetimes are not the same".to_string()
         }
         terr_regions_no_overlap(..) => {
-            format!("lifetimes do not intersect")
+            "lifetimes do not intersect".to_string()
         }
         terr_regions_insufficiently_polymorphic(br, _) => {
             format!("expected bound lifetime parameter {}, \
-                  but found concrete lifetime",
-                 bound_region_ptr_to_str(cx, br))
+                     but found concrete lifetime",
+                    bound_region_ptr_to_str(cx, br))
         }
         terr_regions_overly_polymorphic(br, _) => {
             format!("expected concrete lifetime, \
-                  but found bound lifetime parameter {}",
-                 bound_region_ptr_to_str(cx, br))
+                     but found bound lifetime parameter {}",
+                    bound_region_ptr_to_str(cx, br))
         }
         terr_trait_stores_differ(_, ref values) => {
             format!("trait storage differs: expected `{}` but found `{}`",
-                 trait_store_to_str(cx, (*values).expected),
-                 trait_store_to_str(cx, (*values).found))
+                    trait_store_to_str(cx, (*values).expected),
+                    trait_store_to_str(cx, (*values).found))
         }
         terr_sorts(values) => {
             format!("expected {} but found {}",
-                 ty_sort_str(cx, values.expected),
-                 ty_sort_str(cx, values.found))
+                    ty_sort_str(cx, values.expected),
+                    ty_sort_str(cx, values.found))
         }
         terr_traits(values) => {
             format!("expected trait `{}` but found trait `{}`",
-                 item_path_str(cx, values.expected),
-                 item_path_str(cx, values.found))
+                    item_path_str(cx, values.expected),
+                    item_path_str(cx, values.found))
         }
         terr_builtin_bounds(values) => {
             if values.expected.is_empty() {
                 format!("expected no bounds but found `{}`",
-                     values.found.user_string(cx))
+                        values.found.user_string(cx))
             } else if values.found.is_empty() {
                 format!("expected bounds `{}` but found no bounds",
-                     values.expected.user_string(cx))
+                        values.expected.user_string(cx))
             } else {
                 format!("expected bounds `{}` but found bounds `{}`",
-                     values.expected.user_string(cx),
-                     values.found.user_string(cx))
+                        values.expected.user_string(cx),
+                        values.found.user_string(cx))
             }
         }
         terr_integer_as_char => {
-            format!("expected an integral type but found `char`")
+            "expected an integral type but found `char`".to_string()
         }
         terr_int_mismatch(ref values) => {
             format!("expected `{}` but found `{}`",
-                 values.expected.to_str(),
-                 values.found.to_str())
+                    values.expected.to_str(),
+                    values.found.to_str())
         }
         terr_float_mismatch(ref values) => {
             format!("expected `{}` but found `{}`",
-                 values.expected.to_str(),
-                 values.found.to_str())
+                    values.expected.to_str(),
+                    values.found.to_str())
         }
         terr_variadic_mismatch(ref values) => {
             format!("expected {} fn but found {} function",
@@ -3455,10 +3448,18 @@ pub fn provided_trait_methods(cx: &ctxt, id: ast::DefId) -> Vec<Rc<Method>> {
                         let (_, p) = ast_util::split_trait_methods(ms.as_slice());
                         p.iter().map(|m| method(cx, ast_util::local_def(m.id))).collect()
                     }
-                    _ => cx.sess.bug(format!("provided_trait_methods: `{}` is not a trait", id))
+                    _ => {
+                        cx.sess.bug(format!("provided_trait_methods: `{}` is \
+                                             not a trait",
+                                            id).as_slice())
+                    }
                 }
             }
-            _ => cx.sess.bug(format!("provided_trait_methods: `{}` is not a trait", id))
+            _ => {
+                cx.sess.bug(format!("provided_trait_methods: `{}` is not a \
+                                     trait",
+                                    id).as_slice())
+            }
         }
     } else {
         csearch::get_provided_trait_methods(cx, id)
@@ -3609,7 +3610,9 @@ pub fn try_add_builtin_trait(tcx: &ctxt,
 
 pub fn ty_to_def_id(ty: t) -> Option<ast::DefId> {
     match get(ty).sty {
-        ty_trait(~TyTrait { def_id: id, .. }) | ty_struct(id, _) | ty_enum(id, _) => Some(id),
+        ty_trait(box TyTrait { def_id: id, .. }) |
+        ty_struct(id, _) |
+        ty_enum(id, _) => Some(id),
         _ => None
     }
 }
@@ -3701,8 +3704,8 @@ pub fn substd_enum_variants(cx: &ctxt,
     }).collect()
 }
 
-pub fn item_path_str(cx: &ctxt, id: ast::DefId) -> ~str {
-    with_path(cx, id, |path| ast_map::path_to_str(path))
+pub fn item_path_str(cx: &ctxt, id: ast::DefId) -> String {
+    with_path(cx, id, |path| ast_map::path_to_str(path)).to_string()
 }
 
 pub enum DtorKind {
@@ -3809,7 +3812,7 @@ pub fn enum_variants(cx: &ctxt, id: ast::DefId) -> Rc<Vec<Rc<VariantInfo>>> {
                                         cx.sess
                                           .span_err(e.span,
                                                     format!("expected constant: {}",
-                                                            *err));
+                                                            *err).as_slice());
                                     }
                                 },
                                 None => {}
@@ -3882,20 +3885,22 @@ pub fn lookup_trait_def(cx: &ctxt, did: ast::DefId) -> Rc<ty::TraitDef> {
     }
 }
 
-/// Iterate over meta_items of a definition.
+/// Iterate over attributes of a definition.
 // (This should really be an iterator, but that would require csearch and
 // decoder to use iterators instead of higher-order functions.)
-pub fn each_attr(tcx: &ctxt, did: DefId, f: |@ast::MetaItem| -> bool) -> bool {
+pub fn each_attr(tcx: &ctxt, did: DefId, f: |&ast::Attribute| -> bool) -> bool {
     if is_local(did) {
         let item = tcx.map.expect_item(did.node);
-        item.attrs.iter().advance(|attr| f(attr.node.value))
+        item.attrs.iter().advance(|attr| f(attr))
     } else {
+        info!("getting foreign attrs");
         let mut cont = true;
-        csearch::get_item_attrs(&tcx.sess.cstore, did, |meta_items| {
+        csearch::get_item_attrs(&tcx.sess.cstore, did, |attrs| {
             if cont {
-                cont = meta_items.iter().advance(|ptrptr| f(*ptrptr));
+                cont = attrs.iter().advance(|attr| f(attr));
             }
         });
+        info!("done");
         cont
     }
 }
@@ -3904,7 +3909,7 @@ pub fn each_attr(tcx: &ctxt, did: DefId, f: |@ast::MetaItem| -> bool) -> bool {
 pub fn has_attr(tcx: &ctxt, did: DefId, attr: &str) -> bool {
     let mut found = false;
     each_attr(tcx, did, |item| {
-        if item.name().equiv(&attr) {
+        if item.check_name(attr) {
             found = true;
             false
         } else {
@@ -3972,7 +3977,7 @@ fn each_super_struct(cx: &ctxt, mut did: ast::DefId, f: |ast::DefId|) {
             None => {
                 cx.sess.bug(
                     format!("ID not mapped to super-struct: {}",
-                        cx.map.node_to_str(did.node)));
+                            cx.map.node_to_str(did.node)).as_slice());
             }
         }
     }
@@ -3994,7 +3999,7 @@ pub fn lookup_struct_fields(cx: &ctxt, did: ast::DefId) -> Vec<field_ty> {
                 _ => {
                     cx.sess.bug(
                         format!("ID not mapped to struct fields: {}",
-                            cx.map.node_to_str(did.node)));
+                                cx.map.node_to_str(did.node)).as_slice());
                 }
             }
         });
@@ -4138,8 +4143,8 @@ pub fn normalize_ty(cx: &ctxt, t: t) -> t {
                        substs: &substs)
                        -> substs {
             substs { regions: ErasedRegions,
-                     self_ty: ty_fold::fold_opt_ty(self, substs.self_ty),
-                     tps: ty_fold::fold_ty_vec(self, substs.tps.as_slice()) }
+                     self_ty: substs.self_ty.fold_with(self),
+                     tps: substs.tps.fold_with(self) }
         }
 
         fn fold_sig(&mut self,
@@ -4149,8 +4154,8 @@ pub fn normalize_ty(cx: &ctxt, t: t) -> t {
             // are erased at trans time.
             ty::FnSig {
                 binder_id: ast::DUMMY_NODE_ID,
-                inputs: ty_fold::fold_ty_vec(self, sig.inputs.as_slice()),
-                output: self.fold_ty(sig.output),
+                inputs: sig.inputs.fold_with(self),
+                output: sig.output.fold_with(self),
                 variadic: sig.variadic,
             }
         }
@@ -4267,14 +4272,14 @@ pub fn each_bound_trait_and_supertraits(tcx: &ctxt,
     return true;
 }
 
-pub fn get_tydesc_ty(tcx: &ctxt) -> Result<t, ~str> {
+pub fn get_tydesc_ty(tcx: &ctxt) -> Result<t, String> {
     tcx.lang_items.require(TyDescStructLangItem).map(|tydesc_lang_item| {
         tcx.intrinsic_defs.borrow().find_copy(&tydesc_lang_item)
             .expect("Failed to resolve TyDesc")
     })
 }
 
-pub fn get_opaque_ty(tcx: &ctxt) -> Result<t, ~str> {
+pub fn get_opaque_ty(tcx: &ctxt) -> Result<t, String> {
     tcx.lang_items.require(OpaqueStructLangItem).map(|opaque_lang_item| {
         tcx.intrinsic_defs.borrow().find_copy(&opaque_lang_item)
             .expect("Failed to resolve Opaque")
@@ -4282,7 +4287,7 @@ pub fn get_opaque_ty(tcx: &ctxt) -> Result<t, ~str> {
 }
 
 pub fn visitor_object_ty(tcx: &ctxt,
-                         region: ty::Region) -> Result<(Rc<TraitRef>, t), ~str> {
+                         region: ty::Region) -> Result<(Rc<TraitRef>, t), String> {
     let trait_lang_item = match tcx.lang_items.require(TyVisitorTraitLangItem) {
         Ok(id) => id,
         Err(s) => { return Err(s); }
@@ -4570,7 +4575,7 @@ pub fn hash_crate_independent(tcx: &ctxt, t: t, svh: &Svh) -> u64 {
                     }
                 }
             }
-            ty_trait(~ty::TyTrait { def_id: d, store, bounds, .. }) => {
+            ty_trait(box ty::TyTrait { def_id: d, store, bounds, .. }) => {
                 byte!(17);
                 did(&mut state, d);
                 match store {
@@ -4731,5 +4736,35 @@ impl BorrowKind {
             ImmBorrow => "immutable",
             UniqueImmBorrow => "uniquely immutable",
         }
+    }
+}
+
+impl mc::Typer for ty::ctxt {
+    fn tcx<'a>(&'a self) -> &'a ty::ctxt {
+        self
+    }
+
+    fn node_ty(&self, id: ast::NodeId) -> mc::McResult<ty::t> {
+        Ok(ty::node_id_to_type(self, id))
+    }
+
+    fn node_method_ty(&self, method_call: typeck::MethodCall) -> Option<ty::t> {
+        self.method_map.borrow().find(&method_call).map(|method| method.ty)
+    }
+
+    fn adjustments<'a>(&'a self) -> &'a RefCell<NodeMap<ty::AutoAdjustment>> {
+        &self.adjustments
+    }
+
+    fn is_method_call(&self, id: ast::NodeId) -> bool {
+        self.method_map.borrow().contains_key(&typeck::MethodCall::expr(id))
+    }
+
+    fn temporary_scope(&self, rvalue_id: ast::NodeId) -> Option<ast::NodeId> {
+        self.region_maps.temporary_scope(rvalue_id)
+    }
+
+    fn upvar_borrow(&self, upvar_id: ty::UpvarId) -> ty::UpvarBorrow {
+        self.upvar_borrow_map.borrow().get_copy(&upvar_id)
     }
 }

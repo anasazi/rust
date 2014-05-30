@@ -8,9 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+extern crate debug;
+
 enum foo {
   a(uint),
-  b(~str),
+  b(String),
   c,
 }
 
@@ -19,8 +21,7 @@ enum bar {
 }
 
 pub fn main() {
-    assert_eq!("a(22u)".to_owned(), format!("{:?}", a(22u)));
-    assert_eq!("b(~\"hi\")".to_owned(), format!("{:?}", b("hi".to_owned())));
-    assert_eq!("c".to_owned(), format!("{:?}", c));
-    assert_eq!("d".to_owned(), format!("{:?}", d));
+    assert_eq!("a(22u)".to_string(), format!("{:?}", a(22u)));
+    assert_eq!("c".to_string(), format!("{:?}", c));
+    assert_eq!("d".to_string(), format!("{:?}", d));
 }

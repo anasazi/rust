@@ -15,6 +15,7 @@
 // I *think* it's the same, more or less.
 
 extern crate time;
+extern crate debug;
 
 use std::os;
 use std::task;
@@ -47,11 +48,11 @@ fn server(requests: &Receiver<request>, responses: &Sender<uint>) {
     //println!("server exiting");
 }
 
-fn run(args: &[~str]) {
+fn run(args: &[String]) {
     let (to_parent, from_child) = channel();
 
-    let size = from_str::<uint>(args[1]).unwrap();
-    let workers = from_str::<uint>(args[2]).unwrap();
+    let size = from_str::<uint>(args[1].as_slice()).unwrap();
+    let workers = from_str::<uint>(args[2].as_slice()).unwrap();
     let num_bytes = 100;
     let start = time::precise_time_s();
     let mut worker_results = Vec::new();
@@ -107,11 +108,11 @@ fn run(args: &[~str]) {
 fn main() {
     let args = os::args();
     let args = if os::getenv("RUST_BENCH").is_some() {
-        vec!("".to_owned(), "1000000".to_owned(), "8".to_owned())
+        vec!("".to_string(), "1000000".to_string(), "8".to_string())
     } else if args.len() <= 1u {
-        vec!("".to_owned(), "10000".to_owned(), "4".to_owned())
+        vec!("".to_string(), "10000".to_string(), "4".to_string())
     } else {
-        args.clone().move_iter().collect()
+        args.clone().move_iter().map(|x| x.to_string()).collect()
     };
 
     println!("{:?}", args);

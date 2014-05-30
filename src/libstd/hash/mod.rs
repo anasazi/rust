@@ -23,12 +23,12 @@
  * #[deriving(Hash)]
  * struct Person {
  *     id: uint,
- *     name: ~str,
+ *     name: String,
  *     phone: u64,
  * }
  *
- * let person1 = Person { id: 5, name: "Janet".to_owned(), phone: 555_666_7777 };
- * let person2 = Person { id: 5, name: "Bob".to_owned(), phone: 555_666_7777 };
+ * let person1 = Person { id: 5, name: "Janet".to_string(), phone: 555_666_7777 };
+ * let person2 = Person { id: 5, name: "Bob".to_string(), phone: 555_666_7777 };
  *
  * assert!(hash::hash(&person1) != hash::hash(&person2));
  * ```
@@ -43,7 +43,7 @@
  *
  * struct Person {
  *     id: uint,
- *     name: ~str,
+ *     name: String,
  *     phone: u64,
  * }
  *
@@ -54,8 +54,8 @@
  *     }
  * }
  *
- * let person1 = Person { id: 5, name: "Janet".to_owned(), phone: 555_666_7777 };
- * let person2 = Person { id: 5, name: "Bob".to_owned(), phone: 555_666_7777 };
+ * let person1 = Person { id: 5, name: "Janet".to_string(), phone: 555_666_7777 };
+ * let person2 = Person { id: 5, name: "Bob".to_string(), phone: 555_666_7777 };
  *
  * assert!(hash::hash(&person1) == hash::hash(&person2));
  * ```
@@ -64,16 +64,20 @@
 #![allow(unused_must_use)]
 
 use container::Container;
-use io::Writer;
+use intrinsics::TypeId;
 use iter::Iterator;
 use option::{Option, Some, None};
+use owned::Box;
 use rc::Rc;
-use str::{Str, StrSlice};
+use result::{Result, Ok, Err};
 use slice::{Vector, ImmutableVector};
+use str::{Str, StrSlice};
 use vec::Vec;
 
 /// Reexport the `sip::hash` function as our default hasher.
 pub use hash = self::sip::hash;
+
+pub use Writer = io::Writer;
 
 pub mod sip;
 
@@ -139,13 +143,6 @@ impl<'a, S: Writer> Hash<S> for &'a str {
     fn hash(&self, state: &mut S) {
         state.write(self.as_bytes());
         state.write_u8(0xFF);
-    }
-}
-
-impl<S: Writer> Hash<S> for ~str {
-    #[inline]
-    fn hash(&self, state: &mut S) {
-        self.as_slice().hash(state);
     }
 }
 
@@ -229,7 +226,7 @@ impl<'a, S: Writer, T: Hash<S>> Hash<S> for &'a mut T {
     }
 }
 
-impl<S: Writer, T: Hash<S>> Hash<S> for ~T {
+impl<S: Writer, T: Hash<S>> Hash<S> for Box<T> {
     #[inline]
     fn hash(&self, state: &mut S) {
         (**self).hash(state);
@@ -283,11 +280,28 @@ impl<S: Writer, T> Hash<S> for *mut T {
     }
 }
 
+impl<S: Writer> Hash<S> for TypeId {
+    #[inline]
+    fn hash(&self, state: &mut S) {
+        self.hash().hash(state)
+    }
+}
+
+impl<S: Writer, T: Hash<S>, U: Hash<S>> Hash<S> for Result<T, U> {
+    #[inline]
+    fn hash(&self, state: &mut S) {
+        match *self {
+            Ok(ref t) => { 1u.hash(state); t.hash(state); }
+            Err(ref t) => { 2u.hash(state); t.hash(state); }
+        }
+    }
+}
+
 //////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {
-    use cast;
+    use mem;
     use io::{IoResult, Writer};
     use iter::{Iterator};
     use option::{Some, None};
@@ -343,16 +357,16 @@ mod tests {
 
         assert_eq!(hasher.hash(&'a'), 97);
 
-        assert_eq!(hasher.hash(& &"a"), 97 + 0xFF);
+        assert_eq!(hasher.hash(&("a")), 97 + 0xFF);
         assert_eq!(hasher.hash(& &[1u8, 2u8, 3u8]), 9);
 
         unsafe {
-            let ptr: *int = cast::transmute(5);
+            let ptr: *int = mem::transmute(5);
             assert_eq!(hasher.hash(&ptr), 5);
         }
 
         unsafe {
-            let ptr: *mut int = cast::transmute(5);
+            let ptr: *mut int = mem::transmute(5);
             assert_eq!(hasher.hash(&ptr), 5);
         }
     }

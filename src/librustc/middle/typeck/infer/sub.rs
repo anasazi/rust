@@ -25,7 +25,7 @@ use middle::typeck::infer::{TypeTrace, Subtype};
 use util::common::{indenter};
 use util::ppaux::bound_region_to_str;
 
-use syntax::ast::{Onceness, FnStyle};
+use syntax::ast::{Onceness, FnStyle, MutImmutable, MutMutable};
 
 pub struct Sub<'f>(pub CombineFields<'f>);  // "subtype", "subregion" etc
 
@@ -35,7 +35,7 @@ impl<'f> Sub<'f> {
 
 impl<'f> Combine for Sub<'f> {
     fn infcx<'a>(&'a self) -> &'a InferCtxt<'a> { self.get_ref().infcx }
-    fn tag(&self) -> ~str { "sub".to_owned() }
+    fn tag(&self) -> String { "sub".to_string() }
     fn a_is_expected(&self) -> bool { self.get_ref().a_is_expected }
     fn trace(&self) -> TypeTrace { self.get_ref().trace.clone() }
 

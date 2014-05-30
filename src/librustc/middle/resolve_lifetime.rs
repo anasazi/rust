@@ -102,10 +102,10 @@ impl<'a, 'b> Visitor<Scope<'a>> for LifetimeContext<'b> {
             visit::FkMethod(_, generics, _) => {
                 self.visit_fn_decl(
                     n, generics, scope,
-                    |this, scope1| visit::walk_fn(this, fk, fd, b, s, n, scope1))
+                    |this, scope1| visit::walk_fn(this, fk, fd, b, s, scope1))
             }
             visit::FkFnBlock(..) => {
-                visit::walk_fn(self, fk, fd, b, s, n, scope)
+                visit::walk_fn(self, fk, fd, b, s, scope)
             }
         }
     }
@@ -341,7 +341,7 @@ impl<'a> LifetimeContext<'a> {
         self.sess.span_err(
             lifetime_ref.span,
             format!("use of undeclared lifetime name `'{}`",
-                    token::get_name(lifetime_ref.name)));
+                    token::get_name(lifetime_ref.name)).as_slice());
     }
 
     fn check_lifetime_names(&self, lifetimes: &Vec<ast::Lifetime>) {
@@ -354,7 +354,7 @@ impl<'a> LifetimeContext<'a> {
                     self.sess.span_err(
                         lifetime.span,
                         format!("illegal lifetime parameter name: `{}`",
-                                token::get_name(lifetime.name)));
+                                token::get_name(lifetime.name)).as_slice());
                 }
             }
 
@@ -366,7 +366,7 @@ impl<'a> LifetimeContext<'a> {
                         lifetime_j.span,
                         format!("lifetime name `'{}` declared twice in \
                                 the same scope",
-                                token::get_name(lifetime_j.name)));
+                                token::get_name(lifetime_j.name)).as_slice());
                 }
             }
         }

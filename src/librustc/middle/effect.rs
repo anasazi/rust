@@ -48,8 +48,9 @@ impl<'a> EffectCheckVisitor<'a> {
             SafeContext => {
                 // Report an error.
                 self.tcx.sess.span_err(span,
-                                  format!("{} requires unsafe function or block",
-                                       description))
+                                  format!("{} requires unsafe function or \
+                                           block",
+                                          description).as_slice())
             }
             UnsafeBlock(block_id) => {
                 // OK, but record this.
@@ -86,7 +87,7 @@ impl<'a> EffectCheckVisitor<'a> {
 
 impl<'a> Visitor<()> for EffectCheckVisitor<'a> {
     fn visit_fn(&mut self, fn_kind: &visit::FnKind, fn_decl: &ast::FnDecl,
-                block: &ast::Block, span: Span, node_id: ast::NodeId, _:()) {
+                block: &ast::Block, span: Span, _: ast::NodeId, _:()) {
 
         let (is_item_fn, is_unsafe_fn) = match *fn_kind {
             visit::FkItemFn(_, _, fn_style, _) =>
@@ -103,7 +104,7 @@ impl<'a> Visitor<()> for EffectCheckVisitor<'a> {
             self.unsafe_context = SafeContext
         }
 
-        visit::walk_fn(self, fn_kind, fn_decl, block, span, node_id, ());
+        visit::walk_fn(self, fn_kind, fn_decl, block, span, ());
 
         self.unsafe_context = old_unsafe_context
     }

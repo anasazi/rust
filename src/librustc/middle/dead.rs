@@ -12,7 +12,7 @@
 // closely. The idea is that all reachable symbols are live, codes called
 // from live codes are live, and everything else is dead.
 
-use middle::lint::{allow, contains_lint, DeadCode};
+use middle::lint::{Allow, contains_lint, DeadCode};
 use middle::privacy;
 use middle::ty;
 use middle::typeck;
@@ -51,7 +51,7 @@ fn should_explore(tcx: &ty::ctxt, def_id: ast::DefId) -> bool {
 struct MarkSymbolVisitor<'a> {
     worklist: Vec<ast::NodeId>,
     tcx: &'a ty::ctxt,
-    live_symbols: ~HashSet<ast::NodeId>,
+    live_symbols: Box<HashSet<ast::NodeId>>,
 }
 
 impl<'a> MarkSymbolVisitor<'a> {
@@ -60,7 +60,7 @@ impl<'a> MarkSymbolVisitor<'a> {
         MarkSymbolVisitor {
             worklist: worklist,
             tcx: tcx,
-            live_symbols: ~HashSet::new(),
+            live_symbols: box HashSet::new(),
         }
     }
 
@@ -195,7 +195,7 @@ impl<'a> Visitor<()> for MarkSymbolVisitor<'a> {
 }
 
 fn has_allow_dead_code_or_lang_attr(attrs: &[ast::Attribute]) -> bool {
-    contains_lint(attrs, allow, DEAD_CODE_LINT_STR)
+    contains_lint(attrs, Allow, DEAD_CODE_LINT_STR)
     || attr::contains_name(attrs.as_slice(), "lang")
 }
 
@@ -285,7 +285,7 @@ fn find_live(tcx: &ty::ctxt,
              exported_items: &privacy::ExportedItems,
              reachable_symbols: &NodeSet,
              krate: &ast::Crate)
-             -> ~HashSet<ast::NodeId> {
+             -> Box<HashSet<ast::NodeId>> {
     let worklist = create_and_seed_worklist(tcx, exported_items,
                                             reachable_symbols, krate);
     let mut symbol_visitor = MarkSymbolVisitor::new(tcx, worklist);
@@ -312,7 +312,7 @@ fn get_struct_ctor_id(item: &ast::Item) -> Option<ast::NodeId> {
 
 struct DeadVisitor<'a> {
     tcx: &'a ty::ctxt,
-    live_symbols: ~HashSet<ast::NodeId>,
+    live_symbols: Box<HashSet<ast::NodeId>>,
 }
 
 impl<'a> DeadVisitor<'a> {
@@ -352,11 +352,17 @@ impl<'a> DeadVisitor<'a> {
         false
     }
 
-    fn warn_dead_code(&mut self, id: ast::NodeId,
-                      span: codemap::Span, ident: ast::Ident) {
-        self.tcx.sess.add_lint(DeadCode, id, span,
-                               format!("code is never used: `{}`",
-                                       token::get_ident(ident)));
+    fn warn_dead_code(&mut self,
+                      id: ast::NodeId,
+                      span: codemap::Span,
+                      ident: ast::Ident) {
+        self.tcx
+            .sess
+            .add_lint(DeadCode,
+                      id,
+                      span,
+                      format!("code is never used: `{}`",
+                              token::get_ident(ident)));
     }
 }
 

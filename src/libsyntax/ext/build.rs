@@ -12,6 +12,7 @@ use abi;
 use ast::{P, Ident};
 use ast;
 use ast_util;
+use attr;
 use codemap::{Span, respan, Spanned, DUMMY_SP};
 use ext::base::ExtCtxt;
 use ext::quote::rt::*;
@@ -438,6 +439,7 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
             init: Some(ex),
             id: ast::DUMMY_NODE_ID,
             span: sp,
+            source: ast::LocalLet,
         };
         let decl = respan(sp, ast::DeclLocal(local));
         @respan(sp, ast::StmtDecl(@decl, ast::DUMMY_NODE_ID))
@@ -461,6 +463,7 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
             init: Some(ex),
             id: ast::DUMMY_NODE_ID,
             span: sp,
+            source: ast::LocalLet,
         };
         let decl = respan(sp, ast::DeclLocal(local));
         @respan(sp, ast::StmtDecl(@decl, ast::DUMMY_NODE_ID))
@@ -639,7 +642,9 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
             vec!(
                 self.expr_str(span, msg),
                 self.expr_str(span,
-                              token::intern_and_get_ident(loc.file.name)),
+                              token::intern_and_get_ident(loc.file
+                                                             .name
+                                                             .as_slice())),
                 self.expr_uint(span, loc.line)))
     }
 
@@ -925,6 +930,7 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
 
     fn attribute(&self, sp: Span, mi: @ast::MetaItem) -> ast::Attribute {
         respan(sp, ast::Attribute_ {
+            id: attr::mk_attr_id(),
             style: ast::AttrOuter,
             value: mi,
             is_sugared_doc: false,

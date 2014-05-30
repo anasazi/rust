@@ -13,6 +13,7 @@
 #include "rustllvm.h"
 
 #include "llvm/Support/CBindingWrapping.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Target/TargetLibraryInfo.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 
@@ -69,7 +70,9 @@ LLVMRustCreateTargetMachine(const char *triple,
                             CodeGenOpt::Level OptLevel,
                             bool EnableSegmentedStacks,
                             bool UseSoftFloat,
-                            bool NoFramePointerElim) {
+                            bool NoFramePointerElim,
+                            bool FunctionSections,
+                            bool DataSections) {
     std::string Error;
     Triple Trip(Triple::normalize(triple));
     const llvm::Target *TheTarget = TargetRegistry::lookupTarget(Trip.getTriple(),
@@ -97,6 +100,8 @@ LLVMRustCreateTargetMachine(const char *triple,
                                                        RM,
                                                        CM,
                                                        OptLevel);
+    TM->setDataSections(DataSections);
+    TM->setFunctionSections(FunctionSections);
     return wrap(TM);
 }
 
@@ -124,17 +129,27 @@ LLVMRustAddAnalysisPasses(LLVMTargetMachineRef TM,
 // Unfortunately, the LLVM C API doesn't provide a way to set the `LibraryInfo`
 // field of a PassManagerBuilder, we expose our own method of doing so.
 extern "C" void
-LLVMRustAddBuilderLibraryInfo(LLVMPassManagerBuilderRef PMB, LLVMModuleRef M) {
+LLVMRustAddBuilderLibraryInfo(LLVMPassManagerBuilderRef PMB,
+                              LLVMModuleRef M,
+                              bool DisableSimplifyLibCalls) {
     Triple TargetTriple(unwrap(M)->getTargetTriple());
-    unwrap(PMB)->LibraryInfo = new TargetLibraryInfo(TargetTriple);
+    TargetLibraryInfo *TLI = new TargetLibraryInfo(TargetTriple);
+    if (DisableSimplifyLibCalls)
+      TLI->disableAllFunctions();
+    unwrap(PMB)->LibraryInfo = TLI;
 }
 
 // Unfortunately, the LLVM C API doesn't provide a way to create the
 // TargetLibraryInfo pass, so we use this method to do so.
 extern "C" void
-LLVMRustAddLibraryInfo(LLVMPassManagerRef PMB, LLVMModuleRef M) {
+LLVMRustAddLibraryInfo(LLVMPassManagerRef PMB,
+                       LLVMModuleRef M,
+                       bool DisableSimplifyLibCalls) {
     Triple TargetTriple(unwrap(M)->getTargetTriple());
-    unwrap(PMB)->add(new TargetLibraryInfo(TargetTriple));
+    TargetLibraryInfo *TLI = new TargetLibraryInfo(TargetTriple);
+    if (DisableSimplifyLibCalls)
+      TLI->disableAllFunctions();
+    unwrap(PMB)->add(TLI);
 }
 
 // Unfortunately, the LLVM C API doesn't provide an easy way of iterating over
