@@ -14,6 +14,7 @@ use codemap::Span;
 use ext::base::ExtCtxt;
 use ext::build::{AstBuilder};
 use ext::deriving::generic::*;
+use ext::deriving::generic::ty::*;
 
 pub fn expand_deriving_rand(cx: &mut ExtCtxt,
                             span: Span,
@@ -23,7 +24,7 @@ pub fn expand_deriving_rand(cx: &mut ExtCtxt,
     let trait_def = TraitDef {
         span: span,
         attributes: Vec::new(),
-        path: Path::new(vec!("rand", "Rand")),
+        path: Path::new(vec!("std", "rand", "Rand")),
         additional_bounds: Vec::new(),
         generics: LifetimeBounds::empty(),
         methods: vec!(
@@ -33,7 +34,7 @@ pub fn expand_deriving_rand(cx: &mut ExtCtxt,
                     lifetimes: Vec::new(),
                     bounds: vec!(("R",
                                   ast::StaticSize,
-                                  vec!( Path::new(vec!("rand", "Rng")) )))
+                                  vec!( Path::new(vec!("std", "rand", "Rng")) )))
                 },
                 explicit_self: None,
                 args: vec!(
@@ -58,6 +59,7 @@ fn rand_substructure(cx: &mut ExtCtxt, trait_span: Span, substr: &Substructure) 
         _ => cx.bug("Incorrect number of arguments to `rand` in `deriving(Rand)`")
     };
     let rand_ident = vec!(
+        cx.ident_of("std"),
         cx.ident_of("rand"),
         cx.ident_of("Rand"),
         cx.ident_of("rand")

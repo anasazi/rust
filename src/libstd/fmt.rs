@@ -85,7 +85,7 @@ function, but the `format!` macro is a syntax extension which allows it to
 leverage named parameters. Named parameters are listed at the end of the
 argument list and have the syntax:
 
-```notrust
+```text
 identifier '=' expression
 ```
 
@@ -110,7 +110,7 @@ Each argument's type is dictated by the format string. It is a requirement that
 every argument is only ever referred to by one type. For example, this is an
 invalid format string:
 
-```notrust
+```text
 {0:d} {0:s}
 ```
 
@@ -126,7 +126,7 @@ must have the type `uint`. Although a `uint` can be printed with `{:u}`, it is
 illegal to reference an argument as such. For example, this is another invalid
 format string:
 
-```notrust
+```text
 {:.*s} {0:u}
 ```
 
@@ -347,7 +347,7 @@ This example is the equivalent of `{0:s}` essentially.
 The select method is a switch over a `&str` parameter, and the parameter *must*
 be of the type `&str`. An example of the syntax is:
 
-```notrust
+```text
 {0, select, male{...} female{...} other{...}}
 ```
 
@@ -366,7 +366,7 @@ The plural method is a switch statement over a `uint` parameter, and the
 parameter *must* be a `uint`. A plural method in its full glory can be specified
 as:
 
-```notrust
+```text
 {0, plural, offset=1 =1{...} two{...} many{...} other{...}}
 ```
 
@@ -394,7 +394,7 @@ should not be too alien. Arguments are formatted with python-like syntax,
 meaning that arguments are surrounded by `{}` instead of the C-like `%`. The
 actual grammar for the formatting syntax is:
 
-```notrust
+```text
 format_string := <text> [ format <text> ] *
 format := '{' [ argument ] [ ':' format_spec ] [ ',' function_spec ] '}'
 argument := integer | identifier
@@ -492,10 +492,6 @@ will look like `"\\{"`.
 
 use io::Writer;
 use io;
-#[cfg(stage0)]
-use option::None;
-#[cfg(stage0)]
-use repr;
 use result::{Ok, Err};
 use str::{Str, StrAllocating};
 use str;
@@ -524,21 +520,6 @@ pub use core::fmt::{secret_float, secret_upper_exp, secret_lower_exp};
 #[doc(hidden)]
 pub use core::fmt::{secret_pointer};
 
-#[doc(hidden)]
-#[cfg(stage0)]
-pub fn secret_poly<T: Poly>(x: &T, fmt: &mut Formatter) -> Result {
-    // FIXME #11938 - UFCS would make us able call the this method
-    //                directly Poly::fmt(x, fmt).
-    x.fmt(fmt)
-}
-
-/// Format trait for the `?` character
-#[cfg(stage0)]
-pub trait Poly {
-    /// Formats the value using the given formatter.
-    fn fmt(&self, &mut Formatter) -> Result;
-}
-
 /// The format function takes a precompiled format string and a list of
 /// arguments, to return the resulting formatted string.
 ///
@@ -560,27 +541,6 @@ pub fn format(args: &Arguments) -> string::String{
     let mut output = io::MemWriter::new();
     let _ = write!(&mut output, "{}", args);
     str::from_utf8(output.unwrap().as_slice()).unwrap().into_string()
-}
-
-#[cfg(stage0)]
-impl<T> Poly for T {
-    fn fmt(&self, f: &mut Formatter) -> Result {
-        match (f.width, f.precision) {
-            (None, None) => {
-                match repr::write_repr(f, self) {
-                    Ok(()) => Ok(()),
-                    Err(..) => Err(WriteError),
-                }
-            }
-
-            // If we have a specified width for formatting, then we have to make
-            // this allocation of a new string
-            _ => {
-                let s = repr::repr_to_str(self);
-                f.pad(s.as_slice())
-            }
-        }
-    }
 }
 
 impl<'a> Writer for Formatter<'a> {

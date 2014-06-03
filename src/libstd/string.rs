@@ -30,7 +30,7 @@ use str;
 use vec::Vec;
 
 /// A growable string stored as a UTF-8 encoded buffer.
-#[deriving(Clone, Eq, Ord, TotalEq, TotalOrd)]
+#[deriving(Clone, PartialEq, PartialOrd, Eq, Ord)]
 pub struct String {
     vec: Vec<u8>,
 }
@@ -322,11 +322,6 @@ impl Str for String {
 }
 
 impl StrAllocating for String {
-    #[inline]
-    fn into_owned(self) -> String {
-        self
-    }
-
     #[inline]
     fn into_string(self) -> String {
         self

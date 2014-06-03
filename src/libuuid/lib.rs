@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -67,21 +67,19 @@ Examples of string representations:
 // test harness access
 #[cfg(test)]
 extern crate test;
-
-extern crate rand;
 extern crate serialize;
 
-use std::mem::{transmute,transmute_copy};
 use std::char::Char;
 use std::default::Default;
 use std::fmt;
 use std::from_str::FromStr;
 use std::hash::Hash;
+use std::mem::{transmute,transmute_copy};
 use std::num::FromStrRadix;
-use std::str;
+use std::rand;
+use std::rand::Rng;
 use std::slice;
-
-use rand::Rng;
+use std::str;
 
 use serialize::{Encoder, Encodable, Decoder, Decodable};
 
@@ -89,7 +87,7 @@ use serialize::{Encoder, Encodable, Decoder, Decodable};
 pub type UuidBytes = [u8, ..16];
 
 /// The version of the UUID, denoting the generating algorithm
-#[deriving(Eq)]
+#[deriving(PartialEq)]
 pub enum UuidVersion {
     /// Version 1: MAC address
     Version1Mac    = 1,
@@ -104,7 +102,7 @@ pub enum UuidVersion {
 }
 
 /// The reserved variants of UUIDs
-#[deriving(Eq)]
+#[deriving(PartialEq)]
 pub enum UuidVariant {
     /// Reserved by the NCS for backward compatibility
     VariantNCS,
@@ -194,7 +192,7 @@ impl Uuid {
     /// of random numbers. Use the rand::Rand trait to supply
     /// a custom generator if required.
     pub fn new_v4() -> Uuid {
-        let ub = rand::task_rng().gen_vec(16);
+        let ub = rand::task_rng().gen_iter::<u8>().take(16).collect::<Vec<_>>();
         let mut uuid = Uuid{ bytes: [0, .. 16] };
         slice::bytes::copy_memory(uuid.bytes, ub.as_slice());
         uuid.set_variant(VariantRFC4122);
@@ -483,13 +481,13 @@ impl fmt::Show for Uuid {
 /// Test two UUIDs for equality
 ///
 /// UUIDs are equal only when they are byte-for-byte identical
-impl Eq for Uuid {
+impl PartialEq for Uuid {
     fn eq(&self, other: &Uuid) -> bool {
         self.bytes == other.bytes
     }
 }
 
-impl TotalEq for Uuid {}
+impl Eq for Uuid {}
 
 // FIXME #9845: Test these more thoroughly
 impl<T: Encoder<E>, E> Encodable<T, E> for Uuid {
@@ -510,7 +508,7 @@ impl<T: Decoder<E>, E> Decodable<T, E> for Uuid {
 impl rand::Rand for Uuid {
     #[inline]
     fn rand<R: rand::Rng>(rng: &mut R) -> Uuid {
-        let ub = rng.gen_vec(16);
+        let ub = rng.gen_iter::<u8>().take(16).collect::<Vec<_>>();
         let mut uuid = Uuid{ bytes: [0, .. 16] };
         slice::bytes::copy_memory(uuid.bytes, ub.as_slice());
         uuid.set_variant(VariantRFC4122);
@@ -522,13 +520,13 @@ impl rand::Rand for Uuid {
 #[cfg(test)]
 mod test {
     extern crate collections;
-    extern crate rand;
 
     use super::{Uuid, VariantMicrosoft, VariantNCS, VariantRFC4122,
                 Version1Mac, Version2Dce, Version3Md5, Version4Random,
                 Version5Sha1};
     use std::str;
     use std::io::MemWriter;
+    use std::rand;
 
     #[test]
     fn test_nil() {
@@ -788,7 +786,7 @@ mod test {
     #[test]
     fn test_rand_rand() {
         let mut rng = rand::task_rng();
-        let u: Box<Uuid> = rand::Rand::rand(&mut rng);
+        let u: Uuid = rand::Rand::rand(&mut rng);
         let ub = u.as_bytes();
 
         assert!(ub.len() == 16);
@@ -797,14 +795,16 @@ mod test {
 
     #[test]
     fn test_serialize_round_trip() {
-        use serialize::ebml;
+        use serialize::ebml::Doc;
+        use serialize::ebml::writer::Encoder;
+        use serialize::ebml::reader::Decoder;
         use serialize::{Encodable, Decodable};
 
         let u = Uuid::new_v4();
         let mut wr = MemWriter::new();
-        let _ = u.encode(&mut ebml::writer::Encoder(&mut wr));
-        let doc = ebml::reader::Doc(wr.get_ref());
-        let u2 = Decodable::decode(&mut ebml::reader::Decoder(doc)).unwrap();
+        let _ = u.encode(&mut Encoder::new(&mut wr));
+        let doc = Doc::new(wr.get_ref());
+        let u2 = Decodable::decode(&mut Decoder::new(doc)).unwrap();
         assert_eq!(u, u2);
     }
 

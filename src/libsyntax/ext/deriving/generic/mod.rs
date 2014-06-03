@@ -24,11 +24,11 @@ Supported features (fairly exhaustive):
   current trait as a bound. (This includes separate type parameters
   and lifetimes for methods.)
 - Additional bounds on the type parameters, e.g. the `Ord` instance
-  requires an explicit `Eq` bound at the
+  requires an explicit `PartialEq` bound at the
   moment. (`TraitDef.additional_bounds`)
 
 Unsupported: FIXME #6257: calling methods on reference fields,
-e.g. deriving TotalEq/TotalOrd/Clone don't work on `struct A(&int)`,
+e.g. deriving Eq/Ord/Clone don't work on `struct A(&int)`,
 because of how the auto-dereferencing happens.
 
 The most important thing for implementers is the `Substructure` and
@@ -82,13 +82,13 @@ variants, it is represented as a count of 0.
 
 # Examples
 
-The following simplified `Eq` is used for in-code examples:
+The following simplified `PartialEq` is used for in-code examples:
 
 ```rust
-trait Eq {
+trait PartialEq {
     fn eq(&self, other: &Self);
 }
-impl Eq for int {
+impl PartialEq for int {
     fn eq(&self, other: &int) -> bool {
         *self == *other
     }
@@ -96,13 +96,13 @@ impl Eq for int {
 ```
 
 Some examples of the values of `SubstructureFields` follow, using the
-above `Eq`, `A`, `B` and `C`.
+above `PartialEq`, `A`, `B` and `C`.
 
 ## Structs
 
 When generating the `expr` for the `A` impl, the `SubstructureFields` is
 
-~~~notrust
+~~~text
 Struct(~[FieldInfo {
            span: <span of x>
            name: Some(<ident of x>),
@@ -113,7 +113,7 @@ Struct(~[FieldInfo {
 
 For the `B` impl, called with `B(a)` and `B(b)`,
 
-~~~notrust
+~~~text
 Struct(~[FieldInfo {
           span: <span of `int`>,
           name: None,
@@ -127,7 +127,7 @@ Struct(~[FieldInfo {
 When generating the `expr` for a call with `self == C0(a)` and `other
 == C0(b)`, the SubstructureFields is
 
-~~~notrust
+~~~text
 EnumMatching(0, <ast::Variant for C0>,
              ~[FieldInfo {
                 span: <span of int>
@@ -139,7 +139,7 @@ EnumMatching(0, <ast::Variant for C0>,
 
 For `C1 {x}` and `C1 {x}`,
 
-~~~notrust
+~~~text
 EnumMatching(1, <ast::Variant for C1>,
              ~[FieldInfo {
                 span: <span of x>
@@ -151,7 +151,7 @@ EnumMatching(1, <ast::Variant for C1>,
 
 For `C0(a)` and `C1 {x}` ,
 
-~~~notrust
+~~~text
 EnumNonMatching(~[(0, <ast::Variant for B0>,
                    ~[(<span of int>, None, <expr for &a>)]),
                   (1, <ast::Variant for B1>,
@@ -165,7 +165,7 @@ EnumNonMatching(~[(0, <ast::Variant for B0>,
 
 A static method on the above would result in,
 
-~~~~notrust
+~~~text
 StaticStruct(<ast::StructDef of A>, Named(~[(<ident of x>, <span of x>)]))
 
 StaticStruct(<ast::StructDef of B>, Unnamed(~[<span of x>]))
@@ -191,8 +191,9 @@ use codemap::Span;
 use owned_slice::OwnedSlice;
 use parse::token::InternedString;
 
-pub use self::ty::*;
-mod ty;
+use self::ty::*;
+
+pub mod ty;
 
 pub struct TraitDef<'a> {
     /// The span for the current #[deriving(Foo)] header.
@@ -288,7 +289,7 @@ pub enum SubstructureFields<'a> {
 
     /**
     non-matching variants of the enum, [(variant index, ast::Variant,
-    [field span, field ident, fields])] (i.e. all fields for self are in the
+    [field span, field ident, fields])] \(i.e. all fields for self are in the
     first tuple, for other1 are in the second tuple, etc.)
     */
     EnumNonMatching(&'a [(uint, P<ast::Variant>, Vec<(Span, Option<Ident>, @Expr)> )]),
@@ -645,11 +646,11 @@ impl<'a> MethodDef<'a> {
 
     /**
    ~~~
-    #[deriving(Eq)]
+    #[deriving(PartialEq)]
     struct A { x: int, y: int }
 
     // equivalent to:
-    impl Eq for A {
+    impl PartialEq for A {
         fn eq(&self, __arg_1: &A) -> bool {
             match *self {
                 A {x: ref __self_0_0, y: ref __self_0_1} => {
@@ -750,7 +751,7 @@ impl<'a> MethodDef<'a> {
 
     /**
    ~~~
-    #[deriving(Eq)]
+    #[deriving(PartialEq)]
     enum A {
         A1
         A2(int)
@@ -758,7 +759,7 @@ impl<'a> MethodDef<'a> {
 
     // is equivalent to (with const_nonmatching == false)
 
-    impl Eq for A {
+    impl PartialEq for A {
         fn eq(&self, __arg_1: &A) {
             match *self {
                 A1 => match *__arg_1 {
@@ -792,7 +793,7 @@ impl<'a> MethodDef<'a> {
     /**
     Creates the nested matches for an enum definition recursively, i.e.
 
-   ~~~notrust
+   ~~~text
     match self {
        Variant1 => match other { Variant1 => matching, Variant2 => nonmatching, ... },
        Variant2 => match other { Variant1 => nonmatching, Variant2 => matching, ... },
@@ -994,7 +995,7 @@ impl<'a> MethodDef<'a> {
     }
 }
 
-#[deriving(Eq)] // dogfooding!
+#[deriving(PartialEq)] // dogfooding!
 enum StructType {
     Unknown, Record, Tuple
 }

@@ -12,11 +12,13 @@
 //!
 //! For more details, see std::str
 
+#![doc(primitive = "str")]
+
 use mem;
 use char;
 use clone::Clone;
 use cmp;
-use cmp::{Eq, TotalEq};
+use cmp::{PartialEq, Eq};
 use container::Container;
 use default::Default;
 use iter::{Filter, Map, Iterator};
@@ -696,7 +698,7 @@ pub struct Utf16Items<'a> {
     iter: slice::Items<'a, u16>
 }
 /// The possibilities for values decoded from a `u16` stream.
-#[deriving(Eq, TotalEq, Clone, Show)]
+#[deriving(PartialEq, Eq, Clone, Show)]
 pub enum Utf16Item {
     /// A valid codepoint.
     ScalarValue(char),
@@ -930,12 +932,12 @@ Section: Trait implementations
 #[allow(missing_doc)]
 pub mod traits {
     use container::Container;
-    use cmp::{TotalOrd, Ordering, Less, Equal, Greater, Eq, Ord, Equiv, TotalEq};
+    use cmp::{Ord, Ordering, Less, Equal, Greater, PartialEq, PartialOrd, Equiv, Eq};
     use iter::Iterator;
     use option::{Some, None};
     use str::{Str, StrSlice, eq_slice};
 
-    impl<'a> TotalOrd for &'a str {
+    impl<'a> Ord for &'a str {
         #[inline]
         fn cmp(&self, other: & &'a str) -> Ordering {
             for (s_b, o_b) in self.bytes().zip(other.bytes()) {
@@ -950,7 +952,7 @@ pub mod traits {
         }
     }
 
-    impl<'a> Eq for &'a str {
+    impl<'a> PartialEq for &'a str {
         #[inline]
         fn eq(&self, other: & &'a str) -> bool {
             eq_slice((*self), (*other))
@@ -959,9 +961,9 @@ pub mod traits {
         fn ne(&self, other: & &'a str) -> bool { !(*self).eq(other) }
     }
 
-    impl<'a> TotalEq for &'a str {}
+    impl<'a> Eq for &'a str {}
 
-    impl<'a> Ord for &'a str {
+    impl<'a> PartialOrd for &'a str {
         #[inline]
         fn lt(&self, other: & &'a str) -> bool { self.cmp(other) == Less }
     }
@@ -1473,12 +1475,27 @@ pub trait StrSlice<'a> {
     /// This function can be used to iterate over a unicode string in reverse.
     ///
     /// Returns 0 for next index if called on start index 0.
+    ///
+    /// # Failure
+    ///
+    /// If `i` is greater than the length of the string.
+    /// If `i` is not an index following a valid UTF-8 character.
     fn char_range_at_reverse(&self, start: uint) -> CharRange;
 
-    /// Plucks the character starting at the `i`th byte of a string
+    /// Plucks the character starting at the `i`th byte of a string.
+    ///
+    /// # Failure
+    ///
+    /// If `i` is greater than or equal to the length of the string.
+    /// If `i` is not the index of the beginning of a valid UTF-8 character.
     fn char_at(&self, i: uint) -> char;
 
-    /// Plucks the character ending at the `i`th byte of a string
+    /// Plucks the character ending at the `i`th byte of a string.
+    ///
+    /// # Failure
+    ///
+    /// If `i` is greater than the length of the string.
+    /// If `i` is not an index following a valid UTF-8 character.
     fn char_at_reverse(&self, i: uint) -> char;
 
     /// Work with the byte buffer of a string as a byte slice.

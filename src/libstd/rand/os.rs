@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -11,13 +11,15 @@
 //! Interfaces to the operating system provided random number
 //! generators.
 
-pub use self::imp::OSRng;
+pub use self::imp::OsRng;
 
 #[cfg(unix)]
 mod imp {
-    use Rng;
-    use reader::ReaderRng;
-    use std::io::{IoResult, File};
+    use io::{IoResult, File};
+    use path::Path;
+    use rand::Rng;
+    use rand::reader::ReaderRng;
+    use result::{Ok, Err};
 
     /// A random number generator that retrieves randomness straight from
     /// the operating system. Platform sources:
@@ -29,21 +31,21 @@ mod imp {
     ///
     /// This does not block.
     #[cfg(unix)]
-    pub struct OSRng {
+    pub struct OsRng {
         inner: ReaderRng<File>
     }
 
-    impl OSRng {
-        /// Create a new `OSRng`.
-        pub fn new() -> IoResult<OSRng> {
+    impl OsRng {
+        /// Create a new `OsRng`.
+        pub fn new() -> IoResult<OsRng> {
             let reader = try!(File::open(&Path::new("/dev/urandom")));
             let reader_rng = ReaderRng::new(reader);
 
-            Ok(OSRng { inner: reader_rng })
+            Ok(OsRng { inner: reader_rng })
         }
     }
 
-    impl Rng for OSRng {
+    impl Rng for OsRng {
         fn next_u32(&mut self) -> u32 {
             self.inner.next_u32()
         }
@@ -60,12 +62,16 @@ mod imp {
 mod imp {
     extern crate libc;
 
-    use Rng;
-    use std::io::{IoResult, IoError};
-    use std::mem;
-    use std::os;
-    use std::rt::stack;
+    use container::Container;
+    use io::{IoResult, IoError};
+    use mem;
+    use ops::Drop;
+    use os;
+    use rand::Rng;
+    use result::{Ok, Err};
+    use rt::stack;
     use self::libc::{c_ulong, DWORD, BYTE, LPCSTR, BOOL};
+    use slice::MutableVector;
 
     type HCRYPTPROV = c_ulong;
 
@@ -78,7 +84,7 @@ mod imp {
     ///   service provider with the `PROV_RSA_FULL` type.
     ///
     /// This does not block.
-    pub struct OSRng {
+    pub struct OsRng {
         hcryptprov: HCRYPTPROV
     }
 
@@ -87,6 +93,7 @@ mod imp {
     static CRYPT_VERIFYCONTEXT: DWORD = 0xF0000000;
     static NTE_BAD_SIGNATURE: DWORD = 0x80090006;
 
+    #[allow(non_snake_case_functions)]
     extern "system" {
         fn CryptAcquireContextA(phProv: *mut HCRYPTPROV,
                                 pszContainer: LPCSTR,
@@ -99,9 +106,9 @@ mod imp {
         fn CryptReleaseContext(hProv: HCRYPTPROV, dwFlags: DWORD) -> BOOL;
     }
 
-    impl OSRng {
-        /// Create a new `OSRng`.
-        pub fn new() -> IoResult<OSRng> {
+    impl OsRng {
+        /// Create a new `OsRng`.
+        pub fn new() -> IoResult<OsRng> {
             let mut hcp = 0;
             let mut ret = unsafe {
                 CryptAcquireContextA(&mut hcp, 0 as LPCSTR, 0 as LPCSTR,
@@ -148,12 +155,12 @@ mod imp {
             if ret == 0 {
                 Err(IoError::last_error())
             } else {
-                Ok(OSRng { hcryptprov: hcp })
+                Ok(OsRng { hcryptprov: hcp })
             }
         }
     }
 
-    impl Rng for OSRng {
+    impl Rng for OsRng {
         fn next_u32(&mut self) -> u32 {
             let mut v = [0u8, .. 4];
             self.fill_bytes(v);
@@ -175,7 +182,7 @@ mod imp {
         }
     }
 
-    impl Drop for OSRng {
+    impl Drop for OsRng {
         fn drop(&mut self) {
             let ret = unsafe {
                 CryptReleaseContext(self.hcryptprov, 0)
@@ -189,13 +196,15 @@ mod imp {
 
 #[cfg(test)]
 mod test {
-    use super::OSRng;
-    use Rng;
-    use std::task;
+    use prelude::*;
+
+    use super::OsRng;
+    use rand::Rng;
+    use task;
 
     #[test]
     fn test_os_rng() {
-        let mut r = OSRng::new().unwrap();
+        let mut r = OsRng::new().unwrap();
 
         r.next_u32();
         r.next_u64();
@@ -217,7 +226,7 @@ mod test {
 
                 // deschedule to attempt to interleave things as much
                 // as possible (XXX: is this a good test?)
-                let mut r = OSRng::new().unwrap();
+                let mut r = OsRng::new().unwrap();
                 task::deschedule();
                 let mut v = [0u8, .. 1000];
 

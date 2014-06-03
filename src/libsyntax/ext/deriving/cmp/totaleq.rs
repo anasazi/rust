@@ -13,6 +13,7 @@ use codemap::Span;
 use ext::base::ExtCtxt;
 use ext::build::AstBuilder;
 use ext::deriving::generic::*;
+use ext::deriving::generic::ty::*;
 use parse::token::InternedString;
 
 pub fn expand_deriving_totaleq(cx: &mut ExtCtxt,
@@ -28,7 +29,7 @@ pub fn expand_deriving_totaleq(cx: &mut ExtCtxt,
             let block = cx.block(span, stmts, None);
             cx.expr_block(block)
         },
-                       |cx, sp, _, _| cx.span_bug(sp, "non matching enums in deriving(TotalEq)?"),
+                       |cx, sp, _, _| cx.span_bug(sp, "non matching enums in deriving(Eq)?"),
                        cx,
                        span,
                        substr)
@@ -42,7 +43,7 @@ pub fn expand_deriving_totaleq(cx: &mut ExtCtxt,
     let trait_def = TraitDef {
         span: span,
         attributes: Vec::new(),
-        path: Path::new(vec!("std", "cmp", "TotalEq")),
+        path: Path::new(vec!("std", "cmp", "Eq")),
         additional_bounds: Vec::new(),
         generics: LifetimeBounds::empty(),
         methods: vec!(

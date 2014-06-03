@@ -14,6 +14,7 @@ use codemap::Span;
 use ext::base::ExtCtxt;
 use ext::build::AstBuilder;
 use ext::deriving::generic::*;
+use ext::deriving::generic::ty::*;
 use parse::token::InternedString;
 
 use std::cmp::{Ordering, Equal, Less, Greater};
@@ -28,7 +29,7 @@ pub fn expand_deriving_totalord(cx: &mut ExtCtxt,
     let trait_def = TraitDef {
         span: span,
         attributes: Vec::new(),
-        path: Path::new(vec!("std", "cmp", "TotalOrd")),
+        path: Path::new(vec!("std", "cmp", "Ord")),
         additional_bounds: Vec::new(),
         generics: LifetimeBounds::empty(),
         methods: vec!(
@@ -117,7 +118,7 @@ pub fn cs_cmp(cx: &mut ExtCtxt, span: Span,
                     let order = ordering_const(cx, span, self_var.cmp(&other_var));
                     cx.expr_path(order)
                 }
-                _ => cx.span_bug(span, "not exactly 2 arguments in `deriving(TotalOrd)`")
+                _ => cx.span_bug(span, "not exactly 2 arguments in `deriving(Ord)`")
             }
         },
         cx, span, substr)
