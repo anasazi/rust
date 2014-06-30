@@ -33,15 +33,13 @@ use heap::deallocate;
 /// task.
 ///
 /// ```rust
-/// extern crate sync;
-///
-/// use sync::Arc;
+/// use std::sync::Arc;
 ///
 /// fn main() {
 ///     let numbers = Vec::from_fn(100, |i| i as f32);
 ///     let shared_numbers = Arc::new(numbers);
 ///
-///     for _ in range(0, 10) {
+///     for _ in range(0u, 10) {
 ///         let child_numbers = shared_numbers.clone();
 ///
 ///         spawn(proc() {
@@ -112,6 +110,7 @@ impl<T: Share + Send> Arc<T> {
     }
 }
 
+#[unstable]
 impl<T: Share + Send> Clone for Arc<T> {
     /// Duplicate an atomically reference counted wrapper.
     ///
@@ -184,7 +183,7 @@ impl<T: Share + Send> Drop for Arc<T> {
 
         // This fence is needed to prevent reordering of use of the data and
         // deletion of the data. Because it is marked `Release`, the
-        // decreasing of the reference count sychronizes with this `Acquire`
+        // decreasing of the reference count synchronizes with this `Acquire`
         // fence. This means that use of the data happens before decreasing
         // the refernce count, which happens before this fence, which
         // happens before the deletion of the data.
@@ -238,6 +237,7 @@ impl<T: Share + Send> Weak<T> {
     }
 }
 
+#[unstable]
 impl<T: Share + Send> Clone for Weak<T> {
     #[inline]
     fn clone(&self) -> Weak<T> {
@@ -276,7 +276,7 @@ mod tests {
     use std::task;
     use std::vec::Vec;
     use super::{Arc, Weak};
-    use sync::Mutex;
+    use std::sync::Mutex;
 
     struct Canary(*mut atomics::AtomicUint);
 
@@ -376,14 +376,14 @@ mod tests {
 
     #[test]
     fn test_live() {
-        let x = Arc::new(5);
+        let x = Arc::new(5i);
         let y = x.downgrade();
         assert!(y.upgrade().is_some());
     }
 
     #[test]
     fn test_dead() {
-        let x = Arc::new(5);
+        let x = Arc::new(5i);
         let y = x.downgrade();
         drop(x);
         assert!(y.upgrade().is_none());

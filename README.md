@@ -14,8 +14,8 @@ documentation.
 
 [installer]: http://www.rust-lang.org/install.html
 [tutorial]: http://doc.rust-lang.org/tutorial.html
-[wiki-start]: https://github.com/mozilla/rust/wiki/Note-getting-started-developing-Rust
-[win-wiki]: https://github.com/mozilla/rust/wiki/Using-Rust-on-Windows
+[wiki-start]: https://github.com/rust-lang/rust/wiki/Note-getting-started-developing-Rust
+[win-wiki]: https://github.com/rust-lang/rust/wiki/Using-Rust-on-Windows
 
 ## Building from Source
 
@@ -38,7 +38,7 @@ documentation.
 
     Or to build from the [repo] do:
 
-        $ git clone https://github.com/mozilla/rust.git
+        $ git clone https://github.com/rust-lang/rust.git
         $ cd rust
 
     Now that you have Rust's source code, you can configure and build it:
@@ -54,11 +54,27 @@ documentation.
     When complete, `make install` will place several programs into
     `/usr/local/bin`: `rustc`, the Rust compiler, and `rustdoc`, the
     API-documentation tool.
-    system.
 3. Read the [tutorial].
 4. Enjoy!
 
-[repo]: https://github.com/mozilla/rust
+### Building on Windows
+
+To easily build on windows we can use [MSYS2](http://sourceforge.net/projects/msys2/):
+
+1. Grab the latest MSYS2 installer and go through the installer.
+2. Now from the MSYS2 terminal we want to install the mingw64 toolchain and the other
+   tools we need.
+
+        $ pacman -S mingw-w64-i686-toolchain
+        $ pacman -S base-devel
+
+3. With that now start `mingw32_shell.bat` from where you installed MSYS2 (i.e. `C:\msys`).
+4. From there just navigate to where you have Rust's source code, configure and build it:
+
+        $ ./configure --build=i686-pc-mingw32
+        $ make && make install
+
+[repo]: https://github.com/rust-lang/rust
 [tarball]: http://static.rust-lang.org/dist/rust-nightly.tar.gz
 [tutorial]: http://doc.rust-lang.org/tutorial.html
 
@@ -83,7 +99,7 @@ swap, it will take a very long time to build.
 
 There is a lot more documentation in the [wiki].
 
-[wiki]: https://github.com/mozilla/rust/wiki
+[wiki]: https://github.com/rust-lang/rust/wiki
 
 ## License
 

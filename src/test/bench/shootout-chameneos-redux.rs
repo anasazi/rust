@@ -11,7 +11,7 @@
 // no-pretty-expanded
 
 #![feature(phase)]
-#[phase(syntax)] extern crate green;
+#[phase(plugin)] extern crate green;
 
 use std::string::String;
 use std::fmt;
@@ -111,7 +111,7 @@ fn creature(
     to_rendezvous: Sender<CreatureInfo>,
     to_rendezvous_log: Sender<String>
 ) {
-    let mut creatures_met = 0;
+    let mut creatures_met = 0i32;
     let mut evil_clones_met = 0;
     let mut rendezvous = from_rendezvous.iter();
 

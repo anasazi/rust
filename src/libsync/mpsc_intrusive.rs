@@ -30,12 +30,16 @@
 //! This module implements an intrusive MPSC queue. This queue is incredibly
 //! unsafe (due to use of unsafe pointers for nodes), and hence is not public.
 
+#![experimental]
+
 // http://www.1024cores.net/home/lock-free-algorithms
 //                         /queues/intrusive-mpsc-node-based-queue
 
-use std::mem;
-use std::sync::atomics;
-use std::ty::Unsafe;
+use core::prelude::*;
+
+use core::atomics;
+use core::mem;
+use core::ty::Unsafe;
 
 // NB: all links are done as AtomicUint instead of AtomicPtr to allow for static
 // initialization.
@@ -100,7 +104,7 @@ impl<T: Send> Queue<T> {
             mem::transmute(&self.stub)
         };
         let mut next = (*tail).next(atomics::Relaxed);
-        if tail as uint == &self.stub as *DummyNode as uint {
+        if tail as uint == &self.stub as *const DummyNode as uint {
             if next.is_null() {
                 return None;
             }

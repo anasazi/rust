@@ -18,9 +18,8 @@ use driver::session::Session;
 use back;
 use back::link;
 use back::target_strs;
-use back::{arm, x86, x86_64, mips};
-use metadata;
-use middle::lint;
+use back::{arm, x86, x86_64, mips, mipsel};
+use lint;
 
 use syntax::abi;
 use syntax::ast;
@@ -31,11 +30,12 @@ use syntax::diagnostic::{ColorConfig, Auto, Always, Never};
 use syntax::parse;
 use syntax::parse::token::InternedString;
 
-use collections::HashSet;
+use std::collections::HashSet;
 use getopts::{optopt, optmulti, optflag, optflagopt};
 use getopts;
 use lib::llvm::llvm;
 use std::cell::{RefCell};
+use std::fmt;
 
 
 pub struct Config {
@@ -70,7 +70,8 @@ pub struct Options {
     pub gc: bool,
     pub optimize: OptLevel,
     pub debuginfo: DebugInfoLevel,
-    pub lint_opts: Vec<(lint::Lint, lint::Level)> ,
+    pub lint_opts: Vec<(String, lint::Level)>,
+    pub describe_lints: bool,
     pub output_types: Vec<back::link::OutputType> ,
     // This was mutable for rustpkg, which updates search paths based on the
     // parsed code. It remains mutable in case its replacements wants to use
@@ -104,6 +105,7 @@ pub fn basic_options() -> Options {
         optimize: No,
         debuginfo: NoDebugInfo,
         lint_opts: Vec::new(),
+        describe_lints: false,
         output_types: Vec::new(),
         addl_lib_search_paths: RefCell::new(HashSet::new()),
         maybe_sysroot: None,
@@ -172,7 +174,8 @@ debugging_opts!(
         LTO,
         AST_JSON,
         AST_JSON_NOEXPAND,
-        LS
+        LS,
+        SAVE_ANALYSIS
     ]
     0
 )
@@ -206,7 +209,9 @@ pub fn debugging_opts_map() -> Vec<(&'static str, &'static str, u64)> {
      ("lto", "Perform LLVM link-time optimizations", LTO),
      ("ast-json", "Print the AST as JSON and halt", AST_JSON),
      ("ast-json-noexpand", "Print the pre-expansion AST as JSON and halt", AST_JSON_NOEXPAND),
-     ("ls", "List the symbols defined by a library crate", LS))
+     ("ls", "List the symbols defined by a library crate", LS),
+     ("save-analysis", "Write syntax and type analysis information \
+                        in addition to normal output", SAVE_ANALYSIS))
 }
 
 /// Declare a macro that will define all CodegenOptions fields and parsers all
@@ -354,18 +359,6 @@ pub fn default_lib_output() -> CrateType {
     CrateTypeRlib
 }
 
-pub fn cfg_os_to_meta_os(os: abi::Os) -> metadata::loader::Os {
-    use metadata::loader;
-
-    match os {
-        abi::OsWin32 => loader::OsWin32,
-        abi::OsLinux => loader::OsLinux,
-        abi::OsAndroid => loader::OsAndroid,
-        abi::OsMacos => loader::OsMacos,
-        abi::OsFreebsd => loader::OsFreebsd
-    }
-}
-
 pub fn default_configuration(sess: &Session) -> ast::CrateConfig {
     let tos = match sess.targ_cfg.os {
         abi::OsWin32 =>   InternedString::new("win32"),
@@ -373,6 +366,7 @@ pub fn default_configuration(sess: &Session) -> ast::CrateConfig {
         abi::OsLinux =>   InternedString::new("linux"),
         abi::OsAndroid => InternedString::new("android"),
         abi::OsFreebsd => InternedString::new("freebsd"),
+        abi::OsiOS =>     InternedString::new("ios"),
     };
 
     // ARM is bi-endian, however using NDK seems to default
@@ -381,7 +375,8 @@ pub fn default_configuration(sess: &Session) -> ast::CrateConfig {
         abi::X86 =>    ("little", "x86",    "32"),
         abi::X86_64 => ("little", "x86_64", "64"),
         abi::Arm =>    ("little", "arm",    "32"),
-        abi::Mips =>   ("big",    "mips",   "32")
+        abi::Mips =>   ("big",    "mips",   "32"),
+        abi::Mipsel => ("little", "mipsel", "32")
     };
 
     let fam = match sess.targ_cfg.os {
@@ -438,7 +433,8 @@ static os_names : &'static [(&'static str, abi::Os)] = &'static [
     ("darwin",  abi::OsMacos),
     ("android", abi::OsAndroid),
     ("linux",   abi::OsLinux),
-    ("freebsd", abi::OsFreebsd)];
+    ("freebsd", abi::OsFreebsd),
+    ("ios",     abi::OsiOS)];
 
 pub fn get_arch(triple: &str) -> Option<abi::Architecture> {
     for &(arch, abi) in architecture_abis.iter() {
@@ -459,6 +455,7 @@ static architecture_abis : &'static [(&'static str, abi::Architecture)] = &'stat
     ("xscale", abi::Arm),
     ("thumb",  abi::Arm),
 
+    ("mipsel", abi::Mipsel),
     ("mips",   abi::Mips)];
 
 pub fn build_target_config(sopts: &Options) -> Config {
@@ -477,14 +474,16 @@ pub fn build_target_config(sopts: &Options) -> Config {
       abi::X86 => (ast::TyI32, ast::TyU32),
       abi::X86_64 => (ast::TyI64, ast::TyU64),
       abi::Arm => (ast::TyI32, ast::TyU32),
-      abi::Mips => (ast::TyI32, ast::TyU32)
+      abi::Mips => (ast::TyI32, ast::TyU32),
+      abi::Mipsel => (ast::TyI32, ast::TyU32)
     };
     let target_triple = sopts.target_triple.clone();
     let target_strs = match arch {
       abi::X86 => x86::get_target_strs(target_triple, os),
       abi::X86_64 => x86_64::get_target_strs(target_triple, os),
       abi::Arm => arm::get_target_strs(target_triple, os),
-      abi::Mips => mips::get_target_strs(target_triple, os)
+      abi::Mips => mips::get_target_strs(target_triple, os),
+      abi::Mipsel => mipsel::get_target_strs(target_triple, os)
     };
     Config {
         os: os,
@@ -545,7 +544,7 @@ pub fn optgroups() -> Vec<getopts::OptGroup> {
         optmulti("F", "forbid", "Set lint forbidden", "OPT"),
         optmulti("C", "codegen", "Set a codegen option", "OPT[=VALUE]"),
         optmulti("Z", "", "Set internal debugging options", "FLAG"),
-        optflag("v", "version", "Print version info and exit"),
+        optflagopt("v", "version", "Print version info and exit", "verbose"),
         optopt("", "color", "Configure coloring of output:
             auto   = colorize, if output goes to a tty (default);
             always = always colorize output;
@@ -588,30 +587,15 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
     let no_trans = matches.opt_present("no-trans");
     let no_analysis = matches.opt_present("no-analysis");
 
-    let lint_levels = [lint::Allow, lint::Warn,
-                       lint::Deny, lint::Forbid];
-    let mut lint_opts = Vec::new();
-    let lint_dict = lint::get_lint_dict();
-    for level in lint_levels.iter() {
-        let level_name = lint::level_to_str(*level);
+    let mut lint_opts = vec!();
+    let mut describe_lints = false;
 
-        let level_short = level_name.slice_chars(0, 1);
-        let level_short = level_short.to_ascii().to_upper().into_str();
-        let flags = matches.opt_strs(level_short.as_slice())
-                           .move_iter()
-                           .collect::<Vec<_>>()
-                           .append(matches.opt_strs(level_name).as_slice());
-        for lint_name in flags.iter() {
-            let lint_name = lint_name.replace("-", "_").into_string();
-            match lint_dict.find_equiv(&lint_name) {
-              None => {
-                early_error(format!("unknown {} flag: {}",
-                                    level_name,
-                                    lint_name).as_slice());
-              }
-              Some(lint) => {
-                lint_opts.push((lint.lint, *level));
-              }
+    for &level in [lint::Allow, lint::Warn, lint::Deny, lint::Forbid].iter() {
+        for lint_name in matches.opt_strs(level.as_str()).move_iter() {
+            if lint_name.as_slice() == "help" {
+                describe_lints = true;
+            } else {
+                lint_opts.push((lint_name.replace("-", "_").into_string(), level));
             }
         }
     }
@@ -666,10 +650,8 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
     }
 
     let sysroot_opt = matches.opt_str("sysroot").map(|m| Path::new(m));
-    let target = match matches.opt_str("target") {
-        Some(supplied_target) => supplied_target.to_string(),
-        None => driver::host_triple().to_string(),
-    };
+    let target = matches.opt_str("target").unwrap_or(
+        driver::host_triple().to_string());
     let opt_level = {
         if (debugging_opts & NO_OPT) != 0 {
             No
@@ -721,10 +703,7 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
         Path::new(s.as_slice())
     }).collect();
 
-    let cfg = parse_cfgspecs(matches.opt_strs("cfg")
-                                    .move_iter()
-                                    .map(|x| x.to_string())
-                                    .collect());
+    let cfg = parse_cfgspecs(matches.opt_strs("cfg"));
     let test = matches.opt_present("test");
     let write_dependency_info = (matches.opt_present("dep-info"),
                                  matches.opt_str("dep-info")
@@ -755,6 +734,7 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
         optimize: opt_level,
         debuginfo: debuginfo,
         lint_opts: lint_opts,
+        describe_lints: describe_lints,
         output_types: output_types,
         addl_lib_search_paths: RefCell::new(addl_lib_search_paths),
         maybe_sysroot: sysroot_opt,
@@ -772,6 +752,16 @@ pub fn build_session_options(matches: &getopts::Matches) -> Options {
     }
 }
 
+impl fmt::Show for CrateType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            CrateTypeExecutable => "bin".fmt(f),
+            CrateTypeDylib => "dylib".fmt(f),
+            CrateTypeRlib => "rlib".fmt(f),
+            CrateTypeStaticlib => "staticlib".fmt(f)
+        }
+    }
+}
 
 #[cfg(test)]
 mod test {
@@ -789,7 +779,7 @@ mod test {
         let matches =
             &match getopts(["--test".to_string()], optgroups().as_slice()) {
               Ok(m) => m,
-              Err(f) => fail!("test_switch_implies_cfg_test: {}", f.to_err_msg())
+              Err(f) => fail!("test_switch_implies_cfg_test: {}", f)
             };
         let sessopts = build_session_options(matches);
         let sess = build_session(sessopts, None);
@@ -806,8 +796,7 @@ mod test {
                            optgroups().as_slice()) {
               Ok(m) => m,
               Err(f) => {
-                fail!("test_switch_implies_cfg_test_unless_cfg_test: {}",
-                       f.to_err_msg());
+                fail!("test_switch_implies_cfg_test_unless_cfg_test: {}", f)
               }
             };
         let sessopts = build_session_options(matches);

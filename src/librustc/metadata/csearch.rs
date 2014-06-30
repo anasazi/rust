@@ -18,12 +18,14 @@ use metadata::decoder;
 use middle::lang_items;
 use middle::ty;
 use middle::typeck;
+use middle::subst::VecPerParamSpace;
 
 use serialize::ebml;
 use serialize::ebml::reader;
 use std::rc::Rc;
 use syntax::ast;
 use syntax::ast_map;
+use syntax::attr;
 use syntax::diagnostic::expect;
 use syntax::parse::token;
 
@@ -177,7 +179,7 @@ pub fn get_static_methods_if_impl(cstore: &cstore::CStore,
 
 pub fn get_item_attrs(cstore: &cstore::CStore,
                       def_id: ast::DefId,
-                      f: |Vec<ast::Attribute> |) {
+                      f: |Vec<ast::Attribute>|) {
     let cdata = cstore.get_crate_data(def_id.krate);
     decoder::get_item_attrs(&*cdata, def_id.node, f)
 }
@@ -191,7 +193,7 @@ pub fn get_struct_fields(cstore: &cstore::CStore,
 
 pub fn get_type(tcx: &ty::ctxt,
                 def: ast::DefId)
-             -> ty::ty_param_bounds_and_ty {
+             -> ty::Polytype {
     let cstore = &tcx.sess.cstore;
     let cdata = cstore.get_crate_data(def.krate);
     decoder::get_type(&*cdata, def.node, tcx)
@@ -204,7 +206,7 @@ pub fn get_trait_def(tcx: &ty::ctxt, def: ast::DefId) -> ty::TraitDef {
 }
 
 pub fn get_field_type(tcx: &ty::ctxt, class_id: ast::DefId,
-                      def: ast::DefId) -> ty::ty_param_bounds_and_ty {
+                      def: ast::DefId) -> ty::Polytype {
     let cstore = &tcx.sess.cstore;
     let cdata = cstore.get_crate_data(class_id.krate);
     let all_items = reader::get_doc(ebml::Doc::new(cdata.data()), tag_items);
@@ -222,9 +224,9 @@ pub fn get_field_type(tcx: &ty::ctxt, class_id: ast::DefId,
                     def)).to_string()
         });
     let ty = decoder::item_type(def, the_field, tcx, &*cdata);
-    ty::ty_param_bounds_and_ty {
-        generics: ty::Generics {type_param_defs: Rc::new(Vec::new()),
-                                region_param_defs: Rc::new(Vec::new())},
+    ty::Polytype {
+        generics: ty::Generics {types: VecPerParamSpace::empty(),
+                                regions: VecPerParamSpace::empty()},
         ty: ty
     }
 }
@@ -240,7 +242,8 @@ pub fn get_impl_trait(tcx: &ty::ctxt,
 
 // Given a def_id for an impl, return information about its vtables
 pub fn get_impl_vtables(tcx: &ty::ctxt,
-                        def: ast::DefId) -> typeck::impl_res {
+                        def: ast::DefId)
+                        -> typeck::vtable_res {
     let cstore = &tcx.sess.cstore;
     let cdata = cstore.get_crate_data(def.krate);
     decoder::get_impl_vtables(&*cdata, def.node, tcx)
@@ -313,4 +316,23 @@ pub fn get_method_arg_names(cstore: &cstore::CStore, did: ast::DefId)
 {
     let cdata = cstore.get_crate_data(did.krate);
     decoder::get_method_arg_names(&*cdata, did.node)
+}
+
+pub fn get_reachable_extern_fns(cstore: &cstore::CStore, cnum: ast::CrateNum)
+    -> Vec<ast::DefId>
+{
+    let cdata = cstore.get_crate_data(cnum);
+    decoder::get_reachable_extern_fns(&*cdata)
+}
+
+pub fn is_typedef(cstore: &cstore::CStore, did: ast::DefId) -> bool {
+    let cdata = cstore.get_crate_data(did.krate);
+    decoder::is_typedef(&*cdata, did.node)
+}
+
+pub fn get_stability(cstore: &cstore::CStore,
+                     def: ast::DefId)
+                     -> Option<attr::Stability> {
+    let cdata = cstore.get_crate_data(def.krate);
+    decoder::get_stability(&*cdata, def.node)
 }

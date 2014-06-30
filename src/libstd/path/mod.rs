@@ -35,8 +35,8 @@ code, `Path` should be used to refer to the platform-native path.
 Creation of a path is typically done with either `Path::new(some_str)` or
 `Path::new(some_vec)`. This path can be modified with `.push()` and
 `.pop()` (and other setters). The resulting Path can either be passed to another
-API that expects a path, or can be turned into a &[u8] with `.as_vec()` or a
-Option<&str> with `.as_str()`. Similarly, attributes of the path can be queried
+API that expects a path, or can be turned into a `&[u8]` with `.as_vec()` or a
+`Option<&str>` with `.as_str()`. Similarly, attributes of the path can be queried
 with methods such as `.filename()`. There are also methods that return a new
 path instead of modifying the receiver, such as `.join()` or `.dir_path()`.
 
@@ -63,9 +63,7 @@ println!("path exists: {}", path.exists());
 
 */
 
-#![deny(deprecated_owned_vector)]
-
-use container::Container;
+use collections::Collection;
 use c_str::CString;
 use clone::Clone;
 use fmt;
@@ -221,7 +219,7 @@ pub trait GenericPath: Clone + GenericPathUnsafe {
                 let dot = '.' as u8;
                 match name.rposition_elem(&dot) {
                     None | Some(0) => name,
-                    Some(1) if name == bytes!("..") => name,
+                    Some(1) if name == b".." => name,
                     Some(pos) => name.slice_to(pos)
                 }
             })
@@ -244,7 +242,7 @@ pub trait GenericPath: Clone + GenericPathUnsafe {
                 let dot = '.' as u8;
                 match name.rposition_elem(&dot) {
                     None | Some(0) => None,
-                    Some(1) if name == bytes!("..") => None,
+                    Some(1) if name == b".." => None,
                     Some(pos) => Some(name.slice_from(pos+1))
                 }
             }
@@ -524,13 +522,6 @@ impl<'a> BytesContainer for &'a [u8] {
     #[inline]
     fn container_as_bytes<'a>(&'a self) -> &'a [u8] {
         *self
-    }
-}
-
-impl BytesContainer for ~[u8] {
-    #[inline]
-    fn container_as_bytes<'a>(&'a self) -> &'a [u8] {
-        self.as_slice()
     }
 }
 

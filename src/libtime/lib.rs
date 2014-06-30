@@ -11,23 +11,22 @@
 //! Simple time handling.
 
 #![crate_id = "time#0.11.0-pre"]
+#![experimental]
 
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
 #![license = "MIT/ASL2"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-       html_root_url = "http://doc.rust-lang.org/")]
+       html_root_url = "http://doc.rust-lang.org/",
+       html_playground_url = "http://play.rust-lang.org/")]
 #![feature(phase)]
-#![deny(deprecated_owned_vector)]
 
 #[cfg(test)] extern crate debug;
-#[cfg(test)] #[phase(syntax, link)] extern crate log;
+#[cfg(test)] #[phase(plugin, link)] extern crate log;
 
 extern crate serialize;
 extern crate libc;
-#[cfg(target_os = "macos")]
-extern crate sync;
 
 use std::io::BufReader;
 use std::num;
@@ -48,7 +47,7 @@ mod rustrt {
     }
 }
 
-#[cfg(unix, not(target_os = "macos"))]
+#[cfg(unix, not(target_os = "macos"), not(target_os = "ios"))]
 mod imp {
     use libc::{c_int, timespec};
 
@@ -63,6 +62,7 @@ mod imp {
 
 }
 #[cfg(target_os = "macos")]
+#[cfg(target_os = "ios")]
 mod imp {
     use libc::{timeval, timezone, c_int, mach_timebase_info};
 
@@ -123,6 +123,7 @@ pub fn get_time() -> Timespec {
     }
 
     #[cfg(target_os = "macos")]
+    #[cfg(target_os = "ios")]
     unsafe fn os_get_time() -> (i64, i32) {
         use std::ptr;
         let mut tv = libc::timeval { tv_sec: 0, tv_usec: 0 };
@@ -130,7 +131,7 @@ pub fn get_time() -> Timespec {
         (tv.tv_sec as i64, tv.tv_usec * 1000)
     }
 
-    #[cfg(not(target_os = "macos"), not(windows))]
+    #[cfg(not(target_os = "macos"), not(target_os = "ios"), not(windows))]
     unsafe fn os_get_time() -> (i64, i32) {
         let mut tv = libc::timespec { tv_sec: 0, tv_nsec: 0 };
         imp::clock_gettime(libc::CLOCK_REALTIME, &mut tv);
@@ -162,10 +163,11 @@ pub fn precise_time_ns() -> u64 {
     }
 
     #[cfg(target_os = "macos")]
+    #[cfg(target_os = "ios")]
     fn os_precise_time_ns() -> u64 {
         static mut TIMEBASE: libc::mach_timebase_info = libc::mach_timebase_info { numer: 0,
                                                                                    denom: 0 };
-        static mut ONCE: sync::one::Once = sync::one::ONCE_INIT;
+        static mut ONCE: std::sync::Once = std::sync::ONCE_INIT;
         unsafe {
             ONCE.doit(|| {
                 imp::mach_timebase_info(&mut TIMEBASE);
@@ -175,7 +177,7 @@ pub fn precise_time_ns() -> u64 {
         }
     }
 
-    #[cfg(not(windows), not(target_os = "macos"))]
+    #[cfg(not(windows), not(target_os = "macos"), not(target_os = "ios"))]
     fn os_precise_time_ns() -> u64 {
         let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
         unsafe {
@@ -1020,7 +1022,7 @@ pub fn strftime(format: &str, tm: &Tm) -> String {
           'U' => format!("{:02d}", (tm.tm_yday - tm.tm_wday + 7) / 7),
           'u' => {
             let i = tm.tm_wday as int;
-            (if i == 0 { 7 } else { i }).to_str().to_string()
+            (if i == 0 { 7 } else { i }).to_str()
           }
           'V' => iso_week('V', tm),
           'v' => {
@@ -1033,8 +1035,8 @@ pub fn strftime(format: &str, tm: &Tm) -> String {
               format!("{:02d}",
                              (tm.tm_yday - (tm.tm_wday - 1 + 7) % 7 + 7) / 7)
           }
-          'w' => (tm.tm_wday as int).to_str().to_string(),
-          'Y' => (tm.tm_year as int + 1900).to_str().to_string(),
+          'w' => (tm.tm_wday as int).to_str(),
+          'Y' => (tm.tm_year as int + 1900).to_str(),
           'y' => format!("{:02d}", (tm.tm_year as int + 1900) % 100),
           'Z' => "".to_string(),    // FIXME(pcwalton): Implement this.
           'z' => {
@@ -1089,7 +1091,7 @@ mod tests {
         // `SetEnvironmentVariable`, which `os::setenv` internally uses.
         // It is why we use `putenv` here.
         extern {
-            fn _putenv(envstring: *libc::c_char) -> libc::c_int;
+            fn _putenv(envstring: *const libc::c_char) -> libc::c_int;
         }
 
         unsafe {

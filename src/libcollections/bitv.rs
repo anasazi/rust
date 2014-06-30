@@ -10,14 +10,19 @@
 
 #![allow(missing_doc)]
 
+use core::prelude::*;
 
-use std::cmp;
-use std::fmt;
-use std::iter::RandomAccessIterator;
-use std::iter::{Enumerate, Repeat, Map, Zip};
-use std::ops;
-use std::slice;
-use std::uint;
+use core::cmp;
+use core::default::Default;
+use core::fmt;
+use core::iter::{Enumerate, Repeat, Map, Zip};
+use core::ops;
+use core::slice;
+use core::uint;
+use std::hash;
+
+use {Collection, Mutable, Set, MutableSet};
+use vec::Vec;
 
 #[deriving(Clone)]
 struct SmallBitv {
@@ -32,12 +37,12 @@ fn small_mask(nbits: uint) -> uint {
 }
 
 impl SmallBitv {
-    pub fn new(bits: uint) -> SmallBitv {
+    fn new(bits: uint) -> SmallBitv {
         SmallBitv {bits: bits}
     }
 
     #[inline]
-    pub fn bits_op(&mut self,
+    fn bits_op(&mut self,
                    right_bits: uint,
                    nbits: uint,
                    f: |uint, uint| -> uint)
@@ -50,32 +55,32 @@ impl SmallBitv {
     }
 
     #[inline]
-    pub fn union(&mut self, s: &SmallBitv, nbits: uint) -> bool {
+    fn union(&mut self, s: &SmallBitv, nbits: uint) -> bool {
         self.bits_op(s.bits, nbits, |u1, u2| u1 | u2)
     }
 
     #[inline]
-    pub fn intersect(&mut self, s: &SmallBitv, nbits: uint) -> bool {
+    fn intersect(&mut self, s: &SmallBitv, nbits: uint) -> bool {
         self.bits_op(s.bits, nbits, |u1, u2| u1 & u2)
     }
 
     #[inline]
-    pub fn become(&mut self, s: &SmallBitv, nbits: uint) -> bool {
+    fn become(&mut self, s: &SmallBitv, nbits: uint) -> bool {
         self.bits_op(s.bits, nbits, |_u1, u2| u2)
     }
 
     #[inline]
-    pub fn difference(&mut self, s: &SmallBitv, nbits: uint) -> bool {
+    fn difference(&mut self, s: &SmallBitv, nbits: uint) -> bool {
         self.bits_op(s.bits, nbits, |u1, u2| u1 & !u2)
     }
 
     #[inline]
-    pub fn get(&self, i: uint) -> bool {
+    fn get(&self, i: uint) -> bool {
         (self.bits & (1 << i)) != 0
     }
 
     #[inline]
-    pub fn set(&mut self, i: uint, x: bool) {
+    fn set(&mut self, i: uint, x: bool) {
         if x {
             self.bits |= 1<<i;
         }
@@ -85,29 +90,29 @@ impl SmallBitv {
     }
 
     #[inline]
-    pub fn equals(&self, b: &SmallBitv, nbits: uint) -> bool {
+    fn equals(&self, b: &SmallBitv, nbits: uint) -> bool {
         let mask = small_mask(nbits);
         mask & self.bits == mask & b.bits
     }
 
     #[inline]
-    pub fn clear(&mut self) { self.bits = 0; }
+    fn clear(&mut self) { self.bits = 0; }
 
     #[inline]
-    pub fn set_all(&mut self) { self.bits = !0; }
+    fn set_all(&mut self) { self.bits = !0; }
 
     #[inline]
-    pub fn all(&self, nbits: uint) -> bool {
+    fn all(&self, nbits: uint) -> bool {
         small_mask(nbits) & !self.bits == 0
     }
 
     #[inline]
-    pub fn none(&self, nbits: uint) -> bool {
+    fn none(&self, nbits: uint) -> bool {
         small_mask(nbits) & self.bits == 0
     }
 
     #[inline]
-    pub fn negate(&mut self) { self.bits = !self.bits; }
+    fn negate(&mut self) { self.bits = !self.bits; }
 }
 
 #[deriving(Clone)]
@@ -132,12 +137,12 @@ fn big_mask(nbits: uint, elem: uint) -> uint {
 }
 
 impl BigBitv {
-    pub fn new(storage: Vec<uint>) -> BigBitv {
+    fn new(storage: Vec<uint>) -> BigBitv {
         BigBitv {storage: storage}
     }
 
     #[inline]
-    pub fn process(&mut self,
+    fn process(&mut self,
                    b: &BigBitv,
                    nbits: uint,
                    op: |uint, uint| -> uint)
@@ -161,37 +166,37 @@ impl BigBitv {
     }
 
     #[inline]
-    pub fn each_storage(&mut self, op: |v: &mut uint| -> bool) -> bool {
+    fn each_storage(&mut self, op: |v: &mut uint| -> bool) -> bool {
         self.storage.mut_iter().advance(|elt| op(elt))
     }
 
     #[inline]
-    pub fn negate(&mut self) {
+    fn negate(&mut self) {
         self.each_storage(|w| { *w = !*w; true });
     }
 
     #[inline]
-    pub fn union(&mut self, b: &BigBitv, nbits: uint) -> bool {
+    fn union(&mut self, b: &BigBitv, nbits: uint) -> bool {
         self.process(b, nbits, |w1, w2| w1 | w2)
     }
 
     #[inline]
-    pub fn intersect(&mut self, b: &BigBitv, nbits: uint) -> bool {
+    fn intersect(&mut self, b: &BigBitv, nbits: uint) -> bool {
         self.process(b, nbits, |w1, w2| w1 & w2)
     }
 
     #[inline]
-    pub fn become(&mut self, b: &BigBitv, nbits: uint) -> bool {
+    fn become(&mut self, b: &BigBitv, nbits: uint) -> bool {
         self.process(b, nbits, |_, w| w)
     }
 
     #[inline]
-    pub fn difference(&mut self, b: &BigBitv, nbits: uint) -> bool {
+    fn difference(&mut self, b: &BigBitv, nbits: uint) -> bool {
         self.process(b, nbits, |w1, w2| w1 & !w2)
     }
 
     #[inline]
-    pub fn get(&self, i: uint) -> bool {
+    fn get(&self, i: uint) -> bool {
         let w = i / uint::BITS;
         let b = i % uint::BITS;
         let x = 1 & self.storage.get(w) >> b;
@@ -199,7 +204,7 @@ impl BigBitv {
     }
 
     #[inline]
-    pub fn set(&mut self, i: uint, x: bool) {
+    fn set(&mut self, i: uint, x: bool) {
         let w = i / uint::BITS;
         let b = i % uint::BITS;
         let flag = 1 << b;
@@ -208,7 +213,7 @@ impl BigBitv {
     }
 
     #[inline]
-    pub fn equals(&self, b: &BigBitv, nbits: uint) -> bool {
+    fn equals(&self, b: &BigBitv, nbits: uint) -> bool {
         for (i, elt) in b.storage.iter().enumerate() {
             let mask = big_mask(nbits, i);
             if mask & *self.storage.get(i) != mask & *elt {
@@ -239,17 +244,17 @@ enum Op {Union, Intersect, Assign, Difference}
 /// bv.set(5, true);
 /// bv.set(7, true);
 /// println!("{}", bv.to_str());
-/// println!("total bits set to true: {}", bv.iter().count(|x| x));
+/// println!("total bits set to true: {}", bv.iter().filter(|x| *x).count());
 ///
 /// // flip all values in bitvector, producing non-primes less than 10
 /// bv.negate();
 /// println!("{}", bv.to_str());
-/// println!("total bits set to true: {}", bv.iter().count(|x| x));
+/// println!("total bits set to true: {}", bv.iter().filter(|x| *x).count());
 ///
 /// // reset bitvector to empty
 /// bv.clear();
 /// println!("{}", bv.to_str());
-/// println!("total bits set to true: {}", bv.iter().count(|x| x));
+/// println!("total bits set to true: {}", bv.iter().filter(|x| *x).count());
 /// ```
 #[deriving(Clone)]
 pub struct Bitv {
@@ -371,27 +376,6 @@ impl Bitv {
       }
     }
 
-    /**
-     * Compares two bitvectors
-     *
-     * Both bitvectors must be the same length. Returns `true` if both
-     * bitvectors contain identical elements.
-     */
-    #[inline]
-    pub fn equal(&self, v1: &Bitv) -> bool {
-      if self.nbits != v1.nbits { return false; }
-      match self.rep {
-        Small(ref b) => match v1.rep {
-          Small(ref b1) => b.equals(b1, self.nbits),
-          _ => false
-        },
-        Big(ref s) => match v1.rep {
-          Big(ref s1) => s.equals(s1, self.nbits),
-          Small(_) => return false
-        }
-      }
-    }
-
     /// Set all bits to 0
     #[inline]
     pub fn clear(&mut self) {
@@ -459,7 +443,7 @@ impl Bitv {
     /// bv.set(5, true);
     /// bv.set(8, true);
     /// // Count bits set to 1; result should be 5
-    /// println!("{}", bv.iter().count(|x| x));
+    /// println!("{}", bv.iter().filter(|x| *x).count());
     /// ```
     #[inline]
     pub fn iter<'a>(&'a self) -> Bits<'a> {
@@ -588,11 +572,44 @@ impl ops::Index<uint,bool> for Bitv {
 impl fmt::Show for Bitv {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         for bit in self.iter() {
-            try!(write!(fmt, "{}", if bit { 1 } else { 0 }));
+            try!(write!(fmt, "{}", if bit { 1u } else { 0u }));
         }
         Ok(())
     }
 }
+
+impl<S: hash::Writer> hash::Hash<S> for Bitv {
+    fn hash(&self, state: &mut S) {
+        self.nbits.hash(state);
+        match self.rep {
+            Small(ref s) => (s.bits & small_mask(self.nbits)).hash(state),
+            Big(ref b) => {
+                for (i, ele) in b.storage.iter().enumerate() {
+                    (ele & big_mask(self.nbits, i)).hash(state);
+                }
+            }
+        }
+    }
+}
+
+impl cmp::PartialEq for Bitv {
+    #[inline]
+    fn eq(&self, other: &Bitv) -> bool {
+        if self.nbits != other.nbits { return false; }
+        match self.rep {
+            Small(ref b) => match other.rep {
+                Small(ref b1) => b.equals(b1, self.nbits),
+                _ => false
+            },
+            Big(ref s) => match other.rep {
+                Big(ref s1) => s.equals(s1, self.nbits),
+                Small(_) => return false
+            }
+        }
+    }
+}
+
+impl cmp::Eq for Bitv {}
 
 #[inline]
 fn iterate_bits(base: uint, bits: uint, f: |uint| -> bool) -> bool {
@@ -678,6 +695,11 @@ pub struct BitvSet {
     // there's an array of storage makes our lives a whole lot easier when
     // performing union/intersection/etc operations
     bitv: BigBitv
+}
+
+impl Default for BitvSet {
+    #[inline]
+    fn default() -> BitvSet { BitvSet::new() }
 }
 
 impl BitvSet {
@@ -817,9 +839,11 @@ impl cmp::PartialEq for BitvSet {
     fn ne(&self, other: &BitvSet) -> bool { !self.eq(other) }
 }
 
+impl cmp::Eq for BitvSet {}
+
 impl fmt::Show for BitvSet {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        try!(write!(fmt, r"\{"));
+        try!(write!(fmt, "{{"));
         let mut first = true;
         for n in self.iter() {
             if !first {
@@ -828,11 +852,19 @@ impl fmt::Show for BitvSet {
             try!(write!(fmt, "{}", n));
             first = false;
         }
-        write!(fmt, r"\}")
+        write!(fmt, "}}")
     }
 }
 
-impl Container for BitvSet {
+impl<S: hash::Writer> hash::Hash<S> for BitvSet {
+    fn hash(&self, state: &mut S) {
+        for pos in self.iter() {
+            pos.hash(state);
+        }
+    }
+}
+
+impl Collection for BitvSet {
     #[inline]
     fn len(&self) -> uint { self.size }
 }
@@ -977,26 +1009,27 @@ impl<'a> Iterator<uint> for BitPositions<'a> {
 
 #[cfg(test)]
 mod tests {
-    extern crate test;
-    use self::test::Bencher;
-
-    use bitv::{Bitv, SmallBitv, BigBitv, BitvSet, from_bools, from_fn,
-               from_bytes};
-    use bitv;
-
+    use std::prelude::*;
     use std::uint;
     use std::rand;
     use std::rand::Rng;
+    use test::Bencher;
+
+    use {Set, Mutable, MutableSet};
+    use bitv::{Bitv, SmallBitv, BigBitv, BitvSet, from_bools, from_fn,
+               from_bytes};
+    use bitv;
+    use vec::Vec;
 
     static BENCH_BITS : uint = 1 << 14;
 
     #[test]
     fn test_to_str() {
         let zerolen = Bitv::new(0u, false);
-        assert_eq!(zerolen.to_str(), "".to_string());
+        assert_eq!(zerolen.to_str().as_slice(), "");
 
         let eightbits = Bitv::new(8u, false);
-        assert_eq!(eightbits.to_str(), "00000000".to_string());
+        assert_eq!(eightbits.to_str().as_slice(), "00000000")
     }
 
     #[test]
@@ -1019,7 +1052,7 @@ mod tests {
         let mut b = bitv::Bitv::new(2, false);
         b.set(0, true);
         b.set(1, false);
-        assert_eq!(b.to_str(), "10".to_string());
+        assert_eq!(b.to_str().as_slice(), "10");
     }
 
     #[test]
@@ -1290,14 +1323,14 @@ mod tests {
     fn test_equal_differing_sizes() {
         let v0 = Bitv::new(10u, false);
         let v1 = Bitv::new(11u, false);
-        assert!(!v0.equal(&v1));
+        assert!(v0 != v1);
     }
 
     #[test]
     fn test_equal_greatly_differing_sizes() {
         let v0 = Bitv::new(10u, false);
         let v1 = Bitv::new(110u, false);
-        assert!(!v0.equal(&v1));
+        assert!(v0 != v1);
     }
 
     #[test]
@@ -1308,7 +1341,7 @@ mod tests {
         let mut b = bitv::Bitv::new(1, true);
         b.set(0, true);
 
-        assert!(a.equal(&b));
+        assert_eq!(a, b);
     }
 
     #[test]
@@ -1323,14 +1356,14 @@ mod tests {
             b.set(i, true);
         }
 
-        assert!(a.equal(&b));
+        assert_eq!(a, b);
     }
 
     #[test]
     fn test_from_bytes() {
         let bitv = from_bytes([0b10110110, 0b00000000, 0b11111111]);
         let str = format!("{}{}{}", "10110110", "00000000", "11111111");
-        assert_eq!(bitv.to_str(), str);
+        assert_eq!(bitv.to_str().as_slice(), str.as_slice());
     }
 
     #[test]
@@ -1347,8 +1380,8 @@ mod tests {
 
     #[test]
     fn test_from_bools() {
-        assert!(from_bools([true, false, true, true]).to_str() ==
-            "1011".to_string());
+        assert!(from_bools([true, false, true, true]).to_str().as_slice() ==
+                "1011");
     }
 
     #[test]

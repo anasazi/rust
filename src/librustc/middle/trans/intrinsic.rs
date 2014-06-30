@@ -14,6 +14,7 @@ use arena::TypedArena;
 use lib::llvm::{SequentiallyConsistent, Acquire, Release, Xchg};
 use lib::llvm::{ValueRef, Pointer, Array, Struct};
 use lib;
+use middle::subst::FnSpace;
 use middle::trans::base::*;
 use middle::trans::build::*;
 use middle::trans::common::*;
@@ -95,19 +96,13 @@ pub fn trans_intrinsic(ccx: &CrateContext,
         let b = get_param(bcx.fcx.llfn, first_real_arg + 1);
         let llfn = bcx.ccx().get_intrinsic(&name);
 
-        // convert `i1` to a `bool`, and write to the out parameter
         let val = Call(bcx, llfn, [a, b], []);
-        let result = ExtractValue(bcx, val, 0);
-        let overflow = ZExt(bcx, ExtractValue(bcx, val, 1), Type::bool(bcx.ccx()));
-        let ret = C_undef(type_of::type_of(bcx.ccx(), t));
-        let ret = InsertValue(bcx, ret, result, 0);
-        let ret = InsertValue(bcx, ret, overflow, 1);
 
         if type_is_immediate(bcx.ccx(), t) {
-            Ret(bcx, ret);
+            Ret(bcx, val);
         } else {
             let retptr = get_param(bcx.fcx.llfn, bcx.fcx.out_arg_pos());
-            Store(bcx, ret, retptr);
+            Store(bcx, val, retptr);
             RetVoid(bcx);
         }
     }
@@ -192,7 +187,7 @@ pub fn trans_intrinsic(ccx: &CrateContext,
 
     let arena = TypedArena::new();
     let fcx = new_fn_ctxt(ccx, decl, item.id, false, output_type,
-                          Some(&*substs), Some(item.span), &arena);
+                          substs, Some(item.span), &arena);
     init_function(&fcx, true, output_type);
 
     set_always_inline(fcx.llfn);
@@ -234,11 +229,15 @@ pub fn trans_intrinsic(ccx: &CrateContext,
                     lib::llvm::SequentiallyConsistent =>
                         lib::llvm::SequentiallyConsistent,
                 };
-                let old = AtomicCmpXchg(bcx, get_param(decl, first_real_arg),
+                let res = AtomicCmpXchg(bcx, get_param(decl, first_real_arg),
                                         get_param(decl, first_real_arg + 1u),
                                         get_param(decl, first_real_arg + 2u),
                                         order, strongest_failure_ordering);
-                Ret(bcx, old);
+                if unsafe { lib::llvm::llvm::LLVMVersionMinor() >= 5 } {
+                    Ret(bcx, ExtractValue(bcx, res, 0));
+                } else {
+                    Ret(bcx, res);
+                }
             }
             "load" => {
                 let old = AtomicLoad(bcx, get_param(decl, first_real_arg),
@@ -295,7 +294,7 @@ pub fn trans_intrinsic(ccx: &CrateContext,
             RetVoid(bcx);
         }
         "size_of" => {
-            let tp_ty = *substs.substs.tps.get(0);
+            let tp_ty = *substs.substs.types.get(FnSpace, 0);
             let lltp_ty = type_of::type_of(ccx, tp_ty);
             Ret(bcx, C_uint(ccx, machine::llsize_of_real(ccx, lltp_ty) as uint));
         }
@@ -305,7 +304,7 @@ pub fn trans_intrinsic(ccx: &CrateContext,
             // if the value is non-immediate. Note that, with
             // intrinsics, there are no argument cleanups to
             // concern ourselves with, so we can use an rvalue datum.
-            let tp_ty = *substs.substs.tps.get(0);
+            let tp_ty = *substs.substs.types.get(FnSpace, 0);
             let mode = appropriate_rvalue_mode(ccx, tp_ty);
             let src = Datum {val: get_param(decl, first_real_arg + 1u),
                              ty: tp_ty,
@@ -314,17 +313,17 @@ pub fn trans_intrinsic(ccx: &CrateContext,
             RetVoid(bcx);
         }
         "min_align_of" => {
-            let tp_ty = *substs.substs.tps.get(0);
+            let tp_ty = *substs.substs.types.get(FnSpace, 0);
             let lltp_ty = type_of::type_of(ccx, tp_ty);
             Ret(bcx, C_uint(ccx, machine::llalign_of_min(ccx, lltp_ty) as uint));
         }
         "pref_align_of"=> {
-            let tp_ty = *substs.substs.tps.get(0);
+            let tp_ty = *substs.substs.types.get(FnSpace, 0);
             let lltp_ty = type_of::type_of(ccx, tp_ty);
             Ret(bcx, C_uint(ccx, machine::llalign_of_pref(ccx, lltp_ty) as uint));
         }
         "get_tydesc" => {
-            let tp_ty = *substs.substs.tps.get(0);
+            let tp_ty = *substs.substs.types.get(FnSpace, 0);
             let static_ti = get_tydesc(ccx, tp_ty);
             glue::lazily_emit_visit_glue(ccx, &*static_ti);
 
@@ -339,7 +338,7 @@ pub fn trans_intrinsic(ccx: &CrateContext,
         "type_id" => {
             let hash = ty::hash_crate_independent(
                 ccx.tcx(),
-                *substs.substs.tps.get(0),
+                *substs.substs.types.get(FnSpace, 0),
                 &ccx.link_meta.crate_hash);
             // NB: This needs to be kept in lockstep with the TypeId struct in
             //     libstd/unstable/intrinsics.rs
@@ -354,7 +353,7 @@ pub fn trans_intrinsic(ccx: &CrateContext,
             }
         }
         "init" => {
-            let tp_ty = *substs.substs.tps.get(0);
+            let tp_ty = *substs.substs.types.get(FnSpace, 0);
             let lltp_ty = type_of::type_of(ccx, tp_ty);
             match bcx.fcx.llretptr.get() {
                 Some(ptr) => { Store(bcx, C_null(lltp_ty), ptr); RetVoid(bcx); }
@@ -364,7 +363,7 @@ pub fn trans_intrinsic(ccx: &CrateContext,
         }
         "uninit" => {
             // Do nothing, this is effectively a no-op
-            let retty = *substs.substs.tps.get(0);
+            let retty = *substs.substs.types.get(FnSpace, 0);
             if type_is_immediate(ccx, retty) && !return_type_is_void(ccx, retty) {
                 unsafe {
                     Ret(bcx, lib::llvm::llvm::LLVMGetUndef(type_of(ccx, retty).to_ref()));
@@ -377,8 +376,8 @@ pub fn trans_intrinsic(ccx: &CrateContext,
             RetVoid(bcx);
         }
         "transmute" => {
-            let (in_type, out_type) = (*substs.substs.tps.get(0),
-                                       *substs.substs.tps.get(1));
+            let (in_type, out_type) = (*substs.substs.types.get(FnSpace, 0),
+                                       *substs.substs.types.get(FnSpace, 1));
             let llintype = type_of::type_of(ccx, in_type);
             let llouttype = type_of::type_of(ccx, out_type);
 
@@ -389,14 +388,16 @@ pub fn trans_intrinsic(ccx: &CrateContext,
                     ast_map::NodeExpr(e) => e.span,
                     _ => fail!("transmute has non-expr arg"),
                 };
-                ccx.sess().span_fatal(sp,
+                ccx.sess().span_bug(sp,
                     format!("transmute called on types with different sizes: \
-                             {intype} ({insize, plural, =1{# bit} other{# bits}}) to \
-                             {outtype} ({outsize, plural, =1{# bit} other{# bits}})",
-                            intype = ty_to_str(ccx.tcx(), in_type),
-                            insize = in_type_size as uint,
-                            outtype = ty_to_str(ccx.tcx(), out_type),
-                            outsize = out_type_size as uint).as_slice());
+                             {} ({} bit{}) to \
+                             {} ({} bit{})",
+                            ty_to_str(ccx.tcx(), in_type),
+                            in_type_size,
+                            if in_type_size == 1 {""} else {"s"},
+                            ty_to_str(ccx.tcx(), out_type),
+                            out_type_size,
+                            if out_type_size == 1 {""} else {"s"}).as_slice());
             }
 
             if !return_type_is_void(ccx, out_type) {
@@ -445,11 +446,11 @@ pub fn trans_intrinsic(ccx: &CrateContext,
             }
         }
         "needs_drop" => {
-            let tp_ty = *substs.substs.tps.get(0);
+            let tp_ty = *substs.substs.types.get(FnSpace, 0);
             Ret(bcx, C_bool(ccx, ty::type_needs_drop(ccx.tcx(), tp_ty)));
         }
         "owns_managed" => {
-            let tp_ty = *substs.substs.tps.get(0);
+            let tp_ty = *substs.substs.types.get(FnSpace, 0);
             Ret(bcx, C_bool(ccx, ty::type_contents(ccx.tcx(), tp_ty).owns_managed()));
         }
         "visit_tydesc" => {
@@ -466,19 +467,26 @@ pub fn trans_intrinsic(ccx: &CrateContext,
             Ret(bcx, lladdr);
         }
         "copy_nonoverlapping_memory" => {
-            copy_intrinsic(bcx, false, false, *substs.substs.tps.get(0))
+            copy_intrinsic(bcx, false, false, *substs.substs.types.get(FnSpace, 0))
         }
         "copy_memory" => {
-            copy_intrinsic(bcx, true, false, *substs.substs.tps.get(0))
+            copy_intrinsic(bcx, true, false, *substs.substs.types.get(FnSpace, 0))
         }
         "set_memory" => {
-            memset_intrinsic(bcx, false, *substs.substs.tps.get(0))
+            memset_intrinsic(bcx, false, *substs.substs.types.get(FnSpace, 0))
         }
 
-        "volatile_copy_nonoverlapping_memory" =>
-            copy_intrinsic(bcx, false, true, *substs.substs.tps.get(0)),
-        "volatile_copy_memory" => copy_intrinsic(bcx, true, true, *substs.substs.tps.get(0)),
-        "volatile_set_memory" => memset_intrinsic(bcx, true, *substs.substs.tps.get(0)),
+        "volatile_copy_nonoverlapping_memory" => {
+            copy_intrinsic(bcx, false, true, *substs.substs.types.get(FnSpace, 0))
+        }
+
+        "volatile_copy_memory" => {
+            copy_intrinsic(bcx, true, true, *substs.substs.types.get(FnSpace, 0))
+        }
+
+        "volatile_set_memory" => {
+            memset_intrinsic(bcx, true, *substs.substs.types.get(FnSpace, 0))
+        }
 
         "ctlz8" => count_zeros_intrinsic(bcx, "llvm.ctlz.i8"),
         "ctlz16" => count_zeros_intrinsic(bcx, "llvm.ctlz.i16"),
@@ -554,3 +562,41 @@ pub fn trans_intrinsic(ccx: &CrateContext,
     }
     fcx.cleanup();
 }
+
+/// Performs late verification that intrinsics are used correctly. At present,
+/// the only intrinsic that needs such verification is `transmute`.
+pub fn check_intrinsics(ccx: &CrateContext) {
+    for transmute_restriction in ccx.tcx
+                                    .transmute_restrictions
+                                    .borrow()
+                                    .iter() {
+        let llfromtype = type_of::sizing_type_of(ccx,
+                                                 transmute_restriction.from);
+        let lltotype = type_of::sizing_type_of(ccx,
+                                               transmute_restriction.to);
+        let from_type_size = machine::llbitsize_of_real(ccx, llfromtype);
+        let to_type_size = machine::llbitsize_of_real(ccx, lltotype);
+        if from_type_size != to_type_size {
+            ccx.sess()
+               .span_err(transmute_restriction.span,
+                format!("transmute called on types with different sizes: \
+                         {} ({} bit{}) to {} ({} bit{})",
+                        ty_to_str(ccx.tcx(), transmute_restriction.from),
+                        from_type_size as uint,
+                        if from_type_size == 1 {
+                            ""
+                        } else {
+                            "s"
+                        },
+                        ty_to_str(ccx.tcx(), transmute_restriction.to),
+                        to_type_size as uint,
+                        if to_type_size == 1 {
+                            ""
+                        } else {
+                            "s"
+                        }).as_slice());
+        }
+    }
+    ccx.sess().abort_if_errors();
+}
+

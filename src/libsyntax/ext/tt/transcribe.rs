@@ -18,7 +18,7 @@ use parse::token;
 use parse::lexer::TokenAndSpan;
 
 use std::rc::Rc;
-use collections::HashMap;
+use std::collections::HashMap;
 
 ///an unzipping of `TokenTree`s
 #[deriving(Clone)]
@@ -58,7 +58,7 @@ pub fn new_tt_reader<'a>(sp_diag: &'a SpanHandler,
             dotdotdoted: false,
             sep: None,
         }),
-        interpolations: match interp { /* just a convienience */
+        interpolations: match interp { /* just a convenience */
             None => HashMap::new(),
             Some(x) => x,
         },

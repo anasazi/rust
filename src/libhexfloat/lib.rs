@@ -21,7 +21,7 @@ literal.
 To load the extension and use it:
 
 ```rust,ignore
-#[phase(syntax)]
+#[phase(plugin)]
 extern crate hexfloat;
 
 fn main() {
@@ -37,35 +37,32 @@ fn main() {
 */
 
 #![crate_id = "hexfloat#0.11.0-pre"]
+#![experimental]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
 #![license = "MIT/ASL2"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "http://www.rust-lang.org/favicon.ico",
        html_root_url = "http://doc.rust-lang.org/")]
-
-#![deny(deprecated_owned_vector)]
-#![feature(macro_registrar, managed_boxes)]
+#![feature(plugin_registrar, managed_boxes)]
 
 extern crate syntax;
+extern crate rustc;
 
 use syntax::ast;
-use syntax::ast::Name;
 use syntax::codemap::{Span, mk_sp};
 use syntax::ext::base;
-use syntax::ext::base::{SyntaxExtension, BasicMacroExpander, NormalTT, ExtCtxt, MacExpr};
+use syntax::ext::base::{ExtCtxt, MacExpr};
 use syntax::ext::build::AstBuilder;
 use syntax::parse;
 use syntax::parse::token;
+use rustc::plugin::Registry;
 
-#[macro_registrar]
-pub fn macro_registrar(register: |Name, SyntaxExtension|) {
-    register(token::intern("hexfloat"),
-        NormalTT(box BasicMacroExpander {
-            expander: expand_syntax_ext,
-            span: None,
-        },
-        None));
+use std::gc::Gc;
+
+#[plugin_registrar]
+pub fn plugin_registrar(reg: &mut Registry) {
+    reg.register_macro("hexfloat", expand_syntax_ext);
 }
 
 //Check if the literal is valid (as LLVM expects),
@@ -80,12 +77,12 @@ fn hex_float_lit_err(s: &str) -> Option<(uint, String)> {
     if chars.next() != Some('x') {
         return Some((i, "Expected 'x'".to_string()));
     } i+=1;
-    let mut d_len = 0;
+    let mut d_len = 0i;
     for _ in chars.take_while(|c| c.is_digit_radix(16)) { chars.next(); i+=1; d_len += 1;}
     if chars.next() != Some('.') {
         return Some((i, "Expected '.'".to_string()));
     } i+=1;
-    let mut f_len = 0;
+    let mut f_len = 0i;
     for _ in chars.take_while(|c| c.is_digit_radix(16)) { chars.next(); i+=1; f_len += 1;}
     if d_len == 0 && f_len == 0 {
         return Some((i, "Expected digits before or after decimal \
@@ -95,7 +92,7 @@ fn hex_float_lit_err(s: &str) -> Option<(uint, String)> {
         return Some((i, "Expected 'p'".to_string()));
     } i+=1;
     if chars.peek() == Some(&'-') { chars.next(); i+= 1 }
-    let mut e_len = 0;
+    let mut e_len = 0i;
     for _ in chars.take_while(|c| c.is_digit()) { chars.next(); i+=1; e_len += 1}
     if e_len == 0 {
         return Some((i, "Expected exponent digits".to_string()));
@@ -115,7 +112,6 @@ pub fn expand_syntax_ext(cx: &mut ExtCtxt, sp: Span, tts: &[ast::TokenTree])
         Some(Ident{ident, span}) => match token::get_ident(ident).get() {
             "f32" => Some(ast::TyF32),
             "f64" => Some(ast::TyF64),
-            "f128" => Some(ast::TyF128),
             _ => {
                 cx.span_err(span, "invalid floating point type in hexfloat!");
                 None
@@ -169,7 +165,8 @@ struct Ident {
     span: Span
 }
 
-fn parse_tts(cx: &ExtCtxt, tts: &[ast::TokenTree]) -> (@ast::Expr, Option<Ident>) {
+fn parse_tts(cx: &ExtCtxt,
+             tts: &[ast::TokenTree]) -> (Gc<ast::Expr>, Option<Ident>) {
     let p = &mut parse::new_parser_from_tts(cx.parse_sess(),
                                             cx.cfg(),
                                             tts.iter()

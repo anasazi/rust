@@ -55,12 +55,14 @@ Examples of string representations:
 */
 
 #![crate_id = "uuid#0.11.0-pre"]
+#![experimental]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
 #![license = "MIT/ASL2"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-       html_root_url = "http://doc.rust-lang.org/")]
+       html_root_url = "http://doc.rust-lang.org/",
+       html_playground_url = "http://play.rust-lang.org/")]
 
 #![feature(default_type_params)]
 
@@ -73,7 +75,7 @@ use std::char::Char;
 use std::default::Default;
 use std::fmt;
 use std::from_str::FromStr;
-use std::hash::Hash;
+use std::hash;
 use std::mem::{transmute,transmute_copy};
 use std::num::FromStrRadix;
 use std::rand;
@@ -120,7 +122,7 @@ pub struct Uuid {
     bytes: UuidBytes
 }
 
-impl<S: Writer> Hash<S> for Uuid {
+impl<S: hash::Writer> hash::Hash<S> for Uuid {
     fn hash(&self, state: &mut S) {
         self.bytes.hash(state)
     }
@@ -208,8 +210,6 @@ impl Uuid {
     /// * `d3` A 16-bit word
     /// * `d4` Array of 8 octets
     pub fn from_fields(d1: u32, d2: u16, d3: u16, d4: &[u8]) -> Uuid {
-        use std::mem::{to_be16, to_be32};
-
         // First construct a temporary field-based struct
         let mut fields = UuidFields {
                 data1: 0,
@@ -218,9 +218,9 @@ impl Uuid {
                 data4: [0, ..8]
         };
 
-        fields.data1 = to_be32(d1);
-        fields.data2 = to_be16(d2);
-        fields.data3 = to_be16(d3);
+        fields.data1 = d1.to_be();
+        fields.data2 = d2.to_be();
+        fields.data3 = d3.to_be();
         slice::bytes::copy_memory(fields.data4, d4);
 
         unsafe {
@@ -334,16 +334,15 @@ impl Uuid {
     ///
     /// Example: `550e8400-e29b-41d4-a716-446655440000`
     pub fn to_hyphenated_str(&self) -> String {
-        use std::mem::{to_be16, to_be32};
         // Convert to field-based struct as it matches groups in output.
         // Ensure fields are in network byte order, as per RFC.
         let mut uf: UuidFields;
         unsafe {
             uf = transmute_copy(&self.bytes);
         }
-        uf.data1 = to_be32(uf.data1);
-        uf.data2 = to_be16(uf.data2);
-        uf.data3 = to_be16(uf.data3);
+        uf.data1 = uf.data1.to_be();
+        uf.data2 = uf.data2.to_be();
+        uf.data3 = uf.data3.to_be();
         let s = format!("{:08x}-{:04x}-{:04x}-{:02x}{:02x}-\
                          {:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
             uf.data1,
@@ -461,7 +460,7 @@ impl FromStr for Uuid {
     /// Parse a hex string and interpret as a UUID
     ///
     /// Accepted formats are a sequence of 32 hexadecimal characters,
-    /// with or without hypens (grouped as 8, 4, 4, 4, 12).
+    /// with or without hyphens (grouped as 8, 4, 4, 4, 12).
     fn from_str(us: &str) -> Option<Uuid> {
         let result = Uuid::parse_string(us);
         match result {
@@ -491,7 +490,7 @@ impl Eq for Uuid {}
 
 // FIXME #9845: Test these more thoroughly
 impl<T: Encoder<E>, E> Encodable<T, E> for Uuid {
-    /// Encode a UUID as a hypenated string
+    /// Encode a UUID as a hyphenated string
     fn encode(&self, e: &mut T) -> Result<(), E> {
         e.emit_str(self.to_hyphenated_str().as_slice())
     }
@@ -519,8 +518,6 @@ impl rand::Rand for Uuid {
 
 #[cfg(test)]
 mod test {
-    extern crate collections;
-
     use super::{Uuid, VariantMicrosoft, VariantNCS, VariantRFC4122,
                 Version1Mac, Version2Dce, Version3Md5, Version4Random,
                 Version5Sha1};
@@ -810,7 +807,7 @@ mod test {
 
     #[test]
     fn test_iterbytes_impl_for_uuid() {
-        use self::collections::HashSet;
+        use std::collections::HashSet;
         let mut set = HashSet::new();
         let id1 = Uuid::new_v4();
         let id2 = Uuid::new_v4();

@@ -10,13 +10,14 @@
 
 #![feature(managed_boxes)]
 
+use std::gc::Gc;
 
 // error-pattern:fail
 
-fn fold_local() -> @Vec<int> {
+fn fold_local() -> Gc<Vec<int>> {
     fail!();
 }
 
 fn main() {
-    let _lss = (fold_local(), 0);
+    let _lss = (fold_local(), 0i);
 }

@@ -44,7 +44,7 @@
 //!
 //! # Relevant links
 //!
-//! Original issue: https://github.com/mozilla/rust/issues/10207
+//! Original issue: https://github.com/rust-lang/rust/issues/10207
 
 use std::fmt;
 use std::hash::Hash;
@@ -100,7 +100,7 @@ impl Svh {
 
         let hash = state.result();
         return Svh {
-            hash: range_step(0, 64, 4).map(|i| hex(hash >> i)).collect()
+            hash: range_step(0u, 64u, 4u).map(|i| hex(hash >> i)).collect()
         };
 
         fn hex(b: u64) -> char {
@@ -270,7 +270,7 @@ mod svh_visitor {
             ExprBlock(..)            => SawExprBlock,
             ExprAssign(..)           => SawExprAssign,
             ExprAssignOp(op, _, _)   => SawExprAssignOp(op),
-            ExprField(_, id, _)      => SawExprField(content(id)),
+            ExprField(_, id, _)      => SawExprField(content(id.node)),
             ExprIndex(..)            => SawExprIndex,
             ExprPath(..)             => SawExprPath,
             ExprAddrOf(m, _)         => SawExprAddrOf(m),

@@ -27,11 +27,13 @@
 #![feature(managed_boxes)]
 #![allow(unused_variable)]
 
+use std::gc::GC;
+
 fn main() {
-    let a = box 1;
-    let b = box() (2, 3.5);
-    let c = @4;
-    let d = @false;
+    let a = box 1i;
+    let b = box() (2i, 3.5f64);
+    let c = box(GC) 4i;
+    let d = box(GC) false;
     _zzz();
 }
 

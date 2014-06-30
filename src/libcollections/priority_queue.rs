@@ -12,9 +12,15 @@
 
 #![allow(missing_doc)]
 
-use std::clone::Clone;
-use std::mem::{overwrite, zeroed, replace, swap};
-use std::slice;
+use core::prelude::*;
+
+use core::default::Default;
+use core::mem::{zeroed, replace, swap};
+use core::ptr;
+
+use {Collection, Mutable};
+use slice;
+use vec::Vec;
 
 /// A priority queue implemented with a binary heap
 #[deriving(Clone)]
@@ -22,7 +28,7 @@ pub struct PriorityQueue<T> {
     data: Vec<T>,
 }
 
-impl<T: Ord> Container for PriorityQueue<T> {
+impl<T: Ord> Collection for PriorityQueue<T> {
     /// Returns the length of the queue
     fn len(&self) -> uint { self.data.len() }
 }
@@ -30,6 +36,11 @@ impl<T: Ord> Container for PriorityQueue<T> {
 impl<T: Ord> Mutable for PriorityQueue<T> {
     /// Drop all items from the queue
     fn clear(&mut self) { self.data.truncate(0) }
+}
+
+impl<T: Ord> Default for PriorityQueue<T> {
+    #[inline]
+    fn default() -> PriorityQueue<T> { PriorityQueue::new() }
 }
 
 impl<T: Ord> PriorityQueue<T> {
@@ -163,13 +174,13 @@ impl<T: Ord> PriorityQueue<T> {
                 let parent = (pos - 1) >> 1;
                 if new > *self.data.get(parent) {
                     let x = replace(self.data.get_mut(parent), zeroed());
-                    overwrite(self.data.get_mut(pos), x);
+                    ptr::write(self.data.get_mut(pos), x);
                     pos = parent;
                     continue
                 }
                 break
             }
-            overwrite(self.data.get_mut(pos), new);
+            ptr::write(self.data.get_mut(pos), new);
         }
     }
 
@@ -185,12 +196,12 @@ impl<T: Ord> PriorityQueue<T> {
                     child = right;
                 }
                 let x = replace(self.data.get_mut(child), zeroed());
-                overwrite(self.data.get_mut(pos), x);
+                ptr::write(self.data.get_mut(pos), x);
                 pos = child;
                 child = 2 * pos + 1;
             }
 
-            overwrite(self.data.get_mut(pos), new);
+            ptr::write(self.data.get_mut(pos), new);
             self.siftup(start, pos);
         }
     }
@@ -237,12 +248,15 @@ impl<T: Ord> Extendable<T> for PriorityQueue<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::prelude::*;
+
     use priority_queue::PriorityQueue;
+    use vec::Vec;
 
     #[test]
     fn test_iterator() {
-        let data = vec!(5, 9, 3);
-        let iterout = [9, 5, 3];
+        let data = vec!(5i, 9, 3);
+        let iterout = [9i, 5, 3];
         let pq = PriorityQueue::from_vec(data);
         let mut i = 0;
         for el in pq.iter() {
@@ -265,7 +279,7 @@ mod tests {
 
     #[test]
     fn test_push() {
-        let mut heap = PriorityQueue::from_vec(vec!(2, 4, 9));
+        let mut heap = PriorityQueue::from_vec(vec!(2i, 4, 9));
         assert_eq!(heap.len(), 3);
         assert!(*heap.top().unwrap() == 9);
         heap.push(11);
@@ -287,7 +301,7 @@ mod tests {
 
     #[test]
     fn test_push_unique() {
-        let mut heap = PriorityQueue::from_vec(vec!(box 2, box 4, box 9));
+        let mut heap = PriorityQueue::from_vec(vec!(box 2i, box 4, box 9));
         assert_eq!(heap.len(), 3);
         assert!(*heap.top().unwrap() == box 9);
         heap.push(box 11);
@@ -309,7 +323,7 @@ mod tests {
 
     #[test]
     fn test_push_pop() {
-        let mut heap = PriorityQueue::from_vec(vec!(5, 5, 2, 1, 3));
+        let mut heap = PriorityQueue::from_vec(vec!(5i, 5, 2, 1, 3));
         assert_eq!(heap.len(), 5);
         assert_eq!(heap.push_pop(6), 6);
         assert_eq!(heap.len(), 5);
@@ -323,7 +337,7 @@ mod tests {
 
     #[test]
     fn test_replace() {
-        let mut heap = PriorityQueue::from_vec(vec!(5, 5, 2, 1, 3));
+        let mut heap = PriorityQueue::from_vec(vec!(5i, 5, 2, 1, 3));
         assert_eq!(heap.len(), 5);
         assert_eq!(heap.replace(6).unwrap(), 5);
         assert_eq!(heap.len(), 5);
@@ -341,25 +355,25 @@ mod tests {
         v.sort();
         data.sort();
 
-        assert_eq!(v, data);
-        assert_eq!(heap.into_sorted_vec(), data);
+        assert_eq!(v.as_slice(), data.as_slice());
+        assert_eq!(heap.into_sorted_vec().as_slice(), data.as_slice());
     }
 
     #[test]
     fn test_to_vec() {
         check_to_vec(vec!());
-        check_to_vec(vec!(5));
-        check_to_vec(vec!(3, 2));
-        check_to_vec(vec!(2, 3));
-        check_to_vec(vec!(5, 1, 2));
-        check_to_vec(vec!(1, 100, 2, 3));
-        check_to_vec(vec!(1, 3, 5, 7, 9, 2, 4, 6, 8, 0));
-        check_to_vec(vec!(2, 4, 6, 2, 1, 8, 10, 3, 5, 7, 0, 9, 1));
-        check_to_vec(vec!(9, 11, 9, 9, 9, 9, 11, 2, 3, 4, 11, 9, 0, 0, 0, 0));
-        check_to_vec(vec!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10));
-        check_to_vec(vec!(10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0));
-        check_to_vec(vec!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 0, 0, 1, 2));
-        check_to_vec(vec!(5, 4, 3, 2, 1, 5, 4, 3, 2, 1, 5, 4, 3, 2, 1));
+        check_to_vec(vec!(5i));
+        check_to_vec(vec!(3i, 2));
+        check_to_vec(vec!(2i, 3));
+        check_to_vec(vec!(5i, 1, 2));
+        check_to_vec(vec!(1i, 100, 2, 3));
+        check_to_vec(vec!(1i, 3, 5, 7, 9, 2, 4, 6, 8, 0));
+        check_to_vec(vec!(2i, 4, 6, 2, 1, 8, 10, 3, 5, 7, 0, 9, 1));
+        check_to_vec(vec!(9i, 11, 9, 9, 9, 9, 11, 2, 3, 4, 11, 9, 0, 0, 0, 0));
+        check_to_vec(vec!(0i, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10));
+        check_to_vec(vec!(10i, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0));
+        check_to_vec(vec!(0i, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 0, 0, 1, 2));
+        check_to_vec(vec!(5i, 4, 3, 2, 1, 5, 4, 3, 2, 1, 5, 4, 3, 2, 1));
     }
 
     #[test]

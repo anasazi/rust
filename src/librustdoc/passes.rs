@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use collections::HashSet;
+use std::collections::HashSet;
 use rustc::util::nodemap::NodeSet;
 use std::cmp;
 use std::string::String;
@@ -348,7 +348,7 @@ pub fn unindent(s: &str) -> String {
                 line.slice_from(min_indent).to_string()
             }
         }).collect::<Vec<_>>().as_slice());
-        unindented.connect("\n").to_string()
+        unindented.connect("\n")
     } else {
         s.to_string()
     }
@@ -383,7 +383,7 @@ mod unindent_tests {
 
     #[test]
     fn should_ignore_first_line_indent() {
-        // Thi first line of the first paragraph may not be indented as
+        // The first line of the first paragraph may not be indented as
         // far due to the way the doc string was written:
         //
         // #[doc = "Start way over here

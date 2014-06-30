@@ -13,8 +13,8 @@
 use std::cell::RefCell;
 use std::os;
 use std::io::fs;
-use std::unstable::dynamic_lib::DynamicLibrary;
-use collections::HashSet;
+use std::dynamic_lib::DynamicLibrary;
+use std::collections::HashSet;
 
 use myfs = util::fs;
 
@@ -214,7 +214,7 @@ pub fn rust_path() -> Vec<Path> {
         env_rust_path.push(cwd.clone());
     }
     loop {
-        if { let f = cwd.filename(); f.is_none() || f.unwrap() == bytes!("..") } {
+        if { let f = cwd.filename(); f.is_none() || f.unwrap() == b".." } {
             break
         }
         cwd.set_filename(".rust");

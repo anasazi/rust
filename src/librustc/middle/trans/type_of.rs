@@ -10,18 +10,17 @@
 
 #![allow(non_camel_case_types)]
 
+use middle::subst;
 use middle::trans::adt;
 use middle::trans::common::*;
 use middle::trans::foreign;
 use middle::ty;
-use util::ppaux;
 use util::ppaux::Repr;
 
 use middle::trans::type_::Type;
 
 use syntax::abi;
 use syntax::ast;
-use syntax::owned_slice::OwnedSlice;
 
 pub fn arg_is_indirect(ccx: &CrateContext, arg_ty: ty::t) -> bool {
     !type_is_immediate(ccx, arg_ty)
@@ -117,20 +116,25 @@ pub fn sizing_type_of(cx: &CrateContext, t: ty::t) -> Type {
         ty::ty_float(t) => Type::float_from_ty(cx, t),
 
         ty::ty_box(..) |
-        ty::ty_uniq(..) |
         ty::ty_ptr(..) => Type::i8p(cx),
+        ty::ty_uniq(ty) => {
+            match ty::get(ty).sty {
+                ty::ty_trait(..) => Type::opaque_trait(cx),
+                _ => Type::i8p(cx),
+            }
+        }
         ty::ty_rptr(_, mt) => {
             match ty::get(mt.ty).sty {
                 ty::ty_vec(_, None) | ty::ty_str => {
                     Type::struct_(cx, [Type::i8p(cx), Type::i8p(cx)], false)
                 }
+                ty::ty_trait(..) => Type::opaque_trait(cx),
                 _ => Type::i8p(cx),
             }
         }
 
         ty::ty_bare_fn(..) => Type::i8p(cx),
         ty::ty_closure(..) => Type::struct_(cx, [Type::i8p(cx), Type::i8p(cx)], false),
-        ty::ty_trait(..) => Type::opaque_trait(cx),
 
         ty::ty_vec(mt, Some(size)) => {
             Type::array(&sizing_type_of(cx, mt.ty), size as u64)
@@ -152,8 +156,8 @@ pub fn sizing_type_of(cx: &CrateContext, t: ty::t) -> Type {
             }
         }
 
-        ty::ty_self(_) | ty::ty_infer(..) | ty::ty_param(..) |
-        ty::ty_err(..) | ty::ty_vec(_, None) | ty::ty_str => {
+        ty::ty_infer(..) | ty::ty_param(..) |
+        ty::ty_err(..) | ty::ty_vec(_, None) | ty::ty_str | ty::ty_trait(..) => {
             cx.sess().bug(format!("fictitious type {:?} in sizing_type_of()",
                                   ty::get(t).sty).as_slice())
         }
@@ -205,7 +209,8 @@ pub fn type_of(cx: &CrateContext, t: ty::t) -> Type {
         // avoids creating more than one copy of the enum when one
         // of the enum's variants refers to the enum itself.
         let repr = adt::represent_type(cx, t);
-        let name = llvm_type_name(cx, an_enum, did, substs.tps.as_slice());
+        let tps = substs.types.get_vec(subst::TypeSpace);
+        let name = llvm_type_name(cx, an_enum, did, tps);
         adt::incomplete_type_of(cx, &*repr, name.as_slice())
       }
       ty::ty_box(typ) => {
@@ -215,6 +220,7 @@ pub fn type_of(cx: &CrateContext, t: ty::t) -> Type {
           match ty::get(typ).sty {
               ty::ty_vec(mt, None) => Type::vec(cx, &type_of(cx, mt.ty)).ptr_to(),
               ty::ty_str => Type::vec(cx, &Type::i8(cx)).ptr_to(),
+              ty::ty_trait(..) => Type::opaque_trait(cx),
               _ => type_of(cx, typ).ptr_to(),
           }
       }
@@ -230,6 +236,7 @@ pub fn type_of(cx: &CrateContext, t: ty::t) -> Type {
                   // This means we get a nicer name in the output
                   cx.tn.find_type("str_slice").unwrap()
               }
+              ty::ty_trait(..) => Type::opaque_trait(cx),
               _ => type_of(cx, mt.ty).ptr_to(),
           }
       }
@@ -245,7 +252,6 @@ pub fn type_of(cx: &CrateContext, t: ty::t) -> Type {
           let fn_ty = type_of_fn_from_ty(cx, t).ptr_to();
           Type::struct_(cx, [fn_ty, Type::i8p(cx)], false)
       }
-      ty::ty_trait(..) => Type::opaque_trait(cx),
       ty::ty_tup(..) => {
           let repr = adt::represent_type(cx, t);
           adt::type_of(cx, &*repr)
@@ -260,17 +266,15 @@ pub fn type_of(cx: &CrateContext, t: ty::t) -> Type {
               // in *after* placing it into the type cache. This prevents
               // infinite recursion with recursive struct types.
               let repr = adt::represent_type(cx, t);
-              let name = llvm_type_name(cx,
-                                        a_struct,
-                                        did,
-                                        substs.tps.as_slice());
+              let tps = substs.types.get_vec(subst::TypeSpace);
+              let name = llvm_type_name(cx, a_struct, did, tps);
               adt::incomplete_type_of(cx, &*repr, name.as_slice())
           }
       }
 
       ty::ty_vec(_, None) => cx.sess().bug("type_of with unsized ty_vec"),
       ty::ty_str => cx.sess().bug("type_of with unsized (bare) ty_str"),
-      ty::ty_self(..) => cx.sess().unimpl("type_of with ty_self"),
+      ty::ty_trait(..) => cx.sess().bug("type_of with unsized ty_trait"),
       ty::ty_infer(..) => cx.sess().bug("type_of with ty_infer"),
       ty::ty_param(..) => cx.sess().bug("type_of with ty_param"),
       ty::ty_err(..) => cx.sess().bug("type_of with ty_err")
@@ -301,24 +305,21 @@ pub enum named_ty { a_struct, an_enum }
 pub fn llvm_type_name(cx: &CrateContext,
                       what: named_ty,
                       did: ast::DefId,
-                      tps: &[ty::t])
-                      -> String {
+                      tps: &Vec<ty::t>)
+                      -> String
+{
     let name = match what {
         a_struct => { "struct" }
         an_enum => { "enum" }
     };
-    let tstr = ppaux::parameterized(cx.tcx(),
-                                    ty::item_path_str(cx.tcx(),
-                                                      did).as_slice(),
-                                    &ty::NonerasedRegions(
-                                        OwnedSlice::empty()),
-                                    tps,
-                                    did,
-                                    false);
+
+    let base = ty::item_path_str(cx.tcx(), did);
+    let strings: Vec<String> = tps.iter().map(|t| t.repr(cx.tcx())).collect();
+    let tstr = format!("{}<{}>", base, strings);
     if did.krate == 0 {
         format!("{}.{}", name, tstr)
     } else {
-        format!("{}.{}[\\#{}]", name, tstr, did.krate)
+        format!("{}.{}[{}{}]", name, tstr, "#", did.krate)
     }
 }
 

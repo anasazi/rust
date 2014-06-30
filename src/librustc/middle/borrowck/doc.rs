@@ -551,7 +551,7 @@ are computed based on the kind of borrow:
 The reasoning here is that a mutable borrow must be the only writer,
 therefore it prevents other writes (`MUTATE`), mutable borrows
 (`CLAIM`), and immutable borrows (`FREEZE`). An immutable borrow
-permits other immutable borrows but forbids writes and mutable borows.
+permits other immutable borrows but forbids writes and mutable borrows.
 Finally, a const borrow just wants to be sure that the value is not
 moved out from under it, so no actions are forbidden.
 
@@ -948,7 +948,7 @@ The borrow checker is also in charge of ensuring that:
 
 These are two separate dataflow analyses built on the same
 framework. Let's look at checking that memory is initialized first;
-the checking of immutable local variabe assignments works in a very
+the checking of immutable local variable assignments works in a very
 similar way.
 
 To track the initialization of memory, we actually track all the

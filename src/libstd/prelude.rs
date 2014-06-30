@@ -60,16 +60,15 @@
 #[doc(no_inline)] pub use clone::Clone;
 #[doc(no_inline)] pub use cmp::{PartialEq, PartialOrd, Eq, Ord};
 #[doc(no_inline)] pub use cmp::{Ordering, Less, Equal, Greater, Equiv};
-#[doc(no_inline)] pub use container::{Container, Mutable, Map, MutableMap};
-#[doc(no_inline)] pub use container::{Set, MutableSet};
+#[doc(no_inline)] pub use collections::{Collection, Mutable, Map, MutableMap};
+#[doc(no_inline)] pub use collections::{Set, MutableSet};
 #[doc(no_inline)] pub use iter::{FromIterator, Extendable, ExactSize};
 #[doc(no_inline)] pub use iter::{Iterator, DoubleEndedIterator};
 #[doc(no_inline)] pub use iter::{RandomAccessIterator, CloneableIterator};
 #[doc(no_inline)] pub use iter::{OrdIterator, MutableDoubleEndedIterator};
-#[doc(no_inline)] pub use num::{Num, NumCast, CheckedAdd, CheckedSub, CheckedMul};
+#[doc(no_inline)] pub use num::{Num, NumCast, CheckedAdd, CheckedSub, CheckedMul, CheckedDiv};
 #[doc(no_inline)] pub use num::{Signed, Unsigned, Primitive, Int, Float};
 #[doc(no_inline)] pub use num::{FloatMath, ToPrimitive, FromPrimitive};
-#[doc(no_inline)] pub use option::Expect;
 #[doc(no_inline)] pub use owned::Box;
 #[doc(no_inline)] pub use path::{GenericPath, Path, PosixPath, WindowsPath};
 #[doc(no_inline)] pub use ptr::RawPtr;
@@ -84,7 +83,7 @@
 #[doc(no_inline)] pub use slice::{MutableCloneableVector, MutableOrdVector};
 #[doc(no_inline)] pub use slice::{ImmutableVector, MutableVector};
 #[doc(no_inline)] pub use slice::{ImmutableEqVector, ImmutableOrdVector};
-#[doc(no_inline)] pub use slice::{Vector, VectorVector, OwnedVector};
+#[doc(no_inline)] pub use slice::{Vector, VectorVector};
 #[doc(no_inline)] pub use slice::MutableVectorAllocating;
 #[doc(no_inline)] pub use string::String;
 #[doc(no_inline)] pub use vec::Vec;
@@ -93,7 +92,3 @@
 #[doc(no_inline)] pub use comm::{sync_channel, channel};
 #[doc(no_inline)] pub use comm::{SyncSender, Sender, Receiver};
 #[doc(no_inline)] pub use task::spawn;
-
-// Reexported statics
-#[cfg(not(test))]
-#[doc(no_inline)] pub use gc::GC;

@@ -10,20 +10,20 @@
 
 use std::cell::RefCell;
 use std::char;
-use std::io;
+use std::dynamic_lib::DynamicLibrary;
+use std::gc::GC;
 use std::io::{Command, TempDir};
+use std::io;
 use std::os;
 use std::str;
 use std::string::String;
-use std::unstable::dynamic_lib::DynamicLibrary;
 
-use collections::{HashSet, HashMap};
+use std::collections::{HashSet, HashMap};
 use testing;
 use rustc::back::link;
 use rustc::driver::config;
 use rustc::driver::driver;
 use rustc::driver::session;
-use rustc::metadata::creader::Loader;
 use syntax::ast;
 use syntax::codemap::{CodeMap, dummy_spanned};
 use syntax::diagnostic;
@@ -65,13 +65,14 @@ pub fn run(input: &str,
     let mut cfg = config::build_configuration(&sess);
     cfg.extend(cfgs.move_iter().map(|cfg_| {
         let cfg_ = token::intern_and_get_ident(cfg_.as_slice());
-        @dummy_spanned(ast::MetaWord(cfg_))
+        box(GC) dummy_spanned(ast::MetaWord(cfg_))
     }));
     let krate = driver::phase_1_parse_input(&sess, cfg, &input);
-    let (krate, _) = driver::phase_2_configure_and_expand(&sess, &mut Loader::new(&sess), krate,
-                                                          &from_str("rustdoc-test").unwrap());
+    let (krate, _) = driver::phase_2_configure_and_expand(&sess, krate,
+            &from_str("rustdoc-test").unwrap())
+        .expect("phase_2_configure_and_expand aborted in rustdoc!");
 
-    let ctx = @core::DocContext {
+    let ctx = box(GC) core::DocContext {
         krate: krate,
         maybe_typed: core::NotTyped(sess),
         src: input_path,
@@ -83,15 +84,14 @@ pub fn run(input: &str,
     };
     super::ctxtkey.replace(Some(ctx));
 
-    let mut v = RustdocVisitor::new(ctx, None);
+    let mut v = RustdocVisitor::new(&*ctx, None);
     v.visit(&ctx.krate);
     let krate = v.clean();
-    let (krate, _) = passes::unindent_comments(krate);
     let (krate, _) = passes::collapse_docs(krate);
+    let (krate, _) = passes::unindent_comments(krate);
 
     let mut collector = Collector::new(krate.name.to_string(),
                                        libs,
-                                       false,
                                        false);
     collector.fold_crate(krate);
 
@@ -103,8 +103,10 @@ pub fn run(input: &str,
 }
 
 fn runtest(test: &str, cratename: &str, libs: HashSet<Path>, should_fail: bool,
-           no_run: bool, loose_feature_gating: bool) {
-    let test = maketest(test, cratename, loose_feature_gating);
+           no_run: bool, as_test_harness: bool) {
+    // the test harness wants its own `main` & top level functions, so
+    // never wrap the test in `fn main() { ... }`
+    let test = maketest(test, Some(cratename), true, as_test_harness);
     let input = driver::StrInput(test.to_string());
 
     let sessopts = config::Options {
@@ -117,6 +119,7 @@ fn runtest(test: &str, cratename: &str, libs: HashSet<Path>, should_fail: bool,
             prefer_dynamic: true,
             .. config::basic_codegen_options()
         },
+        test: as_test_harness,
         ..config::basic_options().clone()
     };
 
@@ -137,7 +140,14 @@ fn runtest(test: &str, cratename: &str, libs: HashSet<Path>, should_fail: bool,
     let old = io::stdio::set_stderr(box w1);
     spawn(proc() {
         let mut p = io::ChanReader::new(rx);
-        let mut err = old.unwrap_or(box io::stderr() as Box<Writer:Send>);
+        let mut err = match old {
+            Some(old) => {
+                // Chop off the `Send` bound.
+                let old: Box<Writer> = old;
+                old
+            }
+            None => box io::stderr() as Box<Writer>,
+        };
         io::util::copy(&mut p, &mut err).unwrap();
     });
     let emitter = diagnostic::EmitterWriter::new(box w2);
@@ -201,29 +211,33 @@ fn runtest(test: &str, cratename: &str, libs: HashSet<Path>, should_fail: bool,
     }
 }
 
-fn maketest(s: &str, cratename: &str, loose_feature_gating: bool) -> String {
-    let mut prog = String::from_str(r"
+pub fn maketest(s: &str, cratename: Option<&str>, lints: bool, dont_insert_main: bool) -> String {
+    let mut prog = String::new();
+    if lints {
+        prog.push_str(r"
 #![deny(warnings)]
-#![allow(unused_variable, dead_assignment, unused_mut, attribute_usage, dead_code)]
+#![allow(unused_variable, dead_assignment, unused_mut, unused_attribute, dead_code)]
 ");
-
-    if loose_feature_gating {
-        // FIXME #12773: avoid inserting these when the tutorial & manual
-        // etc. have been updated to not use them so prolifically.
-        prog.push_str("#![feature(macro_rules, globs, struct_variant, managed_boxes) ]\n");
     }
 
-    if !s.contains("extern crate") {
-        if s.contains(cratename) {
-            prog.push_str(format!("extern crate {};\n",
-                                  cratename).as_slice());
+    // Don't inject `extern crate std` because it's already injected by the
+    // compiler.
+    if !s.contains("extern crate") && cratename != Some("std") {
+        match cratename {
+            Some(cratename) => {
+                if s.contains(cratename) {
+                    prog.push_str(format!("extern crate {};\n",
+                                          cratename).as_slice());
+                }
+            }
+            None => {}
         }
     }
-    if s.contains("fn main") {
+    if dont_insert_main || s.contains("fn main") {
         prog.push_str(s);
     } else {
-        prog.push_str("fn main() {\n");
-        prog.push_str(s);
+        prog.push_str("fn main() {\n    ");
+        prog.push_str(s.replace("\n", "\n    ").as_slice());
         prog.push_str("\n}");
     }
 
@@ -238,13 +252,11 @@ pub struct Collector {
     use_headers: bool,
     current_header: Option<String>,
     cratename: String,
-
-    loose_feature_gating: bool
 }
 
 impl Collector {
     pub fn new(cratename: String, libs: HashSet<Path>,
-               use_headers: bool, loose_feature_gating: bool) -> Collector {
+               use_headers: bool) -> Collector {
         Collector {
             tests: Vec::new(),
             names: Vec::new(),
@@ -253,12 +265,11 @@ impl Collector {
             use_headers: use_headers,
             current_header: None,
             cratename: cratename,
-
-            loose_feature_gating: loose_feature_gating
         }
     }
 
-    pub fn add_test(&mut self, test: String, should_fail: bool, no_run: bool, should_ignore: bool) {
+    pub fn add_test(&mut self, test: String,
+                    should_fail: bool, no_run: bool, should_ignore: bool, as_test_harness: bool) {
         let name = if self.use_headers {
             let s = self.current_header.as_ref().map(|s| s.as_slice()).unwrap_or("");
             format!("{}_{}", s, self.cnt)
@@ -268,7 +279,6 @@ impl Collector {
         self.cnt += 1;
         let libs = self.libs.clone();
         let cratename = self.cratename.to_string();
-        let loose_feature_gating = self.loose_feature_gating;
         debug!("Creating test {}: {}", name, test);
         self.tests.push(testing::TestDescAndFn {
             desc: testing::TestDesc {
@@ -282,7 +292,7 @@ impl Collector {
                         libs,
                         should_fail,
                         no_run,
-                        loose_feature_gating);
+                        as_test_harness);
             }),
         });
     }

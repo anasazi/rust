@@ -18,6 +18,7 @@ use std::fmt;
 use std::io;
 use std::iter::range;
 use std::string::String;
+use term::WriterWrapper;
 use term;
 
 // maximum number of lines we will print for each error; arbitrary.
@@ -118,7 +119,7 @@ impl SpanHandler {
 // others log errors for later reporting.
 pub struct Handler {
     err_count: Cell<uint>,
-    emit: RefCell<Box<Emitter:Send>>,
+    emit: RefCell<Box<Emitter + Send>>,
 }
 
 impl Handler {
@@ -187,7 +188,7 @@ pub fn default_handler(color_config: ColorConfig) -> Handler {
     mk_handler(box EmitterWriter::stderr(color_config))
 }
 
-pub fn mk_handler(e: Box<Emitter:Send>) -> Handler {
+pub fn mk_handler(e: Box<Emitter + Send>) -> Handler {
     Handler {
         err_count: Cell::new(0),
         emit: RefCell::new(e),
@@ -281,8 +282,8 @@ pub struct EmitterWriter {
 }
 
 enum Destination {
-    Terminal(Box<term::Terminal<Box<Writer:Send>>:Send>),
-    Raw(Box<Writer:Send>),
+    Terminal(Box<term::Terminal<WriterWrapper> + Send>),
+    Raw(Box<Writer + Send>),
 }
 
 impl EmitterWriter {
@@ -306,7 +307,7 @@ impl EmitterWriter {
         }
     }
 
-    pub fn new(dst: Box<Writer:Send>) -> EmitterWriter {
+    pub fn new(dst: Box<Writer + Send>) -> EmitterWriter {
         EmitterWriter { dst: Raw(dst) }
     }
 }

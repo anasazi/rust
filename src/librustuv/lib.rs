@@ -35,11 +35,12 @@ via `close` and `delete` methods.
 */
 
 #![crate_id = "rustuv#0.11.0-pre"]
+#![experimental]
 #![license = "MIT/ASL2"]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
 
-#![feature(macro_rules)]
+#![feature(macro_rules, unsafe_destructor)]
 #![deny(unused_result, unused_must_use)]
 #![allow(visible_private_types)]
 
@@ -51,16 +52,13 @@ extern crate alloc;
 
 use libc::{c_int, c_void};
 use std::fmt;
-use std::io::IoError;
-use std::io;
 use std::mem;
-use std::ptr::null;
 use std::ptr;
 use std::rt::local::Local;
 use std::rt::rtio;
+use std::rt::rtio::{IoResult, IoError};
 use std::rt::task::{BlockedTask, Task};
 use std::str::raw::from_c_str;
-use std::str;
 use std::task;
 
 pub use self::async::AsyncWatcher;
@@ -79,7 +77,7 @@ pub use self::tty::TtyWatcher;
 //        threading mode than the default by reaching into the auto-generated
 //        '__test' module.
 #[cfg(test)] #[start]
-fn start(argc: int, argv: **u8) -> int {
+fn start(argc: int, argv: *const *const u8) -> int {
     green::start(argc, argv, event_loop, __test::main)
 }
 
@@ -119,7 +117,7 @@ pub mod stream;
 /// extern crate green;
 ///
 /// #[start]
-/// fn start(argc: int, argv: **u8) -> int {
+/// fn start(argc: int, argv: *const *const u8) -> int {
 ///     green::start(argc, argv, rustuv::event_loop, main)
 /// }
 ///
@@ -127,34 +125,34 @@ pub mod stream;
 ///     // this code is running inside of a green task powered by libuv
 /// }
 /// ```
-pub fn event_loop() -> Box<rtio::EventLoop:Send> {
-    box uvio::UvEventLoop::new() as Box<rtio::EventLoop:Send>
+pub fn event_loop() -> Box<rtio::EventLoop + Send> {
+    box uvio::UvEventLoop::new() as Box<rtio::EventLoop + Send>
 }
 
 /// A type that wraps a uv handle
 pub trait UvHandle<T> {
-    fn uv_handle(&self) -> *T;
+    fn uv_handle(&self) -> *mut T;
 
     fn uv_loop(&self) -> Loop {
         Loop::wrap(unsafe { uvll::get_loop_for_uv_handle(self.uv_handle()) })
     }
 
     // FIXME(#8888) dummy self
-    fn alloc(_: Option<Self>, ty: uvll::uv_handle_type) -> *T {
+    fn alloc(_: Option<Self>, ty: uvll::uv_handle_type) -> *mut T {
         unsafe {
             let handle = uvll::malloc_handle(ty);
             assert!(!handle.is_null());
-            handle as *T
+            handle as *mut T
         }
     }
 
-    unsafe fn from_uv_handle<'a>(h: &'a *T) -> &'a mut Self {
+    unsafe fn from_uv_handle<'a>(h: &'a *mut T) -> &'a mut Self {
         mem::transmute(uvll::get_data_for_uv_handle(*h))
     }
 
     fn install(~self) -> Box<Self> {
         unsafe {
-            let myptr = mem::transmute::<&Box<Self>, &*u8>(&self);
+            let myptr = mem::transmute::<&Box<Self>, &*mut u8>(&self);
             uvll::set_data_for_uv_handle(self.uv_handle(), *myptr);
         }
         self
@@ -163,13 +161,13 @@ pub trait UvHandle<T> {
     fn close_async_(&mut self) {
         // we used malloc to allocate all handles, so we must always have at
         // least a callback to free all the handles we allocated.
-        extern fn close_cb(handle: *uvll::uv_handle_t) {
+        extern fn close_cb(handle: *mut uvll::uv_handle_t) {
             unsafe { uvll::free_handle(handle) }
         }
 
         unsafe {
-            uvll::set_data_for_uv_handle(self.uv_handle(), null::<()>());
-            uvll::uv_close(self.uv_handle() as *uvll::uv_handle_t, close_cb)
+            uvll::set_data_for_uv_handle(self.uv_handle(), ptr::mut_null::<()>());
+            uvll::uv_close(self.uv_handle() as *mut uvll::uv_handle_t, close_cb)
         }
     }
 
@@ -177,19 +175,20 @@ pub trait UvHandle<T> {
         let mut slot = None;
 
         unsafe {
-            uvll::uv_close(self.uv_handle() as *uvll::uv_handle_t, close_cb);
-            uvll::set_data_for_uv_handle(self.uv_handle(), ptr::null::<()>());
+            uvll::uv_close(self.uv_handle() as *mut uvll::uv_handle_t, close_cb);
+            uvll::set_data_for_uv_handle(self.uv_handle(),
+                                         ptr::mut_null::<()>());
 
             wait_until_woken_after(&mut slot, &self.uv_loop(), || {
-                uvll::set_data_for_uv_handle(self.uv_handle(), &slot);
+                uvll::set_data_for_uv_handle(self.uv_handle(), &mut slot);
             })
         }
 
-        extern fn close_cb(handle: *uvll::uv_handle_t) {
+        extern fn close_cb(handle: *mut uvll::uv_handle_t) {
             unsafe {
                 let data = uvll::get_data_for_uv_handle(handle);
                 uvll::free_handle(handle);
-                if data == ptr::null() { return }
+                if data == ptr::mut_null() { return }
                 let slot: &mut Option<BlockedTask> = mem::transmute(data);
                 wakeup(slot);
             }
@@ -214,7 +213,7 @@ impl ForbidSwitch {
 impl Drop for ForbidSwitch {
     fn drop(&mut self) {
         assert!(self.io == homing::local_id(),
-                "didnt want a scheduler switch: {}",
+                "didn't want a scheduler switch: {}",
                 self.msg);
     }
 }
@@ -262,7 +261,7 @@ fn wakeup(slot: &mut Option<BlockedTask>) {
 }
 
 pub struct Request {
-    pub handle: *uvll::uv_req_t,
+    pub handle: *mut uvll::uv_req_t,
     defused: bool,
 }
 
@@ -270,22 +269,22 @@ impl Request {
     pub fn new(ty: uvll::uv_req_type) -> Request {
         unsafe {
             let handle = uvll::malloc_req(ty);
-            uvll::set_data_for_req(handle, null::<()>());
+            uvll::set_data_for_req(handle, ptr::mut_null::<()>());
             Request::wrap(handle)
         }
     }
 
-    pub fn wrap(handle: *uvll::uv_req_t) -> Request {
+    pub fn wrap(handle: *mut uvll::uv_req_t) -> Request {
         Request { handle: handle, defused: false }
     }
 
-    pub fn set_data<T>(&self, t: *T) {
+    pub fn set_data<T>(&self, t: *mut T) {
         unsafe { uvll::set_data_for_req(self.handle, t) }
     }
 
     pub unsafe fn get_data<T>(&self) -> &'static mut T {
         let data = uvll::get_data_for_req(self.handle);
-        assert!(data != null());
+        assert!(data != ptr::mut_null());
         mem::transmute(data)
     }
 
@@ -314,18 +313,18 @@ impl Drop for Request {
 /// with dtors may not be destructured, but tuple structs can,
 /// but the results are not correct.
 pub struct Loop {
-    handle: *uvll::uv_loop_t
+    handle: *mut uvll::uv_loop_t
 }
 
 impl Loop {
     pub fn new() -> Loop {
         let handle = unsafe { uvll::loop_new() };
         assert!(handle.is_not_null());
-        unsafe { uvll::set_data_for_uv_loop(handle, 0 as *c_void) }
+        unsafe { uvll::set_data_for_uv_loop(handle, 0 as *mut c_void) }
         Loop::wrap(handle)
     }
 
-    pub fn wrap(handle: *uvll::uv_loop_t) -> Loop { Loop { handle: handle } }
+    pub fn wrap(handle: *mut uvll::uv_loop_t) -> Loop { Loop { handle: handle } }
 
     pub fn run(&mut self) {
         assert_eq!(unsafe { uvll::uv_run(self.handle, uvll::RUN_DEFAULT) }, 0);
@@ -340,7 +339,7 @@ impl Loop {
     fn modify_blockers(&self, amt: uint) {
         unsafe {
             let cur = uvll::get_data_for_uv_loop(self.handle) as uint;
-            uvll::set_data_for_uv_loop(self.handle, (cur + amt) as *c_void)
+            uvll::set_data_for_uv_loop(self.handle, (cur + amt) as *mut c_void)
         }
     }
 
@@ -391,40 +390,40 @@ fn error_smoke_test() {
     assert_eq!(err.to_str(), "EOF: end of file".to_string());
 }
 
+#[cfg(unix)]
 pub fn uv_error_to_io_error(uverr: UvError) -> IoError {
-    unsafe {
-        // Importing error constants
+    let UvError(errcode) = uverr;
+    IoError {
+        code: if errcode == uvll::EOF {libc::EOF as uint} else {-errcode as uint},
+        extra: 0,
+        detail: Some(uverr.desc()),
+    }
+}
 
-        // uv error descriptions are static
-        let UvError(errcode) = uverr;
-        let c_desc = uvll::uv_strerror(errcode);
-        let desc = str::raw::c_str_to_static_slice(c_desc);
-
-        let kind = match errcode {
-            uvll::UNKNOWN => io::OtherIoError,
-            uvll::OK => io::OtherIoError,
-            uvll::EOF => io::EndOfFile,
-            uvll::EACCES => io::PermissionDenied,
-            uvll::ECONNREFUSED => io::ConnectionRefused,
-            uvll::ECONNRESET => io::ConnectionReset,
-            uvll::ENOTCONN => io::NotConnected,
-            uvll::ENOENT => io::FileNotFound,
-            uvll::EPIPE => io::BrokenPipe,
-            uvll::ECONNABORTED => io::ConnectionAborted,
-            uvll::EADDRNOTAVAIL => io::ConnectionRefused,
-            uvll::ECANCELED => io::TimedOut,
+#[cfg(windows)]
+pub fn uv_error_to_io_error(uverr: UvError) -> IoError {
+    let UvError(errcode) = uverr;
+    IoError {
+        code: match errcode {
+            uvll::EOF => libc::EOF,
+            uvll::EACCES => libc::ERROR_ACCESS_DENIED,
+            uvll::ECONNREFUSED => libc::WSAECONNREFUSED,
+            uvll::ECONNRESET => libc::WSAECONNRESET,
+            uvll::ENOTCONN => libc::WSAENOTCONN,
+            uvll::ENOENT => libc::ERROR_FILE_NOT_FOUND,
+            uvll::EPIPE => libc::ERROR_NO_DATA,
+            uvll::ECONNABORTED => libc::WSAECONNABORTED,
+            uvll::EADDRNOTAVAIL => libc::WSAEADDRNOTAVAIL,
+            uvll::ECANCELED => libc::ERROR_OPERATION_ABORTED,
+            uvll::EADDRINUSE => libc::WSAEADDRINUSE,
             err => {
                 uvdebug!("uverr.code {}", err as int);
                 // FIXME: Need to map remaining uv error types
-                io::OtherIoError
+                -1
             }
-        };
-
-        IoError {
-            kind: kind,
-            desc: desc,
-            detail: None
-        }
+        } as uint,
+        extra: 0,
+        detail: Some(uverr.desc()),
     }
 }
 
@@ -437,7 +436,7 @@ pub fn status_to_maybe_uv_error(status: c_int) -> Option<UvError> {
     }
 }
 
-pub fn status_to_io_result(status: c_int) -> Result<(), IoError> {
+pub fn status_to_io_result(status: c_int) -> IoResult<()> {
     if status >= 0 {Ok(())} else {Err(uv_error_to_io_error(UvError(status)))}
 }
 
@@ -446,7 +445,7 @@ pub type Buf = uvll::uv_buf_t;
 
 pub fn empty_buf() -> Buf {
     uvll::uv_buf_t {
-        base: null(),
+        base: ptr::mut_null(),
         len: 0,
     }
 }
@@ -454,7 +453,7 @@ pub fn empty_buf() -> Buf {
 /// Borrow a slice to a Buf
 pub fn slice_to_uv_buf(v: &[u8]) -> Buf {
     let data = v.as_ptr();
-    uvll::uv_buf_t { base: data, len: v.len() as uvll::uv_buf_len_t }
+    uvll::uv_buf_t { base: data as *mut u8, len: v.len() as uvll::uv_buf_len_t }
 }
 
 // This function is full of lies!
@@ -472,6 +471,33 @@ fn local_loop() -> &'static mut uvio::UvIoFactory {
 }
 
 #[cfg(test)]
+fn next_test_ip4() -> std::rt::rtio::SocketAddr {
+    use std::io;
+    use std::rt::rtio;
+
+    let io::net::ip::SocketAddr { ip, port } = io::test::next_test_ip4();
+    let ip = match ip {
+        io::net::ip::Ipv4Addr(a, b, c, d) => rtio::Ipv4Addr(a, b, c, d),
+        _ => unreachable!(),
+    };
+    rtio::SocketAddr { ip: ip, port: port }
+}
+
+#[cfg(test)]
+fn next_test_ip6() -> std::rt::rtio::SocketAddr {
+    use std::io;
+    use std::rt::rtio;
+
+    let io::net::ip::SocketAddr { ip, port } = io::test::next_test_ip6();
+    let ip = match ip {
+        io::net::ip::Ipv6Addr(a, b, c, d, e, f, g, h) =>
+            rtio::Ipv6Addr(a, b, c, d, e, f, g, h),
+        _ => unreachable!(),
+    };
+    rtio::SocketAddr { ip: ip, port: port }
+}
+
+#[cfg(test)]
 mod test {
     use std::mem::transmute;
     use std::rt::thread::Thread;
@@ -486,7 +512,7 @@ mod test {
         assert_eq!(buf.len, 20);
 
         unsafe {
-            let base = transmute::<*u8, *mut u8>(buf.base);
+            let base = transmute::<*mut u8, *mut u8>(buf.base);
             (*base) = 1;
             (*base.offset(1)) = 2;
         }

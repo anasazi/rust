@@ -19,6 +19,7 @@ use parse;
 use parse::token;
 use print::pprust;
 
+use std::gc::Gc;
 use std::io::File;
 use std::rc::Rc;
 use std::str;
@@ -125,7 +126,7 @@ pub fn expand_include_str(cx: &mut ExtCtxt, sp: Span, tts: &[ast::TokenTree])
         Some(src) => {
             // Add this input file to the code map to make it available as
             // dependency information
-            let filename = file.display().to_str().to_string();
+            let filename = file.display().to_str();
             let interned = token::intern_and_get_ident(src);
             cx.codemap().new_filemap(filename, src.to_string());
 
@@ -163,7 +164,7 @@ pub fn expand_include_bin(cx: &mut ExtCtxt, sp: Span, tts: &[ast::TokenTree])
 }
 
 // recur along an ExpnInfo chain to find the original expression
-fn topmost_expn_info(expn_info: @codemap::ExpnInfo) -> @codemap::ExpnInfo {
+fn topmost_expn_info(expn_info: Gc<codemap::ExpnInfo>) -> Gc<codemap::ExpnInfo> {
     match *expn_info {
         ExpnInfo { call_site: ref call_site, .. } => {
             match call_site.expn_info {

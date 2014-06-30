@@ -114,6 +114,13 @@ pub mod write {
     // which are *far* more efficient. This is obviously undesirable in some
     // cases, so if any sort of target feature is specified we don't append v7
     // to the feature list.
+    //
+    // On iOS only armv7 and newer are supported. So it is useful to
+    // get all hardware potential via VFP3 (hardware floating point)
+    // and NEON (SIMD) instructions supported by LLVM.
+    // Note that without those flags various linking errors might
+    // arise as some of intrinsicts are converted into function calls
+    // and nobody provides implementations those functions
     fn target_feature<'a>(sess: &'a Session) -> &'a str {
         match sess.targ_cfg.os {
             abi::OsAndroid => {
@@ -122,7 +129,10 @@ pub mod write {
                 } else {
                     sess.opts.cg.target_feature.as_slice()
                 }
-            }
+            },
+            abi::OsiOS if sess.targ_cfg.arch == abi::Arm => {
+                "+v7,+thumb2,+vfp3,+neon"
+            },
             _ => sess.opts.cg.target_feature.as_slice()
         }
     }
@@ -386,7 +396,7 @@ pub mod write {
     }
 
     unsafe fn configure_llvm(sess: &Session) {
-        use sync::one::{Once, ONCE_INIT};
+        use std::sync::{Once, ONCE_INIT};
         static mut INIT: Once = ONCE_INIT;
 
         // Copy what clang does by turning on loop vectorization at O2 and
@@ -402,7 +412,7 @@ pub mod write {
         {
             let add = |arg: &str| {
                 let s = arg.to_c_str();
-                llvm_args.push(s.with_ref(|p| p));
+                llvm_args.push(s.as_ptr());
                 llvm_c_strs.push(s);
             };
             add("rustc"); // fake program name
@@ -649,7 +659,7 @@ pub fn sanitize(s: &str) -> String {
     if result.len() > 0u &&
         result.as_slice()[0] != '_' as u8 &&
         ! char::is_XID_start(result.as_slice()[0] as char) {
-        return format!("_{}", result.as_slice()).to_string();
+        return format!("_{}", result.as_slice());
     }
 
     return result;
@@ -796,6 +806,10 @@ pub fn link_binary(sess: &Session,
                    id: &CrateId) -> Vec<Path> {
     let mut out_filenames = Vec::new();
     for &crate_type in sess.crate_types.borrow().iter() {
+        if invalid_output_for_target(sess, crate_type) {
+            sess.bug(format!("invalid output type `{}` for target os `{}`",
+                             crate_type, sess.targ_cfg.os).as_slice());
+        }
         let out_file = link_binary_output(sess, trans, crate_type, outputs, id);
         out_filenames.push(out_file);
     }
@@ -810,6 +824,32 @@ pub fn link_binary(sess: &Session,
     }
 
     out_filenames
+}
+
+
+/// Returns default crate type for target
+///
+/// Default crate type is used when crate type isn't provided neither
+/// through cmd line arguments nor through crate attributes
+///
+/// It is CrateTypeExecutable for all platforms but iOS as there is no
+/// way to run iOS binaries anyway without jailbreaking and
+/// interaction with Rust code through static library is the only
+/// option for now
+pub fn default_output_for_target(sess: &Session) -> config::CrateType {
+    match sess.targ_cfg.os {
+        abi::OsiOS => config::CrateTypeStaticlib,
+        _ => config::CrateTypeExecutable
+    }
+}
+
+/// Checks if target supports crate_type as output
+pub fn invalid_output_for_target(sess: &Session,
+                                 crate_type: config::CrateType) -> bool {
+    match (sess.targ_cfg.os, crate_type) {
+        (abi::OsiOS, config::CrateTypeDylib) => true,
+        _ => false
+    }
 }
 
 fn is_writeable(p: &Path) -> bool {
@@ -833,8 +873,11 @@ pub fn filename_for_input(sess: &Session, crate_type: config::CrateType,
                 abi::OsLinux => (loader::LINUX_DLL_PREFIX, loader::LINUX_DLL_SUFFIX),
                 abi::OsAndroid => (loader::ANDROID_DLL_PREFIX, loader::ANDROID_DLL_SUFFIX),
                 abi::OsFreebsd => (loader::FREEBSD_DLL_PREFIX, loader::FREEBSD_DLL_SUFFIX),
+                abi::OsiOS => unreachable!(),
             };
-            out_filename.with_filename(format!("{}{}{}", prefix, libname,
+            out_filename.with_filename(format!("{}{}{}",
+                                               prefix,
+                                               libname,
                                                suffix))
         }
         config::CrateTypeStaticlib => {
@@ -958,8 +1001,13 @@ fn link_rlib<'a>(sess: &'a Session,
 
             // For LTO purposes, the bytecode of this library is also inserted
             // into the archive.
+            //
+            // Note that we make sure that the bytecode filename in the archive
+            // is never exactly 16 bytes long by adding a 16 byte extension to
+            // it. This is to work around a bug in LLDB that would cause it to
+            // crash if the name of a file in an archive was exactly 16 bytes.
             let bc = obj_filename.with_extension("bc");
-            let bc_deflated = obj_filename.with_extension("bc.deflate");
+            let bc_deflated = obj_filename.with_extension("bytecode.deflate");
             match fs::File::open(&bc).read_to_end().and_then(|data| {
                 fs::File::create(&bc_deflated)
                     .write(match flate::deflate_bytes(data.as_slice()) {
@@ -986,7 +1034,7 @@ fn link_rlib<'a>(sess: &'a Session,
             // symbol table of the archive. This currently dies on OSX (see
             // #11162), and isn't necessary there anyway
             match sess.targ_cfg.os {
-                abi::OsMacos => {}
+                abi::OsMacos | abi::OsiOS => {}
                 _ => { a.update_symbols(); }
             }
         }
@@ -1099,15 +1147,16 @@ fn link_natively(sess: &Session, trans: &CrateTranslation, dylib: bool,
 
     // On OSX, debuggers need this utility to get run to do some munging of
     // the symbols
-    if sess.targ_cfg.os == abi::OsMacos && (sess.opts.debuginfo != NoDebugInfo) {
-        match Command::new("dsymutil").arg(out_filename).status() {
-            Ok(..) => {}
-            Err(e) => {
-                sess.err(format!("failed to run dsymutil: {}", e).as_slice());
-                sess.abort_if_errors();
+    if (sess.targ_cfg.os == abi::OsMacos || sess.targ_cfg.os == abi::OsiOS)
+        && (sess.opts.debuginfo != NoDebugInfo) {
+            match Command::new("dsymutil").arg(out_filename).status() {
+                Ok(..) => {}
+                Err(e) => {
+                    sess.err(format!("failed to run dsymutil: {}", e).as_slice());
+                    sess.abort_if_errors();
+                }
             }
         }
-    }
 }
 
 fn link_args(cmd: &mut Command,
@@ -1121,26 +1170,39 @@ fn link_args(cmd: &mut Command,
     // The default library location, we need this to find the runtime.
     // The location of crates will be determined as needed.
     let lib_path = sess.target_filesearch().get_lib_path();
-    cmd.arg("-L").arg(lib_path);
+    cmd.arg("-L").arg(&lib_path);
 
     cmd.arg("-o").arg(out_filename).arg(obj_filename);
 
     // Stack growth requires statically linking a __morestack function. Note
-    // that this is listed *before* all other libraries, even though it may be
-    // used to resolve symbols in other libraries. The only case that this
-    // wouldn't be pulled in by the object file is if the object file had no
-    // functions.
+    // that this is listed *before* all other libraries. Due to the usage of the
+    // --as-needed flag below, the standard library may only be useful for its
+    // rust_stack_exhausted function. In this case, we must ensure that the
+    // libmorestack.a file appears *before* the standard library (so we put it
+    // at the very front).
     //
-    // If we're building an executable, there must be at least one function (the
-    // main function), and if we're building a dylib then we don't need it for
-    // later libraries because they're all dylibs (not rlibs).
+    // Most of the time this is sufficient, except for when LLVM gets super
+    // clever. If, for example, we have a main function `fn main() {}`, LLVM
+    // will optimize out calls to `__morestack` entirely because the function
+    // doesn't need any stack at all!
     //
-    // I'm honestly not entirely sure why this needs to come first. Apparently
-    // the --as-needed flag above sometimes strips out libstd from the command
-    // line, but inserting this farther to the left makes the
-    // "rust_stack_exhausted" symbol an outstanding undefined symbol, which
-    // flags libstd as a required library (or whatever provides the symbol).
-    cmd.arg("-lmorestack");
+    // To get around this snag, we specially tell the linker to always include
+    // all contents of this library. This way we're guaranteed that the linker
+    // will include the __morestack symbol 100% of the time, always resolving
+    // references to it even if the object above didn't use it.
+    match sess.targ_cfg.os {
+        abi::OsMacos | abi::OsiOS => {
+            let morestack = lib_path.join("libmorestack.a");
+
+            let mut v = "-Wl,-force_load,".as_bytes().to_owned();
+            v.push_all(morestack.as_vec());
+            cmd.arg(v.as_slice());
+        }
+        _ => {
+            cmd.args(["-Wl,--whole-archive", "-lmorestack",
+                      "-Wl,--no-whole-archive"]);
+        }
+    }
 
     // When linking a dynamic library, we put the metadata into a section of the
     // executable. This metadata is in a separate object file from the main
@@ -1164,7 +1226,7 @@ fn link_args(cmd: &mut Command,
     // already done the best it can do, and we also don't want to eliminate the
     // metadata. If we're building an executable, however, --gc-sections drops
     // the size of hello world from 1.8MB to 597K, a 67% reduction.
-    if !dylib && sess.targ_cfg.os != abi::OsMacos {
+    if !dylib && sess.targ_cfg.os != abi::OsMacos && sess.targ_cfg.os != abi::OsiOS {
         cmd.arg("-Wl,--gc-sections");
     }
 
@@ -1180,7 +1242,7 @@ fn link_args(cmd: &mut Command,
            sess.opts.optimize == config::Aggressive {
             cmd.arg("-Wl,-O1");
         }
-    } else if sess.targ_cfg.os == abi::OsMacos {
+    } else if sess.targ_cfg.os == abi::OsMacos || sess.targ_cfg.os == abi::OsiOS {
         // The dead_strip option to the linker specifies that functions and data
         // unreachable by the entry point will be removed. This is quite useful
         // with Rust's compilation model of compiling libraries at a time into
@@ -1343,7 +1405,7 @@ fn add_local_native_libraries(cmd: &mut Command, sess: &Session) {
     // For those that support this, we ensure we pass the option if the library
     // was flagged "static" (most defaults are dynamic) to ensure that if
     // libfoo.a and libfoo.so both exist that the right one is chosen.
-    let takes_hints = sess.targ_cfg.os != abi::OsMacos;
+    let takes_hints = sess.targ_cfg.os != abi::OsMacos && sess.targ_cfg.os != abi::OsiOS;
 
     for &(ref l, kind) in sess.cstore.get_used_libraries().borrow().iter() {
         match kind {

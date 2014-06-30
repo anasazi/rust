@@ -27,12 +27,14 @@ use core::mem::transmute;
 use core::cell::Cell;
 use core::clone::Clone;
 use core::cmp::{PartialEq, PartialOrd, Eq, Ord, Ordering};
+use core::default::Default;
 use core::kinds::marker;
 use core::ops::{Deref, Drop};
 use core::option::{Option, Some, None};
 use core::ptr;
 use core::ptr::RawPtr;
 use core::mem::{min_align_of, size_of};
+use core::fmt;
 
 use heap::deallocate;
 
@@ -142,11 +144,19 @@ impl<T> Drop for Rc<T> {
     }
 }
 
+#[unstable]
 impl<T> Clone for Rc<T> {
     #[inline]
     fn clone(&self) -> Rc<T> {
         self.inc_strong();
         Rc { _ptr: self._ptr, _nosend: marker::NoSend, _noshare: marker::NoShare }
+    }
+}
+
+impl<T: Default> Default for Rc<T> {
+    #[inline]
+    fn default() -> Rc<T> {
+        Rc::new(Default::default())
     }
 }
 
@@ -160,6 +170,11 @@ impl<T: PartialEq> PartialEq for Rc<T> {
 impl<T: Eq> Eq for Rc<T> {}
 
 impl<T: PartialOrd> PartialOrd for Rc<T> {
+    #[inline(always)]
+    fn partial_cmp(&self, other: &Rc<T>) -> Option<Ordering> {
+        (**self).partial_cmp(&**other)
+    }
+
     #[inline(always)]
     fn lt(&self, other: &Rc<T>) -> bool { **self < **other }
 
@@ -176,6 +191,12 @@ impl<T: PartialOrd> PartialOrd for Rc<T> {
 impl<T: Ord> Ord for Rc<T> {
     #[inline]
     fn cmp(&self, other: &Rc<T>) -> Ordering { (**self).cmp(&**other) }
+}
+
+impl<T: fmt::Show> fmt::Show for Rc<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        (**self).fmt(f)
+    }
 }
 
 /// Weak reference to a reference-counted box
@@ -217,6 +238,7 @@ impl<T> Drop for Weak<T> {
     }
 }
 
+#[unstable]
 impl<T> Clone for Weak<T> {
     #[inline]
     fn clone(&self) -> Weak<T> {
@@ -269,7 +291,7 @@ mod tests {
 
     #[test]
     fn test_clone() {
-        let x = Rc::new(RefCell::new(5));
+        let x = Rc::new(RefCell::new(5i));
         let y = x.clone();
         *x.borrow_mut() = 20;
         assert_eq!(*y.borrow(), 20);
@@ -277,13 +299,13 @@ mod tests {
 
     #[test]
     fn test_simple() {
-        let x = Rc::new(5);
+        let x = Rc::new(5i);
         assert_eq!(*x, 5);
     }
 
     #[test]
     fn test_simple_clone() {
-        let x = Rc::new(5);
+        let x = Rc::new(5i);
         let y = x.clone();
         assert_eq!(*x, 5);
         assert_eq!(*y, 5);
@@ -291,20 +313,20 @@ mod tests {
 
     #[test]
     fn test_destructor() {
-        let x = Rc::new(box 5);
+        let x = Rc::new(box 5i);
         assert_eq!(**x, 5);
     }
 
     #[test]
     fn test_live() {
-        let x = Rc::new(5);
+        let x = Rc::new(5i);
         let y = x.downgrade();
         assert!(y.upgrade().is_some());
     }
 
     #[test]
     fn test_dead() {
-        let x = Rc::new(5);
+        let x = Rc::new(5i);
         let y = x.downgrade();
         drop(x);
         assert!(y.upgrade().is_none());
@@ -313,8 +335,8 @@ mod tests {
     #[test]
     fn gc_inside() {
         // see issue #11532
-        use std::gc::Gc;
-        let a = Rc::new(RefCell::new(Gc::new(1)));
+        use std::gc::GC;
+        let a = Rc::new(RefCell::new(box(GC) 1i));
         assert!(a.try_borrow_mut().is_some());
     }
 

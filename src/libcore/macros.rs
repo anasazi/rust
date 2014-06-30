@@ -54,13 +54,34 @@ macro_rules! assert(
     );
 )
 
+/// Runtime assertion, only without `--cfg ndebug`
+#[macro_export]
+macro_rules! debug_assert(
+    ($(a:tt)*) => ({
+        if cfg!(not(ndebug)) {
+            assert!($($a)*);
+        }
+    })
+)
+
 /// Runtime assertion for equality, for details see std::macros
+#[macro_export]
 macro_rules! assert_eq(
     ($cond1:expr, $cond2:expr) => ({
         let c1 = $cond1;
         let c2 = $cond2;
         if c1 != c2 || c2 != c1 {
             fail!("expressions not equal, left: {}, right: {}", c1, c2);
+        }
+    })
+)
+
+/// Runtime assertion for equality, only without `--cfg ndebug`
+#[macro_export]
+macro_rules! debug_assert_eq(
+    ($($a:tt)*) => ({
+        if cfg!(not(ndebug)) {
+            assert_eq!($($a)*);
         }
     })
 )
@@ -77,12 +98,29 @@ macro_rules! try(
     ($e:expr) => (match $e { Ok(e) => e, Err(e) => return Err(e) })
 )
 
-#[cfg(test)]
-macro_rules! vec( ($($e:expr),*) => ({
-    let mut _v = ::std::vec::Vec::new();
-    $(_v.push($e);)*
-    _v
-}) )
+/// Writing a formatted string into a writer
+#[macro_export]
+macro_rules! write(
+    ($dst:expr, $($arg:tt)*) => (format_args_method!($dst, write_fmt, $($arg)*))
+)
 
-#[cfg(test)]
-macro_rules! format( ($($arg:tt)*) => (format_args!(::fmt::format, $($arg)*)) )
+/// Writing a formatted string plus a newline into a writer
+#[macro_export]
+macro_rules! writeln(
+    ($dst:expr, $fmt:expr $($arg:tt)*) => (
+        write!($dst, concat!($fmt, "\n") $($arg)*)
+    )
+)
+
+/// Write some formatted data into a stream.
+///
+/// Identical to the macro in `std::macros`
+#[macro_export]
+macro_rules! write(
+    ($dst:expr, $($arg:tt)*) => ({
+        format_args_method!($dst, write_fmt, $($arg)*)
+    })
+)
+
+#[macro_export]
+macro_rules! unreachable( () => (fail!("unreachable code")) )

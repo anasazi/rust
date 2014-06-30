@@ -19,6 +19,7 @@ use metadata::common::*;
 use metadata::cstore;
 use metadata::decoder;
 use metadata::tyencode;
+use middle::subst::VecPerParamSpace;
 use middle::ty::{node_id_to_type, lookup_item_type};
 use middle::astencode;
 use middle::ty;
@@ -27,13 +28,14 @@ use middle;
 use util::nodemap::{NodeMap, NodeSet};
 
 use serialize::Encodable;
-use std::mem;
 use std::cell::RefCell;
-use std::hash;
+use std::gc::Gc;
 use std::hash::Hash;
+use std::hash;
 use std::io::MemWriter;
+use std::mem;
 use std::str;
-use collections::HashMap;
+use std::collections::HashMap;
 use syntax::abi;
 use syntax::ast::*;
 use syntax::ast;
@@ -75,6 +77,7 @@ pub struct EncodeParams<'a> {
     pub link_meta: &'a LinkMeta,
     pub cstore: &'a cstore::CStore,
     pub encode_inlined_item: EncodeInlinedItem<'a>,
+    pub reachable: &'a NodeSet,
 }
 
 pub struct EncodeContext<'a> {
@@ -87,6 +90,7 @@ pub struct EncodeContext<'a> {
     pub cstore: &'a cstore::CStore,
     pub encode_inlined_item: RefCell<EncodeInlinedItem<'a>>,
     pub type_abbrevs: tyencode::abbrev_map,
+    pub reachable: &'a NodeSet,
 }
 
 fn encode_name(ebml_w: &mut Encoder, name: Name) {
@@ -125,10 +129,9 @@ fn encode_trait_ref(ebml_w: &mut Encoder,
 
 fn encode_impl_vtables(ebml_w: &mut Encoder,
                        ecx: &EncodeContext,
-                       vtables: &typeck::impl_res) {
+                       vtables: &typeck::vtable_res) {
     ebml_w.start_tag(tag_item_impl_vtables);
-    astencode::encode_vtable_res(ecx, ebml_w, &vtables.trait_vtables);
-    astencode::encode_vtable_param_res(ecx, ebml_w, &vtables.self_vtables);
+    astencode::encode_vtable_res(ecx, ebml_w, vtables);
     ebml_w.end_tag();
 }
 
@@ -145,7 +148,7 @@ pub fn def_to_str(did: DefId) -> String {
 
 fn encode_ty_type_param_defs(ebml_w: &mut Encoder,
                              ecx: &EncodeContext,
-                             params: &[ty::TypeParameterDef],
+                             params: &VecPerParamSpace<ty::TypeParameterDef>,
                              tag: uint) {
     let ty_str_ctxt = &tyencode::ctxt {
         diag: ecx.diag,
@@ -161,7 +164,7 @@ fn encode_ty_type_param_defs(ebml_w: &mut Encoder,
 }
 
 fn encode_region_param_defs(ebml_w: &mut Encoder,
-                            params: &[ty::RegionParameterDef]) {
+                            params: &VecPerParamSpace<ty::RegionParameterDef>) {
     for param in params.iter() {
         ebml_w.start_tag(tag_region_param_def);
 
@@ -171,6 +174,12 @@ fn encode_region_param_defs(ebml_w: &mut Encoder,
 
         ebml_w.wr_tagged_str(tag_region_param_def_def_id,
                              def_to_str(param.def_id).as_slice());
+
+        ebml_w.wr_tagged_u64(tag_region_param_def_space,
+                             param.space.to_uint() as u64);
+
+        ebml_w.wr_tagged_u64(tag_region_param_def_index,
+                             param.index as u64);
 
         ebml_w.end_tag();
     }
@@ -187,11 +196,11 @@ fn encode_item_variances(ebml_w: &mut Encoder,
 
 fn encode_bounds_and_type(ebml_w: &mut Encoder,
                           ecx: &EncodeContext,
-                          tpt: &ty::ty_param_bounds_and_ty) {
-    encode_ty_type_param_defs(ebml_w, ecx, tpt.generics.type_param_defs(),
+                          pty: &ty::Polytype) {
+    encode_ty_type_param_defs(ebml_w, ecx, &pty.generics.types,
                               tag_items_data_item_ty_param_bounds);
-    encode_region_param_defs(ebml_w, tpt.generics.region_param_defs());
-    encode_type(ecx, ebml_w, tpt.ty);
+    encode_region_param_defs(ebml_w, &pty.generics.regions);
+    encode_type(ecx, ebml_w, pty.ty);
 }
 
 fn encode_variant_id(ebml_w: &mut Encoder, vid: DefId) {
@@ -318,6 +327,10 @@ fn encode_enum_variant_info(ecx: &EncodeContext,
         encode_parent_item(ebml_w, local_def(id));
         encode_visibility(ebml_w, variant.node.vis);
         encode_attributes(ebml_w, variant.node.attrs.as_slice());
+
+        let stab = ecx.tcx.stability.borrow().lookup_local(variant.node.id);
+        encode_stability(ebml_w, stab);
+
         match variant.node.kind {
             ast::TupleVariantKind(ref args)
                     if args.len() > 0 && generics.ty_params.len() == 0 => {
@@ -351,7 +364,7 @@ fn encode_enum_variant_info(ecx: &EncodeContext,
 fn encode_path<PI: Iterator<PathElem> + Clone>(ebml_w: &mut Encoder,
                                                mut path: PI) {
     ebml_w.start_tag(tag_path);
-    ebml_w.wr_tagged_u32(tag_path_len, path.clone().len() as u32);
+    ebml_w.wr_tagged_u32(tag_path_len, path.clone().count() as u32);
     for pe in path {
         let tag = match pe {
             ast_map::PathMod(_) => tag_path_elem_mod,
@@ -473,7 +486,7 @@ fn encode_reexported_static_methods(ecx: &EncodeContext,
 /// * For enums, iterates through the node IDs of the variants.
 ///
 /// * For newtype structs, iterates through the node ID of the constructor.
-fn each_auxiliary_node_id(item: @Item, callback: |NodeId| -> bool) -> bool {
+fn each_auxiliary_node_id(item: Gc<Item>, callback: |NodeId| -> bool) -> bool {
     let mut continue_ = true;
     match item.node {
         ItemEnum(ref enum_def, _) => {
@@ -579,6 +592,7 @@ fn encode_info_for_mod(ecx: &EncodeContext,
 
     encode_path(ebml_w, path.clone());
     encode_visibility(ebml_w, vis);
+    encode_stability(ebml_w, ecx.tcx.stability.borrow().lookup_local(id));
 
     // Encode the reexports of this module, if this module is public.
     if vis == Public {
@@ -708,6 +722,8 @@ fn encode_info_for_struct_ctor(ecx: &EncodeContext,
         encode_symbol(ecx, ebml_w, ctor_id);
     }
 
+    encode_stability(ebml_w, ecx.tcx.stability.borrow().lookup_local(ctor_id));
+
     // indicate that this is a tuple struct ctor, because downstream users will normally want
     // the tuple struct definition, but without this there is no way for them to tell that
     // they actually have a ctor rather than a normal function
@@ -722,8 +738,7 @@ fn encode_method_ty_fields(ecx: &EncodeContext,
                            method_ty: &ty::Method) {
     encode_def_id(ebml_w, method_ty.def_id);
     encode_name(ebml_w, method_ty.ident.name);
-    encode_ty_type_param_defs(ebml_w, ecx,
-                              method_ty.generics.type_param_defs(),
+    encode_ty_type_param_defs(ebml_w, ecx, &method_ty.generics.types,
                               tag_item_method_tps);
     encode_method_fty(ecx, ebml_w, &method_ty.fty);
     encode_visibility(ebml_w, method_ty.vis);
@@ -744,7 +759,7 @@ fn encode_info_for_method(ecx: &EncodeContext,
                           impl_path: PathElems,
                           is_default_impl: bool,
                           parent_id: NodeId,
-                          ast_method_opt: Option<@Method>) {
+                          ast_method_opt: Option<Gc<Method>>) {
 
     debug!("encode_info_for_method: {:?} {}", m.def_id,
            token::get_ident(m.ident));
@@ -753,9 +768,12 @@ fn encode_info_for_method(ecx: &EncodeContext,
     encode_method_ty_fields(ecx, ebml_w, m);
     encode_parent_item(ebml_w, local_def(parent_id));
 
+    let stab = ecx.tcx.stability.borrow().lookup_local(m.def_id.node);
+    encode_stability(ebml_w, stab);
+
     // The type for methods gets encoded twice, which is unfortunate.
-    let tpt = lookup_item_type(ecx.tcx, m.def_id);
-    encode_bounds_and_type(ebml_w, ecx, &tpt);
+    let pty = lookup_item_type(ecx.tcx, m.def_id);
+    encode_bounds_and_type(ebml_w, ecx, &pty);
 
     let elem = ast_map::PathName(m.ident.name);
     encode_path(ebml_w, impl_path.chain(Some(elem).move_iter()));
@@ -767,12 +785,11 @@ fn encode_info_for_method(ecx: &EncodeContext,
     }
 
     for &ast_method in ast_method_opt.iter() {
-        let num_params = tpt.generics.type_param_defs().len();
-        if num_params > 0u ||
-                is_default_impl ||
-                should_inline(ast_method.attrs.as_slice()) {
+        let any_types = !pty.generics.types.is_empty();
+        if any_types || is_default_impl || should_inline(ast_method.attrs.as_slice()) {
             encode_inlined_item(ecx, ebml_w,
-                                IIMethodRef(local_def(parent_id), false, ast_method));
+                                IIMethodRef(local_def(parent_id), false,
+                                            &*ast_method));
         } else {
             encode_symbol(ecx, ebml_w, m.def_id.node);
         }
@@ -873,6 +890,14 @@ fn encode_sized(ebml_w: &mut Encoder, sized: Sized) {
     ebml_w.end_tag();
 }
 
+fn encode_stability(ebml_w: &mut Encoder, stab_opt: Option<attr::Stability>) {
+    stab_opt.map(|stab| {
+        ebml_w.start_tag(tag_items_data_item_stability);
+        stab.encode(ebml_w).unwrap();
+        ebml_w.end_tag();
+    });
+}
+
 fn encode_info_for_item(ecx: &EncodeContext,
                         ebml_w: &mut Encoder,
                         item: &Item,
@@ -893,6 +918,8 @@ fn encode_info_for_item(ecx: &EncodeContext,
            ecx.tcx.sess.codemap().span_to_str(item.span));
 
     let def_id = local_def(item.id);
+    let stab = tcx.stability.borrow().lookup_local(item.id);
+
     match item.node {
       ItemStatic(_, m, _) => {
         add_to_index(item, ebml_w, index);
@@ -914,6 +941,7 @@ fn encode_info_for_item(ecx: &EncodeContext,
             encode_inlined_item(ecx, ebml_w, IIItemRef(item));
         }
         encode_visibility(ebml_w, vis);
+        encode_stability(ebml_w, stab);
         ebml_w.end_tag();
       }
       ItemFn(ref decl, fn_style, _, ref generics, _) => {
@@ -932,6 +960,7 @@ fn encode_info_for_item(ecx: &EncodeContext,
             encode_symbol(ecx, ebml_w, item.id);
         }
         encode_visibility(ebml_w, vis);
+        encode_stability(ebml_w, stab);
         encode_method_argument_names(ebml_w, &**decl);
         ebml_w.end_tag();
       }
@@ -961,6 +990,7 @@ fn encode_info_for_item(ecx: &EncodeContext,
             ebml_w.end_tag();
         }
         encode_visibility(ebml_w, vis);
+        encode_stability(ebml_w, stab);
         ebml_w.end_tag();
       }
       ItemTy(..) => {
@@ -972,6 +1002,7 @@ fn encode_info_for_item(ecx: &EncodeContext,
         encode_name(ebml_w, item.ident.name);
         encode_path(ebml_w, path);
         encode_visibility(ebml_w, vis);
+        encode_stability(ebml_w, stab);
         ebml_w.end_tag();
       }
       ItemEnum(ref enum_definition, ref generics) => {
@@ -994,6 +1025,7 @@ fn encode_info_for_item(ecx: &EncodeContext,
         encode_inherent_implementations(ecx, ebml_w, def_id);
 
         encode_visibility(ebml_w, vis);
+        encode_stability(ebml_w, stab);
         ebml_w.end_tag();
 
         encode_enum_variant_info(ecx,
@@ -1028,6 +1060,7 @@ fn encode_info_for_item(ecx: &EncodeContext,
         encode_name(ebml_w, item.ident.name);
         encode_attributes(ebml_w, item.attrs.as_slice());
         encode_path(ebml_w, path.clone());
+        encode_stability(ebml_w, stab);
         encode_visibility(ebml_w, vis);
 
         /* Encode def_ids for each field and method
@@ -1088,6 +1121,7 @@ fn encode_info_for_item(ecx: &EncodeContext,
             encode_impl_vtables(ebml_w, ecx, &impl_vtables);
         }
         encode_path(ebml_w, path.clone());
+        encode_stability(ebml_w, stab);
         ebml_w.end_tag();
 
         // Iterate down the methods, emitting them. We rely on the
@@ -1121,9 +1155,9 @@ fn encode_info_for_item(ecx: &EncodeContext,
         encode_item_variances(ebml_w, ecx, item.id);
         let trait_def = ty::lookup_trait_def(tcx, def_id);
         encode_ty_type_param_defs(ebml_w, ecx,
-                                  trait_def.generics.type_param_defs(),
+                                  &trait_def.generics.types,
                                   tag_items_data_item_ty_param_bounds);
-        encode_region_param_defs(ebml_w, trait_def.generics.region_param_defs());
+        encode_region_param_defs(ebml_w, &trait_def.generics.regions);
         encode_trait_ref(ebml_w, ecx, &*trait_def.trait_ref, tag_item_trait_ref);
         encode_name(ebml_w, item.ident.name);
         encode_attributes(ebml_w, item.attrs.as_slice());
@@ -1131,6 +1165,7 @@ fn encode_info_for_item(ecx: &EncodeContext,
         // should no longer need this ugly little hack either.
         encode_sized(ebml_w, sized);
         encode_visibility(ebml_w, vis);
+        encode_stability(ebml_w, stab);
         for &method_def_id in ty::trait_method_def_ids(tcx, def_id).iter() {
             ebml_w.start_tag(tag_item_trait_method);
             encode_def_id(ebml_w, method_def_id);
@@ -1169,8 +1204,10 @@ fn encode_info_for_item(ecx: &EncodeContext,
             ebml_w.start_tag(tag_items_data_item);
 
             encode_method_ty_fields(ecx, ebml_w, &*method_ty);
-
             encode_parent_item(ebml_w, def_id);
+
+            let stab = tcx.stability.borrow().lookup_local(method_def_id.node);
+            encode_stability(ebml_w, stab);
 
             let elem = ast_map::PathName(method_ty.ident.name);
             encode_path(ebml_w, path.clone().chain(Some(elem).move_iter()));
@@ -1181,8 +1218,8 @@ fn encode_info_for_item(ecx: &EncodeContext,
                                   fn_style_static_method_family(
                                       method_ty.fty.fn_style));
 
-                    let tpt = ty::lookup_item_type(tcx, method_def_id);
-                    encode_bounds_and_type(ebml_w, ecx, &tpt);
+                    let pty = ty::lookup_item_type(tcx, method_def_id);
+                    encode_bounds_and_type(ebml_w, ecx, &pty);
                 }
 
                 _ => {
@@ -1196,6 +1233,7 @@ fn encode_info_for_item(ecx: &EncodeContext,
                 &Required(ref tm) => {
                     encode_attributes(ebml_w, tm.attrs.as_slice());
                     encode_method_sort(ebml_w, 'r');
+                    encode_method_argument_names(ebml_w, &*tm.decl);
                 }
 
                 &Provided(m) => {
@@ -1204,12 +1242,13 @@ fn encode_info_for_item(ecx: &EncodeContext,
                     // this.
                     if method_ty.explicit_self != SelfStatic {
                         // FIXME: I feel like there is something funny going on.
-                        let tpt = ty::lookup_item_type(tcx, method_def_id);
-                        encode_bounds_and_type(ebml_w, ecx, &tpt);
+                        let pty = ty::lookup_item_type(tcx, method_def_id);
+                        encode_bounds_and_type(ebml_w, ecx, &pty);
                     }
                     encode_method_sort(ebml_w, 'p');
                     encode_inlined_item(ecx, ebml_w,
-                                        IIMethodRef(def_id, true, m));
+                                        IIMethodRef(def_id, true, &*m));
+                    encode_method_argument_names(ebml_w, &*m.decl);
                 }
             }
 
@@ -1269,7 +1308,7 @@ fn my_visit_expr(_e: &Expr) { }
 
 fn my_visit_item(i: &Item,
                  ebml_w: &mut Encoder,
-                 ecx_ptr: *int,
+                 ecx_ptr: *const int,
                  index: &mut Vec<entry<i64>>) {
     let mut ebml_w = unsafe { ebml_w.unsafe_clone() };
     // See above
@@ -1281,7 +1320,7 @@ fn my_visit_item(i: &Item,
 
 fn my_visit_foreign_item(ni: &ForeignItem,
                          ebml_w: &mut Encoder,
-                         ecx_ptr:*int,
+                         ecx_ptr:*const int,
                          index: &mut Vec<entry<i64>>) {
     // See above
     let ecx: &EncodeContext = unsafe { mem::transmute(ecx_ptr) };
@@ -1302,7 +1341,7 @@ fn my_visit_foreign_item(ni: &ForeignItem,
 
 struct EncodeVisitor<'a,'b> {
     ebml_w_for_visit_item: &'a mut Encoder<'b>,
-    ecx_ptr:*int,
+    ecx_ptr:*const int,
     index: &'a mut Vec<entry<i64>>,
 }
 
@@ -1347,7 +1386,7 @@ fn encode_info_for_items(ecx: &EncodeContext,
                         Public);
 
     // See comment in `encode_side_tables_for_ii` in astencode
-    let ecx_ptr: *int = unsafe { mem::transmute(ecx) };
+    let ecx_ptr: *const int = unsafe { mem::transmute(ecx) };
     visit::walk_crate(&mut EncodeVisitor {
         index: &mut index,
         ecx_ptr: ecx_ptr,
@@ -1404,7 +1443,7 @@ fn write_i64(writer: &mut MemWriter, &n: &i64) {
     wr.write_be_u32(n as u32);
 }
 
-fn encode_meta_item(ebml_w: &mut Encoder, mi: @MetaItem) {
+fn encode_meta_item(ebml_w: &mut Encoder, mi: Gc<MetaItem>) {
     match mi.node {
       MetaWord(ref name) => {
         ebml_w.start_tag(tag_meta_item_word);
@@ -1578,9 +1617,9 @@ fn encode_native_libraries(ecx: &EncodeContext, ebml_w: &mut Encoder) {
     ebml_w.end_tag();
 }
 
-fn encode_macro_registrar_fn(ecx: &EncodeContext, ebml_w: &mut Encoder) {
-    match ecx.tcx.sess.macro_registrar_fn.get() {
-        Some(id) => { ebml_w.wr_tagged_u32(tag_macro_registrar_fn, id); }
+fn encode_plugin_registrar_fn(ecx: &EncodeContext, ebml_w: &mut Encoder) {
+    match ecx.tcx.sess.plugin_registrar_fn.get() {
+        Some(id) => { ebml_w.wr_tagged_u32(tag_plugin_registrar_fn, id); }
         None => {}
     }
 }
@@ -1631,7 +1670,7 @@ impl<'a,'b,'c> Visitor<()> for ImplVisitor<'a,'b,'c> {
             ItemImpl(_, Some(ref trait_ref), _, _) => {
                 let def_map = &self.ecx.tcx.def_map;
                 let trait_def = def_map.borrow().get_copy(&trait_ref.ref_id);
-                let def_id = ast_util::def_id_of_def(trait_def);
+                let def_id = trait_def.def_id();
 
                 // Load eagerly if this is an implementation of the Drop trait
                 // or if the trait is not defined in this crate.
@@ -1697,6 +1736,26 @@ fn encode_misc_info(ecx: &EncodeContext,
     encode_reexports(ecx, ebml_w, 0, ast_map::Values([].iter()).chain(None));
 
     ebml_w.end_tag();
+    ebml_w.end_tag();
+}
+
+fn encode_reachable_extern_fns(ecx: &EncodeContext, ebml_w: &mut Encoder) {
+    ebml_w.start_tag(tag_reachable_extern_fns);
+
+    for id in ecx.reachable.iter() {
+        match ecx.tcx.map.find(*id) {
+            Some(ast_map::NodeItem(i)) => {
+                match i.node {
+                    ast::ItemFn(_, _, abi, _, _) if abi != abi::Rust => {
+                        ebml_w.wr_tagged_u32(tag_reachable_extern_fn_id, *id);
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
     ebml_w.end_tag();
 }
 
@@ -1767,7 +1826,7 @@ fn encode_metadata_inner(wr: &mut MemWriter, parms: EncodeParams, krate: &Crate)
         dep_bytes: u64,
         lang_item_bytes: u64,
         native_lib_bytes: u64,
-        macro_registrar_fn_bytes: u64,
+        plugin_registrar_fn_bytes: u64,
         macro_defs_bytes: u64,
         impl_bytes: u64,
         misc_bytes: u64,
@@ -1781,7 +1840,7 @@ fn encode_metadata_inner(wr: &mut MemWriter, parms: EncodeParams, krate: &Crate)
         dep_bytes: 0,
         lang_item_bytes: 0,
         native_lib_bytes: 0,
-        macro_registrar_fn_bytes: 0,
+        plugin_registrar_fn_bytes: 0,
         macro_defs_bytes: 0,
         impl_bytes: 0,
         misc_bytes: 0,
@@ -1799,6 +1858,7 @@ fn encode_metadata_inner(wr: &mut MemWriter, parms: EncodeParams, krate: &Crate)
         encode_inlined_item,
         link_meta,
         non_inlineable_statics,
+        reachable,
         ..
     } = parms;
     let ecx = EncodeContext {
@@ -1811,6 +1871,7 @@ fn encode_metadata_inner(wr: &mut MemWriter, parms: EncodeParams, krate: &Crate)
         cstore: cstore,
         encode_inlined_item: RefCell::new(encode_inlined_item),
         type_abbrevs: RefCell::new(HashMap::new()),
+        reachable: reachable,
      };
 
     let mut ebml_w = writer::Encoder::new(wr);
@@ -1844,10 +1905,10 @@ fn encode_metadata_inner(wr: &mut MemWriter, parms: EncodeParams, krate: &Crate)
     encode_native_libraries(&ecx, &mut ebml_w);
     stats.native_lib_bytes = ebml_w.writer.tell().unwrap() - i;
 
-    // Encode the macro registrar function
+    // Encode the plugin registrar function
     i = ebml_w.writer.tell().unwrap();
-    encode_macro_registrar_fn(&ecx, &mut ebml_w);
-    stats.macro_registrar_fn_bytes = ebml_w.writer.tell().unwrap() - i;
+    encode_plugin_registrar_fn(&ecx, &mut ebml_w);
+    stats.plugin_registrar_fn_bytes = ebml_w.writer.tell().unwrap() - i;
 
     // Encode macro definitions
     i = ebml_w.writer.tell().unwrap();
@@ -1862,6 +1923,7 @@ fn encode_metadata_inner(wr: &mut MemWriter, parms: EncodeParams, krate: &Crate)
     // Encode miscellaneous info.
     i = ebml_w.writer.tell().unwrap();
     encode_misc_info(&ecx, krate, &mut ebml_w);
+    encode_reachable_extern_fns(&ecx, &mut ebml_w);
     stats.misc_bytes = ebml_w.writer.tell().unwrap() - i;
 
     // Encode and index the items.
@@ -1885,18 +1947,18 @@ fn encode_metadata_inner(wr: &mut MemWriter, parms: EncodeParams, krate: &Crate)
         }
 
         println!("metadata stats:");
-        println!("      attribute bytes: {}", stats.attr_bytes);
-        println!("            dep bytes: {}", stats.dep_bytes);
-        println!("      lang item bytes: {}", stats.lang_item_bytes);
-        println!("         native bytes: {}", stats.native_lib_bytes);
-        println!("macro registrar bytes: {}", stats.macro_registrar_fn_bytes);
-        println!("      macro def bytes: {}", stats.macro_defs_bytes);
-        println!("           impl bytes: {}", stats.impl_bytes);
-        println!("           misc bytes: {}", stats.misc_bytes);
-        println!("           item bytes: {}", stats.item_bytes);
-        println!("          index bytes: {}", stats.index_bytes);
-        println!("           zero bytes: {}", stats.zero_bytes);
-        println!("          total bytes: {}", stats.total_bytes);
+        println!("       attribute bytes: {}", stats.attr_bytes);
+        println!("             dep bytes: {}", stats.dep_bytes);
+        println!("       lang item bytes: {}", stats.lang_item_bytes);
+        println!("          native bytes: {}", stats.native_lib_bytes);
+        println!("plugin registrar bytes: {}", stats.plugin_registrar_fn_bytes);
+        println!("       macro def bytes: {}", stats.macro_defs_bytes);
+        println!("            impl bytes: {}", stats.impl_bytes);
+        println!("            misc bytes: {}", stats.misc_bytes);
+        println!("            item bytes: {}", stats.item_bytes);
+        println!("           index bytes: {}", stats.index_bytes);
+        println!("            zero bytes: {}", stats.zero_bytes);
+        println!("           total bytes: {}", stats.total_bytes);
     }
 }
 

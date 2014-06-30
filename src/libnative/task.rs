@@ -17,18 +17,17 @@
 use std::any::Any;
 use std::mem;
 use std::rt::bookkeeping;
-use std::rt::env;
 use std::rt::local::Local;
+use std::rt::mutex::NativeMutex;
 use std::rt::rtio;
 use std::rt::stack;
-use std::rt::task::{Task, BlockedTask, SendMessage};
+use std::rt::task::{Task, BlockedTask, TaskOpts};
 use std::rt::thread::Thread;
 use std::rt;
-use std::task::TaskOpts;
-use std::unstable::mutex::NativeMutex;
 
 use io;
 use task;
+use std::task::{TaskBuilder, Spawner};
 
 /// Creates a new Task which is ready to execute as a 1:1 task.
 pub fn new(stack_bounds: (uint, uint)) -> Box<Task> {
@@ -50,28 +49,22 @@ fn ops() -> Box<Ops> {
 }
 
 /// Spawns a function with the default configuration
+#[deprecated = "use the native method of NativeTaskBuilder instead"]
 pub fn spawn(f: proc():Send) {
-    spawn_opts(TaskOpts::new(), f)
+    spawn_opts(TaskOpts { name: None, stack_size: None, on_exit: None }, f)
 }
 
 /// Spawns a new task given the configuration options and a procedure to run
 /// inside the task.
+#[deprecated = "use the native method of NativeTaskBuilder instead"]
 pub fn spawn_opts(opts: TaskOpts, f: proc():Send) {
-    let TaskOpts {
-        notify_chan, name, stack_size,
-        stderr, stdout,
-    } = opts;
+    let TaskOpts { name, stack_size, on_exit } = opts;
 
     let mut task = box Task::new();
     task.name = name;
-    task.stderr = stderr;
-    task.stdout = stdout;
-    match notify_chan {
-        Some(chan) => { task.death.on_exit = Some(SendMessage(chan)); }
-        None => {}
-    }
+    task.death.on_exit = on_exit;
 
-    let stack = stack_size.unwrap_or(env::min_stack());
+    let stack = stack_size.unwrap_or(rt::min_stack());
     let task = task;
     let ops = ops();
 
@@ -88,7 +81,7 @@ pub fn spawn_opts(opts: TaskOpts, f: proc():Send) {
     // which our stack started).
     Thread::spawn_stack(stack, proc() {
         let something_around_the_top_of_the_stack = 1;
-        let addr = &something_around_the_top_of_the_stack as *int;
+        let addr = &something_around_the_top_of_the_stack as *const int;
         let my_stack = addr as uint;
         unsafe {
             stack::record_stack_bounds(my_stack - stack + 1024, my_stack);
@@ -99,10 +92,29 @@ pub fn spawn_opts(opts: TaskOpts, f: proc():Send) {
         let mut f = Some(f);
         let mut task = task;
         task.put_runtime(ops);
-        let t = task.run(|| { f.take_unwrap()() });
-        drop(t);
+        drop(task.run(|| { f.take_unwrap()() }).destroy());
         bookkeeping::decrement();
     })
+}
+
+/// A spawner for native tasks
+pub struct NativeSpawner;
+
+impl Spawner for NativeSpawner {
+    fn spawn(self, opts: TaskOpts, f: proc():Send) {
+        spawn_opts(opts, f)
+    }
+}
+
+/// An extension trait adding a `native` configuration method to `TaskBuilder`.
+pub trait NativeTaskBuilder {
+    fn native(self) -> TaskBuilder<NativeSpawner>;
+}
+
+impl<S: Spawner> NativeTaskBuilder for TaskBuilder<S> {
+    fn native(self) -> TaskBuilder<NativeSpawner> {
+        self.spawner(NativeSpawner)
+    }
 }
 
 // This structure is the glue between channels and the 1:1 scheduling mode. This
@@ -176,7 +188,7 @@ impl rt::Runtime for Ops {
     //
     // On a mildly unrelated note, it should also be pointed out that OS
     // condition variables are susceptible to spurious wakeups, which we need to
-    // be ready for. In order to accomodate for this fact, we have an extra
+    // be ready for. In order to accommodate for this fact, we have an extra
     // `awoken` field which indicates whether we were actually woken up via some
     // invocation of `reawaken`. This flag is only ever accessed inside the
     // lock, so there's no need to make it atomic.
@@ -186,7 +198,7 @@ impl rt::Runtime for Ops {
         cur_task.put_runtime(self);
 
         unsafe {
-            let cur_task_dupe = &*cur_task as *Task;
+            let cur_task_dupe = &mut *cur_task as *mut Task;
             let task = BlockedTask::block(cur_task);
 
             if times == 1 {
@@ -267,10 +279,10 @@ impl rt::Runtime for Ops {
 #[cfg(test)]
 mod tests {
     use std::rt::local::Local;
-    use std::rt::task::Task;
+    use std::rt::task::{Task, TaskOpts};
     use std::task;
-    use std::task::TaskOpts;
-    use super::{spawn, spawn_opts, Ops};
+    use std::task::TaskBuilder;
+    use super::{spawn, spawn_opts, Ops, NativeTaskBuilder};
 
     #[test]
     fn smoke() {
@@ -297,7 +309,7 @@ mod tests {
         opts.name = Some("test".into_maybe_owned());
         opts.stack_size = Some(20 * 4096);
         let (tx, rx) = channel();
-        opts.notify_chan = Some(tx);
+        opts.on_exit = Some(proc(r) tx.send(r));
         spawn_opts(opts, proc() {});
         assert!(rx.recv().is_ok());
     }
@@ -306,7 +318,7 @@ mod tests {
     fn smoke_opts_fail() {
         let mut opts = TaskOpts::new();
         let (tx, rx) = channel();
-        opts.notify_chan = Some(tx);
+        opts.on_exit = Some(proc(r) tx.send(r));
         spawn_opts(opts, proc() { fail!() });
         assert!(rx.recv().is_err());
     }
@@ -315,7 +327,7 @@ mod tests {
     fn yield_test() {
         let (tx, rx) = channel();
         spawn(proc() {
-            for _ in range(0, 10) { task::deschedule(); }
+            for _ in range(0u, 10) { task::deschedule(); }
             tx.send(());
         });
         rx.recv();
@@ -357,5 +369,13 @@ mod tests {
             });
         });
         rx.recv();
+    }
+
+    #[test]
+    fn test_native_builder() {
+        let res = TaskBuilder::new().native().try(proc() {
+            "Success!".to_string()
+        });
+        assert_eq!(res.ok().unwrap(), "Success!".to_string());
     }
 }

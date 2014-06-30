@@ -14,7 +14,7 @@ use metadata::cstore;
 use metadata::filesearch;
 use util::fs;
 
-use collections::HashSet;
+use std::collections::HashSet;
 use std::os;
 use syntax::abi;
 
@@ -122,7 +122,7 @@ pub fn get_rpath_relative_to_output(os: abi::Os,
         abi::OsAndroid | abi::OsLinux | abi::OsFreebsd
                           => "$ORIGIN",
         abi::OsMacos => "@loader_path",
-        abi::OsWin32 => unreachable!()
+        abi::OsWin32 | abi::OsiOS => unreachable!()
     };
 
     let mut lib = fs::realpath(&os::make_absolute(lib)).unwrap();

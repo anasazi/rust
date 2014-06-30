@@ -1,4 +1,4 @@
-// Copyright 2012-2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -71,7 +71,7 @@ fn main() {
     let to_encode_object = TestStruct{data_str:"example of string to encode".to_string()};
     let mut m = io::MemWriter::new();
     {
-        let mut encoder = json::Encoder::new(&mut m as &mut std::io::Writer);
+        let mut encoder = json::Encoder::new(&mut m as &mut Writer);
         match to_encode_object.encode(&mut encoder) {
             Ok(()) => (),
             Err(e) => fail!("json encoding error: {}", e)
@@ -81,7 +81,7 @@ fn main() {
 ```
 
 Two wrapper functions are provided to encode a Encodable object
-into a string (String) or buffer (~[u8]): `str_encode(&m)` and `buffer_encode(&m)`.
+into a string (String) or buffer (vec![u8]): `str_encode(&m)` and `buffer_encode(&m)`.
 
 ```rust
 use serialize::json;
@@ -99,12 +99,9 @@ A basic `ToJson` example using a TreeMap of attribute name / attribute value:
 
 
 ```rust
-extern crate collections;
-extern crate serialize;
-
+use std::collections::TreeMap;
 use serialize::json;
 use serialize::json::ToJson;
-use collections::TreeMap;
 
 pub struct MyStruct  {
     attr1: u8,
@@ -186,16 +183,13 @@ fn main() {
 
 ## Using `ToJson`
 
-This example use the ToJson impl to deserialize the JSON string.
+This example uses the ToJson impl to deserialize the JSON string.
 Example of `ToJson` trait implementation for TestStruct1.
 
 ```rust
-extern crate serialize;
-extern crate collections;
-
+use std::collections::TreeMap;
 use serialize::json::ToJson;
 use serialize::{json, Encodable, Decodable};
-use collections::TreeMap;
 
 #[deriving(Decodable, Encodable)] // generate Decodable, Encodable impl.
 pub struct TestStruct1  {
@@ -234,11 +228,13 @@ fn main() {
 */
 
 use std::char;
+use std::collections::{HashMap, TreeMap};
 use std::f64;
 use std::fmt;
 use std::io::MemWriter;
 use std::io;
-use std::mem::swap;
+use std::mem::{swap,transmute};
+use std::num::{FPNaN, FPInfinite};
 use std::num;
 use std::str::ScalarValue;
 use std::str;
@@ -246,10 +242,9 @@ use std::string::String;
 use std::vec::Vec;
 
 use Encodable;
-use collections::{HashMap, TreeMap};
 
 /// Represents a json value
-#[deriving(Clone, PartialEq)]
+#[deriving(Clone, PartialEq, PartialOrd)]
 pub enum Json {
     Number(f64),
     String(String),
@@ -355,12 +350,15 @@ fn escape_str(s: &str) -> String {
     escaped
 }
 
-fn spaces(n: uint) -> String {
-    let mut ss = String::new();
-    for _ in range(0, n) {
-        ss.push_str(" ");
+fn fmt_number_or_null(v: f64) -> String {
+    match v.classify() {
+        FPNaN | FPInfinite => String::from_str("null"),
+        _ => f64::to_str_digits(v, 6u)
     }
-    return ss
+}
+
+fn spaces(n: uint) -> String {
+    String::from_char(n, ' ')
 }
 
 /// A structure for implementing serialization to JSON.
@@ -379,10 +377,11 @@ impl<'a> Encoder<'a> {
     pub fn buffer_encode<T:Encodable<Encoder<'a>, io::IoError>>(to_encode_object: &T) -> Vec<u8>  {
        //Serialize the object in a string using a writer
         let mut m = MemWriter::new();
-        {
+        // FIXME(14302) remove the transmute and unsafe block.
+        unsafe {
             let mut encoder = Encoder::new(&mut m as &mut io::Writer);
             // MemWriter never Errs
-            let _ = to_encode_object.encode(&mut encoder);
+            let _ = to_encode_object.encode(transmute(&mut encoder));
         }
         m.unwrap()
     }
@@ -421,7 +420,7 @@ impl<'a> ::Encoder<io::IoError> for Encoder<'a> {
     }
 
     fn emit_f64(&mut self, v: f64) -> EncodeResult {
-        write!(self.wr, "{}", f64::to_str_digits(v, 6u))
+        write!(self.wr, "{}", fmt_number_or_null(v))
     }
     fn emit_f32(&mut self, v: f32) -> EncodeResult { self.emit_f64(v as f64) }
 
@@ -447,11 +446,11 @@ impl<'a> ::Encoder<io::IoError> for Encoder<'a> {
         if cnt == 0 {
             write!(self.wr, "{}", escape_str(name))
         } else {
-            try!(write!(self.wr, "\\{\"variant\":"));
+            try!(write!(self.wr, "{{\"variant\":"));
             try!(write!(self.wr, "{}", escape_str(name)));
             try!(write!(self.wr, ",\"fields\":["));
             try!(f(self));
-            write!(self.wr, "]\\}")
+            write!(self.wr, "]}}")
         }
     }
 
@@ -483,9 +482,9 @@ impl<'a> ::Encoder<io::IoError> for Encoder<'a> {
                    _: &str,
                    _: uint,
                    f: |&mut Encoder<'a>| -> EncodeResult) -> EncodeResult {
-        try!(write!(self.wr, r"\{"));
+        try!(write!(self.wr, "{{"));
         try!(f(self));
-        write!(self.wr, r"\}")
+        write!(self.wr, "}}")
     }
 
     fn emit_struct_field(&mut self,
@@ -540,9 +539,9 @@ impl<'a> ::Encoder<io::IoError> for Encoder<'a> {
     }
 
     fn emit_map(&mut self, _len: uint, f: |&mut Encoder<'a>| -> EncodeResult) -> EncodeResult {
-        try!(write!(self.wr, r"\{"));
+        try!(write!(self.wr, "{{"));
         try!(f(self));
-        write!(self.wr, r"\}")
+        write!(self.wr, "}}")
     }
 
     fn emit_map_elt_key(&mut self,
@@ -553,8 +552,11 @@ impl<'a> ::Encoder<io::IoError> for Encoder<'a> {
         // ref #12967, make sure to wrap a key in double quotes,
         // in the event that its of a type that omits them (eg numbers)
         let mut buf = MemWriter::new();
-        let mut check_encoder = Encoder::new(&mut buf);
-        try!(f(&mut check_encoder));
+        // FIXME(14302) remove the transmute and unsafe block.
+        unsafe {
+            let mut check_encoder = Encoder::new(&mut buf);
+            try!(f(transmute(&mut check_encoder)));
+        }
         let buf = buf.unwrap();
         let out = from_utf8(buf.as_slice()).unwrap();
         let needs_wrapping = out.char_at(0) != '"' &&
@@ -614,7 +616,7 @@ impl<'a> ::Encoder<io::IoError> for PrettyEncoder<'a> {
     }
 
     fn emit_f64(&mut self, v: f64) -> EncodeResult {
-        write!(self.wr, "{}", f64::to_str_digits(v, 6u))
+        write!(self.wr, "{}", fmt_number_or_null(v))
     }
     fn emit_f32(&mut self, v: f32) -> EncodeResult {
         self.emit_f64(v as f64)
@@ -681,13 +683,13 @@ impl<'a> ::Encoder<io::IoError> for PrettyEncoder<'a> {
                    len: uint,
                    f: |&mut PrettyEncoder<'a>| -> EncodeResult) -> EncodeResult {
         if len == 0 {
-            write!(self.wr, "\\{\\}")
+            write!(self.wr, "{{}}")
         } else {
-            try!(write!(self.wr, "\\{"));
+            try!(write!(self.wr, "{{"));
             self.indent += 2;
             try!(f(self));
             self.indent -= 2;
-            write!(self.wr, "\n{}\\}", spaces(self.indent))
+            write!(self.wr, "\n{}}}", spaces(self.indent))
         }
     }
 
@@ -765,13 +767,13 @@ impl<'a> ::Encoder<io::IoError> for PrettyEncoder<'a> {
                 len: uint,
                 f: |&mut PrettyEncoder<'a>| -> EncodeResult) -> EncodeResult {
         if len == 0 {
-            write!(self.wr, "\\{\\}")
+            write!(self.wr, "{{}}")
         } else {
-            try!(write!(self.wr, "\\{"));
+            try!(write!(self.wr, "{{"));
             self.indent += 2;
             try!(f(self));
             self.indent -= 2;
-            write!(self.wr, "\n{}\\}", spaces(self.indent))
+            write!(self.wr, "\n{}}}", spaces(self.indent))
         }
     }
 
@@ -788,8 +790,11 @@ impl<'a> ::Encoder<io::IoError> for PrettyEncoder<'a> {
         // ref #12967, make sure to wrap a key in double quotes,
         // in the event that its of a type that omits them (eg numbers)
         let mut buf = MemWriter::new();
-        let mut check_encoder = PrettyEncoder::new(&mut buf);
-        try!(f(&mut check_encoder));
+        // FIXME(14302) remove the transmute and unsafe block.
+        unsafe {
+            let mut check_encoder = PrettyEncoder::new(&mut buf);
+            try!(f(transmute(&mut check_encoder)));
+        }
         let buf = buf.unwrap();
         let out = from_utf8(buf.as_slice()).unwrap();
         let needs_wrapping = out.char_at(0) != '"' &&
@@ -998,7 +1003,7 @@ enum ParserState {
     ParseObject(bool),
     // Parse ',' or ']' after an element in an object.
     ParseObjectComma,
-    // Initialial state.
+    // Initial state.
     ParseStart,
     // Expecting the stream to end.
     ParseBeforeFinish,
@@ -1158,7 +1163,7 @@ pub struct Parser<T> {
     // We maintain a stack representing where we are in the logical structure
     // of the JSON stream.
     stack: Stack,
-    // A state machine is kept to make it possible to interupt and resume parsing.
+    // A state machine is kept to make it possible to interrupt and resume parsing.
     state: ParserState,
 }
 
@@ -1273,7 +1278,7 @@ impl<T: Iterator<char>> Parser<T> {
             '0' => {
                 self.bump();
 
-                // There can be only one leading '0'.
+                // A leading '0' must be the only digit before the decimal point.
                 match self.ch_or_null() {
                     '0' .. '9' => return self.error(InvalidNumber),
                     _ => ()
@@ -1455,7 +1460,7 @@ impl<T: Iterator<char>> Parser<T> {
     // information to return a JsonEvent.
     // Manages an internal state so that parsing can be interrupted and resumed.
     // Also keeps track of the position in the logical structure of the json
-    // stream int the form of a stack that can be queried by the user usng the
+    // stream int the form of a stack that can be queried by the user using the
     // stack() method.
     fn parse(&mut self) -> JsonEvent {
         loop {
@@ -1867,6 +1872,7 @@ impl ::Decoder<DecoderError> for Decoder {
                 // is going to have a string here, as per JSON spec..
                 Ok(FromStr::from_str(s.as_slice()).unwrap())
             },
+            Null => Ok(f64::NAN),
             value => {
                 Err(ExpectedError("Number".to_string(),
                                   format!("{}", value)))
@@ -2081,62 +2087,6 @@ impl ::Decoder<DecoderError> for Decoder {
     }
 }
 
-/// Test if two json values are less than one another
-impl PartialOrd for Json {
-    fn lt(&self, other: &Json) -> bool {
-        match *self {
-            Number(f0) => {
-                match *other {
-                    Number(f1) => f0 < f1,
-                    String(_) | Boolean(_) | List(_) | Object(_) |
-                    Null => true
-                }
-            }
-
-            String(ref s0) => {
-                match *other {
-                    Number(_) => false,
-                    String(ref s1) => s0 < s1,
-                    Boolean(_) | List(_) | Object(_) | Null => true
-                }
-            }
-
-            Boolean(b0) => {
-                match *other {
-                    Number(_) | String(_) => false,
-                    Boolean(b1) => b0 < b1,
-                    List(_) | Object(_) | Null => true
-                }
-            }
-
-            List(ref l0) => {
-                match *other {
-                    Number(_) | String(_) | Boolean(_) => false,
-                    List(ref l1) => (*l0) < (*l1),
-                    Object(_) | Null => true
-                }
-            }
-
-            Object(ref d0) => {
-                match *other {
-                    Number(_) | String(_) | Boolean(_) | List(_) => false,
-                    Object(ref d1) => d0 < d1,
-                    Null => true
-                }
-            }
-
-            Null => {
-                match *other {
-                    Number(_) | String(_) | Boolean(_) | List(_) |
-                    Object(_) =>
-                        false,
-                    Null => true
-                }
-            }
-        }
-    }
-}
-
 /// A trait for converting values to JSON
 pub trait ToJson {
     /// Converts the value of `self` to an instance of JSON
@@ -2188,11 +2138,16 @@ impl ToJson for u64 {
 }
 
 impl ToJson for f32 {
-    fn to_json(&self) -> Json { Number(*self as f64) }
+    fn to_json(&self) -> Json { (*self as f64).to_json() }
 }
 
 impl ToJson for f64 {
-    fn to_json(&self) -> Json { Number(*self) }
+    fn to_json(&self) -> Json {
+        match self.classify() {
+            FPNaN | FPInfinite => Null,
+            _ => Number(*self)
+        }
+    }
 }
 
 impl ToJson for () {
@@ -2228,10 +2183,6 @@ impl<A:ToJson,B:ToJson,C:ToJson> ToJson for (A, B, C) {
 }
 
 impl<'a, A:ToJson> ToJson for &'a [A] {
-    fn to_json(&self) -> Json { List(self.iter().map(|elt| elt.to_json()).collect()) }
-}
-
-impl<A:ToJson> ToJson for ~[A] {
     fn to_json(&self) -> Json { List(self.iter().map(|elt| elt.to_json()).collect()) }
 }
 
@@ -2289,8 +2240,10 @@ mod tests {
                 InvalidSyntax, InvalidNumber, EOFWhileParsingObject, EOFWhileParsingList,
                 EOFWhileParsingValue, EOFWhileParsingString, KeyMustBeAString, ExpectedColon,
                 TrailingCharacters};
+    use std::f32;
+    use std::f64;
     use std::io;
-    use collections::TreeMap;
+    use std::collections::TreeMap;
 
     #[deriving(PartialEq, Encodable, Decodable, Show)]
     enum Animal {
@@ -2342,6 +2295,15 @@ mod tests {
 
         assert_eq!(Number(0.5).to_str().into_string(), "0.5".to_string());
         assert_eq!(Number(0.5).to_pretty_str().into_string(), "0.5".to_string());
+
+        assert_eq!(Number(f64::NAN).to_str().into_string(), "null".to_string());
+        assert_eq!(Number(f64::NAN).to_pretty_str().into_string(), "null".to_string());
+
+        assert_eq!(Number(f64::INFINITY).to_str().into_string(), "null".to_string());
+        assert_eq!(Number(f64::INFINITY).to_pretty_str().into_string(), "null".to_string());
+
+        assert_eq!(Number(f64::NEG_INFINITY).to_str().into_string(), "null".to_string());
+        assert_eq!(Number(f64::NEG_INFINITY).to_pretty_str().into_string(), "null".to_string());
     }
 
     #[test]
@@ -2590,6 +2552,7 @@ mod tests {
     fn test_read_number() {
         assert_eq!(from_str("+"),   Err(SyntaxError(InvalidSyntax, 1, 1)));
         assert_eq!(from_str("."),   Err(SyntaxError(InvalidSyntax, 1, 1)));
+        assert_eq!(from_str("NaN"), Err(SyntaxError(InvalidSyntax, 1, 1)));
         assert_eq!(from_str("-"),   Err(SyntaxError(InvalidNumber, 1, 2)));
         assert_eq!(from_str("00"),  Err(SyntaxError(InvalidNumber, 1, 2)));
         assert_eq!(from_str("1."),  Err(SyntaxError(InvalidNumber, 1, 3)));
@@ -2799,6 +2762,22 @@ mod tests {
         );
     }
 
+    #[deriving(Decodable)]
+    struct FloatStruct {
+        f: f64,
+        a: Vec<f64>
+    }
+    #[test]
+    fn test_decode_struct_with_nan() {
+        let encoded_str = "{\"f\":null,\"a\":[null,123]}";
+        let json_object = from_str(encoded_str.as_slice());
+        let mut decoder = Decoder::new(json_object.unwrap());
+        let after: FloatStruct = Decodable::decode(&mut decoder).unwrap();
+        assert!(after.f.is_nan());
+        assert!(after.a.get(0).is_nan());
+        assert_eq!(after.a.get(1), &123f64);
+    }
+
     #[test]
     fn test_decode_option() {
         let mut decoder = Decoder::new(from_str("null").unwrap());
@@ -2840,6 +2819,7 @@ mod tests {
     }
 
     #[deriving(Decodable)]
+    #[allow(dead_code)]
     struct DecodeStruct {
         x: f64,
         y: bool,
@@ -3006,7 +2986,7 @@ mod tests {
         use std::str::from_utf8;
         use std::io::Writer;
         use std::io::MemWriter;
-        use collections::HashMap;
+        use std::collections::HashMap;
         let mut hm: HashMap<uint, bool> = HashMap::new();
         hm.insert(1, true);
         let mut mem_buf = MemWriter::new();
@@ -3026,7 +3006,7 @@ mod tests {
         use std::str::from_utf8;
         use std::io::Writer;
         use std::io::MemWriter;
-        use collections::HashMap;
+        use std::collections::HashMap;
         let mut hm: HashMap<uint, bool> = HashMap::new();
         hm.insert(1, true);
         let mut mem_buf = MemWriter::new();
@@ -3043,7 +3023,7 @@ mod tests {
     }
     #[test]
     fn test_hashmap_with_numeric_key_can_handle_double_quote_delimited_key() {
-        use collections::HashMap;
+        use std::collections::HashMap;
         use Decodable;
         let json_str = "{\"1\":true}";
         let json_obj = match from_str(json_str) {
@@ -3054,7 +3034,8 @@ mod tests {
         let _hm: HashMap<uint, bool> = Decodable::decode(&mut decoder).unwrap();
     }
 
-    fn assert_stream_equal(src: &str, expected: ~[(JsonEvent, ~[StackElement])]) {
+    fn assert_stream_equal(src: &str,
+                           expected: Vec<(JsonEvent, Vec<StackElement>)>) {
         let mut parser = Parser::new(src.chars());
         let mut i = 0;
         loop {
@@ -3062,7 +3043,7 @@ mod tests {
                 Some(e) => e,
                 None => { break; }
             };
-            let (ref expected_evt, ref expected_stack) = expected[i];
+            let (ref expected_evt, ref expected_stack) = *expected.get(i);
             if !parser.stack().is_equal_to(expected_stack.as_slice()) {
                 fail!("Parser stack is not equal to {}", expected_stack);
             }
@@ -3071,26 +3052,27 @@ mod tests {
         }
     }
     #[test]
+    #[ignore(cfg(target_word_size = "32"))] // FIXME(#14064)
     fn test_streaming_parser() {
         assert_stream_equal(
             r#"{ "foo":"bar", "array" : [0, 1, 2,3 ,4,5], "idents":[null,true,false]}"#,
-            ~[
-                (ObjectStart,             ~[]),
-                  (StringValue("bar".to_string()),   ~[Key("foo")]),
-                  (ListStart,             ~[Key("array")]),
-                    (NumberValue(0.0),    ~[Key("array"), Index(0)]),
-                    (NumberValue(1.0),    ~[Key("array"), Index(1)]),
-                    (NumberValue(2.0),    ~[Key("array"), Index(2)]),
-                    (NumberValue(3.0),    ~[Key("array"), Index(3)]),
-                    (NumberValue(4.0),    ~[Key("array"), Index(4)]),
-                    (NumberValue(5.0),    ~[Key("array"), Index(5)]),
-                  (ListEnd,               ~[Key("array")]),
-                  (ListStart,             ~[Key("idents")]),
-                    (NullValue,           ~[Key("idents"), Index(0)]),
-                    (BooleanValue(true),  ~[Key("idents"), Index(1)]),
-                    (BooleanValue(false), ~[Key("idents"), Index(2)]),
-                  (ListEnd,               ~[Key("idents")]),
-                (ObjectEnd,               ~[]),
+            vec![
+                (ObjectStart,             vec![]),
+                  (StringValue("bar".to_string()),   vec![Key("foo")]),
+                  (ListStart,             vec![Key("array")]),
+                    (NumberValue(0.0),    vec![Key("array"), Index(0)]),
+                    (NumberValue(1.0),    vec![Key("array"), Index(1)]),
+                    (NumberValue(2.0),    vec![Key("array"), Index(2)]),
+                    (NumberValue(3.0),    vec![Key("array"), Index(3)]),
+                    (NumberValue(4.0),    vec![Key("array"), Index(4)]),
+                    (NumberValue(5.0),    vec![Key("array"), Index(5)]),
+                  (ListEnd,               vec![Key("array")]),
+                  (ListStart,             vec![Key("idents")]),
+                    (NullValue,           vec![Key("idents"), Index(0)]),
+                    (BooleanValue(true),  vec![Key("idents"), Index(1)]),
+                    (BooleanValue(false), vec![Key("idents"), Index(2)]),
+                  (ListEnd,               vec![Key("idents")]),
+                (ObjectEnd,               vec![]),
             ]
         );
     }
@@ -3121,34 +3103,34 @@ mod tests {
 
         assert_stream_equal(
             "{}",
-            box [(ObjectStart, box []), (ObjectEnd, box [])]
+            vec![(ObjectStart, vec![]), (ObjectEnd, vec![])]
         );
         assert_stream_equal(
             "{\"a\": 3}",
-            box [
-                (ObjectStart,        box []),
-                  (NumberValue(3.0), box [Key("a")]),
-                (ObjectEnd,          box []),
+            vec![
+                (ObjectStart,        vec![]),
+                  (NumberValue(3.0), vec![Key("a")]),
+                (ObjectEnd,          vec![]),
             ]
         );
         assert_stream_equal(
             "{ \"a\": null, \"b\" : true }",
-            box [
-                (ObjectStart,           box []),
-                  (NullValue,           box [Key("a")]),
-                  (BooleanValue(true),  box [Key("b")]),
-                (ObjectEnd,             box []),
+            vec![
+                (ObjectStart,           vec![]),
+                  (NullValue,           vec![Key("a")]),
+                  (BooleanValue(true),  vec![Key("b")]),
+                (ObjectEnd,             vec![]),
             ]
         );
         assert_stream_equal(
             "{\"a\" : 1.0 ,\"b\": [ true ]}",
-            box [
-                (ObjectStart,           box []),
-                  (NumberValue(1.0),    box [Key("a")]),
-                  (ListStart,           box [Key("b")]),
-                    (BooleanValue(true),box [Key("b"), Index(0)]),
-                  (ListEnd,             box [Key("b")]),
-                (ObjectEnd,             box []),
+            vec![
+                (ObjectStart,           vec![]),
+                  (NumberValue(1.0),    vec![Key("a")]),
+                  (ListStart,           vec![Key("b")]),
+                    (BooleanValue(true),vec![Key("b"), Index(0)]),
+                  (ListEnd,             vec![Key("b")]),
+                (ObjectEnd,             vec![]),
             ]
         );
         assert_stream_equal(
@@ -3160,19 +3142,19 @@ mod tests {
                     { "c": {"d": null} }
                 ]
             }"#,
-            ~[
-                (ObjectStart,                   ~[]),
-                  (NumberValue(1.0),            ~[Key("a")]),
-                  (ListStart,                   ~[Key("b")]),
-                    (BooleanValue(true),        ~[Key("b"), Index(0)]),
-                    (StringValue("foo\nbar".to_string()),  ~[Key("b"), Index(1)]),
-                    (ObjectStart,               ~[Key("b"), Index(2)]),
-                      (ObjectStart,             ~[Key("b"), Index(2), Key("c")]),
-                        (NullValue,             ~[Key("b"), Index(2), Key("c"), Key("d")]),
-                      (ObjectEnd,               ~[Key("b"), Index(2), Key("c")]),
-                    (ObjectEnd,                 ~[Key("b"), Index(2)]),
-                  (ListEnd,                     ~[Key("b")]),
-                (ObjectEnd,                     ~[]),
+            vec![
+                (ObjectStart,                   vec![]),
+                  (NumberValue(1.0),            vec![Key("a")]),
+                  (ListStart,                   vec![Key("b")]),
+                    (BooleanValue(true),        vec![Key("b"), Index(0)]),
+                    (StringValue("foo\nbar".to_string()),  vec![Key("b"), Index(1)]),
+                    (ObjectStart,               vec![Key("b"), Index(2)]),
+                      (ObjectStart,             vec![Key("b"), Index(2), Key("c")]),
+                        (NullValue,             vec![Key("b"), Index(2), Key("c"), Key("d")]),
+                      (ObjectEnd,               vec![Key("b"), Index(2), Key("c")]),
+                    (ObjectEnd,                 vec![Key("b"), Index(2)]),
+                  (ListEnd,                     vec![Key("b")]),
+                (ObjectEnd,                     vec![]),
             ]
         );
     }
@@ -3181,70 +3163,70 @@ mod tests {
     fn test_read_list_streaming() {
         assert_stream_equal(
             "[]",
-            box [
-                (ListStart, box []),
-                (ListEnd,   box []),
+            vec![
+                (ListStart, vec![]),
+                (ListEnd,   vec![]),
             ]
         );
         assert_stream_equal(
             "[ ]",
-            box [
-                (ListStart, box []),
-                (ListEnd,   box []),
+            vec![
+                (ListStart, vec![]),
+                (ListEnd,   vec![]),
             ]
         );
         assert_stream_equal(
             "[true]",
-            box [
-                (ListStart,              box []),
-                    (BooleanValue(true), box [Index(0)]),
-                (ListEnd,                box []),
+            vec![
+                (ListStart,              vec![]),
+                    (BooleanValue(true), vec![Index(0)]),
+                (ListEnd,                vec![]),
             ]
         );
         assert_stream_equal(
             "[ false ]",
-            box [
-                (ListStart,               box []),
-                    (BooleanValue(false), box [Index(0)]),
-                (ListEnd,                 box []),
+            vec![
+                (ListStart,               vec![]),
+                    (BooleanValue(false), vec![Index(0)]),
+                (ListEnd,                 vec![]),
             ]
         );
         assert_stream_equal(
             "[null]",
-            box [
-                (ListStart,     box []),
-                    (NullValue, box [Index(0)]),
-                (ListEnd,       box []),
+            vec![
+                (ListStart,     vec![]),
+                    (NullValue, vec![Index(0)]),
+                (ListEnd,       vec![]),
             ]
         );
         assert_stream_equal(
             "[3, 1]",
-            box [
-                (ListStart,     box []),
-                    (NumberValue(3.0), box [Index(0)]),
-                    (NumberValue(1.0), box [Index(1)]),
-                (ListEnd,       box []),
+            vec![
+                (ListStart,     vec![]),
+                    (NumberValue(3.0), vec![Index(0)]),
+                    (NumberValue(1.0), vec![Index(1)]),
+                (ListEnd,       vec![]),
             ]
         );
         assert_stream_equal(
             "\n[3, 2]\n",
-            box [
-                (ListStart,     box []),
-                    (NumberValue(3.0), box [Index(0)]),
-                    (NumberValue(2.0), box [Index(1)]),
-                (ListEnd,       box []),
+            vec![
+                (ListStart,     vec![]),
+                    (NumberValue(3.0), vec![Index(0)]),
+                    (NumberValue(2.0), vec![Index(1)]),
+                (ListEnd,       vec![]),
             ]
         );
         assert_stream_equal(
             "[2, [4, 1]]",
-            box [
-                (ListStart,                 box []),
-                    (NumberValue(2.0),      box [Index(0)]),
-                    (ListStart,             box [Index(1)]),
-                        (NumberValue(4.0),  box [Index(1), Index(0)]),
-                        (NumberValue(1.0),  box [Index(1), Index(1)]),
-                    (ListEnd,               box [Index(1)]),
-                (ListEnd,                   box []),
+            vec![
+                (ListStart,                 vec![]),
+                    (NumberValue(2.0),      vec![Index(0)]),
+                    (ListStart,             vec![Index(1)]),
+                        (NumberValue(4.0),  vec![Index(1), Index(0)]),
+                        (NumberValue(1.0),  vec![Index(1), Index(1)]),
+                    (ListEnd,               vec![Index(1)]),
+                (ListEnd,                   vec![]),
             ]
         );
 
@@ -3340,7 +3322,7 @@ mod tests {
 
     #[test]
     fn test_to_json() {
-        use collections::{HashMap,TreeMap};
+        use std::collections::{HashMap,TreeMap};
         use super::ToJson;
 
         let list2 = List(vec!(Number(1.0_f64), Number(2.0_f64)));
@@ -3367,24 +3349,26 @@ mod tests {
         assert_eq!(13.0_f32.to_json(), Number(13.0_f64));
         assert_eq!(14.0_f64.to_json(), Number(14.0_f64));
         assert_eq!(().to_json(), Null);
+        assert_eq!(f32::INFINITY.to_json(), Null);
+        assert_eq!(f64::NAN.to_json(), Null);
         assert_eq!(true.to_json(), Boolean(true));
         assert_eq!(false.to_json(), Boolean(false));
         assert_eq!("abc".to_string().to_json(), String("abc".to_string()));
-        assert_eq!((1, 2).to_json(), list2);
-        assert_eq!((1, 2, 3).to_json(), list3);
-        assert_eq!([1, 2].to_json(), list2);
-        assert_eq!((&[1, 2, 3]).to_json(), list3);
-        assert_eq!((~[1, 2]).to_json(), list2);
-        assert_eq!(vec!(1, 2, 3).to_json(), list3);
+        assert_eq!((1i, 2i).to_json(), list2);
+        assert_eq!((1i, 2i, 3i).to_json(), list3);
+        assert_eq!([1i, 2].to_json(), list2);
+        assert_eq!((&[1i, 2, 3]).to_json(), list3);
+        assert_eq!((vec![1i, 2]).to_json(), list2);
+        assert_eq!(vec!(1i, 2i, 3i).to_json(), list3);
         let mut tree_map = TreeMap::new();
-        tree_map.insert("a".to_string(), 1);
+        tree_map.insert("a".to_string(), 1i);
         tree_map.insert("b".to_string(), 2);
         assert_eq!(tree_map.to_json(), object);
         let mut hash_map = HashMap::new();
-        hash_map.insert("a".to_string(), 1);
+        hash_map.insert("a".to_string(), 1i);
         hash_map.insert("b".to_string(), 2);
         assert_eq!(hash_map.to_json(), object);
-        assert_eq!(Some(15).to_json(), Number(15 as f64));
+        assert_eq!(Some(15i).to_json(), Number(15f64));
         assert_eq!(None::<int>.to_json(), Null);
     }
 
@@ -3425,7 +3409,7 @@ mod tests {
 
     fn big_json() -> String {
         let mut src = "[\n".to_string();
-        for _ in range(0, 500) {
+        for _ in range(0i, 500) {
             src.push_str(r#"{ "a": true, "b": null, "c":3.1415, "d": "Hello world", "e": \
                             [1,2,3]},"#);
         }

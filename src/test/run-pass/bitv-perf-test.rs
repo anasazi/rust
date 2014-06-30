@@ -10,7 +10,7 @@
 // except according to those terms.
 
 extern crate collections;
-use collections::Bitv;
+use std::collections::Bitv;
 
 fn bitv_test() {
     let mut v1 = box Bitv::new(31, false);
@@ -19,5 +19,5 @@ fn bitv_test() {
 }
 
 pub fn main() {
-    for _ in range(0, 10000) { bitv_test(); }
+    for _ in range(0i, 10000) { bitv_test(); }
 }

@@ -10,19 +10,20 @@
 
 #![feature(managed_boxes)]
 
+use std::gc::{Gc, GC};
 
 fn borrow(x: &int, f: |x: &int|) {
     f(x)
 }
 
-fn test1(x: @Box<int>) {
+fn test1(x: Gc<Box<int>>) {
     borrow(&*(*x).clone(), |p| {
-        let x_a = &**x as *int;
-        assert!((x_a as uint) != (p as *int as uint));
+        let x_a = &**x as *const int;
+        assert!((x_a as uint) != (p as *const int as uint));
         assert_eq!(unsafe{*x_a}, *p);
     })
 }
 
 pub fn main() {
-    test1(@box 22);
+    test1(box(GC) box 22);
 }

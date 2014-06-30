@@ -12,12 +12,11 @@
 #![crate_id="req"]
 #![crate_type = "lib"]
 
-extern crate collections;
-
 use std::cell::RefCell;
-use collections::HashMap;
+use std::collections::HashMap;
+use std::gc::Gc;
 
-pub type header_map = HashMap<String, @RefCell<Vec<@String>>>;
+pub type header_map = HashMap<String, Gc<RefCell<Vec<Gc<String>>>>>;
 
 // the unused ty param is necessary so this gets monomorphized
 pub fn request<T>(req: &header_map) {

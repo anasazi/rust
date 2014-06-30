@@ -18,8 +18,14 @@
 ///a length (the height of the tree), and lower and upper bounds on the
 ///number of elements that a given node can contain.
 
-use std::fmt;
-use std::fmt::Show;
+use core::prelude::*;
+
+use alloc::owned::Box;
+use core::fmt;
+use core::fmt::Show;
+
+use Collection;
+use vec::Vec;
 
 #[allow(missing_doc)]
 pub struct BTree<K, V> {
@@ -101,8 +107,8 @@ impl<K: Ord, V: Eq> PartialEq for BTree<K, V> {
 impl<K: Ord, V: Eq> Eq for BTree<K, V> {}
 
 impl<K: Ord, V: Eq> PartialOrd for BTree<K, V> {
-    fn lt(&self, other: &BTree<K, V>) -> bool {
-        self.cmp(other) == Less
+    fn partial_cmp(&self, other: &BTree<K, V>) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -223,8 +229,8 @@ impl<K: Ord, V: Eq> PartialEq for Node<K, V> {
 impl<K: Ord, V: Eq> Eq for Node<K, V> {}
 
 impl<K: Ord, V: Eq> PartialOrd for Node<K, V> {
-    fn lt(&self, other: &Node<K, V>) -> bool {
-        self.cmp(other) == Less
+    fn partial_cmp(&self, other: &Node<K, V>) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -402,8 +408,8 @@ impl<K: Ord, V: Eq> PartialEq for Leaf<K, V> {
 impl<K: Ord, V: Eq> Eq for Leaf<K, V> {}
 
 impl<K: Ord, V: Eq> PartialOrd for Leaf<K, V> {
-    fn lt(&self, other: &Leaf<K, V>) -> bool {
-        self.cmp(other) == Less
+    fn partial_cmp(&self, other: &Leaf<K, V>) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -632,8 +638,8 @@ impl<K: Ord, V: Eq> PartialEq for Branch<K, V> {
 impl<K: Ord, V: Eq> Eq for Branch<K, V> {}
 
 impl<K: Ord, V: Eq> PartialOrd for Branch<K, V> {
-    fn lt(&self, other: &Branch<K, V>) -> bool {
-        self.cmp(other) == Less
+    fn partial_cmp(&self, other: &Branch<K, V>) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -700,8 +706,8 @@ impl<K: Ord, V: Eq> PartialEq for LeafElt<K, V> {
 impl<K: Ord, V: Eq> Eq for LeafElt<K, V> {}
 
 impl<K: Ord, V: Eq> PartialOrd for LeafElt<K, V> {
-    fn lt(&self, other: &LeafElt<K, V>) -> bool {
-        self.cmp(other) == Less
+    fn partial_cmp(&self, other: &LeafElt<K, V>) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -749,8 +755,8 @@ impl<K: Ord, V: Eq> PartialEq for BranchElt<K, V>{
 impl<K: Ord, V: Eq> Eq for BranchElt<K, V>{}
 
 impl<K: Ord, V: Eq> PartialOrd for BranchElt<K, V> {
-    fn lt(&self, other: &BranchElt<K, V>) -> bool {
-        self.cmp(other) == Less
+    fn partial_cmp(&self, other: &BranchElt<K, V>) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -772,23 +778,24 @@ impl<K: fmt::Show + Ord, V: fmt::Show> fmt::Show for BranchElt<K, V> {
 
 #[cfg(test)]
 mod test_btree {
+    use std::prelude::*;
 
     use super::{BTree, Node, LeafElt};
 
     //Tests the functionality of the insert methods (which are unfinished).
     #[test]
     fn insert_test_one() {
-        let b = BTree::new(1, "abc".to_string(), 2);
-        let is_insert = b.insert(2, "xyz".to_string());
+        let b = BTree::new(1i, "abc".to_string(), 2);
+        let is_insert = b.insert(2i, "xyz".to_string());
         //println!("{}", is_insert.clone().to_str());
         assert!(is_insert.root.is_leaf());
     }
 
     #[test]
     fn insert_test_two() {
-        let leaf_elt_1 = LeafElt::new(1, "aaa".to_string());
-        let leaf_elt_2 = LeafElt::new(2, "bbb".to_string());
-        let leaf_elt_3 = LeafElt::new(3, "ccc".to_string());
+        let leaf_elt_1 = LeafElt::new(1i, "aaa".to_string());
+        let leaf_elt_2 = LeafElt::new(2i, "bbb".to_string());
+        let leaf_elt_3 = LeafElt::new(3i, "ccc".to_string());
         let n = Node::new_leaf(vec!(leaf_elt_1, leaf_elt_2, leaf_elt_3));
         let b = BTree::new_with_node_len(n, 3, 2);
         //println!("{}", b.clone().insert(4, "ddd".to_string()).to_str());
@@ -797,10 +804,10 @@ mod test_btree {
 
     #[test]
     fn insert_test_three() {
-        let leaf_elt_1 = LeafElt::new(1, "aaa".to_string());
-        let leaf_elt_2 = LeafElt::new(2, "bbb".to_string());
-        let leaf_elt_3 = LeafElt::new(3, "ccc".to_string());
-        let leaf_elt_4 = LeafElt::new(4, "ddd".to_string());
+        let leaf_elt_1 = LeafElt::new(1i, "aaa".to_string());
+        let leaf_elt_2 = LeafElt::new(2i, "bbb".to_string());
+        let leaf_elt_3 = LeafElt::new(3i, "ccc".to_string());
+        let leaf_elt_4 = LeafElt::new(4i, "ddd".to_string());
         let n = Node::new_leaf(vec!(leaf_elt_1, leaf_elt_2, leaf_elt_3, leaf_elt_4));
         let b = BTree::new_with_node_len(n, 3, 2);
         //println!("{}", b.clone().insert(5, "eee".to_string()).to_str());
@@ -809,10 +816,10 @@ mod test_btree {
 
     #[test]
     fn insert_test_four() {
-        let leaf_elt_1 = LeafElt::new(1, "aaa".to_string());
-        let leaf_elt_2 = LeafElt::new(2, "bbb".to_string());
-        let leaf_elt_3 = LeafElt::new(3, "ccc".to_string());
-        let leaf_elt_4 = LeafElt::new(4, "ddd".to_string());
+        let leaf_elt_1 = LeafElt::new(1i, "aaa".to_string());
+        let leaf_elt_2 = LeafElt::new(2i, "bbb".to_string());
+        let leaf_elt_3 = LeafElt::new(3i, "ccc".to_string());
+        let leaf_elt_4 = LeafElt::new(4i, "ddd".to_string());
         let n = Node::new_leaf(vec!(leaf_elt_1, leaf_elt_2, leaf_elt_3, leaf_elt_4));
         let mut b = BTree::new_with_node_len(n, 3, 2);
         b = b.clone().insert(5, "eee".to_string());
@@ -826,22 +833,22 @@ mod test_btree {
 
     #[test]
     fn bsearch_test_one() {
-        let b = BTree::new(1, "abc".to_string(), 2);
+        let b = BTree::new(1i, "abc".to_string(), 2u);
         assert_eq!(Some(1), b.root.bsearch_node(2));
     }
 
     #[test]
     fn bsearch_test_two() {
-        let b = BTree::new(1, "abc".to_string(), 2);
+        let b = BTree::new(1i, "abc".to_string(), 2u);
         assert_eq!(Some(0), b.root.bsearch_node(0));
     }
 
     #[test]
     fn bsearch_test_three() {
-        let leaf_elt_1 = LeafElt::new(1, "aaa".to_string());
-        let leaf_elt_2 = LeafElt::new(2, "bbb".to_string());
-        let leaf_elt_3 = LeafElt::new(4, "ccc".to_string());
-        let leaf_elt_4 = LeafElt::new(5, "ddd".to_string());
+        let leaf_elt_1 = LeafElt::new(1i, "aaa".to_string());
+        let leaf_elt_2 = LeafElt::new(2i, "bbb".to_string());
+        let leaf_elt_3 = LeafElt::new(4i, "ccc".to_string());
+        let leaf_elt_4 = LeafElt::new(5i, "ddd".to_string());
         let n = Node::new_leaf(vec!(leaf_elt_1, leaf_elt_2, leaf_elt_3, leaf_elt_4));
         let b = BTree::new_with_node_len(n, 3, 2);
         assert_eq!(Some(2), b.root.bsearch_node(3));
@@ -849,10 +856,10 @@ mod test_btree {
 
     #[test]
     fn bsearch_test_four() {
-        let leaf_elt_1 = LeafElt::new(1, "aaa".to_string());
-        let leaf_elt_2 = LeafElt::new(2, "bbb".to_string());
-        let leaf_elt_3 = LeafElt::new(4, "ccc".to_string());
-        let leaf_elt_4 = LeafElt::new(5, "ddd".to_string());
+        let leaf_elt_1 = LeafElt::new(1i, "aaa".to_string());
+        let leaf_elt_2 = LeafElt::new(2i, "bbb".to_string());
+        let leaf_elt_3 = LeafElt::new(4i, "ccc".to_string());
+        let leaf_elt_4 = LeafElt::new(5i, "ddd".to_string());
         let n = Node::new_leaf(vec!(leaf_elt_1, leaf_elt_2, leaf_elt_3, leaf_elt_4));
         let b = BTree::new_with_node_len(n, 3, 2);
         assert_eq!(Some(4), b.root.bsearch_node(800));
@@ -861,7 +868,7 @@ mod test_btree {
     //Tests the functionality of the get method.
     #[test]
     fn get_test() {
-        let b = BTree::new(1, "abc".to_string(), 2);
+        let b = BTree::new(1i, "abc".to_string(), 2);
         let val = b.get(1);
         assert_eq!(val, Some("abc".to_string()));
     }
@@ -869,7 +876,7 @@ mod test_btree {
     //Tests the BTree's clone() method.
     #[test]
     fn btree_clone_test() {
-        let b = BTree::new(1, "abc".to_string(), 2);
+        let b = BTree::new(1i, "abc".to_string(), 2);
         let b2 = b.clone();
         assert!(b.root == b2.root)
     }
@@ -877,31 +884,31 @@ mod test_btree {
     //Tests the BTree's cmp() method when one node is "less than" another.
     #[test]
     fn btree_cmp_test_less() {
-        let b = BTree::new(1, "abc".to_string(), 2);
-        let b2 = BTree::new(2, "bcd".to_string(), 2);
+        let b = BTree::new(1i, "abc".to_string(), 2);
+        let b2 = BTree::new(2i, "bcd".to_string(), 2);
         assert!(&b.cmp(&b2) == &Less)
     }
 
     //Tests the BTree's cmp() method when two nodes are equal.
     #[test]
     fn btree_cmp_test_eq() {
-        let b = BTree::new(1, "abc".to_string(), 2);
-        let b2 = BTree::new(1, "bcd".to_string(), 2);
+        let b = BTree::new(1i, "abc".to_string(), 2);
+        let b2 = BTree::new(1i, "bcd".to_string(), 2);
         assert!(&b.cmp(&b2) == &Equal)
     }
 
     //Tests the BTree's cmp() method when one node is "greater than" another.
     #[test]
     fn btree_cmp_test_greater() {
-        let b = BTree::new(1, "abc".to_string(), 2);
-        let b2 = BTree::new(2, "bcd".to_string(), 2);
+        let b = BTree::new(1i, "abc".to_string(), 2);
+        let b2 = BTree::new(2i, "bcd".to_string(), 2);
         assert!(&b2.cmp(&b) == &Greater)
     }
 
     //Tests the BTree's to_str() method.
     #[test]
     fn btree_tostr_test() {
-        let b = BTree::new(1, "abc".to_string(), 2);
+        let b = BTree::new(1i, "abc".to_string(), 2);
         assert_eq!(b.to_str(), "Key: 1, value: abc;".to_string())
     }
 

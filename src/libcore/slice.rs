@@ -16,7 +16,7 @@
 
 use mem::transmute;
 use clone::Clone;
-use container::Container;
+use collections::Collection;
 use cmp::{PartialEq, Ord, Ordering, Less, Equal, Greater};
 use cmp;
 use default::Default;
@@ -44,7 +44,7 @@ pub fn ref_slice<'a, A>(s: &'a A) -> &'a [A] {
  */
 pub fn mut_ref_slice<'a, A>(s: &'a mut A) -> &'a mut [A] {
     unsafe {
-        let ptr: *A = transmute(s);
+        let ptr: *const A = transmute(s);
         transmute(Slice { data: ptr, len: 1 })
     }
 }
@@ -246,14 +246,14 @@ impl<'a, T> RandomAccessIterator<&'a [T]> for Chunks<'a, T> {
 
 // Equality
 
-#[cfg(not(test))]
 #[allow(missing_doc)]
 pub mod traits {
     use super::*;
 
     use cmp::{PartialEq, PartialOrd, Eq, Ord, Ordering, Equiv};
-    use iter::{order, Iterator};
-    use container::Container;
+    use iter::order;
+    use collections::Collection;
+    use option::Option;
 
     impl<'a,T:PartialEq> PartialEq for &'a [T] {
         fn eq(&self, other: & &'a [T]) -> bool {
@@ -266,23 +266,9 @@ pub mod traits {
         }
     }
 
-    impl<T:PartialEq> PartialEq for ~[T] {
-        #[inline]
-        fn eq(&self, other: &~[T]) -> bool { self.as_slice() == *other }
-        #[inline]
-        fn ne(&self, other: &~[T]) -> bool { !self.eq(other) }
-    }
-
     impl<'a,T:Eq> Eq for &'a [T] {}
 
-    impl<T:Eq> Eq for ~[T] {}
-
     impl<'a,T:PartialEq, V: Vector<T>> Equiv<V> for &'a [T] {
-        #[inline]
-        fn equiv(&self, other: &V) -> bool { self.as_slice() == other.as_slice() }
-    }
-
-    impl<'a,T:PartialEq, V: Vector<T>> Equiv<V> for ~[T] {
         #[inline]
         fn equiv(&self, other: &V) -> bool { self.as_slice() == other.as_slice() }
     }
@@ -293,12 +279,12 @@ pub mod traits {
         }
     }
 
-    impl<T: Ord> Ord for ~[T] {
-        #[inline]
-        fn cmp(&self, other: &~[T]) -> Ordering { self.as_slice().cmp(&other.as_slice()) }
-    }
-
     impl<'a, T: PartialOrd> PartialOrd for &'a [T] {
+        #[inline]
+        fn partial_cmp(&self, other: &&'a [T]) -> Option<Ordering> {
+            order::partial_cmp(self.iter(), other.iter())
+        }
+        #[inline]
         fn lt(&self, other: & &'a [T]) -> bool {
             order::lt(self.iter(), other.iter())
         }
@@ -315,21 +301,7 @@ pub mod traits {
             order::gt(self.iter(), other.iter())
         }
     }
-
-    impl<T: PartialOrd> PartialOrd for ~[T] {
-        #[inline]
-        fn lt(&self, other: &~[T]) -> bool { self.as_slice() < other.as_slice() }
-        #[inline]
-        fn le(&self, other: &~[T]) -> bool { self.as_slice() <= other.as_slice() }
-        #[inline]
-        fn ge(&self, other: &~[T]) -> bool { self.as_slice() >= other.as_slice() }
-        #[inline]
-        fn gt(&self, other: &~[T]) -> bool { self.as_slice() > other.as_slice() }
-    }
 }
-
-#[cfg(test)]
-pub mod traits {}
 
 /// Any vector that can be represented as a slice.
 pub trait Vector<T> {
@@ -342,12 +314,7 @@ impl<'a,T> Vector<T> for &'a [T] {
     fn as_slice<'a>(&'a self) -> &'a [T] { *self }
 }
 
-impl<T> Vector<T> for ~[T] {
-    #[inline(always)]
-    fn as_slice<'a>(&'a self) -> &'a [T] { let v: &'a [T] = *self; v }
-}
-
-impl<'a, T> Container for &'a [T] {
+impl<'a, T> Collection for &'a [T] {
     /// Returns the length of a vector
     #[inline]
     fn len(&self) -> uint {
@@ -355,20 +322,12 @@ impl<'a, T> Container for &'a [T] {
     }
 }
 
-impl<T> Container for ~[T] {
-    /// Returns the length of a vector
-    #[inline]
-    fn len(&self) -> uint {
-        self.as_slice().len()
-    }
-}
-
 /// Extension methods for vectors
 pub trait ImmutableVector<'a, T> {
     /**
-     * Returns a slice of self between `start` and `end`.
+     * Returns a slice of self spanning the interval [`start`, `end`).
      *
-     * Fails when `start` or `end` point outside the bounds of self,
+     * Fails when the slice (or part of it) is outside the bounds of self,
      * or when `start` > `end`.
      */
     fn slice(&self, start: uint, end: uint) -> &'a [T];
@@ -419,7 +378,7 @@ pub trait ImmutableVector<'a, T> {
      * `[3,4]`):
      *
      * ```rust
-     * let v = &[1,2,3,4];
+     * let v = &[1i, 2, 3, 4];
      * for win in v.windows(2) {
      *     println!("{}", win);
      * }
@@ -444,7 +403,7 @@ pub trait ImmutableVector<'a, T> {
      * `[3,4]`, `[5]`):
      *
      * ```rust
-     * let v = &[1,2,3,4,5];
+     * let v = &[1i, 2, 3, 4, 5];
      * for win in v.chunks(2) {
      *     println!("{}", win);
      * }
@@ -482,7 +441,7 @@ pub trait ImmutableVector<'a, T> {
      * Modifying the vector may cause its buffer to be reallocated, which
      * would also make any pointers to it invalid.
      */
-    fn as_ptr(&self) -> *T;
+    fn as_ptr(&self) -> *const T;
 
     /**
      * Binary search a sorted vector with a comparator function.
@@ -563,7 +522,7 @@ impl<'a,T> ImmutableVector<'a, T> for &'a [T] {
             let p = self.as_ptr();
             if mem::size_of::<T>() == 0 {
                 Items{ptr: p,
-                      end: (p as uint + self.len()) as *T,
+                      end: (p as uint + self.len()) as *const T,
                       marker: marker::ContravariantLifetime::<'a>}
             } else {
                 Items{ptr: p,
@@ -649,7 +608,7 @@ impl<'a,T> ImmutableVector<'a, T> for &'a [T] {
     }
 
     #[inline]
-    fn as_ptr(&self) -> *T {
+    fn as_ptr(&self) -> *const T {
         self.repr().data
     }
 
@@ -760,6 +719,9 @@ impl<'a, T: Ord> ImmutableOrdVector<T> for &'a [T] {
 /// Extension methods for vectors such that their elements are
 /// mutable.
 pub trait MutableVector<'a, T> {
+    /// Returns a mutable reference to the element at the given index,
+    /// or `None` if the index is out of bounds
+    fn get_mut(self, index: uint) -> Option<&'a mut T>;
     /// Work with `self` as a mut slice.
     /// Primarily intended for getting a &mut [T] from a [T, ..N].
     fn as_mut_slice(self) -> &'a mut [T];
@@ -870,24 +832,24 @@ pub trait MutableVector<'a, T> {
     /// # Example
     ///
     /// ```rust
-    /// let mut v = [1, 2, 3, 4, 5, 6];
+    /// let mut v = [1i, 2, 3, 4, 5, 6];
     ///
     /// // scoped to restrict the lifetime of the borrows
     /// {
     ///    let (left, right) = v.mut_split_at(0);
     ///    assert!(left == &mut []);
-    ///    assert!(right == &mut [1, 2, 3, 4, 5, 6]);
+    ///    assert!(right == &mut [1i, 2, 3, 4, 5, 6]);
     /// }
     ///
     /// {
     ///     let (left, right) = v.mut_split_at(2);
-    ///     assert!(left == &mut [1, 2]);
-    ///     assert!(right == &mut [3, 4, 5, 6]);
+    ///     assert!(left == &mut [1i, 2]);
+    ///     assert!(right == &mut [3i, 4, 5, 6]);
     /// }
     ///
     /// {
     ///     let (left, right) = v.mut_split_at(6);
-    ///     assert!(left == &mut [1, 2, 3, 4, 5, 6]);
+    ///     assert!(left == &mut [1i, 2, 3, 4, 5, 6]);
     ///     assert!(right == &mut []);
     /// }
     /// ```
@@ -898,9 +860,9 @@ pub trait MutableVector<'a, T> {
     /// # Example
     ///
     /// ```rust
-    /// let mut v = [1, 2, 3];
+    /// let mut v = [1i, 2, 3];
     /// v.reverse();
-    /// assert!(v == [3, 2, 1]);
+    /// assert!(v == [3i, 2, 1]);
     /// ```
     fn reverse(self);
 
@@ -927,7 +889,7 @@ pub trait MutableVector<'a, T> {
     /// # Example
     ///
     /// ```rust
-    /// let mut v = ~["foo".to_string(), "bar".to_string(), "baz".to_string()];
+    /// let mut v = ["foo".to_string(), "bar".to_string(), "baz".to_string()];
     ///
     /// unsafe {
     ///     // `"baz".to_string()` is deallocated.
@@ -964,6 +926,11 @@ pub trait MutableVector<'a, T> {
 
 impl<'a,T> MutableVector<'a, T> for &'a mut [T] {
     #[inline]
+    fn get_mut(self, index: uint) -> Option<&'a mut T> {
+        if index < self.len() { Some(&mut self[index]) } else { None }
+    }
+
+    #[inline]
     fn as_mut_slice(self) -> &'a mut [T] { self }
 
     fn mut_slice(self, start: uint, end: uint) -> &'a mut [T] {
@@ -971,7 +938,7 @@ impl<'a,T> MutableVector<'a, T> for &'a mut [T] {
         assert!(end <= self.len());
         unsafe {
             transmute(Slice {
-                    data: self.as_mut_ptr().offset(start as int) as *T,
+                    data: self.as_mut_ptr().offset(start as int) as *const T,
                     len: (end - start)
                 })
         }
@@ -1093,7 +1060,7 @@ impl<'a,T> MutableVector<'a, T> for &'a mut [T] {
 
     #[inline]
     unsafe fn init_elem(self, i: uint, val: T) {
-        mem::overwrite(&mut (*self.as_mut_ptr().offset(i as int)), val);
+        ptr::write(&mut (*self.as_mut_ptr().offset(i as int)), val);
     }
 
     #[inline]
@@ -1115,15 +1082,15 @@ pub trait MutableCloneableVector<T> {
     /// ```rust
     /// use std::slice::MutableCloneableVector;
     ///
-    /// let mut dst = [0, 0, 0];
-    /// let src = [1, 2];
+    /// let mut dst = [0i, 0, 0];
+    /// let src = [1i, 2];
     ///
     /// assert!(dst.copy_from(src) == 2);
     /// assert!(dst == [1, 2, 0]);
     ///
-    /// let src2 = [3, 4, 5, 6];
+    /// let src2 = [3i, 4, 5, 6];
     /// assert!(dst.copy_from(src2) == 3);
-    /// assert!(dst == [3, 4, 5]);
+    /// assert!(dst == [3i, 4, 5]);
     /// ```
     fn copy_from(self, &[T]) -> uint;
 }
@@ -1141,7 +1108,6 @@ impl<'a, T:Clone> MutableCloneableVector<T> for &'a mut [T] {
 /// Unsafe operations
 pub mod raw {
     use mem::transmute;
-    use iter::Iterator;
     use ptr::RawPtr;
     use raw::Slice;
     use option::{None, Option, Some};
@@ -1151,7 +1117,7 @@ pub mod raw {
      * not bytes).
      */
     #[inline]
-    pub unsafe fn buf_as_slice<T,U>(p: *T, len: uint, f: |v: &[T]| -> U)
+    pub unsafe fn buf_as_slice<T,U>(p: *const T, len: uint, f: |v: &[T]| -> U)
                                -> U {
         f(transmute(Slice {
             data: p,
@@ -1171,7 +1137,7 @@ pub mod raw {
                                    f: |v: &mut [T]| -> U)
                                    -> U {
         f(transmute(Slice {
-            data: p as *T,
+            data: p as *const T,
             len: len
         }))
     }
@@ -1182,9 +1148,9 @@ pub mod raw {
      * if the slice is empty. O(1).
      */
      #[inline]
-    pub unsafe fn shift_ptr<T>(slice: &mut Slice<T>) -> Option<*T> {
+    pub unsafe fn shift_ptr<T>(slice: &mut Slice<T>) -> Option<*const T> {
         if slice.len == 0 { return None; }
-        let head: *T = slice.data;
+        let head: *const T = slice.data;
         slice.data = slice.data.offset(1);
         slice.len -= 1;
         Some(head)
@@ -1196,9 +1162,9 @@ pub mod raw {
      * if the slice is empty. O(1).
      */
      #[inline]
-    pub unsafe fn pop_ptr<T>(slice: &mut Slice<T>) -> Option<*T> {
+    pub unsafe fn pop_ptr<T>(slice: &mut Slice<T>) -> Option<*const T> {
         if slice.len == 0 { return None; }
-        let tail: *T = slice.data.offset((slice.len - 1) as int);
+        let tail: *const T = slice.data.offset((slice.len - 1) as int);
         slice.len -= 1;
         Some(tail)
     }
@@ -1206,7 +1172,7 @@ pub mod raw {
 
 /// Operations on `[u8]`.
 pub mod bytes {
-    use container::Container;
+    use collections::Collection;
     use ptr;
     use slice::MutableVector;
 
@@ -1218,6 +1184,7 @@ pub mod bytes {
 
     impl<'a> MutableByteVector for &'a mut [u8] {
         #[inline]
+        #[allow(experimental)]
         fn set_memory(self, value: u8) {
             unsafe { ptr::set_memory(self.as_mut_ptr(), value, self.len()) };
         }
@@ -1236,8 +1203,8 @@ pub mod bytes {
 
 /// Immutable slice iterator
 pub struct Items<'a, T> {
-    ptr: *T,
-    end: *T,
+    ptr: *const T,
+    end: *const T,
     marker: marker::ContravariantLifetime<'a>
 }
 
@@ -1324,7 +1291,7 @@ impl<'a, T> RandomAccessIterator<&'a T> for Items<'a, T> {
     }
 }
 
-iterator!{struct Items -> *T, &'a T}
+iterator!{struct Items -> *const T, &'a T}
 
 impl<'a, T> ExactSize<&'a T> for Items<'a, T> {}
 impl<'a, T> ExactSize<&'a mut T> for MutItems<'a, T> {}
@@ -1454,8 +1421,4 @@ impl<'a, T> DoubleEndedIterator<&'a mut [T]> for MutChunks<'a, T> {
 
 impl<'a, T> Default for &'a [T] {
     fn default() -> &'a [T] { &[] }
-}
-
-impl<T> Default for ~[T] {
-    fn default() -> ~[T] { ~[] }
 }

@@ -13,7 +13,7 @@
 
 #![feature(phase)]
 
-#[phase(syntax, link)]
+#[phase(plugin, link)]
 extern crate log;
 extern crate native;
 
@@ -31,7 +31,7 @@ impl Logger for MyWriter {
 }
 
 #[start]
-fn start(argc: int, argv: **u8) -> int {
+fn start(argc: int, argv: *const *const u8) -> int {
     native::start(argc, argv, proc() {
         main();
     })
@@ -41,7 +41,7 @@ fn main() {
     let (tx, rx) = channel();
     let (mut r, w) = (ChanReader::new(rx), ChanWriter::new(tx));
     spawn(proc() {
-        set_logger(box MyWriter(w) as Box<Logger:Send>);
+        set_logger(box MyWriter(w) as Box<Logger+Send>);
         debug!("debug");
         info!("info");
     });

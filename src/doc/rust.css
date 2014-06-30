@@ -275,7 +275,7 @@ dd {
 
 nav ul {
     list-style-type: none;
-    margin: 0;
+    margin: 0 0 20px 0;
     padding-left: 0px;
 }
 
@@ -311,6 +311,19 @@ table td,
 table th {
     border: 1px solid #ddd;
     padding: 5px;
+}
+
+/* Code snippets */
+
+.rusttest { display: none; }
+pre.rust { position: relative; }
+pre.rust a { transform: scaleX(-1); }
+.test-arrow {
+    display: inline-block;
+    position: absolute;
+    top: 0;
+    right: 10px;
+    font-size: 150%;
 }
 
 @media (min-width: 1170px) {

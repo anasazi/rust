@@ -61,6 +61,7 @@
 //! the system malloc/free.
 
 #![crate_id = "alloc#0.11.0-pre"]
+#![experimental]
 #![license = "MIT/ASL2"]
 #![crate_type = "rlib"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
@@ -68,20 +69,18 @@
        html_root_url = "http://doc.rust-lang.org/")]
 
 #![no_std]
-#![feature(phase)]
+#![feature(lang_items, phase, unsafe_destructor)]
 
-#[phase(syntax, link)]
+#[phase(plugin, link)]
 extern crate core;
 extern crate libc;
-
 
 // Allow testing this library
 
 #[cfg(test)] extern crate debug;
-#[cfg(test)] extern crate sync;
 #[cfg(test)] extern crate native;
-#[cfg(test)] #[phase(syntax, link)] extern crate std;
-#[cfg(test)] #[phase(syntax, link)] extern crate log;
+#[cfg(test)] #[phase(plugin, link)] extern crate std;
+#[cfg(test)] #[phase(plugin, link)] extern crate log;
 
 // Heaps provided for low-level allocation strategies
 
@@ -95,6 +94,29 @@ pub mod util;
 pub mod owned;
 pub mod arc;
 pub mod rc;
+
+/// Common OOM routine used by liballoc
+fn oom() -> ! {
+    // FIXME(#14674): This really needs to do something other than just abort
+    //                here, but any printing done must be *guaranteed* to not
+    //                allocate.
+    unsafe { core::intrinsics::abort() }
+}
+
+// FIXME(#14344): When linking liballoc with libstd, this library will be linked
+//                as an rlib (it only exists as an rlib). It turns out that an
+//                optimized standard library doesn't actually use *any* symbols
+//                from this library. Everything is inlined and optimized away.
+//                This means that linkers will actually omit the object for this
+//                file, even though it may be needed in the future.
+//
+//                To get around this for now, we define a dummy symbol which
+//                will never get inlined so the stdlib can call it. The stdlib's
+//                reference to this symbol will cause this library's object file
+//                to get linked in to libstd successfully (the linker won't
+//                optimize it out).
+#[doc(hidden)]
+pub fn fixme_14344_be_sure_to_link_to_collections() {}
 
 #[cfg(not(test))]
 #[doc(hidden)]

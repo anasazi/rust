@@ -111,7 +111,7 @@ impl Token {
 
 pub fn tok_str(t: Token) -> String {
     match t {
-        String(s, len) => return format!("STR({},{})", s, len).to_string(),
+        String(s, len) => return format!("STR({},{})", s, len),
         Break(_) => return "BREAK".to_string(),
         Begin(_) => return "BEGIN".to_string(),
         End => return "END".to_string(),
@@ -163,7 +163,7 @@ pub fn mk_printer(out: Box<io::Writer>, linewidth: uint) -> Printer {
     let n: uint = 3 * linewidth;
     debug!("mk_printer {}", linewidth);
     let token: Vec<Token> = Vec::from_elem(n, Eof);
-    let size: Vec<int> = Vec::from_elem(n, 0);
+    let size: Vec<int> = Vec::from_elem(n, 0i);
     let scan_stack: Vec<uint> = Vec::from_elem(n, 0u);
     Printer {
         out: out,
@@ -233,7 +233,7 @@ pub fn mk_printer(out: Box<io::Writer>, linewidth: uint) -> Printer {
  *
  * There is a parallel ring buffer, 'size', that holds the calculated size of
  * each token. Why calculated? Because for Begin/End pairs, the "size"
- * includes everything betwen the pair. That is, the "size" of Begin is
+ * includes everything between the pair. That is, the "size" of Begin is
  * actually the sum of the sizes of everything between Begin and the paired
  * End that follows. Since that is arbitrarily far in the future, 'size' is
  * being rewritten regularly while the printer runs; in fact most of the
@@ -322,7 +322,8 @@ impl Printer {
                    b.offset, self.left, self.right);
             *self.token.get_mut(self.right) = t;
             *self.size.get_mut(self.right) = -self.right_total;
-            self.scan_push(self.right);
+            let right = self.right;
+            self.scan_push(right);
             Ok(())
           }
           End => {
@@ -334,7 +335,8 @@ impl Printer {
                 self.advance_right();
                 *self.token.get_mut(self.right) = t;
                 *self.size.get_mut(self.right) = -1;
-                self.scan_push(self.right);
+                let right = self.right;
+                self.scan_push(right);
                 Ok(())
             }
           }
@@ -348,7 +350,8 @@ impl Printer {
             debug!("pp Break({})/buffer ~[{},{}]",
                    b.offset, self.left, self.right);
             self.check_stack(0);
-            self.scan_push(self.right);
+            let right = self.right;
+            self.scan_push(right);
             *self.token.get_mut(self.right) = t;
             *self.size.get_mut(self.right) = -self.right_total;
             self.right_total += b.blank_space;
@@ -434,7 +437,7 @@ impl Printer {
         assert!((self.right != self.left));
     }
     pub fn advance_left(&mut self, x: Token, l: int) -> io::IoResult<()> {
-        debug!("advnce_left ~[{},{}], sizeof({})={}", self.left, self.right,
+        debug!("advance_left ~[{},{}], sizeof({})={}", self.left, self.right,
                self.left, l);
         if l >= 0 {
             let ret = self.print(x.clone(), l);

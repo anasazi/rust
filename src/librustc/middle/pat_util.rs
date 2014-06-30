@@ -8,10 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-
+use middle::def::*;
 use middle::resolve;
 
-use collections::HashMap;
+use std::collections::HashMap;
 use syntax::ast::*;
 use syntax::ast_util::{path_to_ident, walk_pat};
 use syntax::codemap::Span;

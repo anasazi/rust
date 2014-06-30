@@ -13,9 +13,9 @@
 
 #![feature(phase)]
 
-#[phase(syntax)]
+#[phase(plugin)]
 extern crate macro_export_inner_module;
 
 pub fn main() {
-    assert_eq!(1, foo!());
+    assert_eq!(1i, foo!());
 }

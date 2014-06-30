@@ -229,6 +229,36 @@ pub fn copy<R: Reader, W: Writer>(r: &mut R, w: &mut W) -> io::IoResult<()> {
     }
 }
 
+/// A `Reader` which converts an `Iterator<u8>` into a `Reader`.
+pub struct IterReader<T> {
+    iter: T,
+}
+
+impl<T: Iterator<u8>> IterReader<T> {
+    /// Create a new `IterReader` which will read from the specified `Iterator`.
+    pub fn new(iter: T) -> IterReader<T> {
+        IterReader {
+            iter: iter,
+        }
+    }
+}
+
+impl<T: Iterator<u8>> Reader for IterReader<T> {
+    #[inline]
+    fn read(&mut self, buf: &mut [u8]) -> io::IoResult<uint> {
+        let mut len = 0;
+        for (slot, elt) in buf.mut_iter().zip(self.iter.by_ref()) {
+            *slot = elt;
+            len += 1;
+        }
+        if len == 0 {
+            Err(io::standard_error(io::EndOfFile))
+        } else {
+            Ok(len)
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use io::{MemReader, MemWriter, BufReader};
@@ -270,24 +300,24 @@ mod test {
     #[test]
     fn test_null_writer() {
         let mut s = NullWriter;
-        let buf = box [0, 0, 0];
-        s.write(buf).unwrap();
+        let buf = vec![0, 0, 0];
+        s.write(buf.as_slice()).unwrap();
         s.flush().unwrap();
     }
 
     #[test]
     fn test_zero_reader() {
         let mut s = ZeroReader;
-        let mut buf = box [1, 2, 3];
-        assert_eq!(s.read(buf), Ok(3));
-        assert_eq!(box [0, 0, 0], buf);
+        let mut buf = vec![1, 2, 3];
+        assert_eq!(s.read(buf.as_mut_slice()), Ok(3));
+        assert_eq!(vec![0, 0, 0], buf);
     }
 
     #[test]
     fn test_null_reader() {
         let mut r = NullReader;
-        let mut buf = box [0];
-        assert!(r.read(buf).is_err());
+        let mut buf = vec![0];
+        assert!(r.read(buf.as_mut_slice()).is_err());
     }
 
     #[test]
@@ -365,5 +395,24 @@ mod test {
             assert_eq!(r.limit(), 99);
             assert_eq!(r.read_line(), Ok("23456789\n".to_str()));
         }
+    }
+
+    #[test]
+    fn test_iter_reader() {
+        let mut r = IterReader::new(range(0u8, 8));
+        let mut buf = [0, 0, 0];
+        let len = r.read(buf).unwrap();
+        assert_eq!(len, 3);
+        assert!(buf == [0, 1, 2]);
+
+        let len = r.read(buf).unwrap();
+        assert_eq!(len, 3);
+        assert!(buf == [3, 4, 5]);
+
+        let len = r.read(buf).unwrap();
+        assert_eq!(len, 2);
+        assert!(buf == [6, 7, 5]);
+
+        assert_eq!(r.read(buf).unwrap_err().kind, io::EndOfFile);
     }
 }

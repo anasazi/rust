@@ -8,13 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate sync;
-use sync::Arc;
-
+use std::sync::Arc;
 use std::task;
 
 fn main() {
-    let v = vec!(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+    let v = vec!(1i, 2, 3, 4, 5, 6, 7, 8, 9, 10);
     let arc_v = Arc::new(v);
 
     task::spawn(proc() {

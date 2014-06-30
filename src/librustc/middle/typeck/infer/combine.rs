@@ -47,16 +47,17 @@
 // now.
 
 
+use middle::subst;
+use middle::subst::Substs;
 use middle::ty::{FloatVar, FnSig, IntVar, TyVar};
-use middle::ty::{IntType, UintType, substs};
+use middle::ty::{IntType, UintType};
 use middle::ty::{BuiltinBounds};
 use middle::ty;
-use middle::typeck::infer::{then, ToUres};
+use middle::typeck::infer::{ToUres};
 use middle::typeck::infer::glb::Glb;
 use middle::typeck::infer::lub::Lub;
 use middle::typeck::infer::sub::Sub;
-use middle::typeck::infer::to_str::InferStr;
-use middle::typeck::infer::unify::InferCtxtMethods;
+use middle::typeck::infer::unify::InferCtxtMethodsForSimplyUnifiableTypes;
 use middle::typeck::infer::{InferCtxt, cres, ures};
 use middle::typeck::infer::{TypeTrace};
 use util::common::indent;
@@ -66,7 +67,6 @@ use std::result;
 
 use syntax::ast::{Onceness, FnStyle};
 use syntax::ast;
-use syntax::owned_slice::OwnedSlice;
 use syntax::abi;
 
 pub trait Combine {
@@ -83,112 +83,99 @@ pub trait Combine {
     fn contratys(&self, a: ty::t, b: ty::t) -> cres<ty::t>;
     fn tys(&self, a: ty::t, b: ty::t) -> cres<ty::t>;
 
-    fn tps(&self, as_: &[ty::t], bs: &[ty::t]) -> cres<Vec<ty::t> > {
+    fn tps(&self,
+           _: subst::ParamSpace,
+           as_: &[ty::t],
+           bs: &[ty::t])
+           -> cres<Vec<ty::t>> {
+        // FIXME -- In general, we treat variance a bit wrong
+        // here. For historical reasons, we treat tps and Self
+        // as invariant. This is overly conservative.
 
-        // Note: type parameters are always treated as *invariant*
-        // (otherwise the type system would be unsound).  In the
-        // future we could allow type parameters to declare a
-        // variance.
-
-        if as_.len() == bs.len() {
-            result::fold_(as_.iter().zip(bs.iter())
-                          .map(|(a, b)| eq_tys(self, *a, *b)))
-                .then(|| Ok(Vec::from_slice(as_)))
-        } else {
-            Err(ty::terr_ty_param_size(expected_found(self,
-                                                      as_.len(),
-                                                      bs.len())))
+        if as_.len() != bs.len() {
+            return Err(ty::terr_ty_param_size(expected_found(self,
+                                                             as_.len(),
+                                                             bs.len())));
         }
-    }
 
-    fn self_tys(&self, a: Option<ty::t>, b: Option<ty::t>)
-               -> cres<Option<ty::t>> {
-
-        match (a, b) {
-            (None, None) => {
-                Ok(None)
-            }
-            (Some(a), Some(b)) => {
-                // FIXME(#5781) this should be eq_tys
-                // eq_tys(self, a, b).then(|| Ok(Some(a)) )
-                self.contratys(a, b).and_then(|t| Ok(Some(t)))
-            }
-            (None, Some(_)) |
-                (Some(_), None) => {
-                // I think it should never happen that we unify two
-                // substs and one of them has a self_ty and one
-                // doesn't...? I could be wrong about this.
-                self.infcx().tcx.sess.bug("substitution a had a self_ty \
-                                           and substitution b didn't, or \
-                                           vice versa");
-            }
-        }
+        try!(result::fold_(as_
+                          .iter()
+                          .zip(bs.iter())
+                          .map(|(a, b)| eq_tys(self, *a, *b))));
+        Ok(Vec::from_slice(as_))
     }
 
     fn substs(&self,
               item_def_id: ast::DefId,
-              as_: &ty::substs,
-              bs: &ty::substs) -> cres<ty::substs> {
+              a_subst: &subst::Substs,
+              b_subst: &subst::Substs)
+              -> cres<subst::Substs>
+    {
+        let variances = ty::item_variances(self.infcx().tcx, item_def_id);
+        let mut substs = subst::Substs::empty();
+
+        for &space in subst::ParamSpace::all().iter() {
+            let a_tps = a_subst.types.get_vec(space);
+            let b_tps = b_subst.types.get_vec(space);
+            let tps = if_ok!(self.tps(space,
+                                      a_tps.as_slice(),
+                                      b_tps.as_slice()));
+
+            let a_regions = a_subst.regions().get_vec(space);
+            let b_regions = b_subst.regions().get_vec(space);
+            let r_variances = variances.regions.get_vec(space);
+            let regions = if_ok!(relate_region_params(self,
+                                                      item_def_id,
+                                                      r_variances,
+                                                      a_regions,
+                                                      b_regions));
+
+            *substs.types.get_mut_vec(space) = tps;
+            *substs.mut_regions().get_mut_vec(space) = regions;
+        }
+
+        return Ok(substs);
 
         fn relate_region_params<C:Combine>(this: &C,
                                            item_def_id: ast::DefId,
-                                           a: &ty::RegionSubsts,
-                                           b: &ty::RegionSubsts)
-                                           -> cres<ty::RegionSubsts> {
+                                           variances: &Vec<ty::Variance>,
+                                           a_rs: &Vec<ty::Region>,
+                                           b_rs: &Vec<ty::Region>)
+                                           -> cres<Vec<ty::Region>>
+        {
             let tcx = this.infcx().tcx;
-            match (a, b) {
-                (&ty::ErasedRegions, _) | (_, &ty::ErasedRegions) => {
-                    Ok(ty::ErasedRegions)
-                }
+            let num_region_params = variances.len();
 
-                (&ty::NonerasedRegions(ref a_rs),
-                 &ty::NonerasedRegions(ref b_rs)) => {
-                    let variances = ty::item_variances(tcx, item_def_id);
-                    let region_params = &variances.region_params;
-                    let num_region_params = region_params.len();
+            debug!("relate_region_params(\
+                   item_def_id={}, \
+                   a_rs={}, \
+                   b_rs={},
+                   variances={})",
+                   item_def_id.repr(tcx),
+                   a_rs.repr(tcx),
+                   b_rs.repr(tcx),
+                   variances.repr(tcx));
 
-                    debug!("relate_region_params(\
-                            item_def_id={}, \
-                            a_rs={}, \
-                            b_rs={},
-                            region_params={})",
-                            item_def_id.repr(tcx),
-                            a_rs.repr(tcx),
-                            b_rs.repr(tcx),
-                            region_params.repr(tcx));
-
-                    assert_eq!(num_region_params, a_rs.len());
-                    assert_eq!(num_region_params, b_rs.len());
-                    let mut rs = vec!();
-                    for i in range(0, num_region_params) {
-                        let a_r = *a_rs.get(i);
-                        let b_r = *b_rs.get(i);
-                        let variance = *region_params.get(i);
-                        let r = match variance {
-                            ty::Invariant => {
-                                eq_regions(this, a_r, b_r)
-                                    .and_then(|()| Ok(a_r))
-                            }
-                            ty::Covariant => this.regions(a_r, b_r),
-                            ty::Contravariant => this.contraregions(a_r, b_r),
-                            ty::Bivariant => Ok(a_r),
-                        };
-                        rs.push(if_ok!(r));
+            assert_eq!(num_region_params, a_rs.len());
+            assert_eq!(num_region_params, b_rs.len());
+            let mut rs = vec!();
+            for i in range(0, num_region_params) {
+                let a_r = *a_rs.get(i);
+                let b_r = *b_rs.get(i);
+                let variance = *variances.get(i);
+                let r = match variance {
+                    ty::Invariant => {
+                        eq_regions(this, a_r, b_r)
+                            .and_then(|()| Ok(a_r))
                     }
-                    Ok(ty::NonerasedRegions(OwnedSlice::from_vec(rs)))
-                }
+                    ty::Covariant => this.regions(a_r, b_r),
+                    ty::Contravariant => this.contraregions(a_r, b_r),
+                    ty::Bivariant => Ok(a_r),
+                };
+                rs.push(if_ok!(r));
             }
+            Ok(rs)
         }
-
-        let tps = if_ok!(self.tps(as_.tps.as_slice(), bs.tps.as_slice()));
-        let self_ty = if_ok!(self.self_tys(as_.self_ty, bs.self_ty));
-        let regions = if_ok!(relate_region_params(self,
-                                                  item_def_id,
-                                                  &as_.regions,
-                                                  &bs.regions));
-        Ok(substs { regions: regions,
-                    self_ty: self_ty,
-                    tps: tps.clone() })
     }
 
     fn bare_fn_tys(&self, a: &ty::BareFnTy,
@@ -259,7 +246,7 @@ pub trait Combine {
                     a: ty::TraitStore,
                     b: ty::TraitStore)
                     -> cres<ty::TraitStore> {
-        debug!("{}.trait_stores(a={:?}, b={:?})", self.tag(), a, b);
+        debug!("{}.trait_stores(a={}, b={})", self.tag(), a, b);
 
         match (a, b) {
             (ty::RegionTraitStore(a_r, a_m),
@@ -370,21 +357,23 @@ pub fn super_fn_sigs<C:Combine>(this: &C, a: &ty::FnSig, b: &ty::FnSig) -> cres<
 
 pub fn super_tys<C:Combine>(this: &C, a: ty::t, b: ty::t) -> cres<ty::t> {
 
-    // This is a horible hack - historically, [T] was not treated as a type,
+    // This is a horrible hack - historically, [T] was not treated as a type,
     // so, for example, &T and &[U] should not unify. In fact the only thing
     // &[U] should unify with is &[T]. We preserve that behaviour with this
     // check.
-    fn check_ptr_to_vec<C:Combine>(this: &C,
-                                   a: ty::t,
-                                   b: ty::t,
-                                   a_inner: ty::t,
-                                   b_inner: ty::t,
-                                   result: ty::t) -> cres<ty::t> {
+    fn check_ptr_to_unsized<C:Combine>(this: &C,
+                                       a: ty::t,
+                                       b: ty::t,
+                                       a_inner: ty::t,
+                                       b_inner: ty::t,
+                                       result: ty::t) -> cres<ty::t> {
         match (&ty::get(a_inner).sty, &ty::get(b_inner).sty) {
             (&ty::ty_vec(_, None), &ty::ty_vec(_, None)) |
-            (&ty::ty_str, &ty::ty_str) => Ok(result),
+            (&ty::ty_str, &ty::ty_str) |
+            (&ty::ty_trait(..), &ty::ty_trait(..)) => Ok(result),
             (&ty::ty_vec(_, None), _) | (_, &ty::ty_vec(_, None)) |
-            (&ty::ty_str, _) | (_, &ty::ty_str)
+            (&ty::ty_str, _) | (_, &ty::ty_str) |
+            (&ty::ty_trait(..), _) | (_, &ty::ty_trait(..))
                 => Err(ty::terr_sorts(expected_found(this, a, b))),
             _ => Ok(result),
         }
@@ -403,8 +392,8 @@ pub fn super_tys<C:Combine>(this: &C, a: ty::t, b: ty::t) -> cres<ty::t> {
         tcx.sess.bug(
             format!("{}: bot and var types should have been handled ({},{})",
                     this.tag(),
-                    a.inf_str(this.infcx()),
-                    b.inf_str(this.infcx())).as_slice());
+                    a.repr(this.infcx().tcx),
+                    b.repr(this.infcx().tcx)).as_slice());
       }
 
         // Relate integral variables to other types
@@ -474,12 +463,10 @@ pub fn super_tys<C:Combine>(this: &C, a: ty::t, b: ty::t) -> cres<ty::t> {
       if a_.def_id == b_.def_id => {
           debug!("Trying to match traits {:?} and {:?}", a, b);
           let substs = if_ok!(this.substs(a_.def_id, &a_.substs, &b_.substs));
-          let s = if_ok!(this.trait_stores(ty::terr_trait, a_.store, b_.store));
           let bounds = if_ok!(this.bounds(a_.bounds, b_.bounds));
           Ok(ty::mk_trait(tcx,
                           a_.def_id,
                           substs.clone(),
-                          s,
                           bounds))
       }
 
@@ -495,18 +482,28 @@ pub fn super_tys<C:Combine>(this: &C, a: ty::t, b: ty::t) -> cres<ty::t> {
 
       (&ty::ty_uniq(a_inner), &ty::ty_uniq(b_inner)) => {
             let typ = if_ok!(this.tys(a_inner, b_inner));
-            check_ptr_to_vec(this, a, b, a_inner, b_inner, ty::mk_uniq(tcx, typ))
+            check_ptr_to_unsized(this, a, b, a_inner, b_inner, ty::mk_uniq(tcx, typ))
       }
 
       (&ty::ty_ptr(ref a_mt), &ty::ty_ptr(ref b_mt)) => {
             let mt = if_ok!(this.mts(a_mt, b_mt));
-            check_ptr_to_vec(this, a, b, a_mt.ty, b_mt.ty, ty::mk_ptr(tcx, mt))
+            check_ptr_to_unsized(this, a, b, a_mt.ty, b_mt.ty, ty::mk_ptr(tcx, mt))
       }
 
       (&ty::ty_rptr(a_r, ref a_mt), &ty::ty_rptr(b_r, ref b_mt)) => {
             let r = if_ok!(this.contraregions(a_r, b_r));
-            let mt = if_ok!(this.mts(a_mt, b_mt));
-            check_ptr_to_vec(this, a, b, a_mt.ty, b_mt.ty, ty::mk_rptr(tcx, r, mt))
+            // FIXME(14985)  If we have mutable references to trait objects, we
+            // used to use covariant subtyping. I have preserved this behaviour,
+            // even though it is probably incorrect. So don't go down the usual
+            // path which would require invariance.
+            let mt = match (&ty::get(a_mt.ty).sty, &ty::get(b_mt.ty).sty) {
+                (&ty::ty_trait(..), &ty::ty_trait(..)) if a_mt.mutbl == b_mt.mutbl => {
+                    let ty = if_ok!(this.tys(a_mt.ty, b_mt.ty));
+                    ty::mt { ty: ty, mutbl: a_mt.mutbl }
+                }
+                _ => if_ok!(this.mts(a_mt, b_mt))
+            };
+            check_ptr_to_unsized(this, a, b, a_mt.ty, b_mt.ty, ty::mk_rptr(tcx, r, mt))
       }
 
       (&ty::ty_vec(ref a_mt, sz_a), &ty::ty_vec(ref b_mt, sz_b)) => {

@@ -1,15 +1,12 @@
-export LD_LIBRARY_PATH:=$(TMPDIR):$(LD_LIBRARY_PATH)
-export DYLD_LIBRARY_PATH:=$(TMPDIR):$(DYLD_LIBRARY_PATH)
-
-RUSTC := $(RUSTC) --out-dir $(TMPDIR) -L $(TMPDIR)
-CC := $(CC) -L $(TMPDIR)
-
 # These deliberately use `=` and not `:=` so that client makefiles can
 # augment HOST_RPATH_DIR / TARGET_RPATH_DIR.
 HOST_RPATH_ENV = \
-    $(LD_LIB_PATH_ENVVAR)=$$$(LD_LIB_PATH_ENVVAR):$(HOST_RPATH_DIR)
+    $(LD_LIB_PATH_ENVVAR)="$(TMPDIR):$(HOST_RPATH_DIR):$($(LD_LIB_PATH_ENVVAR))"
 TARGET_RPATH_ENV = \
-    $(LD_LIB_PATH_ENVVAR)=$$$(LD_LIB_PATH_ENVVAR):$(TARGET_RPATH_DIR)
+    $(LD_LIB_PATH_ENVVAR)="$(TMPDIR):$(TARGET_RPATH_DIR):$($(LD_LIB_PATH_ENVVAR))"
+
+RUSTC := $(HOST_RPATH_ENV) $(RUSTC) --out-dir $(TMPDIR) -L $(TMPDIR)
+CC := $(CC) -L $(TMPDIR)
 
 # This is the name of the binary we will generate and run; use this
 # e.g. for `$(CC) -o $(RUN_BINFILE)`.
@@ -43,13 +40,26 @@ DYLIB_GLOB = $(1)*.dll
 DYLIB = $(TMPDIR)/$(1).dll
 BIN = $(1).exe
 RPATH_LINK_SEARCH =
-RUSTC := PATH="$(PATH):$(LD_LIBRARY_PATH)" $(RUSTC)
 else
 RUN = $(TARGET_RPATH_ENV) $(RUN_BINFILE)
 FAIL = $(TARGET_RPATH_ENV) $(RUN_BINFILE) && exit 1 || exit 0
 DYLIB_GLOB = lib$(1)*.so
 DYLIB = $(TMPDIR)/lib$(1).so
 RPATH_LINK_SEARCH = -Wl,-rpath-link=$(1)
+endif
+endif
+
+# Extra flags needed to compile a working executable with the standard library
+ifdef IS_WINDOWS
+	EXTRACFLAGS :=
+else
+ifeq ($(shell uname),Darwin)
+else
+ifeq ($(shell uname),FreeBSD)
+	EXTRACFLAGS := -lm -lpthread -lgcc_s
+else
+	EXTRACFLAGS := -lm -lrt -ldl -lpthread
+endif
 endif
 endif
 

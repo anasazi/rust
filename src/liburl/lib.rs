@@ -11,21 +11,20 @@
 //! Types/fns concerning URLs (see RFC 3986)
 
 #![crate_id = "url#0.11.0-pre"]
+#![experimental]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
 #![license = "MIT/ASL2"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-       html_root_url = "http://doc.rust-lang.org/")]
+       html_root_url = "http://doc.rust-lang.org/",
+       html_playground_url = "http://play.rust-lang.org/")]
 #![feature(default_type_params)]
 
-extern crate collections;
-
-use collections::HashMap;
-use std::cmp::PartialEq;
+use std::collections::HashMap;
 use std::fmt;
 use std::from_str::FromStr;
-use std::hash::Hash;
+use std::hash;
 use std::io::BufReader;
 use std::string::String;
 use std::uint;
@@ -164,10 +163,10 @@ fn encode_inner(s: &str, full_url: bool) -> String {
                     out.push_char(ch);
                   }
 
-                  _ => out.push_str(format!("%{:X}", ch as uint).as_slice())
+                  _ => out.push_str(format!("%{:02X}", ch as uint).as_slice())
                 }
             } else {
-                out.push_str(format!("%{:X}", ch as uint).as_slice());
+                out.push_str(format!("%{:02X}", ch as uint).as_slice());
             }
           }
         }
@@ -527,7 +526,7 @@ fn get_authority(rawurl: &str) ->
     Result<(Option<UserInfo>, String, Option<String>, String), String> {
     if !rawurl.starts_with("//") {
         // there is no authority.
-        return Ok((None, "".to_string(), None, rawurl.to_str().to_string()));
+        return Ok((None, "".to_string(), None, rawurl.to_str()));
     }
 
     enum State {
@@ -547,7 +546,7 @@ fn get_authority(rawurl: &str) ->
     let mut host = "".to_string();
     let mut port = None;
 
-    let mut colon_count = 0;
+    let mut colon_count = 0u;
     let mut pos = 0;
     let mut begin = 2;
     let mut end = len;
@@ -847,7 +846,7 @@ impl fmt::Show for Url {
 
         match self.fragment {
             Some(ref fragment) => {
-                write!(f, "\\#{}", encode_component(fragment.as_slice()))
+                write!(f, "#{}", encode_component(fragment.as_slice()))
             }
             None => Ok(()),
         }
@@ -863,20 +862,20 @@ impl fmt::Show for Path {
 
         match self.fragment {
             Some(ref fragment) => {
-                write!(f, "\\#{}", encode_component(fragment.as_slice()))
+                write!(f, "#{}", encode_component(fragment.as_slice()))
             }
             None => Ok(())
         }
     }
 }
 
-impl<S: Writer> Hash<S> for Url {
+impl<S: hash::Writer> hash::Hash<S> for Url {
     fn hash(&self, state: &mut S) {
         self.to_str().hash(state)
     }
 }
 
-impl<S: Writer> Hash<S> for Path {
+impl<S: hash::Writer> hash::Hash<S> for Path {
     fn hash(&self, state: &mut S) {
         self.to_str().hash(state)
     }
@@ -973,7 +972,7 @@ mod tests {
          decode, encode, from_str, encode_component, decode_component,
          path_from_str, UserInfo, get_scheme};
 
-    use collections::HashMap;
+    use std::collections::HashMap;
 
     #[test]
     fn test_url_parse() {
@@ -1181,6 +1180,8 @@ mod tests {
         assert_eq!(encode("@"), "@".to_string());
         assert_eq!(encode("["), "[".to_string());
         assert_eq!(encode("]"), "]".to_string());
+        assert_eq!(encode("\0"), "%00".to_string());
+        assert_eq!(encode("\n"), "%0A".to_string());
     }
 
     #[test]
@@ -1210,6 +1211,8 @@ mod tests {
         assert_eq!(encode_component("@"), "%40".to_string());
         assert_eq!(encode_component("["), "%5B".to_string());
         assert_eq!(encode_component("]"), "%5D".to_string());
+        assert_eq!(encode_component("\0"), "%00".to_string());
+        assert_eq!(encode_component("\n"), "%0A".to_string());
     }
 
     #[test]

@@ -13,7 +13,7 @@ extern crate libc;
 use std::mem;
 use std::rt::thread::Thread;
 
-#[link(name = "rustrt")]
+#[link(name = "rust_test_helpers")]
 extern {
     fn rust_dbg_call(cb: extern "C" fn(libc::uintptr_t),
                      data: libc::uintptr_t) -> libc::uintptr_t;
@@ -22,7 +22,7 @@ extern {
 pub fn main() {
     unsafe {
         Thread::start(proc() {
-            let i = &100;
+            let i = &100i;
             rust_dbg_call(callback, mem::transmute(i));
         }).join();
     }
@@ -30,7 +30,7 @@ pub fn main() {
 
 extern fn callback(data: libc::uintptr_t) {
     unsafe {
-        let data: *int = mem::transmute(data);
-        assert_eq!(*data, 100);
+        let data: *const int = mem::transmute(data);
+        assert_eq!(*data, 100i);
     }
 }

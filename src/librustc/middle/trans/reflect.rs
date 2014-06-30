@@ -90,7 +90,7 @@ impl<'a, 'b> Reflector<'a, 'b> {
         let mth_idx = ty::method_idx(token::str_to_ident(format!(
                         "visit_{}", ty_name).as_slice()),
                                      self.visitor_methods.as_slice()).expect(
-                format!("couldn't find visit method for {}", ty_name));
+                format!("couldn't find visit method for {}", ty_name).as_slice());
         let mth_ty =
             ty::mk_bare_fn(tcx,
                            self.visitor_methods[mth_idx].fty.clone());
@@ -107,7 +107,6 @@ impl<'a, 'b> Reflector<'a, 'b> {
                                                          mth_idx,
                                                          v),
             ArgVals(args), None));
-        let result = bool_to_i1(bcx, result);
         let next_bcx = fcx.new_temp_block("next");
         CondBr(bcx, result, next_bcx.llbb, self.final_bcx.llbb);
         self.bcx = next_bcx
@@ -149,7 +148,6 @@ impl<'a, 'b> Reflector<'a, 'b> {
           ty::ty_uint(ast::TyU64) => self.leaf("u64"),
           ty::ty_float(ast::TyF32) => self.leaf("f32"),
           ty::ty_float(ast::TyF64) => self.leaf("f64"),
-          ty::ty_float(ast::TyF128) => self.leaf("f128"),
 
           // Should rename to vec_*.
           ty::ty_vec(ref mt, Some(sz)) => {
@@ -157,7 +155,7 @@ impl<'a, 'b> Reflector<'a, 'b> {
               let extra = extra.append(self.c_mt(mt).as_slice());
               self.visit("evec_fixed", extra.as_slice())
           }
-          ty::ty_vec(..) | ty::ty_str => fail!("unexpected unsized type"),
+          ty::ty_vec(..) | ty::ty_str | ty::ty_trait(..) => fail!("unexpected unsized type"),
           // Should remove mt from box and uniq.
           ty::ty_box(typ) => {
               let extra = self.c_mt(&ty::mt {
@@ -174,6 +172,13 @@ impl<'a, 'b> Reflector<'a, 'b> {
                       self.visit("evec_uniq", extra.as_slice())
                   }
                   ty::ty_str => self.visit("estr_uniq", &[]),
+                  ty::ty_trait(..) => {
+                      let extra = [
+                          self.c_slice(token::intern_and_get_ident(
+                                  ty_to_str(tcx, t).as_slice()))
+                      ];
+                      self.visit("trait", extra);
+                  }
                   _ => {
                       let extra = self.c_mt(&ty::mt {
                           ty: typ,
@@ -196,6 +201,13 @@ impl<'a, 'b> Reflector<'a, 'b> {
                                  extra.as_slice())
                   }
                   ty::ty_str => self.visit("estr_slice", &[]),
+                  ty::ty_trait(..) => {
+                      let extra = [
+                          self.c_slice(token::intern_and_get_ident(
+                                  ty_to_str(tcx, t).as_slice()))
+                      ];
+                      self.visit("trait", extra);
+                  }
                   _ => {
                       let extra = self.c_mt(mt);
                       self.visit("rptr", extra.as_slice())
@@ -297,8 +309,10 @@ impl<'a, 'b> Reflector<'a, 'b> {
                                                     fn_ty,
                                                     sym.as_slice());
                 let arena = TypedArena::new();
+                let empty_param_substs = param_substs::empty();
                 let fcx = new_fn_ctxt(ccx, llfdecl, -1, false,
-                                      ty::mk_u64(), None, None, &arena);
+                                      ty::mk_u64(), &empty_param_substs,
+                                      None, &arena);
                 init_function(&fcx, false, ty::mk_u64());
 
                 let arg = unsafe {
@@ -349,14 +363,6 @@ impl<'a, 'b> Reflector<'a, 'b> {
             })
           }
 
-          ty::ty_trait(..) => {
-              let extra = [
-                  self.c_slice(token::intern_and_get_ident(
-                          ty_to_str(tcx, t).as_slice()))
-              ];
-              self.visit("trait", extra);
-          }
-
           // Miscellaneous extra types
           ty::ty_infer(_) => self.leaf("infer"),
           ty::ty_err => self.leaf("err"),
@@ -364,7 +370,6 @@ impl<'a, 'b> Reflector<'a, 'b> {
               let extra = vec!(self.c_uint(p.idx));
               self.visit("param", extra.as_slice())
           }
-          ty::ty_self(..) => self.leaf("self")
         }
     }
 

@@ -38,6 +38,15 @@ directory to load plugins from (default: /tmp/rustdoc_ng/plugins)
 -L --library-path <val>
 directory to add to crate search path
 .TP
+--html-in-header <val>
+file to add to <head>
+.TP
+--html-before-content <val>
+file to add in <body>, before content
+.TP
+--html-after-content <val>
+file to add in <body>, after content
+.TP
 -h, --help
 Print help
 
@@ -87,7 +96,7 @@ The generated HTML can be viewed with any standard web browser.
 rustc
 
 .SH "BUGS"
-See <\fBhttps://github.com/mozilla/rust/issues\fR> for issues.
+See <\fBhttps://github.com/rust-lang/rust/issues\fR> for issues.
 
 .SH "AUTHOR"
 See \fBAUTHORS.txt\fR in the Rust source distribution.

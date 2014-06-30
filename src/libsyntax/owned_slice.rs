@@ -9,7 +9,7 @@
 // except according to those terms.
 
 use std::default::Default;
-use std::hash::Hash;
+use std::hash;
 use std::{mem, raw, ptr, slice};
 use serialize::{Encodable, Decodable, Encoder, Decoder};
 
@@ -69,9 +69,9 @@ impl<T> OwnedSlice<T> {
         static PTR_MARKER: u8 = 0;
         let ptr = if self.data.is_null() {
             // length zero, i.e. this will never be read as a T.
-            &PTR_MARKER as *u8 as *T
+            &PTR_MARKER as *const u8 as *const T
         } else {
-            self.data as *T
+            self.data as *const T
         };
 
         let slice: &[T] = unsafe {mem::transmute(raw::Slice {
@@ -107,7 +107,7 @@ impl<T: Clone> Clone for OwnedSlice<T> {
     }
 }
 
-impl<S: Writer, T: Hash<S>> Hash<S> for OwnedSlice<T> {
+impl<S: hash::Writer, T: hash::Hash<S>> hash::Hash<S> for OwnedSlice<T> {
     fn hash(&self, state: &mut S) {
         self.as_slice().hash(state)
     }
@@ -121,7 +121,7 @@ impl<T: PartialEq> PartialEq for OwnedSlice<T> {
 
 impl<T: Eq> Eq for OwnedSlice<T> {}
 
-impl<T> Container for OwnedSlice<T> {
+impl<T> Collection for OwnedSlice<T> {
     fn len(&self) -> uint { self.len }
 }
 

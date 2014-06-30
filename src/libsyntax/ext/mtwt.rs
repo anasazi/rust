@@ -19,8 +19,7 @@ use ast::{Ident, Mrk, Name, SyntaxContext};
 
 use std::cell::RefCell;
 use std::rc::Rc;
-
-use collections::HashMap;
+use std::collections::HashMap;
 
 // the SCTable contains a table of SyntaxContext_'s. It
 // represents a flattened tree structure, to avoid having
@@ -31,6 +30,7 @@ use collections::HashMap;
 // change the semantics--everything here is immutable--but
 // it should cut down on memory use *a lot*; applying a mark
 // to a tree containing 50 identifiers would otherwise generate
+// 50 new contexts
 pub struct SCTable {
     table: RefCell<Vec<SyntaxContext_>>,
     mark_memo: RefCell<HashMap<(SyntaxContext,Mrk),SyntaxContext>>,
@@ -161,7 +161,7 @@ fn with_resolve_table_mut<T>(op: |&mut ResolveTable| -> T) -> T {
 }
 
 // Resolve a syntax object to a name, per MTWT.
-// adding memorization to possibly resolve 500+ seconds in resolve for librustc (!)
+// adding memoization to resolve 500+ seconds in resolve for librustc (!)
 fn resolve_internal(id: Ident,
                     table: &SCTable,
                     resolve_table: &mut ResolveTable) -> Name {
@@ -267,7 +267,7 @@ mod tests {
     use super::{resolve, xor_push, new_mark_internal, new_sctable_internal};
     use super::{new_rename_internal, marksof_internal, resolve_internal};
     use super::{SCTable, EmptyCtxt, Mark, Rename, IllegalCtxt};
-    use collections::HashMap;
+    use std::collections::HashMap;
 
     #[test]
     fn xorpush_test () {

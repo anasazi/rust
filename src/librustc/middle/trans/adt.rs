@@ -45,12 +45,12 @@
 
 #![allow(unsigned_negate)]
 
-use std::container::Map;
 use libc::c_ulonglong;
-use std::num::{Bitwise};
 use std::rc::Rc;
 
 use lib::llvm::{ValueRef, True, IntEQ, IntNE};
+use middle::subst;
+use middle::subst::Subst;
 use middle::trans::_match;
 use middle::trans::build::*;
 use middle::trans::common::*;
@@ -59,7 +59,7 @@ use middle::trans::type_::Type;
 use middle::trans::type_of;
 use middle::ty;
 use middle::ty::Disr;
-use syntax::abi::{X86, X86_64, Arm, Mips};
+use syntax::abi::{X86, X86_64, Arm, Mips, Mipsel};
 use syntax::ast;
 use syntax::attr;
 use syntax::attr::IntType;
@@ -291,12 +291,11 @@ impl Case {
     fn find_ptr(&self) -> Option<uint> {
         self.tys.iter().position(|&ty| {
             match ty::get(ty).sty {
-                ty::ty_rptr(_, mt) => match ty::get(mt.ty).sty {
-                    ty::ty_vec(_, None) | ty::ty_str => false,
+                ty::ty_uniq(ty) | ty::ty_rptr(_, ty::mt{ty, ..}) => match ty::get(ty).sty {
+                    ty::ty_vec(_, None) | ty::ty_str| ty::ty_trait(..) => false,
                     _ => true,
                 },
-                ty::ty_uniq(..) | ty::ty_box(..) |
-                ty::ty_bare_fn(..) => true,
+                ty::ty_box(..) | ty::ty_bare_fn(..) => true,
                 // Is that everything?  Would closures or slices qualify?
                 _ => false
             }
@@ -304,10 +303,10 @@ impl Case {
     }
 }
 
-fn get_cases(tcx: &ty::ctxt, def_id: ast::DefId, substs: &ty::substs) -> Vec<Case> {
+fn get_cases(tcx: &ty::ctxt, def_id: ast::DefId, substs: &subst::Substs) -> Vec<Case> {
     ty::enum_variants(tcx, def_id).iter().map(|vi| {
         let arg_tys = vi.args.iter().map(|&raw_ty| {
-            ty::subst(tcx, substs, raw_ty)
+            raw_ty.subst(tcx, substs)
         }).collect();
         Case { discr: vi.disr_val, tys: arg_tys }
     }).collect()
@@ -366,6 +365,7 @@ fn range_to_inttype(cx: &CrateContext, hint: Hint, bounds: &IntBounds) -> IntTyp
                 // corresponding to `choose_shortest`.  However, we don't run on those yet...?
                 Arm => at_least_32,
                 Mips => at_least_32,
+                Mipsel => at_least_32,
             }
         }
         attr::ReprAny => {
@@ -578,6 +578,7 @@ fn load_discr(bcx: &Block, ity: IntType, ptr: ValueRef, min: Disr, max: Disr)
     assert_eq!(val_ty(ptr), llty.ptr_to());
     let bits = machine::llbitsize_of_real(bcx.ccx(), llty);
     assert!(bits <= 64);
+    let  bits = bits as uint;
     let mask = (-1u64 >> (64 - bits)) as Disr;
     if (max + 1) & mask == min & mask {
         // i.e., if the range is everything.  The lo==hi case would be
@@ -716,7 +717,7 @@ pub fn trans_field_ptr(bcx: &Block, r: &Repr, val: ValueRef, discr: Disr,
             let ty = type_of::type_of(bcx.ccx(), *nullfields.get(ix));
             assert_eq!(machine::llsize_of_alloc(bcx.ccx(), ty), 0);
             // The contents of memory at this pointer can't matter, but use
-            // the value that's "reasonable" in case of pointer comparision.
+            // the value that's "reasonable" in case of pointer comparison.
             PointerCast(bcx, val, ty.ptr_to())
         }
         RawNullablePointer { nndiscr, nnty, .. } => {

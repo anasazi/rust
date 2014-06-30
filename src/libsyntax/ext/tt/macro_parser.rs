@@ -22,7 +22,8 @@ use parse::token::{Token, EOF, Nonterminal};
 use parse::token;
 
 use std::rc::Rc;
-use collections::HashMap;
+use std::gc::GC;
+use std::collections::HashMap;
 
 /* This is an Earley-like parser, without support for in-grammar nonterminals,
 only by calling out to the main rust parser for named nonterminals (which it
@@ -452,7 +453,7 @@ pub fn parse_nt(p: &mut Parser, name: &str) -> Nonterminal {
       "meta" => token::NtMeta(p.parse_meta_item()),
       "tt" => {
         p.quote_depth += 1u; //but in theory, non-quoted tts might be useful
-        let res = token::NtTT(@p.parse_token_tree());
+        let res = token::NtTT(box(GC) p.parse_token_tree());
         p.quote_depth -= 1u;
         res
       }

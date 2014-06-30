@@ -10,9 +10,12 @@
 
 // Generalized type folding mechanism.
 
+use middle::subst;
+use middle::subst::VecPerParamSpace;
 use middle::ty;
 use middle::typeck;
 use std::rc::Rc;
+use syntax::ast;
 use syntax::owned_slice::OwnedSlice;
 use util::ppaux::Repr;
 
@@ -50,8 +53,8 @@ pub trait TypeFolder {
     }
 
     fn fold_substs(&mut self,
-                   substs: &ty::substs)
-                   -> ty::substs {
+                   substs: &subst::Substs)
+                   -> subst::Substs {
         super_fold_substs(self, substs)
     }
 
@@ -126,6 +129,12 @@ impl<T:TypeFoldable> TypeFoldable for OwnedSlice<T> {
     }
 }
 
+impl<T:TypeFoldable> TypeFoldable for VecPerParamSpace<T> {
+    fn fold_with<F:TypeFolder>(&self, folder: &mut F) -> VecPerParamSpace<T> {
+        self.map(|t| t.fold_with(folder))
+    }
+}
+
 impl TypeFoldable for ty::TraitStore {
     fn fold_with<F:TypeFolder>(&self, folder: &mut F) -> ty::TraitStore {
         folder.fold_trait_store(*self)
@@ -180,8 +189,8 @@ impl TypeFoldable for ty::Region {
     }
 }
 
-impl TypeFoldable for ty::substs {
-    fn fold_with<F:TypeFolder>(&self, folder: &mut F) -> ty::substs {
+impl TypeFoldable for subst::Substs {
+    fn fold_with<F:TypeFolder>(&self, folder: &mut F) -> subst::Substs {
         folder.fold_substs(self)
     }
 }
@@ -211,15 +220,9 @@ impl TypeFoldable for typeck::vtable_origin {
             typeck::vtable_param(n, b) => {
                 typeck::vtable_param(n, b)
             }
-        }
-    }
-}
-
-impl TypeFoldable for typeck::impl_res {
-    fn fold_with<F:TypeFolder>(&self, folder: &mut F) -> typeck::impl_res {
-        typeck::impl_res {
-            trait_vtables: self.trait_vtables.fold_with(folder),
-            self_vtables: self.self_vtables.fold_with(folder),
+            typeck::vtable_error => {
+                typeck::vtable_error
+            }
         }
     }
 }
@@ -244,6 +247,8 @@ impl TypeFoldable for ty::TypeParameterDef {
         ty::TypeParameterDef {
             ident: self.ident,
             def_id: self.def_id,
+            space: self.space,
+            index: self.index,
             bounds: self.bounds.fold_with(folder),
             default: self.default.fold_with(folder),
         }
@@ -259,8 +264,8 @@ impl TypeFoldable for ty::RegionParameterDef {
 impl TypeFoldable for ty::Generics {
     fn fold_with<F:TypeFolder>(&self, folder: &mut F) -> ty::Generics {
         ty::Generics {
-            type_param_defs: self.type_param_defs.fold_with(folder),
-            region_param_defs: self.region_param_defs.fold_with(folder)
+            types: self.types.fold_with(folder),
+            regions: self.regions.fold_with(folder),
         }
     }
 }
@@ -278,20 +283,19 @@ pub fn super_fold_ty<T:TypeFolder>(this: &mut T,
 }
 
 pub fn super_fold_substs<T:TypeFolder>(this: &mut T,
-                                       substs: &ty::substs)
-                                       -> ty::substs {
+                                       substs: &subst::Substs)
+                                       -> subst::Substs {
     let regions = match substs.regions {
-        ty::ErasedRegions => {
-            ty::ErasedRegions
+        subst::ErasedRegions => {
+            subst::ErasedRegions
         }
-        ty::NonerasedRegions(ref regions) => {
-            ty::NonerasedRegions(regions.fold_with(this))
+        subst::NonerasedRegions(ref regions) => {
+            subst::NonerasedRegions(regions.fold_with(this))
         }
     };
 
-    ty::substs { regions: regions,
-                 self_ty: substs.self_ty.fold_with(this),
-                 tps: substs.tps.fold_with(this) }
+    subst::Substs { regions: regions,
+                    types: substs.types.fold_with(this) }
 }
 
 pub fn super_fold_sig<T:TypeFolder>(this: &mut T,
@@ -361,13 +365,11 @@ pub fn super_fold_sty<T:TypeFolder>(this: &mut T,
         ty::ty_trait(box ty::TyTrait {
                 def_id,
                 ref substs,
-                store,
                 bounds
             }) => {
             ty::ty_trait(box ty::TyTrait {
                 def_id: def_id,
                 substs: substs.fold_with(this),
-                store: store.fold_with(this),
                 bounds: bounds
             })
         }
@@ -389,7 +391,7 @@ pub fn super_fold_sty<T:TypeFolder>(this: &mut T,
         ty::ty_nil | ty::ty_bot | ty::ty_bool | ty::ty_char | ty::ty_str |
         ty::ty_int(_) | ty::ty_uint(_) | ty::ty_float(_) |
         ty::ty_err | ty::ty_infer(_) |
-        ty::ty_param(..) | ty::ty_self(_) => {
+        ty::ty_param(..) => {
             (*sty).clone()
         }
     }
@@ -448,10 +450,23 @@ impl<'a> TypeFolder for BottomUpFolder<'a> {
 ///////////////////////////////////////////////////////////////////////////
 // Region folder
 
+/// Folds over the substructure of a type, visiting its component
+/// types and all regions that occur *free* within it.
+///
+/// That is, `ty::t` can contain function or method types that bind
+/// regions at the call site (`ReLateBound`), and occurrences of
+/// regions (aka "lifetimes") that are bound within a type are not
+/// visited by this folder; only regions that occur free will be
+/// visited by `fld_r`.
+///
+/// (The distinction between "free" and "bound" is represented by
+/// keeping track of each `FnSig` in the lexical context of the
+/// current position of the fold.)
 pub struct RegionFolder<'a> {
     tcx: &'a ty::ctxt,
     fld_t: |ty::t|: 'a -> ty::t,
     fld_r: |ty::Region|: 'a -> ty::Region,
+    within_binder_ids: Vec<ast::NodeId>,
 }
 
 impl<'a> RegionFolder<'a> {
@@ -462,7 +477,8 @@ impl<'a> RegionFolder<'a> {
         RegionFolder {
             tcx: tcx,
             fld_t: fld_t,
-            fld_r: fld_r
+            fld_r: fld_r,
+            within_binder_ids: vec![],
         }
     }
 
@@ -473,8 +489,19 @@ impl<'a> RegionFolder<'a> {
         RegionFolder {
             tcx: tcx,
             fld_t: noop,
-            fld_r: fld_r
+            fld_r: fld_r,
+            within_binder_ids: vec![],
         }
+    }
+}
+
+/// If `ty` has `FnSig` (i.e. closure or fn), return its binder_id;
+/// else None.
+fn opt_binder_id_of_function(t: ty::t) -> Option<ast::NodeId> {
+    match ty::get(t).sty {
+        ty::ty_closure(ref f) => Some(f.sig.binder_id),
+        ty::ty_bare_fn(ref f) => Some(f.sig.binder_id),
+        _                     => None,
     }
 }
 
@@ -483,12 +510,32 @@ impl<'a> TypeFolder for RegionFolder<'a> {
 
     fn fold_ty(&mut self, ty: ty::t) -> ty::t {
         debug!("RegionFolder.fold_ty({})", ty.repr(self.tcx()));
+        let opt_binder_id = opt_binder_id_of_function(ty);
+        match opt_binder_id {
+            Some(binder_id) => self.within_binder_ids.push(binder_id),
+            None => {}
+        }
+
         let t1 = super_fold_ty(self, ty);
-        (self.fld_t)(t1)
+        let ret = (self.fld_t)(t1);
+
+        if opt_binder_id.is_some() {
+            self.within_binder_ids.pop();
+        }
+
+        ret
     }
 
     fn fold_region(&mut self, r: ty::Region) -> ty::Region {
-        debug!("RegionFolder.fold_region({})", r.repr(self.tcx()));
-        (self.fld_r)(r)
+        match r {
+            ty::ReLateBound(binder_id, _) if self.within_binder_ids.contains(&binder_id) => {
+                debug!("RegionFolder.fold_region({}) skipped bound region", r.repr(self.tcx()));
+                r
+            }
+            _ => {
+                debug!("RegionFolder.fold_region({}) folding free region", r.repr(self.tcx()));
+                (self.fld_r)(r)
+            }
+        }
     }
 }

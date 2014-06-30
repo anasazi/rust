@@ -12,6 +12,7 @@
 
 use std::cell::Cell;
 use std::mem::swap;
+use std::gc::{Gc, GC};
 
 // Just a grab bag of stuff that you wouldn't want to actually write.
 
@@ -23,10 +24,10 @@ fn funny() {
 }
 
 fn what() {
-    fn the(x: @Cell<bool>) {
+    fn the(x: Gc<Cell<bool>>) {
         return while !x.get() { x.set(true); };
     }
-    let i = @Cell::new(false);
+    let i = box(GC) Cell::new(false);
     let dont = {||the(i)};
     dont();
     assert!((i.get()));
@@ -37,7 +38,7 @@ fn zombiejesus() {
         while (return) {
             if (return) {
                 match (return) {
-                    1 => {
+                    1i => {
                         if (return) {
                             return
                         } else {
@@ -55,7 +56,7 @@ fn zombiejesus() {
 }
 
 fn notsure() {
-    let mut _x;
+    let mut _x: int;
     let mut _y = (_x = 0) == (_x = 0);
     let mut _z = (_x = 0) < (_x = 0);
     let _a = (_x += 0) == (_x = 0);
@@ -66,13 +67,13 @@ fn canttouchthis() -> uint {
     fn p() -> bool { true }
     let _a = (assert!((true)) == (assert!(p())));
     let _c = (assert!((p())) == ());
-    let _b: bool = (println!("{}", 0) == (return 0u));
+    let _b: bool = (println!("{}", 0i) == (return 0u));
 }
 
 fn angrydome() {
     loop { if break { } }
-    let mut i = 0;
-    loop { i += 1; if i == 1 { match (continue) { 1 => { }, _ => fail!("wat") } }
+    let mut i = 0i;
+    loop { i += 1; if i == 1 { match (continue) { 1i => { }, _ => fail!("wat") } }
       break; }
 }
 

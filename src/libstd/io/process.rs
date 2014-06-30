@@ -16,12 +16,13 @@ use prelude::*;
 
 use str;
 use fmt;
-use io::IoResult;
+use io::{IoResult, IoError};
 use io;
 use libc;
 use mem;
 use owned::Box;
 use rt::rtio::{RtioProcess, ProcessConfig, IoFactory, LocalIo};
+use rt::rtio;
 use c_str::CString;
 
 /// Signal a process to exit, without forcibly killing it. Corresponds to
@@ -57,7 +58,8 @@ use c_str::CString;
 /// assert!(child.wait().unwrap().success());
 /// ```
 pub struct Process {
-    handle: Box<RtioProcess:Send>,
+    handle: Box<RtioProcess + Send>,
+    forget: bool,
 
     /// Handle to the child's stdin, if the `stdin` field of this process's
     /// `ProcessConfig` was `CreatePipe`. By default, this handle is `Some`.
@@ -232,16 +234,25 @@ impl Command {
 
     /// Executes the command as a child process, which is returned.
     pub fn spawn(&self) -> IoResult<Process> {
+        fn to_rtio(p: StdioContainer) -> rtio::StdioContainer {
+            match p {
+                Ignored => rtio::Ignored,
+                InheritFd(fd) => rtio::InheritFd(fd),
+                CreatePipe(a, b) => rtio::CreatePipe(a, b),
+            }
+        }
+        let extra_io: Vec<rtio::StdioContainer> =
+            self.extra_io.iter().map(|x| to_rtio(*x)).collect();
         LocalIo::maybe_raise(|io| {
             let cfg = ProcessConfig {
                 program: &self.program,
                 args: self.args.as_slice(),
                 env: self.env.as_ref().map(|env| env.as_slice()),
                 cwd: self.cwd.as_ref(),
-                stdin: self.stdin,
-                stdout: self.stdout,
-                stderr: self.stderr,
-                extra_io: self.extra_io.as_slice(),
+                stdin: to_rtio(self.stdin),
+                stdout: to_rtio(self.stdout),
+                stderr: to_rtio(self.stderr),
+                extra_io: extra_io.as_slice(),
                 uid: self.uid,
                 gid: self.gid,
                 detach: self.detach,
@@ -252,13 +263,14 @@ impl Command {
                 });
                 Process {
                     handle: p,
+                    forget: false,
                     stdin: io.next().unwrap(),
                     stdout: io.next().unwrap(),
                     stderr: io.next().unwrap(),
                     extra_io: io.collect(),
                 }
             })
-        })
+        }).map_err(IoError::from_rtio_error)
     }
 
     /// Executes the command as a child process, waiting for it to finish and
@@ -393,7 +405,9 @@ impl Process {
     /// be successfully delivered if the child has exited, but not yet been
     /// reaped.
     pub fn kill(id: libc::pid_t, signal: int) -> IoResult<()> {
-        LocalIo::maybe_raise(|io| io.kill(id, signal))
+        LocalIo::maybe_raise(|io| {
+            io.kill(id, signal)
+        }).map_err(IoError::from_rtio_error)
     }
 
     /// Returns the process id of this child process
@@ -415,7 +429,7 @@ impl Process {
     ///
     /// If the signal delivery fails, the corresponding error is returned.
     pub fn signal(&mut self, signal: int) -> IoResult<()> {
-        self.handle.kill(signal)
+        self.handle.kill(signal).map_err(IoError::from_rtio_error)
     }
 
     /// Sends a signal to this child requesting that it exits. This is
@@ -442,7 +456,11 @@ impl Process {
     /// `set_timeout` and the timeout expires before the child exits.
     pub fn wait(&mut self) -> IoResult<ProcessExit> {
         drop(self.stdin.take());
-        self.handle.wait()
+        match self.handle.wait() {
+            Ok(rtio::ExitSignal(s)) => Ok(ExitSignal(s)),
+            Ok(rtio::ExitStatus(s)) => Ok(ExitStatus(s)),
+            Err(e) => Err(IoError::from_rtio_error(e)),
+        }
     }
 
     /// Sets a timeout, in milliseconds, for future calls to wait().
@@ -458,8 +476,8 @@ impl Process {
     ///
     /// ```no_run
     /// # #![allow(experimental)]
-    /// use std::io::process::{Command, ProcessExit};
-    /// use std::io::IoResult;
+    /// use std::io::{Command, IoResult};
+    /// use std::io::process::ProcessExit;
     ///
     /// fn run_gracefully(prog: &str) -> IoResult<ProcessExit> {
     ///     let mut p = try!(Command::new("long-running-process").spawn());
@@ -524,10 +542,23 @@ impl Process {
             error:  stderr.recv().ok().unwrap_or(Vec::new()),
         })
     }
+
+    /// Forgets this process, allowing it to outlive the parent
+    ///
+    /// This function will forcefully prevent calling `wait()` on the child
+    /// process in the destructor, allowing the child to outlive the
+    /// parent. Note that this operation can easily lead to leaking the
+    /// resources of the child process, so care must be taken when
+    /// invoking this method.
+    pub fn forget(mut self) {
+        self.forget = true;
+    }
 }
 
 impl Drop for Process {
     fn drop(&mut self) {
+        if self.forget { return }
+
         // Close all I/O before exiting to ensure that the child doesn't wait
         // forever to print some text or something similar.
         drop(self.stdin.take());
@@ -840,8 +871,8 @@ mod tests {
     })
 
     iotest!(fn test_add_to_env() {
-        let new_env = box [("RUN_TEST_NEW_ENV", "123")];
-        let prog = env_cmd().env(new_env).spawn().unwrap();
+        let new_env = vec![("RUN_TEST_NEW_ENV", "123")];
+        let prog = env_cmd().env(new_env.as_slice()).spawn().unwrap();
         let result = prog.wait_with_output().unwrap();
         let output = str::from_utf8_lossy(result.output.as_slice()).into_string();
 
@@ -857,7 +888,7 @@ mod tests {
     pub fn sleeper() -> Process {
         // There's a `timeout` command on windows, but it doesn't like having
         // its output piped, so instead just ping ourselves a few times with
-        // gaps inbetweeen so we're sure this process is alive for awhile
+        // gaps in between so we're sure this process is alive for awhile
         Command::new("ping").arg("127.0.0.1").arg("-n").arg("1000").spawn().unwrap()
     }
 
@@ -877,7 +908,7 @@ mod tests {
     iotest!(fn test_zero() {
         let mut p = sleeper();
         p.signal_kill().unwrap();
-        for _ in range(0, 20) {
+        for _ in range(0i, 20) {
             if p.signal(0).is_err() {
                 assert!(!p.wait().unwrap().success());
                 return
@@ -916,5 +947,13 @@ mod tests {
         });
         rx.recv();
         rx.recv();
+    })
+
+    iotest!(fn forget() {
+        let p = sleeper();
+        let id = p.id();
+        p.forget();
+        assert!(Process::kill(id, 0).is_ok());
+        assert!(Process::kill(id, PleaseExitSignal).is_ok());
     })
 }

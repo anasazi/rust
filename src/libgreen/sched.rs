@@ -10,11 +10,11 @@
 
 use std::mem;
 use std::rt::local::Local;
+use std::rt::mutex::NativeMutex;
 use std::rt::rtio::{RemoteCallback, PausableIdleCallback, Callback, EventLoop};
 use std::rt::task::BlockedTask;
 use std::rt::task::Task;
 use std::sync::deque;
-use std::unstable::mutex::NativeMutex;
 use std::raw;
 
 use std::rand::{XorShiftRng, Rng, Rand};
@@ -82,8 +82,8 @@ pub struct Scheduler {
     run_anything: bool,
     /// A fast XorShift rng for scheduler use
     rng: XorShiftRng,
-    /// A togglable idle callback
-    idle_callback: Option<Box<PausableIdleCallback:Send>>,
+    /// A toggleable idle callback
+    idle_callback: Option<Box<PausableIdleCallback + Send>>,
     /// A countdown that starts at a random value and is decremented
     /// every time a yield check is performed. When it hits 0 a task
     /// will yield.
@@ -100,7 +100,7 @@ pub struct Scheduler {
     //      destroyed before it's actually destroyed.
 
     /// The event loop used to drive the scheduler and perform I/O
-    pub event_loop: Box<EventLoop:Send>,
+    pub event_loop: Box<EventLoop + Send>,
 }
 
 /// An indication of how hard to work on a given operation, the difference
@@ -123,7 +123,7 @@ impl Scheduler {
     // * Initialization Functions
 
     pub fn new(pool_id: uint,
-               event_loop: Box<EventLoop:Send>,
+               event_loop: Box<EventLoop + Send>,
                work_queue: deque::Worker<Box<GreenTask>>,
                work_queues: Vec<deque::Stealer<Box<GreenTask>>>,
                sleeper_list: SleeperList,
@@ -136,7 +136,7 @@ impl Scheduler {
     }
 
     pub fn new_special(pool_id: uint,
-                       event_loop: Box<EventLoop:Send>,
+                       event_loop: Box<EventLoop + Send>,
                        work_queue: deque::Worker<Box<GreenTask>>,
                        work_queues: Vec<deque::Stealer<Box<GreenTask>>>,
                        sleeper_list: SleeperList,
@@ -183,7 +183,7 @@ impl Scheduler {
     pub fn bootstrap(mut ~self) {
 
         // Build an Idle callback.
-        let cb = box SchedRunner as Box<Callback:Send>;
+        let cb = box SchedRunner as Box<Callback + Send>;
         self.idle_callback = Some(self.event_loop.pausable_idle_callback(cb));
 
         // Create a task for the scheduler with an empty context.
@@ -231,7 +231,7 @@ impl Scheduler {
         // mutable reference to the event_loop to give it the "run"
         // command.
         unsafe {
-            let event_loop: *mut Box<EventLoop:Send> = &mut self.event_loop;
+            let event_loop: *mut Box<EventLoop + Send> = &mut self.event_loop;
             // Our scheduler must be in the task before the event loop
             // is started.
             stask.put_with_sched(self);
@@ -287,7 +287,7 @@ impl Scheduler {
 
         // After processing a message, we consider doing some more work on the
         // event loop. The "keep going" condition changes after the first
-        // iteration becase we don't want to spin here infinitely.
+        // iteration because we don't want to spin here infinitely.
         //
         // Once we start doing work we can keep doing work so long as the
         // iteration does something. Note that we don't want to starve the
@@ -611,13 +611,13 @@ impl Scheduler {
     // old task as inputs.
 
     pub fn change_task_context(mut ~self,
-                               current_task: Box<GreenTask>,
+                               mut current_task: Box<GreenTask>,
                                mut next_task: Box<GreenTask>,
                                f: |&mut Scheduler, Box<GreenTask>|)
                                -> Box<GreenTask> {
         let f_opaque = ClosureConverter::from_fn(f);
 
-        let current_task_dupe = &*current_task as *GreenTask;
+        let current_task_dupe = &mut *current_task as *mut GreenTask;
 
         // The current task is placed inside an enum with the cleanup
         // function. This enum is then placed inside the scheduler.
@@ -641,7 +641,7 @@ impl Scheduler {
             };
 
             let (current_task_context, next_task_context) =
-                Scheduler::get_contexts(current_task, next_task);
+                Scheduler::get_contexts(current_task, &mut *next_task);
 
             // Done with everything - put the next task in TLS. This
             // works because due to transmute the borrow checker
@@ -871,7 +871,7 @@ impl Scheduler {
 
     // * Utility Functions
 
-    pub fn sched_id(&self) -> uint { self as *Scheduler as uint }
+    pub fn sched_id(&self) -> uint { self as *const Scheduler as uint }
 
     pub fn run_cleanup_job(&mut self) {
         let cleanup_job = self.cleanup_job.take_unwrap();
@@ -904,7 +904,7 @@ pub enum SchedMessage {
 }
 
 pub struct SchedHandle {
-    remote: Box<RemoteCallback:Send>,
+    remote: Box<RemoteCallback + Send>,
     queue: msgq::Producer<SchedMessage>,
     pub sched_id: uint
 }
@@ -1022,7 +1022,7 @@ fn new_sched_rng() -> XorShiftRng {
 mod test {
     use rustuv;
 
-    use std::task::TaskOpts;
+    use std::rt::task::TaskOpts;
     use std::rt::task::Task;
     use std::rt::local::Local;
 
@@ -1336,7 +1336,7 @@ mod test {
     fn multithreading() {
         run(proc() {
             let mut rxs = vec![];
-            for _ in range(0, 10) {
+            for _ in range(0u, 10) {
                 let (tx, rx) = channel();
                 spawn(proc() {
                     tx.send(());
@@ -1413,7 +1413,7 @@ mod test {
 
             impl Drop for S {
                 fn drop(&mut self) {
-                    let _foo = box 0;
+                    let _foo = box 0i;
                 }
             }
 
@@ -1469,18 +1469,18 @@ mod test {
     fn single_threaded_yield() {
         use std::task::deschedule;
         run(proc() {
-            for _ in range(0, 5) { deschedule(); }
+            for _ in range(0u, 5) { deschedule(); }
         });
     }
 
     #[test]
     fn test_spawn_sched_blocking() {
-        use std::unstable::mutex::{StaticNativeMutex, NATIVE_MUTEX_INIT};
+        use std::rt::mutex::{StaticNativeMutex, NATIVE_MUTEX_INIT};
         static mut LOCK: StaticNativeMutex = NATIVE_MUTEX_INIT;
 
         // Testing that a task in one scheduler can block in foreign code
         // without affecting other schedulers
-        for _ in range(0, 20) {
+        for _ in range(0u, 20) {
             let mut pool = pool();
             let (start_tx, start_rx) = channel();
             let (fin_tx, fin_rx) = channel();

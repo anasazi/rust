@@ -14,9 +14,9 @@ Despite their complete safety, a reference's representation at runtime
 is the same as that of an ordinary pointer in a C program. They introduce zero
 overhead. The compiler does all safety checks at compile time.
 
-Although references have rather elaborate theoretical underpinnings usually
-introduced as (e.g. region pointers), the core concepts will be familiar to
-anyone who has worked with C or C++. The best way to explain how they are
+Although references have rather elaborate theoretical underpinnings
+(e.g. region pointers), the core concepts will be familiar to anyone
+who has worked with C or C++. The best way to explain how they are
 used—and their limitations—is probably just to work through several examples.
 
 # By example
@@ -78,7 +78,7 @@ value. We also call this _borrowing_ the local variable
 name for the same data.
 
 In the case of `on_the_heap`, however, no explicit action is necessary. 
-The compiler will automatically convert a box box point to a reference like &point. 
+The compiler will automatically convert a box point to a reference like &point. 
 This is another form of borrowing; in this case, the contents of the owned box 
 are being lent out.
 
@@ -275,8 +275,10 @@ invalidate the pointer `owner_age`.
 
 # Borrowing and enums
 
-The previous example showed that the type system forbids any borrowing
-of owned boxes found in aliasable, mutable memory. This restriction
+The previous example showed that the type system forbids any mutations
+of owned boxed values while they are being borrowed. In general, the type
+system also forbids borrowing a value as mutable if it is already being
+borrowed - either as a mutable reference or an immutable one. This restriction
 prevents pointers from pointing into freed memory. There is one other
 case where the compiler must be very careful to ensure that pointers
 remain valid: pointers into the interior of an `enum`.
@@ -575,7 +577,7 @@ This is equivalent to the previous definition.
 Named lifetime notation can also be used to control the flow of execution:
 
 ~~~
-'h: for i in range(0,10) {
+'h: for i in range(0u, 10) {
     'g: loop {
         if i % 2 == 0 { continue 'h; }
         if i == 9 { break 'h; }

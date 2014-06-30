@@ -16,14 +16,13 @@ use super::{Loop, UvHandle};
 use std::rt::rtio::{Callback, PausableIdleCallback};
 
 pub struct IdleWatcher {
-    handle: *uvll::uv_idle_t,
+    handle: *mut uvll::uv_idle_t,
     idle_flag: bool,
-    closed: bool,
-    callback: Box<Callback:Send>,
+    callback: Box<Callback + Send>,
 }
 
 impl IdleWatcher {
-    pub fn new(loop_: &mut Loop, cb: Box<Callback:Send>) -> Box<IdleWatcher> {
+    pub fn new(loop_: &mut Loop, cb: Box<Callback + Send>) -> Box<IdleWatcher> {
         let handle = UvHandle::alloc(None::<IdleWatcher>, uvll::UV_IDLE);
         assert_eq!(unsafe {
             uvll::uv_idle_init(loop_.handle, handle)
@@ -31,7 +30,6 @@ impl IdleWatcher {
         let me = box IdleWatcher {
             handle: handle,
             idle_flag: false,
-            closed: false,
             callback: cb,
         };
         return me.install();
@@ -41,12 +39,12 @@ impl IdleWatcher {
         let handle = UvHandle::alloc(None::<IdleWatcher>, uvll::UV_IDLE);
         unsafe {
             assert_eq!(uvll::uv_idle_init(loop_.handle, handle), 0);
-            let data: *c_void = mem::transmute(box f);
+            let data: *mut c_void = mem::transmute(box f);
             uvll::set_data_for_uv_handle(handle, data);
             assert_eq!(uvll::uv_idle_start(handle, onetime_cb), 0)
         }
 
-        extern fn onetime_cb(handle: *uvll::uv_idle_t) {
+        extern fn onetime_cb(handle: *mut uvll::uv_idle_t) {
             unsafe {
                 let data = uvll::get_data_for_uv_handle(handle);
                 let f: Box<proc()> = mem::transmute(data);
@@ -56,7 +54,7 @@ impl IdleWatcher {
             }
         }
 
-        extern fn close_cb(handle: *uvll::uv_handle_t) {
+        extern fn close_cb(handle: *mut uvll::uv_handle_t) {
             unsafe { uvll::free_handle(handle) }
         }
     }
@@ -78,10 +76,10 @@ impl PausableIdleCallback for IdleWatcher {
 }
 
 impl UvHandle<uvll::uv_idle_t> for IdleWatcher {
-    fn uv_handle(&self) -> *uvll::uv_idle_t { self.handle }
+    fn uv_handle(&self) -> *mut uvll::uv_idle_t { self.handle }
 }
 
-extern fn idle_cb(handle: *uvll::uv_idle_t) {
+extern fn idle_cb(handle: *mut uvll::uv_idle_t) {
     let idle: &mut IdleWatcher = unsafe { UvHandle::from_uv_handle(&handle) };
     idle.callback.call();
 }
@@ -129,7 +127,7 @@ mod test {
     fn mk(v: uint) -> (Box<IdleWatcher>, Chan) {
         let rc = Rc::new(RefCell::new((None, 0)));
         let cb = box MyCallback(rc.clone(), v);
-        let cb = cb as Box<Callback:>;
+        let cb = cb as Box<Callback>;
         let cb = unsafe { mem::transmute(cb) };
         (IdleWatcher::new(&mut local_loop().loop_, cb), rc)
     }

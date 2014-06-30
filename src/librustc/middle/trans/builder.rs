@@ -19,7 +19,7 @@ use middle::trans::base;
 use middle::trans::common::*;
 use middle::trans::machine::llalign_of_pref;
 use middle::trans::type_::Type;
-use collections::HashMap;
+use std::collections::HashMap;
 use libc::{c_uint, c_ulonglong, c_char};
 use std::string::String;
 use syntax::codemap::Span;
@@ -31,9 +31,9 @@ pub struct Builder<'a> {
 
 // This is a really awful way to get a zero-length c-string, but better (and a
 // lot more efficient) than doing str::as_c_str("", ...) every time.
-pub fn noname() -> *c_char {
+pub fn noname() -> *const c_char {
     static cnull: c_char = 0;
-    &cnull as *c_char
+    &cnull as *const c_char
 }
 
 impl<'a> Builder<'a> {
@@ -564,14 +564,14 @@ impl<'a> Builder<'a> {
         }
     }
 
-    pub fn global_string(&self, _str: *c_char) -> ValueRef {
+    pub fn global_string(&self, _str: *const c_char) -> ValueRef {
         self.count_insn("globalstring");
         unsafe {
             llvm::LLVMBuildGlobalString(self.llbuilder, _str, noname())
         }
     }
 
-    pub fn global_string_ptr(&self, _str: *c_char) -> ValueRef {
+    pub fn global_string_ptr(&self, _str: *const c_char) -> ValueRef {
         self.count_insn("globalstringptr");
         unsafe {
             llvm::LLVMBuildGlobalStringPtr(self.llbuilder, _str, noname())
@@ -761,7 +761,8 @@ impl<'a> Builder<'a> {
     pub fn add_comment(&self, text: &str) {
         if self.ccx.sess().asm_comments() {
             let sanitized = text.replace("$", "");
-            let comment_text = format!("\\# {}", sanitized.replace("\n", "\n\t# "));
+            let comment_text = format!("{} {}", "#",
+                                       sanitized.replace("\n", "\n\t# "));
             self.count_insn("inlineasm");
             let asm = comment_text.as_slice().with_c_str(|c| {
                 unsafe {
@@ -773,7 +774,7 @@ impl<'a> Builder<'a> {
         }
     }
 
-    pub fn inline_asm_call(&self, asm: *c_char, cons: *c_char,
+    pub fn inline_asm_call(&self, asm: *const c_char, cons: *const c_char,
                          inputs: &[ValueRef], output: Type,
                          volatile: bool, alignstack: bool,
                          dia: AsmDialect) -> ValueRef {

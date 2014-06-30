@@ -8,9 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use alloc::arc::Arc;
 use std::mem;
+use std::rt::exclusive::Exclusive;
 use std::rt::rtio::{Callback, RemoteCallback};
-use std::unstable::sync::Exclusive;
 
 use uvll;
 use super::{Loop, UvHandle};
@@ -18,28 +19,28 @@ use super::{Loop, UvHandle};
 // The entire point of async is to call into a loop from other threads so it
 // does not need to home.
 pub struct AsyncWatcher {
-    handle: *uvll::uv_async_t,
+    handle: *mut uvll::uv_async_t,
 
     // A flag to tell the callback to exit, set from the dtor. This is
     // almost never contested - only in rare races with the dtor.
-    exit_flag: Exclusive<bool>
+    exit_flag: Arc<Exclusive<bool>>,
 }
 
 struct Payload {
-    callback: Box<Callback:Send>,
-    exit_flag: Exclusive<bool>,
+    callback: Box<Callback + Send>,
+    exit_flag: Arc<Exclusive<bool>>,
 }
 
 impl AsyncWatcher {
-    pub fn new(loop_: &mut Loop, cb: Box<Callback:Send>) -> AsyncWatcher {
+    pub fn new(loop_: &mut Loop, cb: Box<Callback + Send>) -> AsyncWatcher {
         let handle = UvHandle::alloc(None::<AsyncWatcher>, uvll::UV_ASYNC);
         assert_eq!(unsafe {
             uvll::uv_async_init(loop_.handle, handle, async_cb)
         }, 0);
-        let flag = Exclusive::new(false);
+        let flag = Arc::new(Exclusive::new(false));
         let payload = box Payload { callback: cb, exit_flag: flag.clone() };
         unsafe {
-            let payload: *u8 = mem::transmute(payload);
+            let payload: *mut u8 = mem::transmute(payload);
             uvll::set_data_for_uv_handle(handle, payload);
         }
         return AsyncWatcher { handle: handle, exit_flag: flag, };
@@ -47,13 +48,13 @@ impl AsyncWatcher {
 }
 
 impl UvHandle<uvll::uv_async_t> for AsyncWatcher {
-    fn uv_handle(&self) -> *uvll::uv_async_t { self.handle }
-    unsafe fn from_uv_handle<'a>(_: &'a *uvll::uv_async_t) -> &'a mut AsyncWatcher {
+    fn uv_handle(&self) -> *mut uvll::uv_async_t { self.handle }
+    unsafe fn from_uv_handle<'a>(_: &'a *mut uvll::uv_async_t) -> &'a mut AsyncWatcher {
         fail!("async watchers can't be built from their handles");
     }
 }
 
-extern fn async_cb(handle: *uvll::uv_async_t) {
+extern fn async_cb(handle: *mut uvll::uv_async_t) {
     let payload: &mut Payload = unsafe {
         mem::transmute(uvll::get_data_for_uv_handle(handle))
     };
@@ -80,9 +81,7 @@ extern fn async_cb(handle: *uvll::uv_async_t) {
     // could be called in the other thread, missing the final
     // callback while still destroying the handle.
 
-    let should_exit = unsafe {
-        payload.exit_flag.with_imm(|&should_exit| should_exit)
-    };
+    let should_exit = unsafe { *payload.exit_flag.lock() };
 
     payload.callback.call();
 
@@ -91,7 +90,7 @@ extern fn async_cb(handle: *uvll::uv_async_t) {
     }
 }
 
-extern fn close_cb(handle: *uvll::uv_handle_t) {
+extern fn close_cb(handle: *mut uvll::uv_handle_t) {
     // drop the payload
     let _payload: Box<Payload> = unsafe {
         mem::transmute(uvll::get_data_for_uv_handle(handle))
@@ -108,16 +107,13 @@ impl RemoteCallback for AsyncWatcher {
 
 impl Drop for AsyncWatcher {
     fn drop(&mut self) {
-        unsafe {
-            self.exit_flag.with(|should_exit| {
-                // NB: These two things need to happen atomically. Otherwise
-                // the event handler could wake up due to a *previous*
-                // signal and see the exit flag, destroying the handle
-                // before the final send.
-                *should_exit = true;
-                uvll::uv_async_send(self.handle)
-            })
-        }
+        let mut should_exit = unsafe { self.exit_flag.lock() };
+        // NB: These two things need to happen atomically. Otherwise
+        // the event handler could wake up due to a *previous*
+        // signal and see the exit flag, destroying the handle
+        // before the final send.
+        *should_exit = true;
+        unsafe { uvll::uv_async_send(self.handle) }
     }
 }
 

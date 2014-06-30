@@ -24,14 +24,14 @@
  */
 
 #![crate_id = "glob#0.11.0-pre"]
+#![experimental]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
 #![license = "MIT/ASL2"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-       html_root_url = "http://doc.rust-lang.org/")]
-
-#![deny(deprecated_owned_vector)]
+       html_root_url = "http://doc.rust-lang.org/",
+       html_playground_url = "http://play.rust-lang.org/")]
 
 use std::cell::Cell;
 use std::{cmp, os, path};
@@ -44,7 +44,6 @@ use std::string::String;
  * pattern - see the `glob` function for more details.
  */
 pub struct Paths {
-    root: Path,
     dir_patterns: Vec<Pattern>,
     require_dir: bool,
     options: MatchOptions,
@@ -108,7 +107,6 @@ pub fn glob_with(pattern: &str, options: MatchOptions) -> Paths {
             // FIXME: How do we want to handle verbatim paths? I'm inclined to return nothing,
             // since we can't very well find all UNC shares with a 1-letter server name.
             return Paths {
-                root: root,
                 dir_patterns: Vec::new(),
                 require_dir: false,
                 options: options,
@@ -134,7 +132,6 @@ pub fn glob_with(pattern: &str, options: MatchOptions) -> Paths {
     }
 
     Paths {
-        root: root,
         dir_patterns: dir_patterns,
         require_dir: require_dir,
         options: options,
@@ -689,13 +686,13 @@ mod test {
     fn test_range_pattern() {
 
         let pat = Pattern::new("a[0-9]b");
-        for i in range(0, 10) {
+        for i in range(0u, 10) {
             assert!(pat.matches(format!("a{}b", i).as_slice()));
         }
         assert!(!pat.matches("a_b"));
 
         let pat = Pattern::new("a[!0-9]b");
-        for i in range(0, 10) {
+        for i in range(0u, 10) {
             assert!(!pat.matches(format!("a{}b", i).as_slice()));
         }
         assert!(pat.matches("a_b"));

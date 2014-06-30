@@ -15,10 +15,9 @@ use std::any::Any;
 use std::mem;
 use std::rt::Runtime;
 use std::rt::local::Local;
+use std::rt::mutex::NativeMutex;
 use std::rt::rtio;
-use std::rt::task::{Task, BlockedTask};
-use std::task::TaskOpts;
-use std::unstable::mutex::NativeMutex;
+use std::rt::task::{Task, BlockedTask, TaskOpts};
 
 struct SimpleTask {
     lock: NativeMutex,
@@ -33,7 +32,7 @@ impl Runtime for SimpleTask {
         assert!(times == 1);
 
         let me = &mut *self as *mut SimpleTask;
-        let cur_dupe = &*cur_task as *Task;
+        let cur_dupe = &mut *cur_task as *mut Task;
         cur_task.put_runtime(self);
         let task = BlockedTask::block(cur_task);
 

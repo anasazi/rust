@@ -17,7 +17,7 @@ use middle::ty;
 
 use syntax::ast;
 use syntax::ast_util::local_def;
-use syntax::attr;
+use syntax::ast_util;
 
 pub fn maybe_instantiate_inline(ccx: &CrateContext, fn_id: ast::DefId)
     -> ast::DefId {
@@ -51,7 +51,7 @@ pub fn maybe_instantiate_inline(ccx: &CrateContext, fn_id: ast::DefId)
             ccx.external_srcs.borrow_mut().insert(item.id, fn_id);
 
             ccx.stats.n_inlines.set(ccx.stats.n_inlines.get() + 1);
-            trans_item(ccx, item);
+            trans_item(ccx, &*item);
 
             // We're bringing an external global into this crate, but we don't
             // want to create two copies of the global. If we do this, then if
@@ -62,12 +62,13 @@ pub fn maybe_instantiate_inline(ccx: &CrateContext, fn_id: ast::DefId)
             // however, so we use the available_externally linkage which llvm
             // provides
             match item.node {
-                ast::ItemStatic(..) => {
+                ast::ItemStatic(_, mutbl, _) => {
                     let g = get_item_val(ccx, item.id);
                     // see the comment in get_item_val() as to why this check is
                     // performed here.
-                    if !attr::contains_name(item.attrs.as_slice(),
-                                            "address_insignificant") {
+                    if ast_util::static_has_significant_address(
+                            mutbl,
+                            item.attrs.as_slice()) {
                         SetLinkage(g, AvailableExternallyLinkage);
                     }
                 }
@@ -107,7 +108,7 @@ pub fn maybe_instantiate_inline(ccx: &CrateContext, fn_id: ast::DefId)
             _ => ccx.sess().bug("maybe_instantiate_inline: item has a \
                                  non-enum, non-struct parent")
           }
-          trans_item(ccx, item);
+          trans_item(ccx, &*item);
           local_def(my_id)
         }
         csearch::found_parent(_, _) => {
@@ -118,20 +119,21 @@ pub fn maybe_instantiate_inline(ccx: &CrateContext, fn_id: ast::DefId)
             ccx.external.borrow_mut().insert(fn_id, Some(mth.id));
             ccx.external_srcs.borrow_mut().insert(mth.id, fn_id);
 
-          ccx.stats.n_inlines.set(ccx.stats.n_inlines.get() + 1);
+            ccx.stats.n_inlines.set(ccx.stats.n_inlines.get() + 1);
 
-          // If this is a default method, we can't look up the
-          // impl type. But we aren't going to translate anyways, so don't.
-          if is_provided { return local_def(mth.id); }
+            // If this is a default method, we can't look up the
+            // impl type. But we aren't going to translate anyways, so don't.
+            if is_provided { return local_def(mth.id); }
 
             let impl_tpt = ty::lookup_item_type(ccx.tcx(), impl_did);
-            let num_type_params =
-                impl_tpt.generics.type_param_defs().len() +
-                mth.generics.ty_params.len();
+            let unparameterized =
+                impl_tpt.generics.types.is_empty() &&
+                mth.generics.ty_params.is_empty();
 
-          if num_type_params == 0 {
+          if unparameterized {
               let llfn = get_item_val(ccx, mth.id);
-              trans_fn(ccx, mth.decl, mth.body, llfn, None, mth.id, []);
+              trans_fn(ccx, &*mth.decl, &*mth.body, llfn,
+                       &param_substs::empty(), mth.id, []);
           }
           local_def(mth.id)
         }

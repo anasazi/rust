@@ -51,10 +51,10 @@ use std::mem;
 use std::os;
 use std::ptr;
 use std::rt::rtio;
+use std::rt::rtio::IoResult;
 use std::sync::atomics;
 use std::comm;
 
-use io::IoResult;
 use io::c;
 use io::file::FileDesc;
 use io::helper_thread::Helper;
@@ -67,7 +67,7 @@ pub struct Timer {
 }
 
 struct Inner {
-    tx: Option<Sender<()>>,
+    cb: Option<Box<rtio::Callback + Send>>,
     interval: u64,
     repeat: bool,
     target: u64,
@@ -88,12 +88,25 @@ pub enum Req {
 pub fn now() -> u64 {
     unsafe {
         let mut now: libc::timeval = mem::zeroed();
-        assert_eq!(c::gettimeofday(&mut now, ptr::null()), 0);
+        assert_eq!(c::gettimeofday(&mut now, ptr::mut_null()), 0);
         return (now.tv_sec as u64) * 1000 + (now.tv_usec as u64) / 1000;
     }
 }
 
-fn helper(input: libc::c_int, messages: Receiver<Req>, _: ()) {
+
+// Note: although the last parameter isn't used there is no way now to
+// convert it to unit type, because LLVM dies in SjLj preparation
+// step (unfortunately iOS uses SjLJ exceptions)
+//
+// It's definitely a temporary workaround just to get it working.
+// So far it looks like an LLVM issue and it was reported:
+// http://llvm.org/bugs/show_bug.cgi?id=19855
+// Actually this issue is pretty common while compiling for armv7 iOS
+// and in most cases it is simply solved by using --opt-level=2 (or -O)
+//
+// For this specific case unfortunately turning optimizations wasn't
+// enough.
+fn helper(input: libc::c_int, messages: Receiver<Req>, _: int) {
     let mut set: c::fd_set = unsafe { mem::zeroed() };
 
     let mut fd = FileDesc::new(input, true);
@@ -119,13 +132,13 @@ fn helper(input: libc::c_int, messages: Receiver<Req>, _: ()) {
         let mut timer = match active.shift() {
             Some(timer) => timer, None => return
         };
-        let tx = timer.tx.take_unwrap();
-        if tx.send_opt(()).is_ok() && timer.repeat {
-            timer.tx = Some(tx);
+        let mut cb = timer.cb.take_unwrap();
+        cb.call();
+        if timer.repeat {
+            timer.cb = Some(cb);
             timer.target += timer.interval;
             insert(timer, active);
         } else {
-            drop(tx);
             dead.push((timer.id, timer));
         }
     }
@@ -133,7 +146,7 @@ fn helper(input: libc::c_int, messages: Receiver<Req>, _: ()) {
     'outer: loop {
         let timeout = if active.len() == 0 {
             // Empty array? no timeout (wait forever for the next request)
-            ptr::null()
+            ptr::mut_null()
         } else {
             let now = now();
             // If this request has already expired, then signal it and go
@@ -149,12 +162,13 @@ fn helper(input: libc::c_int, messages: Receiver<Req>, _: ()) {
             let tm = active.get(0).target - now;
             timeout.tv_sec = (tm / 1000) as libc::time_t;
             timeout.tv_usec = ((tm % 1000) * 1000) as libc::suseconds_t;
-            &timeout as *libc::timeval
+            &mut timeout as *mut libc::timeval
         };
 
         c::fd_set(&mut set, input);
         match unsafe {
-            c::select(input + 1, &set, ptr::null(), ptr::null(), timeout)
+            c::select(input + 1, &mut set, ptr::mut_null(),
+                      ptr::mut_null(), timeout)
         } {
             // timed out
             0 => signal(&mut active, &mut dead),
@@ -190,7 +204,7 @@ fn helper(input: libc::c_int, messages: Receiver<Req>, _: ()) {
 
                 // drain the file descriptor
                 let mut buf = [0];
-                assert_eq!(fd.inner_read(buf).unwrap(), 1);
+                assert_eq!(fd.inner_read(buf).ok().unwrap(), 1);
             }
 
             -1 if os::errno() == libc::EINTR as int => {}
@@ -202,14 +216,16 @@ fn helper(input: libc::c_int, messages: Receiver<Req>, _: ()) {
 
 impl Timer {
     pub fn new() -> IoResult<Timer> {
-        unsafe { HELPER.boot(|| {}, helper); }
+        // See notes above regarding using int return value
+        // instead of ()
+        unsafe { HELPER.boot(|| {0}, helper); }
 
         static mut ID: atomics::AtomicUint = atomics::INIT_ATOMIC_UINT;
         let id = unsafe { ID.fetch_add(1, atomics::Relaxed) };
         Ok(Timer {
             id: id,
             inner: Some(box Inner {
-                tx: None,
+                cb: None,
                 interval: 0,
                 target: 0,
                 repeat: false,
@@ -245,38 +261,34 @@ impl Timer {
 impl rtio::RtioTimer for Timer {
     fn sleep(&mut self, msecs: u64) {
         let mut inner = self.inner();
-        inner.tx = None; // cancel any previous request
+        inner.cb = None; // cancel any previous request
         self.inner = Some(inner);
 
         Timer::sleep(msecs);
     }
 
-    fn oneshot(&mut self, msecs: u64) -> Receiver<()> {
+    fn oneshot(&mut self, msecs: u64, cb: Box<rtio::Callback + Send>) {
         let now = now();
         let mut inner = self.inner();
 
-        let (tx, rx) = channel();
         inner.repeat = false;
-        inner.tx = Some(tx);
+        inner.cb = Some(cb);
         inner.interval = msecs;
         inner.target = now + msecs;
 
         unsafe { HELPER.send(NewTimer(inner)); }
-        return rx;
     }
 
-    fn period(&mut self, msecs: u64) -> Receiver<()> {
+    fn period(&mut self, msecs: u64, cb: Box<rtio::Callback + Send>) {
         let now = now();
         let mut inner = self.inner();
 
-        let (tx, rx) = channel();
         inner.repeat = true;
-        inner.tx = Some(tx);
+        inner.cb = Some(cb);
         inner.interval = msecs;
         inner.target = now + msecs;
 
         unsafe { HELPER.send(NewTimer(inner)); }
-        return rx;
     }
 }
 

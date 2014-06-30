@@ -15,19 +15,26 @@
 
 #![allow(missing_doc)]
 
-use std::iter::{Enumerate, FilterMap};
-use std::mem::replace;
-use std::{vec, slice};
+use core::prelude::*;
+
+use core::default::Default;
+use core::fmt;
+use core::iter::{Enumerate, FilterMap};
+use core::mem::replace;
+
+use {Collection, Mutable, Map, MutableMap};
+use {vec, slice};
+use vec::Vec;
 
 #[allow(missing_doc)]
 pub struct SmallIntMap<T> {
     v: Vec<Option<T>>,
 }
 
-impl<V> Container for SmallIntMap<V> {
+impl<V> Collection for SmallIntMap<V> {
     /// Return the number of elements in the map
     fn len(&self) -> uint {
-        self.v.iter().count(|elt| elt.is_some())
+        self.v.iter().filter(|elt| elt.is_some()).count()
     }
 
     /// Return true if there are no elements in the map
@@ -108,6 +115,11 @@ impl<V> MutableMap<uint, V> for SmallIntMap<V> {
     }
 }
 
+impl<V> Default for SmallIntMap<V> {
+    #[inline]
+    fn default() -> SmallIntMap<V> { SmallIntMap::new() }
+}
+
 impl<V> SmallIntMap<V> {
     /// Create an empty SmallIntMap
     pub fn new() -> SmallIntMap<V> { SmallIntMap{v: vec!()} }
@@ -172,6 +184,18 @@ impl<V:Clone> SmallIntMap<V> {
     }
 }
 
+impl<V: fmt::Show> fmt::Show for SmallIntMap<V> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        try!(write!(f, "{{"));
+
+        for (i, (k, v)) in self.iter().enumerate() {
+            if i != 0 { try!(write!(f, ", ")); }
+            try!(write!(f, "{}: {}", k, *v));
+        }
+
+        write!(f, "}}")
+    }
+}
 
 macro_rules! iterator {
     (impl $name:ident -> $elem:ty, $getter:ident) => {
@@ -245,13 +269,15 @@ double_ended_iterator!(impl MutEntries -> (uint, &'a mut T), get_mut_ref)
 
 #[cfg(test)]
 mod test_map {
+    use std::prelude::*;
 
+    use {Map, MutableMap, Mutable};
     use super::SmallIntMap;
 
     #[test]
     fn test_find_mut() {
         let mut m = SmallIntMap::new();
-        assert!(m.insert(1, 12));
+        assert!(m.insert(1, 12i));
         assert!(m.insert(2, 8));
         assert!(m.insert(5, 14));
         let new = 100;
@@ -266,7 +292,7 @@ mod test_map {
         let mut map = SmallIntMap::new();
         assert_eq!(map.len(), 0);
         assert!(map.is_empty());
-        assert!(map.insert(5, 20));
+        assert!(map.insert(5, 20i));
         assert_eq!(map.len(), 1);
         assert!(!map.is_empty());
         assert!(map.insert(11, 12));
@@ -280,7 +306,7 @@ mod test_map {
     #[test]
     fn test_clear() {
         let mut map = SmallIntMap::new();
-        assert!(map.insert(5, 20));
+        assert!(map.insert(5, 20i));
         assert!(map.insert(11, 12));
         assert!(map.insert(14, 22));
         map.clear();
@@ -323,15 +349,15 @@ mod test_map {
     #[test]
     fn test_swap() {
         let mut m = SmallIntMap::new();
-        assert_eq!(m.swap(1, 2), None);
-        assert_eq!(m.swap(1, 3), Some(2));
-        assert_eq!(m.swap(1, 4), Some(3));
+        assert_eq!(m.swap(1, 2i), None);
+        assert_eq!(m.swap(1, 3i), Some(2));
+        assert_eq!(m.swap(1, 4i), Some(3));
     }
 
     #[test]
     fn test_pop() {
         let mut m = SmallIntMap::new();
-        m.insert(1, 2);
+        m.insert(1, 2i);
         assert_eq!(m.pop(&1), Some(2));
         assert_eq!(m.pop(&1), None);
     }
@@ -340,7 +366,7 @@ mod test_map {
     fn test_iterator() {
         let mut m = SmallIntMap::new();
 
-        assert!(m.insert(0, 1));
+        assert!(m.insert(0, 1i));
         assert!(m.insert(1, 2));
         assert!(m.insert(3, 5));
         assert!(m.insert(6, 10));
@@ -365,7 +391,7 @@ mod test_map {
     fn test_iterator_size_hints() {
         let mut m = SmallIntMap::new();
 
-        assert!(m.insert(0, 1));
+        assert!(m.insert(0, 1i));
         assert!(m.insert(1, 2));
         assert!(m.insert(3, 5));
         assert!(m.insert(6, 10));
@@ -381,7 +407,7 @@ mod test_map {
     fn test_mut_iterator() {
         let mut m = SmallIntMap::new();
 
-        assert!(m.insert(0, 1));
+        assert!(m.insert(0, 1i));
         assert!(m.insert(1, 2));
         assert!(m.insert(3, 5));
         assert!(m.insert(6, 10));
@@ -404,7 +430,7 @@ mod test_map {
     fn test_rev_iterator() {
         let mut m = SmallIntMap::new();
 
-        assert!(m.insert(0, 1));
+        assert!(m.insert(0, 1i));
         assert!(m.insert(1, 2));
         assert!(m.insert(3, 5));
         assert!(m.insert(6, 10));
@@ -423,7 +449,7 @@ mod test_map {
     fn test_mut_rev_iterator() {
         let mut m = SmallIntMap::new();
 
-        assert!(m.insert(0, 1));
+        assert!(m.insert(0, 1i));
         assert!(m.insert(1, 2));
         assert!(m.insert(3, 5));
         assert!(m.insert(6, 10));
@@ -445,16 +471,30 @@ mod test_map {
     #[test]
     fn test_move_iter() {
         let mut m = SmallIntMap::new();
-        m.insert(1, box 2);
+        m.insert(1, box 2i);
         let mut called = false;
         for (k, v) in m.move_iter() {
             assert!(!called);
             called = true;
             assert_eq!(k, 1);
-            assert_eq!(v, box 2);
+            assert_eq!(v, box 2i);
         }
         assert!(called);
-        m.insert(2, box 1);
+        m.insert(2, box 1i);
+    }
+
+    #[test]
+    fn test_show() {
+        let mut map = SmallIntMap::new();
+        let empty = SmallIntMap::<int>::new();
+
+        map.insert(1, 2i);
+        map.insert(3, 4i);
+
+        let map_str = map.to_str();
+        let map_str = map_str.as_slice();
+        assert!(map_str == "{1: 2, 3: 4}" || map_str == "{3: 4, 1: 2}");
+        assert_eq!(format!("{}", empty), "{}".to_string());
     }
 }
 

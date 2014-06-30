@@ -16,15 +16,16 @@
 
 use mem;
 use char;
+use char::Char;
 use clone::Clone;
 use cmp;
 use cmp::{PartialEq, Eq};
-use container::Container;
+use collections::Collection;
 use default::Default;
 use iter::{Filter, Map, Iterator};
 use iter::{DoubleEndedIterator, ExactSize};
 use iter::range;
-use num::Saturating;
+use num::{CheckedMul, Saturating};
 use option::{None, Option, Some};
 use raw::Repr;
 use slice::ImmutableVector;
@@ -364,7 +365,8 @@ impl TwoWaySearcher {
             period = period2;
         }
 
-        let byteset = needle.iter().fold(0, |a, &b| (1 << (b & 0x3f)) | a);
+        let byteset = needle.iter()
+                            .fold(0, |a, &b| (1 << ((b & 0x3f) as uint)) | a);
 
         if needle.slice_to(critPos) == needle.slice_from(needle.len() - critPos) {
             TwoWaySearcher {
@@ -396,7 +398,9 @@ impl TwoWaySearcher {
             }
 
             // Quickly skip by large portions unrelated to our substring
-            if (self.byteset >> (haystack[self.position + needle.len() - 1] & 0x3f)) & 1 == 0 {
+            if (self.byteset >>
+                    ((haystack[self.position + needle.len() - 1] & 0x3f)
+                     as uint)) & 1 == 0 {
                 self.position += needle.len();
                 continue 'search;
             }
@@ -478,7 +482,7 @@ impl TwoWaySearcher {
 }
 
 /// The internal state of an iterator that searches for matches of a substring
-/// within a larger string using a dynamically chosed search algorithm
+/// within a larger string using a dynamically chosen search algorithm
 #[deriving(Clone)]
 enum Searcher {
     Naive(NaiveSearcher),
@@ -554,33 +558,64 @@ impl<'a> Iterator<&'a str> for StrSplits<'a> {
     }
 }
 
+/// External iterator for a string's UTF16 codeunits.
+/// Use with the `std::iter` module.
+#[deriving(Clone)]
+pub struct Utf16CodeUnits<'a> {
+    chars: Chars<'a>,
+    extra: u16
+}
+
+impl<'a> Iterator<u16> for Utf16CodeUnits<'a> {
+    #[inline]
+    fn next(&mut self) -> Option<u16> {
+        if self.extra != 0 {
+            let tmp = self.extra;
+            self.extra = 0;
+            return Some(tmp);
+        }
+
+        let mut buf = [0u16, ..2];
+        self.chars.next().map(|ch| {
+            let n = ch.encode_utf16(buf /* as mut slice! */);
+            if n == 2 { self.extra = buf[1]; }
+            buf[0]
+        })
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (uint, Option<uint>) {
+        let (low, high) = self.chars.size_hint();
+        // every char gets either one u16 or two u16,
+        // so this iterator is between 1 or 2 times as
+        // long as the underlying iterator.
+        (low, high.and_then(|n| n.checked_mul(&2)))
+    }
+}
+
 /*
 Section: Comparing strings
 */
 
 // share the implementation of the lang-item vs. non-lang-item
 // eq_slice.
+/// NOTE: This function is (ab)used in rustc::middle::trans::_match
+/// to compare &[u8] byte slices that are not necessarily valid UTF-8.
 #[inline]
 fn eq_slice_(a: &str, b: &str) -> bool {
     #[allow(ctypes)]
-    extern { fn memcmp(s1: *i8, s2: *i8, n: uint) -> i32; }
+    extern { fn memcmp(s1: *const i8, s2: *const i8, n: uint) -> i32; }
     a.len() == b.len() && unsafe {
-        memcmp(a.as_ptr() as *i8,
-               b.as_ptr() as *i8,
+        memcmp(a.as_ptr() as *const i8,
+               b.as_ptr() as *const i8,
                a.len()) == 0
     }
 }
 
 /// Bytewise slice equality
-#[cfg(not(test))]
+/// NOTE: This function is (ab)used in rustc::middle::trans::_match
+/// to compare &[u8] byte slices that are not necessarily valid UTF-8.
 #[lang="str_eq"]
-#[inline]
-pub fn eq_slice(a: &str, b: &str) -> bool {
-    eq_slice_(a, b)
-}
-
-/// Bytewise slice equality
-#[cfg(test)]
 #[inline]
 pub fn eq_slice(a: &str, b: &str) -> bool {
     eq_slice_(a, b)
@@ -866,8 +901,7 @@ static TAG_CONT_U8: u8 = 128u8;
 /// Unsafe operations
 pub mod raw {
     use mem;
-    use container::Container;
-    use iter::Iterator;
+    use collections::Collection;
     use ptr::RawPtr;
     use raw::Slice;
     use slice::{ImmutableVector};
@@ -882,8 +916,8 @@ pub mod raw {
     /// Form a slice from a C string. Unsafe because the caller must ensure the
     /// C string has the static lifetime, or else the return value may be
     /// invalidated later.
-    pub unsafe fn c_str_to_static_slice(s: *i8) -> &'static str {
-        let s = s as *u8;
+    pub unsafe fn c_str_to_static_slice(s: *const i8) -> &'static str {
+        let s = s as *const u8;
         let mut curr = s;
         let mut len = 0u;
         while *curr != 0u8 {
@@ -928,13 +962,12 @@ pub mod raw {
 Section: Trait implementations
 */
 
-#[cfg(not(test))]
 #[allow(missing_doc)]
 pub mod traits {
-    use container::Container;
     use cmp::{Ord, Ordering, Less, Equal, Greater, PartialEq, PartialOrd, Equiv, Eq};
+    use collections::Collection;
     use iter::Iterator;
-    use option::{Some, None};
+    use option::{Option, Some, None};
     use str::{Str, StrSlice, eq_slice};
 
     impl<'a> Ord for &'a str {
@@ -965,7 +998,9 @@ pub mod traits {
 
     impl<'a> PartialOrd for &'a str {
         #[inline]
-        fn lt(&self, other: & &'a str) -> bool { self.cmp(other) == Less }
+        fn partial_cmp(&self, other: &&'a str) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
     }
 
     impl<'a, S: Str> Equiv<S> for &'a str {
@@ -973,9 +1008,6 @@ pub mod traits {
         fn equiv(&self, other: &S) -> bool { eq_slice(*self, other.as_slice()) }
     }
 }
-
-#[cfg(test)]
-pub mod traits {}
 
 /// Any string that can be represented as a slice
 pub trait Str {
@@ -988,7 +1020,7 @@ impl<'a> Str for &'a str {
     fn as_slice<'a>(&'a self) -> &'a str { *self }
 }
 
-impl<'a> Container for &'a str {
+impl<'a> Collection for &'a str {
     #[inline]
     fn len(&self) -> uint {
         self.repr().len
@@ -1121,7 +1153,7 @@ pub trait StrSlice<'a> {
     ///
     /// That is, each returned value `(start, end)` satisfies
     /// `self.slice(start, end) == sep`. For matches of `sep` within
-    /// `self` that overlap, only the indicies corresponding to the
+    /// `self` that overlap, only the indices corresponding to the
     /// first match are returned.
     ///
     /// # Example
@@ -1612,7 +1644,10 @@ pub trait StrSlice<'a> {
     /// The caller must ensure that the string outlives this pointer,
     /// and that it is not reallocated (e.g. by pushing to the
     /// string).
-    fn as_ptr(&self) -> *u8;
+    fn as_ptr(&self) -> *const u8;
+
+    /// Return an iterator of `u16` over the string encoded as UTF-16.
+    fn utf16_units(&self) -> Utf16CodeUnits<'a>;
 }
 
 impl<'a> StrSlice<'a> for &'a str {
@@ -1725,7 +1760,7 @@ impl<'a> StrSlice<'a> for &'a str {
     fn is_alphanumeric(&self) -> bool { self.chars().all(char::is_alphanumeric) }
 
     #[inline]
-    fn char_len(&self) -> uint { self.chars().len() }
+    fn char_len(&self) -> uint { self.chars().count() }
 
     #[inline]
     fn slice(&self, begin: uint, end: uint) -> &'a str {
@@ -1958,8 +1993,13 @@ impl<'a> StrSlice<'a> for &'a str {
     }
 
     #[inline]
-    fn as_ptr(&self) -> *u8 {
+    fn as_ptr(&self) -> *const u8 {
         self.repr().data
+    }
+
+    #[inline]
+    fn utf16_units(&self) -> Utf16CodeUnits<'a> {
+        Utf16CodeUnits{ chars: self.chars(), extra: 0}
     }
 }
 

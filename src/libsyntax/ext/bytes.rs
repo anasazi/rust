@@ -19,6 +19,14 @@ use ext::build::AstBuilder;
 
 pub fn expand_syntax_ext(cx: &mut ExtCtxt, sp: Span, tts: &[ast::TokenTree])
                          -> Box<base::MacResult> {
+    cx.span_warn(sp, "`bytes!` is deprecated, use `b\"foo\"` literals instead");
+    cx.parse_sess.span_diagnostic.span_note(sp,
+        "see http://doc.rust-lang.org/rust.html#byte-and-byte-string-literals \
+         for documentation");
+    cx.parse_sess.span_diagnostic.span_note(sp,
+        "see https://github.com/rust-lang/rust/blob/master/src/etc/2014-06-rewrite-bytes-macros.py \
+         for an automated migration");
+
     // Gather all argument expressions
     let exprs = match get_exprs_from_tts(cx, sp, tts) {
         None => return DummyResult::expr(sp),
@@ -94,6 +102,18 @@ pub fn expand_syntax_ext(cx: &mut ExtCtxt, sp: Span, tts: &[ast::TokenTree])
     }
 
     let e = cx.expr_vec_slice(sp, bytes);
-    let e = quote_expr!(cx, { static BYTES: &'static [u8] = $e; BYTES});
+    let ty = cx.ty(sp, ast::TyVec(cx.ty_ident(sp, cx.ident_of("u8"))));
+    let lifetime = cx.lifetime(sp, cx.ident_of("'static").name);
+    let item = cx.item_static(sp,
+                              cx.ident_of("BYTES"),
+                              cx.ty_rptr(sp,
+                                         ty,
+                                         Some(lifetime),
+                                         ast::MutImmutable),
+                              ast::MutImmutable,
+                              e);
+    let e = cx.expr_block(cx.block(sp,
+                                   vec!(cx.stmt_item(sp, item)),
+                                   Some(cx.expr_ident(sp, cx.ident_of("BYTES")))));
     MacExpr::new(e)
 }

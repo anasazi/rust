@@ -20,7 +20,7 @@ use metadata::loader;
 use std::cell::RefCell;
 use std::c_vec::CVec;
 use std::rc::Rc;
-use collections::HashMap;
+use std::collections::HashMap;
 use syntax::ast;
 use syntax::crateid::CrateId;
 use syntax::codemap::Span;
@@ -137,9 +137,6 @@ impl CStore {
         self.used_crate_sources.borrow_mut()
             .iter().find(|source| source.cnum == cnum)
             .map(|source| source.clone())
-    }
-
-    pub fn dump_phase_syntax_crates(&self) {
     }
 
     pub fn reset(&self) {

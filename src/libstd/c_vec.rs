@@ -33,7 +33,7 @@
 //! handled correctly, i.e. that allocated memory is eventually freed
 //! if necessary.
 
-use container::Container;
+use collections::Collection;
 use kinds::Send;
 use mem;
 use ops::Drop;
@@ -102,14 +102,14 @@ impl<T> CVec<T> {
     /// View the stored data as a slice.
     pub fn as_slice<'a>(&'a self) -> &'a [T] {
         unsafe {
-            mem::transmute(raw::Slice { data: self.base as *T, len: self.len })
+            mem::transmute(raw::Slice { data: self.base as *const T, len: self.len })
         }
     }
 
     /// View the stored data as a mutable slice.
     pub fn as_mut_slice<'a>(&'a mut self) -> &'a mut [T] {
         unsafe {
-            mem::transmute(raw::Slice { data: self.base as *T, len: self.len })
+            mem::transmute(raw::Slice { data: self.base as *const T, len: self.len })
         }
     }
 
@@ -149,7 +149,7 @@ impl<T> CVec<T> {
     }
 }
 
-impl<T> Container for CVec<T> {
+impl<T> Collection for CVec<T> {
     fn len(&self) -> uint { self.len }
 }
 

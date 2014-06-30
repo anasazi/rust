@@ -81,13 +81,13 @@ struct Struct {
 
 fn main() {
 
-    let shadowed = 231;
-    let not_shadowed = 232;
+    let shadowed = 231i;
+    let not_shadowed = 232i;
 
     zzz();
     sentinel();
 
-    match (233, 234) {
+    match (233i, 234i) {
         (shadowed, local_to_arm) => {
 
             zzz();
@@ -95,7 +95,7 @@ fn main() {
         }
     }
 
-    match (235, 236) {
+    match (235i, 236i) {
         // with literal
         (235, shadowed) => {
 
@@ -105,7 +105,7 @@ fn main() {
         _ => {}
     }
 
-    match Struct { x: 237, y: 238 } {
+    match (Struct { x: 237, y: 238 }) {
         Struct { x: shadowed, y: local_to_arm } => {
 
             zzz();
@@ -113,7 +113,7 @@ fn main() {
         }
     }
 
-    match Struct { x: 239, y: 240 } {
+    match (Struct { x: 239, y: 240 }) {
         // ignored field
         Struct { x: shadowed, .. } => {
 
@@ -122,7 +122,7 @@ fn main() {
         }
     }
 
-    match Struct { x: 241, y: 242 } {
+    match (Struct { x: 241, y: 242 }) {
         // with literal
         Struct { x: shadowed, y: 242 } => {
 
@@ -132,7 +132,7 @@ fn main() {
         _ => {}
     }
 
-    match (243, 244) {
+    match (243i, 244i) {
         (shadowed, ref local_to_arm) => {
 
             zzz();

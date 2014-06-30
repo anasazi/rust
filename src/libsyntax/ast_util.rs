@@ -11,6 +11,8 @@
 use ast::*;
 use ast;
 use ast_util;
+use attr::{InlineNever, InlineNone};
+use attr;
 use codemap;
 use codemap::Span;
 use owned_slice::OwnedSlice;
@@ -21,14 +23,14 @@ use visit;
 
 use std::cell::Cell;
 use std::cmp;
-use std::string::String;
+use std::gc::{Gc, GC};
 use std::u32;
 
 pub fn path_name_i(idents: &[Ident]) -> String {
     // FIXME: Bad copies (#2543 -- same for everything else that says "bad")
     idents.iter().map(|i| {
         token::get_ident(*i).get().to_string()
-    }).collect::<Vec<String>>().connect("::").to_string()
+    }).collect::<Vec<String>>().connect("::")
 }
 
 // totally scary function: ignores all but the last element, should have
@@ -49,33 +51,6 @@ pub fn stmt_id(s: &Stmt) -> NodeId {
       StmtExpr(_, id) => id,
       StmtSemi(_, id) => id,
       StmtMac(..) => fail!("attempted to analyze unexpanded stmt")
-    }
-}
-
-pub fn variant_def_ids(d: Def) -> Option<(DefId, DefId)> {
-    match d {
-      DefVariant(enum_id, var_id, _) => {
-          Some((enum_id, var_id))
-      }
-      _ => None
-    }
-}
-
-pub fn def_id_of_def(d: Def) -> DefId {
-    match d {
-        DefFn(id, _) | DefStaticMethod(id, _, _) | DefMod(id) |
-        DefForeignMod(id) | DefStatic(id, _) |
-        DefVariant(_, id, _) | DefTy(id) | DefTyParam(id, _) |
-        DefUse(id) | DefStruct(id) | DefTrait(id) | DefMethod(id, _) => {
-            id
-        }
-        DefArg(id, _) | DefLocal(id, _) | DefSelfTy(id)
-        | DefUpvar(id, _, _, _) | DefBinding(id, _) | DefRegion(id)
-        | DefTyParamBinder(id) | DefLabel(id) => {
-            local_def(id)
-        }
-
-        DefPrimTy(_) => fail!()
     }
 }
 
@@ -120,7 +95,7 @@ pub fn is_shift_binop(b: BinOp) -> bool {
 
 pub fn unop_to_str(op: UnOp) -> &'static str {
     match op {
-      UnBox => "@",
+      UnBox => "box(GC) ",
       UnUniq => "box() ",
       UnDeref => "*",
       UnNot => "!",
@@ -128,23 +103,15 @@ pub fn unop_to_str(op: UnOp) -> &'static str {
     }
 }
 
-pub fn is_path(e: @Expr) -> bool {
+pub fn is_path(e: Gc<Expr>) -> bool {
     return match e.node { ExprPath(_) => true, _ => false };
-}
-
-pub enum SuffixMode {
-    ForceSuffix,
-    AutoSuffix,
 }
 
 // Get a string representation of a signed int type, with its value.
 // We want to avoid "45int" and "-3int" in favor of "45" and "-3"
-pub fn int_ty_to_str(t: IntTy, val: Option<i64>, mode: SuffixMode) -> String {
+pub fn int_ty_to_str(t: IntTy, val: Option<i64>) -> String {
     let s = match t {
-        TyI if val.is_some() => match mode {
-            AutoSuffix => "",
-            ForceSuffix => "i",
-        },
+        TyI if val.is_some() => "i",
         TyI => "int",
         TyI8 => "i8",
         TyI16 => "i16",
@@ -156,7 +123,7 @@ pub fn int_ty_to_str(t: IntTy, val: Option<i64>, mode: SuffixMode) -> String {
         // cast to a u64 so we can correctly print INT64_MIN. All integral types
         // are parsed as u64, so we wouldn't want to print an extra negative
         // sign.
-        Some(n) => format!("{}{}", n as u64, s).to_string(),
+        Some(n) => format!("{}{}", n as u64, s),
         None => s.to_string()
     }
 }
@@ -172,12 +139,9 @@ pub fn int_ty_max(t: IntTy) -> u64 {
 
 // Get a string representation of an unsigned int type, with its value.
 // We want to avoid "42uint" in favor of "42u"
-pub fn uint_ty_to_str(t: UintTy, val: Option<u64>, mode: SuffixMode) -> String {
+pub fn uint_ty_to_str(t: UintTy, val: Option<u64>) -> String {
     let s = match t {
-        TyU if val.is_some() => match mode {
-            AutoSuffix => "",
-            ForceSuffix => "u",
-        },
+        TyU if val.is_some() => "u",
         TyU => "uint",
         TyU8 => "u8",
         TyU16 => "u16",
@@ -186,7 +150,7 @@ pub fn uint_ty_to_str(t: UintTy, val: Option<u64>, mode: SuffixMode) -> String {
     };
 
     match val {
-        Some(n) => format!("{}{}", n, s).to_string(),
+        Some(n) => format!("{}{}", n, s),
         None => s.to_string()
     }
 }
@@ -204,15 +168,14 @@ pub fn float_ty_to_str(t: FloatTy) -> String {
     match t {
         TyF32 => "f32".to_string(),
         TyF64 => "f64".to_string(),
-        TyF128 => "f128".to_string(),
     }
 }
 
-pub fn is_call_expr(e: @Expr) -> bool {
+pub fn is_call_expr(e: Gc<Expr>) -> bool {
     match e.node { ExprCall(..) => true, _ => false }
 }
 
-pub fn block_from_expr(e: @Expr) -> P<Block> {
+pub fn block_from_expr(e: Gc<Expr>) -> P<Block> {
     P(Block {
         view_items: Vec::new(),
         stmts: Vec::new(),
@@ -237,8 +200,8 @@ pub fn ident_to_path(s: Span, identifier: Ident) -> Path {
     }
 }
 
-pub fn ident_to_pat(id: NodeId, s: Span, i: Ident) -> @Pat {
-    @ast::Pat { id: id,
+pub fn ident_to_pat(id: NodeId, s: Span, i: Ident) -> Gc<Pat> {
+    box(GC) ast::Pat { id: id,
                 node: PatIdent(BindByValue(MutImmutable), ident_to_path(s, i), None),
                 span: s }
 }
@@ -256,7 +219,7 @@ pub fn is_unguarded(a: &Arm) -> bool {
     }
 }
 
-pub fn unguarded_pat(a: &Arm) -> Option<Vec<@Pat> > {
+pub fn unguarded_pat(a: &Arm) -> Option<Vec<Gc<Pat>>> {
     if is_unguarded(a) {
         Some(/* FIXME (#2543) */ a.pats.clone())
     } else {
@@ -281,7 +244,7 @@ pub fn impl_pretty_name(trait_ref: &Option<TraitRef>, ty: &Ty) -> Ident {
     token::gensym_ident(pretty.as_slice())
 }
 
-pub fn public_methods(ms: Vec<@Method> ) -> Vec<@Method> {
+pub fn public_methods(ms: Vec<Gc<Method>> ) -> Vec<Gc<Method>> {
     ms.move_iter().filter(|m| {
         match m.vis {
             Public => true,
@@ -312,7 +275,7 @@ pub fn trait_method_to_ty_method(method: &TraitMethod) -> TypeMethod {
 }
 
 pub fn split_trait_methods(trait_methods: &[TraitMethod])
-    -> (Vec<TypeMethod> , Vec<@Method> ) {
+    -> (Vec<TypeMethod> , Vec<Gc<Method>> ) {
     let mut reqd = Vec::new();
     let mut provd = Vec::new();
     for trt_method in trait_methods.iter() {
@@ -637,7 +600,7 @@ pub fn compute_id_range_for_fn_body(fk: &visit::FnKind,
     visitor.result.get()
 }
 
-pub fn is_item_impl(item: @ast::Item) -> bool {
+pub fn is_item_impl(item: Gc<ast::Item>) -> bool {
     match item.node {
         ItemImpl(..) => true,
         _            => false
@@ -650,20 +613,20 @@ pub fn walk_pat(pat: &Pat, it: |&Pat| -> bool) -> bool {
     }
 
     match pat.node {
-        PatIdent(_, _, Some(p)) => walk_pat(p, it),
+        PatIdent(_, _, Some(ref p)) => walk_pat(&**p, it),
         PatStruct(_, ref fields, _) => {
-            fields.iter().advance(|f| walk_pat(f.pat, |p| it(p)))
+            fields.iter().advance(|f| walk_pat(&*f.pat, |p| it(p)))
         }
         PatEnum(_, Some(ref s)) | PatTup(ref s) => {
-            s.iter().advance(|&p| walk_pat(p, |p| it(p)))
+            s.iter().advance(|p| walk_pat(&**p, |p| it(p)))
         }
-        PatBox(s) | PatRegion(s) => {
-            walk_pat(s, it)
+        PatBox(ref s) | PatRegion(ref s) => {
+            walk_pat(&**s, it)
         }
         PatVec(ref before, ref slice, ref after) => {
-            before.iter().advance(|&p| walk_pat(p, |p| it(p))) &&
-                slice.iter().advance(|&p| walk_pat(p, |p| it(p))) &&
-                after.iter().advance(|&p| walk_pat(p, |p| it(p)))
+            before.iter().advance(|p| walk_pat(&**p, |p| it(p))) &&
+                slice.iter().advance(|p| walk_pat(&**p, |p| it(p))) &&
+                after.iter().advance(|p| walk_pat(&**p, |p| it(p)))
         }
         PatMac(_) => fail!("attempted to analyze unexpanded pattern"),
         PatWild | PatWildMulti | PatLit(_) | PatRange(_, _) | PatIdent(_, _, _) |
@@ -712,7 +675,7 @@ pub fn struct_def_is_tuple_like(struct_def: &ast::StructDef) -> bool {
 
 /// Returns true if the given pattern consists solely of an identifier
 /// and false otherwise.
-pub fn pat_is_ident(pat: @ast::Pat) -> bool {
+pub fn pat_is_ident(pat: Gc<ast::Pat>) -> bool {
     match pat.node {
         ast::PatIdent(..) => true,
         _ => false,
@@ -747,7 +710,7 @@ pub fn segments_name_eq(a : &[ast::PathSegment], b : &[ast::PathSegment]) -> boo
 }
 
 // Returns true if this literal is a string and false otherwise.
-pub fn lit_is_str(lit: @Lit) -> bool {
+pub fn lit_is_str(lit: Gc<Lit>) -> bool {
     match lit.node {
         LitStr(..) => true,
         _ => false,
@@ -764,10 +727,22 @@ pub fn get_inner_tys(ty: P<Ty>) -> Vec<P<Ty>> {
         | ast::TyUniq(ty)
         | ast::TyFixedLengthVec(ty, _) => vec!(ty),
         ast::TyTup(ref tys) => tys.clone(),
+        ast::TyParen(ty) => get_inner_tys(ty),
         _ => Vec::new()
     }
 }
 
+/// Returns true if the static with the given mutability and attributes
+/// has a significant address and false otherwise.
+pub fn static_has_significant_address(mutbl: ast::Mutability,
+                                              attrs: &[ast::Attribute])
+                                              -> bool {
+    if mutbl == ast::MutMutable {
+        return true
+    }
+    let inline = attr::find_inline_attr(attrs);
+    inline == InlineNever || inline == InlineNone
+}
 
 #[cfg(test)]
 mod test {

@@ -12,17 +12,18 @@
 
 #![feature(managed_boxes)]
 
+use std::gc::GC;
 
 fn f() -> Vec<int> { fail!(); }
 
 // Voodoo. In unwind-alt we had to do this to trigger the bug. Might
 // have been to do with memory allocation patterns.
 fn prime() {
-    @0;
+    box(GC) 0i;
 }
 
 fn partial() {
-    let _x = vec!(vec!(0), f(), vec!(0));
+    let _x = vec!(vec!(0i), f(), vec!(0i));
 }
 
 fn main() {

@@ -16,10 +16,12 @@
  * represented with nullable pointers could be misoptimized in some cases.
  */
 
-enum List<X> { Nil, Cons(X, @List<X>) }
+use std::gc::{Gc, GC};
+
+enum List<X> { Nil, Cons(X, Gc<List<X>>) }
 pub fn main() {
-    match Cons(10, @Nil) {
-        Cons(10, _) => {}
+    match Cons(10i, box(GC) Nil) {
+        Cons(10i, _) => {}
         Nil => {}
         _ => fail!()
     }

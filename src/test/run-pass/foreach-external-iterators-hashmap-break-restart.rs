@@ -10,7 +10,7 @@
 
 extern crate collections;
 
-use collections::HashMap;
+use std::collections::HashMap;
 
 // This is a fancy one: it uses an external iterator established
 // outside the loop, breaks, then _picks back up_ and continues
@@ -18,7 +18,7 @@ use collections::HashMap;
 
 pub fn main() {
     let mut h = HashMap::new();
-    let kvs = [(1, 10), (2, 20), (3, 30)];
+    let kvs = [(1i, 10i), (2i, 20i), (3i, 30i)];
     for &(k,v) in kvs.iter() {
         h.insert(k,v);
     }

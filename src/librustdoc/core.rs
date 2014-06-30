@@ -10,17 +10,17 @@
 
 use rustc;
 use rustc::{driver, middle};
-use rustc::metadata::creader::Loader;
 use rustc::middle::privacy;
-use rustc::middle::lint;
+use rustc::lint;
 
 use syntax::ast;
 use syntax::parse::token;
 use syntax;
 
 use std::cell::RefCell;
+use std::gc::GC;
 use std::os;
-use collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use visit_ast::RustdocVisitor;
 use clean;
@@ -75,11 +75,13 @@ fn get_ast_and_resolve(cpath: &Path, libs: HashSet<Path>, cfgs: Vec<String>)
 
     let input = FileInput(cpath.clone());
 
+    let warning_lint = lint::builtin::WARNINGS.name_lower();
+
     let sessopts = driver::config::Options {
         maybe_sysroot: Some(os::self_exe_path().unwrap().dir_path()),
         addl_lib_search_paths: RefCell::new(libs),
         crate_types: vec!(driver::config::CrateTypeRlib),
-        lint_opts: vec!((lint::Warnings, lint::Allow)),
+        lint_opts: vec!((warning_lint, lint::Allow)),
         ..rustc::driver::config::basic_options().clone()
     };
 
@@ -96,12 +98,14 @@ fn get_ast_and_resolve(cpath: &Path, libs: HashSet<Path>, cfgs: Vec<String>)
     let mut cfg = build_configuration(&sess);
     for cfg_ in cfgs.move_iter() {
         let cfg_ = token::intern_and_get_ident(cfg_.as_slice());
-        cfg.push(@dummy_spanned(ast::MetaWord(cfg_)));
+        cfg.push(box(GC) dummy_spanned(ast::MetaWord(cfg_)));
     }
 
     let krate = phase_1_parse_input(&sess, cfg, &input);
-    let (krate, ast_map) = phase_2_configure_and_expand(&sess, &mut Loader::new(&sess),
-                                                        krate, &from_str("rustdoc").unwrap());
+    let (krate, ast_map)
+        = phase_2_configure_and_expand(&sess, krate, &from_str("rustdoc").unwrap())
+            .expect("phase_2_configure_and_expand aborted in rustdoc!");
+
     let driver::driver::CrateAnalysis {
         exported_items, public_items, ty_cx, ..
     } = phase_3_run_analysis_passes(sess, &krate, ast_map);
@@ -129,11 +133,11 @@ fn get_ast_and_resolve(cpath: &Path, libs: HashSet<Path>, cfgs: Vec<String>)
 pub fn run_core(libs: HashSet<Path>, cfgs: Vec<String>, path: &Path)
                 -> (clean::Crate, CrateAnalysis) {
     let (ctxt, analysis) = get_ast_and_resolve(path, libs, cfgs);
-    let ctxt = @ctxt;
+    let ctxt = box(GC) ctxt;
     super::ctxtkey.replace(Some(ctxt));
 
     let krate = {
-        let mut v = RustdocVisitor::new(ctxt, Some(&analysis));
+        let mut v = RustdocVisitor::new(&*ctxt, Some(&analysis));
         v.visit(&ctxt.krate);
         v.clean()
     };

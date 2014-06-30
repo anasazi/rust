@@ -14,7 +14,7 @@ use driver::driver;
 use front;
 use metadata::cstore::CStore;
 use metadata::filesearch;
-use middle::lint;
+use lint;
 use util::nodemap::NodeMap;
 
 use syntax::ast::NodeId;
@@ -28,6 +28,7 @@ use syntax::{ast, codemap};
 use std::os;
 use std::cell::{Cell, RefCell};
 
+
 pub struct Session {
     pub targ_cfg: config::Config,
     pub opts: config::Options,
@@ -36,13 +37,14 @@ pub struct Session {
     // For a library crate, this is always none
     pub entry_fn: RefCell<Option<(NodeId, codemap::Span)>>,
     pub entry_type: Cell<Option<config::EntryFnType>>,
-    pub macro_registrar_fn: Cell<Option<ast::NodeId>>,
+    pub plugin_registrar_fn: Cell<Option<ast::NodeId>>,
     pub default_sysroot: Option<Path>,
     // The name of the root source file of the crate, in the local file system. The path is always
     // expected to be absolute. `None` means that there is no source file.
     pub local_crate_source_file: Option<Path>,
     pub working_dir: Path,
-    pub lints: RefCell<NodeMap<Vec<(lint::Lint, codemap::Span, String)>>>,
+    pub lint_store: RefCell<lint::LintStore>,
+    pub lints: RefCell<NodeMap<Vec<(lint::LintId, codemap::Span, String)>>>,
     pub node_id: Cell<ast::NodeId>,
     pub crate_types: RefCell<Vec<config::CrateType>>,
     pub features: front::feature_gate::Features,
@@ -105,16 +107,17 @@ impl Session {
         self.diagnostic().handler().unimpl(msg)
     }
     pub fn add_lint(&self,
-                    lint: lint::Lint,
+                    lint: &'static lint::Lint,
                     id: ast::NodeId,
                     sp: Span,
                     msg: String) {
+        let lint_id = lint::LintId::of(lint);
         let mut lints = self.lints.borrow_mut();
         match lints.find_mut(&id) {
-            Some(arr) => { arr.push((lint, sp, msg)); return; }
+            Some(arr) => { arr.push((lint_id, sp, msg)); return; }
             None => {}
         }
-        lints.insert(id, vec!((lint, sp, msg)));
+        lints.insert(id, vec!((lint_id, sp, msg)));
     }
     pub fn next_node_id(&self) -> ast::NodeId {
         self.reserve_node_ids(1)
@@ -224,7 +227,7 @@ pub fn build_session_(sopts: config::Options,
         }
     );
 
-    Session {
+    let sess = Session {
         targ_cfg: target_cfg,
         opts: sopts,
         cstore: CStore::new(token::get_ident_interner()),
@@ -232,16 +235,20 @@ pub fn build_session_(sopts: config::Options,
         // For a library crate, this is always none
         entry_fn: RefCell::new(None),
         entry_type: Cell::new(None),
-        macro_registrar_fn: Cell::new(None),
+        plugin_registrar_fn: Cell::new(None),
         default_sysroot: default_sysroot,
         local_crate_source_file: local_crate_source_file,
         working_dir: os::getcwd(),
+        lint_store: RefCell::new(lint::LintStore::new()),
         lints: RefCell::new(NodeMap::new()),
         node_id: Cell::new(1),
         crate_types: RefCell::new(Vec::new()),
         features: front::feature_gate::Features::new(),
         recursion_limit: Cell::new(64),
-    }
+    };
+
+    sess.lint_store.borrow_mut().register_builtin(Some(&sess));
+    sess
 }
 
 // Seems out of place, but it uses session, so I'm putting it here
@@ -249,4 +256,3 @@ pub fn expect<T:Clone>(sess: &Session, opt: Option<T>, msg: || -> String)
               -> T {
     diagnostic::expect(sess.diagnostic(), opt, msg)
 }
-

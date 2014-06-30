@@ -11,12 +11,17 @@
 //! A double-ended queue implemented as a circular buffer
 //!
 //! RingBuf implements the trait Deque. It should be imported with `use
-//! collections::deque::Deque`.
+//! collections::Deque`.
 
-use std::cmp;
-use std::iter::RandomAccessIterator;
+use core::prelude::*;
 
-use deque::Deque;
+use core::cmp;
+use core::default::Default;
+use core::fmt;
+use core::iter::RandomAccessIterator;
+
+use {Deque, Collection, Mutable};
+use vec::Vec;
 
 static INITIAL_CAPACITY: uint = 8u; // 2^3
 static MINIMUM_CAPACITY: uint = 2u;
@@ -29,7 +34,7 @@ pub struct RingBuf<T> {
     elts: Vec<Option<T>>
 }
 
-impl<T> Container for RingBuf<T> {
+impl<T> Collection for RingBuf<T> {
     /// Return the number of elements in the RingBuf
     fn len(&self) -> uint { self.nelts }
 }
@@ -61,7 +66,8 @@ impl<T> Deque<T> for RingBuf<T> {
 
     /// Return a mutable reference to the last element in the RingBuf
     fn back_mut<'a>(&'a mut self) -> Option<&'a mut T> {
-        if self.nelts > 0 { Some(self.get_mut(self.nelts - 1)) } else { None }
+        let nelts = self.nelts;
+        if nelts > 0 { Some(self.get_mut(nelts - 1)) } else { None }
     }
 
     /// Remove and return the first element in the RingBuf, or None if it is empty
@@ -106,6 +112,11 @@ impl<T> Deque<T> for RingBuf<T> {
         *self.elts.get_mut(hi) = Some(t);
         self.nelts += 1u;
     }
+}
+
+impl<T> Default for RingBuf<T> {
+    #[inline]
+    fn default() -> RingBuf<T> { RingBuf::new() }
 }
 
 impl<T> RingBuf<T> {
@@ -391,22 +402,37 @@ impl<A> Extendable<A> for RingBuf<A> {
     }
 }
 
+impl<T: fmt::Show> fmt::Show for RingBuf<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        try!(write!(f, "["));
+
+        for (i, e) in self.iter().enumerate() {
+            if i != 0 { try!(write!(f, ", ")); }
+            try!(write!(f, "{}", *e));
+        }
+
+        write!(f, "]")
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    extern crate test;
-    use self::test::Bencher;
-    use deque::Deque;
-    use std::clone::Clone;
-    use std::cmp::PartialEq;
     use std::fmt::Show;
+    use std::prelude::*;
+    use std::gc::{GC, Gc};
+    use test::Bencher;
+    use test;
+
+    use {Deque, Mutable};
     use super::RingBuf;
+    use vec::Vec;
 
     #[test]
     fn test_simple() {
         let mut d = RingBuf::new();
         assert_eq!(d.len(), 0u);
-        d.push_front(17);
-        d.push_front(42);
+        d.push_front(17i);
+        d.push_front(42i);
         d.push_back(137);
         assert_eq!(d.len(), 3u);
         d.push_back(137);
@@ -448,10 +474,10 @@ mod tests {
 
     #[test]
     fn test_boxes() {
-        let a: @int = @5;
-        let b: @int = @72;
-        let c: @int = @64;
-        let d: @int = @175;
+        let a: Gc<int> = box(GC) 5;
+        let b: Gc<int> = box(GC) 72;
+        let c: Gc<int> = box(GC) 64;
+        let d: Gc<int> = box(GC) 175;
 
         let mut deq = RingBuf::new();
         assert_eq!(deq.len(), 0);
@@ -546,7 +572,7 @@ mod tests {
     fn bench_push_back(b: &mut test::Bencher) {
         let mut deq = RingBuf::new();
         b.iter(|| {
-            deq.push_back(0);
+            deq.push_back(0i);
         })
     }
 
@@ -554,7 +580,7 @@ mod tests {
     fn bench_push_front(b: &mut test::Bencher) {
         let mut deq = RingBuf::new();
         b.iter(|| {
-            deq.push_front(0);
+            deq.push_front(0i);
         })
     }
 
@@ -562,8 +588,8 @@ mod tests {
     fn bench_grow(b: &mut test::Bencher) {
         let mut deq = RingBuf::new();
         b.iter(|| {
-            for _ in range(0, 65) {
-                deq.push_front(1);
+            for _ in range(0i, 65) {
+                deq.push_front(1i);
             }
         })
     }
@@ -596,7 +622,8 @@ mod tests {
 
     #[test]
     fn test_param_at_int() {
-        test_parameterized::<@int>(@5, @72, @64, @175);
+        test_parameterized::<Gc<int>>(box(GC) 5, box(GC) 72,
+                                      box(GC) 64, box(GC) 175);
     }
 
     #[test]
@@ -624,10 +651,10 @@ mod tests {
     #[test]
     fn test_with_capacity() {
         let mut d = RingBuf::with_capacity(0);
-        d.push_back(1);
+        d.push_back(1i);
         assert_eq!(d.len(), 1);
         let mut d = RingBuf::with_capacity(50);
-        d.push_back(1);
+        d.push_back(1i);
         assert_eq!(d.len(), 1);
     }
 
@@ -657,7 +684,7 @@ mod tests {
 
     #[test]
     fn test_swap() {
-        let mut d: RingBuf<int> = range(0, 5).collect();
+        let mut d: RingBuf<int> = range(0i, 5).collect();
         d.pop_front();
         d.swap(0, 3);
         assert_eq!(d.iter().map(|&x|x).collect::<Vec<int>>(), vec!(4, 2, 3, 1));
@@ -669,12 +696,12 @@ mod tests {
         assert_eq!(d.iter().next(), None);
         assert_eq!(d.iter().size_hint(), (0, Some(0)));
 
-        for i in range(0, 5) {
+        for i in range(0i, 5) {
             d.push_back(i);
         }
         assert_eq!(d.iter().collect::<Vec<&int>>().as_slice(), &[&0,&1,&2,&3,&4]);
 
-        for i in range(6, 9) {
+        for i in range(6i, 9) {
             d.push_front(i);
         }
         assert_eq!(d.iter().collect::<Vec<&int>>().as_slice(), &[&8,&7,&6,&0,&1,&2,&3,&4]);
@@ -694,12 +721,12 @@ mod tests {
         let mut d = RingBuf::new();
         assert_eq!(d.iter().rev().next(), None);
 
-        for i in range(0, 5) {
+        for i in range(0i, 5) {
             d.push_back(i);
         }
         assert_eq!(d.iter().rev().collect::<Vec<&int>>().as_slice(), &[&4,&3,&2,&1,&0]);
 
-        for i in range(6, 9) {
+        for i in range(6i, 9) {
             d.push_front(i);
         }
         assert_eq!(d.iter().rev().collect::<Vec<&int>>().as_slice(), &[&4,&3,&2,&1,&0,&6,&7,&8]);
@@ -710,7 +737,7 @@ mod tests {
         let mut d = RingBuf::with_capacity(3);
         assert!(d.mut_iter().rev().next().is_none());
 
-        d.push_back(1);
+        d.push_back(1i);
         d.push_back(2);
         d.push_back(3);
         assert_eq!(d.pop_front(), Some(1));
@@ -769,7 +796,7 @@ mod tests {
     #[test]
     fn test_from_iter() {
         use std::iter;
-        let v = vec!(1,2,3,4,5,6,7);
+        let v = vec!(1i,2,3,4,5,6,7);
         let deq: RingBuf<int> = v.iter().map(|&x| x).collect();
         let u: Vec<int> = deq.iter().map(|&x| x).collect();
         assert_eq!(u, v);
@@ -785,7 +812,7 @@ mod tests {
     #[test]
     fn test_clone() {
         let mut d = RingBuf::new();
-        d.push_front(17);
+        d.push_front(17i);
         d.push_front(42);
         d.push_back(137);
         d.push_back(137);
@@ -803,7 +830,7 @@ mod tests {
     fn test_eq() {
         let mut d = RingBuf::new();
         assert!(d == RingBuf::with_capacity(0));
-        d.push_front(137);
+        d.push_front(137i);
         d.push_front(17);
         d.push_front(42);
         d.push_back(137);
@@ -818,5 +845,16 @@ mod tests {
         assert!(e != d);
         e.clear();
         assert!(e == RingBuf::new());
+    }
+
+    #[test]
+    fn test_show() {
+        let ringbuf: RingBuf<int> = range(0i, 10).collect();
+        assert!(format!("{}", ringbuf).as_slice() == "[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]");
+
+        let ringbuf: RingBuf<&str> = vec!["just", "one", "test", "more"].iter()
+                                                                        .map(|&s| s)
+                                                                        .collect();
+        assert!(format!("{}", ringbuf).as_slice() == "[just, one, test, more]");
     }
 }

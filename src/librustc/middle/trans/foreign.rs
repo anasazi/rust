@@ -11,7 +11,7 @@
 
 use back::{link};
 use lib::llvm::llvm;
-use lib::llvm::{ValueRef, CallConv, StructRetAttribute, Linkage};
+use lib::llvm::{ValueRef, CallConv, Linkage};
 use lib;
 use middle::weak_lang_items;
 use middle::trans::base::push_ctxt;
@@ -64,9 +64,6 @@ struct LlvmSignature {
     // function, because the foreign function may opt to return via an
     // out pointer.
     llret_ty: Type,
-
-    // True if *Rust* would use an outpointer for this function.
-    sret: bool,
 }
 
 
@@ -376,18 +373,41 @@ pub fn trans_native_call<'a>(
     };
 
     // A function pointer is called without the declaration available, so we have to apply
-    // any attributes with ABI implications directly to the call instruction. Right now, the
-    // only attribute we need to worry about is `sret`.
+    // any attributes with ABI implications directly to the call instruction.
     let mut attrs = Vec::new();
-    if fn_type.ret_ty.is_indirect() {
-        attrs.push((1, lib::llvm::StructRetAttribute as u64));
 
+    // Add attributes that are always applicable, independent of the concrete foreign ABI
+    if fn_type.ret_ty.is_indirect() {
         // The outptr can be noalias and nocapture because it's entirely
         // invisible to the program. We can also mark it as nonnull
         attrs.push((1, lib::llvm::NoAliasAttribute as u64));
         attrs.push((1, lib::llvm::NoCaptureAttribute as u64));
         attrs.push((1, lib::llvm::NonNullAttribute as u64));
     };
+
+    // Add attributes that depend on the concrete foreign ABI
+    let mut arg_idx = if fn_type.ret_ty.is_indirect() { 1 } else { 0 };
+    match fn_type.ret_ty.attr {
+        Some(attr) => attrs.push((arg_idx, attr as u64)),
+        _ => ()
+    }
+
+    arg_idx += 1;
+    for arg_ty in fn_type.arg_tys.iter() {
+        if arg_ty.is_ignore() {
+            continue;
+        }
+        // skip padding
+        if arg_ty.pad.is_some() { arg_idx += 1; }
+
+        match arg_ty.attr {
+            Some(attr) => attrs.push((arg_idx, attr as u64)),
+            _ => {}
+        }
+
+        arg_idx += 1;
+    }
+
     let llforeign_retval = CallWithConv(bcx,
                                         llfn,
                                         llargs_foreign.as_slice(),
@@ -446,8 +466,8 @@ pub fn trans_native_call<'a>(
 
 pub fn trans_foreign_mod(ccx: &CrateContext, foreign_mod: &ast::ForeignMod) {
     let _icx = push_ctxt("foreign::trans_foreign_mod");
-    for &foreign_item in foreign_mod.items.iter() {
-        let lname = link_name(foreign_item);
+    for foreign_item in foreign_mod.items.iter() {
+        let lname = link_name(&**foreign_item);
 
         match foreign_item.node {
             ast::ForeignItemFn(..) => {
@@ -570,7 +590,7 @@ pub fn trans_rust_fn_with_foreign_abi(ccx: &CrateContext,
 
         let llfn = base::decl_internal_rust_fn(ccx, t, ps.as_slice());
         base::set_llvm_fn_attrs(attrs, llfn);
-        base::trans_fn(ccx, decl, body, llfn, None, id, []);
+        base::trans_fn(ccx, decl, body, llfn, &param_substs::empty(), id, []);
         llfn
     }
 
@@ -695,7 +715,7 @@ pub fn trans_rust_fn_with_foreign_abi(ccx: &CrateContext,
             let foreign_index = next_foreign_arg(llforeign_arg_ty.pad.is_some());
             let mut llforeign_arg = llvm::LLVMGetParam(llwrapfn, foreign_index);
 
-            debug!("llforeign_arg \\#{}: {}",
+            debug!("llforeign_arg {}{}: {}", "#",
                    i, ccx.tn.val_to_str(llforeign_arg));
             debug!("rust_indirect = {}, foreign_indirect = {}",
                    rust_indirect, foreign_indirect);
@@ -728,7 +748,7 @@ pub fn trans_rust_fn_with_foreign_abi(ccx: &CrateContext,
                 llvm::LLVMBuildLoad(builder, llforeign_arg, noname())
             };
 
-            debug!("llrust_arg \\#{}: {}",
+            debug!("llrust_arg {}{}: {}", "#",
                    i, ccx.tn.val_to_str(llrust_arg));
             llrust_args.push(llrust_arg);
         }
@@ -847,8 +867,7 @@ fn foreign_signature(ccx: &CrateContext, fn_sig: &ty::FnSig, arg_tys: &[ty::t])
     let llret_ty = type_of::type_of(ccx, fn_sig.output);
     LlvmSignature {
         llarg_tys: llarg_tys,
-        llret_ty: llret_ty,
-        sret: type_of::return_uses_outptr(ccx, fn_sig.output),
+        llret_ty: llret_ty
     }
 }
 
@@ -938,21 +957,20 @@ pub fn lltype_for_foreign_fn(ccx: &CrateContext, ty: ty::t) -> Type {
 
 fn add_argument_attributes(tys: &ForeignTypes,
                            llfn: ValueRef) {
-    let mut i = 0;
+    let mut i = if tys.fn_ty.ret_ty.is_indirect() {
+        1i
+    } else {
+        0i
+    };
 
-    if tys.fn_ty.ret_ty.is_indirect() {
-        match tys.fn_ty.ret_ty.attr {
-            Some(attr) => {
-                let llarg = get_param(llfn, i);
-                unsafe {
-                    llvm::LLVMAddAttribute(llarg, attr as c_uint);
-                }
-            }
-            None => {}
-        }
-
-        i += 1;
+    match tys.fn_ty.ret_ty.attr {
+        Some(attr) => unsafe {
+            llvm::LLVMAddFunctionAttribute(llfn, i as c_uint, attr as u64);
+        },
+        None => {}
     }
+
+    i += 1;
 
     for &arg_ty in tys.fn_ty.arg_tys.iter() {
         if arg_ty.is_ignore() {
@@ -962,12 +980,9 @@ fn add_argument_attributes(tys: &ForeignTypes,
         if arg_ty.pad.is_some() { i += 1; }
 
         match arg_ty.attr {
-            Some(attr) => {
-                let llarg = get_param(llfn, i);
-                unsafe {
-                    llvm::LLVMAddAttribute(llarg, attr as c_uint);
-                }
-            }
+            Some(attr) => unsafe {
+                llvm::LLVMAddFunctionAttribute(llfn, i as c_uint, attr as u64);
+            },
             None => ()
         }
 

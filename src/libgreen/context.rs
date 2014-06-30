@@ -27,7 +27,7 @@ pub struct Context {
     stack_bounds: Option<(uint, uint)>,
 }
 
-pub type InitFn = extern "C" fn(uint, *(), *()) -> !;
+pub type InitFn = extern "C" fn(uint, *mut (), *mut ()) -> !;
 
 impl Context {
     pub fn empty() -> Context {
@@ -49,7 +49,7 @@ impl Context {
     pub fn new(init: InitFn, arg: uint, start: proc():Send,
                stack: &mut Stack) -> Context {
 
-        let sp: *uint = stack.end();
+        let sp: *const uint = stack.end();
         let sp: *mut uint = sp as *mut uint;
         // Save and then immediately load the current context,
         // which we will then modify to call the given function when restored
@@ -66,7 +66,7 @@ impl Context {
         // them in terms of the code running on them (and hopefully they don't
         // overflow). Additionally, their coroutine stacks are listed as being
         // zero-length, so that's how we detect what's what here.
-        let stack_base: *uint = stack.start();
+        let stack_base: *const uint = stack.start();
         let bounds = if sp as uint == stack_base as uint {
             None
         } else {
@@ -116,7 +116,7 @@ impl Context {
 
 #[link(name = "context_switch", kind = "static")]
 extern {
-    fn rust_swap_registers(out_regs: *mut Registers, in_regs: *Registers);
+    fn rust_swap_registers(out_regs: *mut Registers, in_regs: *const Registers);
 }
 
 // Register contexts used in various architectures
@@ -143,6 +143,7 @@ extern {
 // stacks are disabled.
 
 #[cfg(target_arch = "x86")]
+#[repr(C)]
 struct Registers {
     eax: u32, ebx: u32, ecx: u32, edx: u32,
     ebp: u32, esi: u32, edi: u32, esp: u32,
@@ -190,9 +191,9 @@ type Registers = [uint, ..34];
 type Registers = [uint, ..22];
 
 #[cfg(windows, target_arch = "x86_64")]
-fn new_regs() -> Box<Registers> { box [0, .. 34] }
+fn new_regs() -> Box<Registers> { box() ([0, .. 34]) }
 #[cfg(not(windows), target_arch = "x86_64")]
-fn new_regs() -> Box<Registers> { box {let v = [0, .. 22]; v} }
+fn new_regs() -> Box<Registers> { box() ([0, .. 22]) }
 
 #[cfg(target_arch = "x86_64")]
 fn initialize_call_frame(regs: &mut Registers, fptr: InitFn, arg: uint,
@@ -226,7 +227,7 @@ fn initialize_call_frame(regs: &mut Registers, fptr: InitFn, arg: uint,
     regs[RUSTRT_R14] = procedure.env as uint;
     regs[RUSTRT_R15] = fptr as uint;
 
-    // These registers are picked up by the regulard context switch paths. These
+    // These registers are picked up by the regular context switch paths. These
     // will put us in "mostly the right context" except for frobbing all the
     // arguments to the right place. We have the small trampoline code inside of
     // rust_bootstrap_green_task to do that.
@@ -267,12 +268,15 @@ fn initialize_call_frame(regs: &mut Registers, fptr: InitFn, arg: uint,
 }
 
 #[cfg(target_arch = "mips")]
+#[cfg(target_arch = "mipsel")]
 type Registers = [uint, ..32];
 
 #[cfg(target_arch = "mips")]
+#[cfg(target_arch = "mipsel")]
 fn new_regs() -> Box<Registers> { box {[0, .. 32]} }
 
 #[cfg(target_arch = "mips")]
+#[cfg(target_arch = "mipsel")]
 fn initialize_call_frame(regs: &mut Registers, fptr: InitFn, arg: uint,
                          procedure: raw::Procedure, sp: *mut uint) {
     let sp = align_down(sp);

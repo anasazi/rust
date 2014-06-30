@@ -80,6 +80,7 @@ obtained the type `Foo`, we would never match this method.
 */
 
 
+use middle::subst;
 use middle::subst::Subst;
 use middle::ty::*;
 use middle::ty;
@@ -90,13 +91,14 @@ use middle::typeck::infer;
 use middle::typeck::MethodCallee;
 use middle::typeck::{MethodOrigin, MethodParam};
 use middle::typeck::{MethodStatic, MethodObject};
-use middle::typeck::{param_numbered, param_self, param_index};
+use middle::typeck::{param_index};
 use middle::typeck::check::regionmanip::replace_late_bound_regions_in_fn_sig;
+use middle::typeck::TypeAndSubsts;
 use util::common::indenter;
 use util::ppaux;
 use util::ppaux::Repr;
 
-use collections::HashSet;
+use std::collections::HashSet;
 use std::rc::Rc;
 use syntax::ast::{DefId, SelfValue, SelfRegion};
 use syntax::ast::{SelfUniq, SelfStatic};
@@ -104,7 +106,6 @@ use syntax::ast::{MutMutable, MutImmutable};
 use syntax::ast;
 use syntax::codemap::Span;
 use syntax::parse::token;
-use syntax::owned_slice::OwnedSlice;
 
 #[deriving(PartialEq)]
 pub enum CheckTraitsFlag {
@@ -233,33 +234,38 @@ fn construct_transformed_self_ty_for_object(
     tcx: &ty::ctxt,
     span: Span,
     trait_def_id: ast::DefId,
-    rcvr_substs: &ty::substs,
+    rcvr_substs: &subst::Substs,
     method_ty: &ty::Method)
-    -> ty::t {
+    -> ty::t
+{
     /*!
-        * This is a bit tricky. We have a match against a trait method
-        * being invoked on an object, and we want to generate the
-        * self-type. As an example, consider a trait
-        *
-        *     trait Foo {
-        *         fn r_method<'a>(&'a self);
-        *         fn u_method(Box<self>);
-        *     }
-        *
-        * Now, assuming that `r_method` is being called, we want the
-        * result to be `&'a Foo`. Assuming that `u_method` is being
-        * called, we want the result to be `Box<Foo>`. Of course,
-        * this transformation has already been done as part of
-        * `method_ty.fty.sig.inputs[0]`, but there the type
-        * is expressed in terms of `Self` (i.e., `&'a Self`, `Box<Self>`).
-        * Because objects are not standalone types, we can't just substitute
-        * `s/Self/Foo/`, so we must instead perform this kind of hokey
-        * match below.
-        */
+     * This is a bit tricky. We have a match against a trait method
+     * being invoked on an object, and we want to generate the
+     * self-type. As an example, consider a trait
+     *
+     *     trait Foo {
+     *         fn r_method<'a>(&'a self);
+     *         fn u_method(Box<self>);
+     *     }
+     *
+     * Now, assuming that `r_method` is being called, we want the
+     * result to be `&'a Foo`. Assuming that `u_method` is being
+     * called, we want the result to be `Box<Foo>`. Of course,
+     * this transformation has already been done as part of
+     * `method_ty.fty.sig.inputs[0]`, but there the type
+     * is expressed in terms of `Self` (i.e., `&'a Self`, `Box<Self>`).
+     * Because objects are not standalone types, we can't just substitute
+     * `s/Self/Foo/`, so we must instead perform this kind of hokey
+     * match below.
+     */
 
-    let substs = ty::substs {regions: rcvr_substs.regions.clone(),
-                                self_ty: None,
-                                tps: rcvr_substs.tps.clone()};
+    let mut obj_substs = rcvr_substs.clone();
+
+    // The subst we get in has Err as the "Self" type. For an object
+    // type, we don't put any type into the Self paramspace, so let's
+    // make a copy of rcvr_substs that has the Self paramspace empty.
+    obj_substs.types.get_mut_vec(subst::SelfSpace).pop().unwrap();
+
     match method_ty.explicit_self {
         ast::SelfStatic => {
             tcx.sess.span_bug(span, "static method for object type receiver");
@@ -271,15 +277,15 @@ fn construct_transformed_self_ty_for_object(
             let transformed_self_ty = *method_ty.fty.sig.inputs.get(0);
             match ty::get(transformed_self_ty).sty {
                 ty::ty_rptr(r, mt) => { // must be SelfRegion
-                    let r = r.subst(tcx, &substs); // handle Early-Bound lifetime
-                    ty::mk_trait(tcx, trait_def_id, substs,
-                                 RegionTraitStore(r, mt.mutbl),
-                                 ty::empty_builtin_bounds())
+                    let r = r.subst(tcx, rcvr_substs); // handle Early-Bound lifetime
+                    let tr = ty::mk_trait(tcx, trait_def_id, obj_substs,
+                                          ty::empty_builtin_bounds());
+                    ty::mk_rptr(tcx, r, ty::mt{ ty: tr, mutbl: mt.mutbl })
                 }
                 ty::ty_uniq(_) => { // must be SelfUniq
-                    ty::mk_trait(tcx, trait_def_id, substs,
-                                 UniqTraitStore,
-                                 ty::empty_builtin_bounds())
+                    let tr = ty::mk_trait(tcx, trait_def_id, obj_substs,
+                                          ty::empty_builtin_bounds());
+                    ty::mk_uniq(tcx, tr)
                 }
                 _ => {
                     tcx.sess.span_bug(span,
@@ -319,7 +325,7 @@ struct LookupContext<'a> {
 #[deriving(Clone)]
 struct Candidate {
     rcvr_match_condition: RcvrMatchCondition,
-    rcvr_substs: ty::substs,
+    rcvr_substs: subst::Substs,
     method_ty: Rc<ty::Method>,
     origin: MethodOrigin,
 }
@@ -428,10 +434,13 @@ impl<'a> LookupContext<'a> {
         let span = self.self_expr.map_or(self.span, |e| e.span);
         check::autoderef(self.fcx, span, self_ty, None, PreferMutLvalue, |self_ty, _| {
             match get(self_ty).sty {
-                ty_trait(box TyTrait { def_id, ref substs, .. }) => {
-                    self.push_inherent_candidates_from_object(def_id, substs);
-                    self.push_inherent_impl_candidates_for_type(def_id);
-                }
+                ty_uniq(ty) | ty_rptr(_, mt {ty, ..}) => match get(ty).sty{
+                    ty_trait(box TyTrait { def_id, ref substs, .. }) => {
+                        self.push_inherent_candidates_from_object(def_id, substs);
+                        self.push_inherent_impl_candidates_for_type(def_id);
+                    }
+                    _ => {}
+                },
                 ty_enum(did, _) | ty_struct(did, _) => {
                     if self.check_traits == CheckTraitsAndInherentMethods {
                         self.push_inherent_impl_candidates_for_type(did);
@@ -455,11 +464,6 @@ impl<'a> LookupContext<'a> {
             match get(self_ty).sty {
                 ty_param(p) => {
                     self.push_inherent_candidates_from_param(self_ty, restrict_to, p);
-                }
-                ty_self(..) => {
-                    // Call is of the form "self.foo()" and appears in one
-                    // of a trait's default method implementations.
-                    self.push_inherent_candidates_from_self(self_ty, restrict_to);
                 }
                 _ => { /* No bound methods in these types */ }
             }
@@ -500,7 +504,7 @@ impl<'a> LookupContext<'a> {
 
     fn push_inherent_candidates_from_object(&mut self,
                                             did: DefId,
-                                            substs: &ty::substs) {
+                                            substs: &subst::Substs) {
         debug!("push_inherent_candidates_from_object(did={}, substs={})",
                self.did_to_str(did),
                substs.repr(self.tcx()));
@@ -516,10 +520,7 @@ impl<'a> LookupContext<'a> {
         //
         // `confirm_candidate()` also relies upon this substitution
         // for Self. (fix)
-        let rcvr_substs = substs {
-            self_ty: Some(ty::mk_err()),
-            ..(*substs).clone()
-        };
+        let rcvr_substs = substs.with_self_ty(ty::mk_err());
         let trait_ref = Rc::new(TraitRef {
             def_id: did,
             substs: rcvr_substs.clone()
@@ -552,35 +553,27 @@ impl<'a> LookupContext<'a> {
     fn push_inherent_candidates_from_param(&mut self,
                                            rcvr_ty: ty::t,
                                            restrict_to: Option<DefId>,
-                                           param_ty: param_ty) {
+                                           param_ty: ParamTy) {
         debug!("push_inherent_candidates_from_param(param_ty={:?})",
                param_ty);
-        let i = param_ty.idx;
-        match self.fcx.inh.param_env.type_param_bounds.as_slice().get(i) {
-            Some(b) => self.push_inherent_candidates_from_bounds(
-                            rcvr_ty, b.trait_bounds.as_slice(), restrict_to,
-                            param_numbered(param_ty.idx)),
-            None => {}
-        }
-    }
-
-
-    fn push_inherent_candidates_from_self(&mut self,
-                                          rcvr_ty: ty::t,
-                                          restrict_to: Option<DefId>) {
-        debug!("push_inherent_candidates_from_self()");
         self.push_inherent_candidates_from_bounds(
             rcvr_ty,
-            [self.fcx.inh.param_env.self_param_bound.clone().unwrap()],
+            param_ty.space,
+            param_ty.idx,
             restrict_to,
-            param_self)
+            param_index { space: param_ty.space, index: param_ty.idx });
     }
+
 
     fn push_inherent_candidates_from_bounds(&mut self,
                                             self_ty: ty::t,
-                                            bounds: &[Rc<TraitRef>],
+                                            space: subst::ParamSpace,
+                                            index: uint,
                                             restrict_to: Option<DefId>,
                                             param: param_index) {
+        let bounds =
+            self.fcx.inh.param_env.bounds.get(space, index).trait_bounds
+            .as_slice();
         self.push_inherent_candidates_from_bounds_inner(bounds,
             |trait_ref, m, method_num, bound_num| {
                 match restrict_to {
@@ -696,7 +689,7 @@ impl<'a> LookupContext<'a> {
         // variables for each parameter:
         let span = self.self_expr.map_or(self.span, |e| e.span);
         let vcx = self.fcx.vtable_context();
-        let ty::ty_param_substs_and_ty {
+        let TypeAndSubsts {
             substs: impl_substs,
             ty: impl_ty
         } = impl_self_ty(&vcx, span, impl_did);
@@ -785,24 +778,13 @@ impl<'a> LookupContext<'a> {
                 let (extra_derefs, auto) = match ty::get(self_mt.ty).sty {
                     ty::ty_vec(_, None) => (0, ty::AutoBorrowVec(region, self_mt.mutbl)),
                     ty::ty_str => (0, ty::AutoBorrowVec(region, self_mt.mutbl)),
+                    ty::ty_trait(..) => (0, ty::AutoBorrowObj(region, self_mt.mutbl)),
                     _ => (1, ty::AutoPtr(region, self_mt.mutbl)),
                 };
                 (ty::mk_rptr(tcx, region, self_mt),
                  ty::AutoDerefRef {
                      autoderefs: autoderefs + extra_derefs,
                      autoref: Some(auto)})
-            }
-
-            ty::ty_trait(box ty::TyTrait {
-                def_id, ref substs, store: ty::RegionTraitStore(_, mutbl), bounds
-            }) => {
-                let region =
-                    self.infcx().next_region_var(infer::Autoref(self.span));
-                (ty::mk_trait(tcx, def_id, substs.clone(),
-                              ty::RegionTraitStore(region, mutbl), bounds),
-                 ty::AutoDerefRef {
-                     autoderefs: autoderefs,
-                     autoref: Some(ty::AutoBorrowObj(region, mutbl))})
             }
             _ => {
                 (self_ty,
@@ -873,6 +855,26 @@ impl<'a> LookupContext<'a> {
             })
     }
 
+    // Coerce Box/&Trait instances to &Trait.
+    fn auto_slice_trait(&self, ty: ty::t, autoderefs: uint) -> Option<MethodCallee> {
+        match ty::get(ty).sty {
+            ty_trait(box ty::TyTrait {
+                    def_id: trt_did,
+                    substs: ref trt_substs,
+                    bounds: b,
+                    .. }) => {
+                let tcx = self.tcx();
+                self.search_for_some_kind_of_autorefd_method(
+                    AutoBorrowObj, autoderefs, [MutImmutable, MutMutable],
+                    |m, r| {
+                        let tr = ty::mk_trait(tcx, trt_did, trt_substs.clone(), b);
+                        ty::mk_rptr(tcx, r, ty::mt{ ty: tr, mutbl: m })
+                    })
+            }
+            _ => fail!("Expected ty_trait in auto_slice_trait")
+        }
+    }
+
     fn search_for_autosliced_method(&self,
                                     self_ty: ty::t,
                                     autoderefs: uint)
@@ -882,37 +884,22 @@ impl<'a> LookupContext<'a> {
          * `~[]` to `&[]`.
          */
 
-        let tcx = self.tcx();
-        debug!("search_for_autosliced_method {}", ppaux::ty_to_str(tcx, self_ty));
+        debug!("search_for_autosliced_method {}", ppaux::ty_to_str(self.tcx(), self_ty));
 
         let sty = ty::get(self_ty).sty.clone();
         match sty {
             ty_rptr(_, mt) => match ty::get(mt.ty).sty {
                 ty_vec(mt, None) => self.auto_slice_vec(mt, autoderefs),
+                ty_trait(..) => self.auto_slice_trait(mt.ty, autoderefs),
                 _ => None
             },
             ty_uniq(t) => match ty::get(t).sty {
                 ty_vec(mt, None) => self.auto_slice_vec(mt, autoderefs),
                 ty_str => self.auto_slice_str(autoderefs),
+                ty_trait(..) => self.auto_slice_trait(t, autoderefs),
                 _ => None
             },
             ty_vec(mt, Some(_)) => self.auto_slice_vec(mt, autoderefs),
-
-            ty_trait(box ty::TyTrait {
-                    def_id: trt_did,
-                    substs: trt_substs,
-                    bounds: b,
-                    ..
-                }) => {
-                // Coerce Box/&Trait instances to &Trait.
-
-                self.search_for_some_kind_of_autorefd_method(
-                    AutoBorrowObj, autoderefs, [MutImmutable, MutMutable],
-                    |m, r| {
-                        ty::mk_trait(tcx, trt_did, trt_substs.clone(),
-                                     RegionTraitStore(r, m), b)
-                    })
-            }
 
             ty_closure(..) => {
                 // This case should probably be handled similarly to
@@ -937,7 +924,7 @@ impl<'a> LookupContext<'a> {
             ty_bare_fn(..) | ty_box(..) | ty_uniq(..) | ty_rptr(..) |
             ty_infer(IntVar(_)) |
             ty_infer(FloatVar(_)) |
-            ty_self(_) | ty_param(..) | ty_nil | ty_bot | ty_bool |
+            ty_param(..) | ty_nil | ty_bot | ty_bool |
             ty_char | ty_int(..) | ty_uint(..) |
             ty_float(..) | ty_enum(..) | ty_ptr(..) | ty_struct(..) | ty_tup(..) |
             ty_str | ty_vec(..) | ty_trait(..) | ty_closure(..) => {
@@ -1047,7 +1034,7 @@ impl<'a> LookupContext<'a> {
             return Some(MethodCallee {
                 origin: relevant_candidates.get(0).origin,
                 ty: ty::mk_err(),
-                substs: substs::empty()
+                substs: subst::Substs::empty()
             });
         }
 
@@ -1093,7 +1080,8 @@ impl<'a> LookupContext<'a> {
     }
 
     fn confirm_candidate(&self, rcvr_ty: ty::t, candidate: &Candidate)
-                         -> MethodCallee {
+                         -> MethodCallee
+    {
         // This method performs two sets of substitutions, one after the other:
         // 1. Substitute values for any type/lifetime parameters from the impl and
         //    method declaration into the method type. This is the function type
@@ -1117,8 +1105,8 @@ impl<'a> LookupContext<'a> {
         // If they were not explicitly supplied, just construct fresh
         // variables.
         let num_supplied_tps = self.supplied_tps.len();
-        let num_method_tps = candidate.method_ty.generics.type_param_defs().len();
-        let m_substs = {
+        let num_method_tps = candidate.method_ty.generics.types.len(subst::FnSpace);
+        let m_types = {
             if num_supplied_tps == 0u {
                 self.fcx.infcx().next_ty_vars(num_method_tps)
             } else if num_method_tps == 0u {
@@ -1129,42 +1117,30 @@ impl<'a> LookupContext<'a> {
             } else if num_supplied_tps != num_method_tps {
                 tcx.sess.span_err(
                     self.span,
-                    "incorrect number of type \
-                     parameters given for this method");
+                    "incorrect number of type parameters given for this method");
                 self.fcx.infcx().next_ty_vars(num_method_tps)
             } else {
                 Vec::from_slice(self.supplied_tps)
             }
         };
 
-        // Determine values for the early-bound lifetime parameters.
+        // Create subst for early-bound lifetime parameters, combining
+        // parameters from the type and those from the method.
+        //
         // FIXME -- permit users to manually specify lifetimes
-        let mut all_regions: Vec<Region> = match candidate.rcvr_substs.regions {
-            NonerasedRegions(ref v) => v.iter().map(|r| r.clone()).collect(),
-            ErasedRegions => tcx.sess.span_bug(self.span, "ErasedRegions")
-        };
         let m_regions =
             self.fcx.infcx().region_vars_for_defs(
                 self.span,
-                candidate.method_ty.generics.region_param_defs.as_slice());
-        for &r in m_regions.iter() {
-            all_regions.push(r);
-        }
+                candidate.method_ty.generics.regions.get_vec(subst::FnSpace));
 
-        // Construct the full set of type parameters for the method,
-        // which is equal to the class tps + the method tps.
-        let all_substs = substs {
-            tps: candidate.rcvr_substs.tps.clone().append(m_substs.as_slice()),
-            regions: NonerasedRegions(OwnedSlice::from_vec(all_regions)),
-            self_ty: candidate.rcvr_substs.self_ty,
-        };
+        let all_substs = candidate.rcvr_substs.clone().with_method(m_types, m_regions);
 
         let ref bare_fn_ty = candidate.method_ty.fty;
 
         // Compute the method type with type parameters substituted
         debug!("fty={} all_substs={}",
                bare_fn_ty.repr(tcx),
-               ty::substs_to_str(tcx, &all_substs));
+               all_substs.repr(tcx));
 
         let fn_sig = &bare_fn_ty.sig;
         let inputs = match candidate.origin {
@@ -1283,7 +1259,8 @@ impl<'a> LookupContext<'a> {
             check_for_self_ty(sig.output);
         }
 
-        if candidate.method_ty.generics.has_type_params() { // reason (b) above
+        if candidate.method_ty.generics.has_type_params(subst::FnSpace) {
+            // reason (b) above
             self.tcx().sess.span_err(
                 self.span,
                 "cannot call a generic method through an object");
@@ -1334,17 +1311,15 @@ impl<'a> LookupContext<'a> {
                     ty::ty_rptr(_, mt) => {
                         match ty::get(mt.ty).sty {
                             ty::ty_vec(_, None) | ty::ty_str => false,
+                            ty::ty_trait(box ty::TyTrait { def_id: self_did, .. }) => {
+                                mutability_matches(mt.mutbl, m) &&
+                                rcvr_matches_object(self_did, candidate)
+                            }
                             _ => mutability_matches(mt.mutbl, m) &&
                                  rcvr_matches_ty(self.fcx, mt.ty, candidate),
                         }
                     }
 
-                    ty::ty_trait(box ty::TyTrait {
-                        def_id: self_did, store: RegionTraitStore(_, self_m), ..
-                    }) => {
-                        mutability_matches(self_m, m) &&
-                        rcvr_matches_object(self_did, candidate)
-                    }
 
                     _ => false
                 }
@@ -1356,14 +1331,11 @@ impl<'a> LookupContext<'a> {
                     ty::ty_uniq(typ) => {
                         match ty::get(typ).sty {
                             ty::ty_vec(_, None) | ty::ty_str => false,
+                            ty::ty_trait(box ty::TyTrait { def_id: self_did, .. }) => {
+                                rcvr_matches_object(self_did, candidate)
+                            }
                             _ => rcvr_matches_ty(self.fcx, typ, candidate),
                         }
-                    }
-
-                    ty::ty_trait(box ty::TyTrait {
-                        def_id: self_did, store: UniqTraitStore, ..
-                    }) => {
-                        rcvr_matches_object(self_did, candidate)
                     }
 
                     _ => false
@@ -1441,7 +1413,7 @@ impl<'a> LookupContext<'a> {
         };
         self.tcx().sess.span_note(
             span,
-            format!("candidate \\#{} is `{}`",
+            format!("candidate #{} is `{}`",
                     idx + 1u,
                     ty::item_path_str(self.tcx(), did)).as_slice());
     }
@@ -1449,7 +1421,7 @@ impl<'a> LookupContext<'a> {
     fn report_param_candidate(&self, idx: uint, did: DefId) {
         self.tcx().sess.span_note(
             self.span,
-            format!("candidate \\#{} derives from the bound `{}`",
+            format!("candidate #{} derives from the bound `{}`",
                     idx + 1u,
                     ty::item_path_str(self.tcx(), did)).as_slice());
     }
@@ -1457,7 +1429,7 @@ impl<'a> LookupContext<'a> {
     fn report_trait_candidate(&self, idx: uint, did: DefId) {
         self.tcx().sess.span_note(
             self.span,
-            format!("candidate \\#{} derives from the type of the receiver, \
+            format!("candidate #{} derives from the type of the receiver, \
                      which is the trait `{}`",
                     idx + 1u,
                     ty::item_path_str(self.tcx(), did)).as_slice());

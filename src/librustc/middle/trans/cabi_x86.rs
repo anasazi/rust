@@ -9,7 +9,7 @@
 // except according to those terms.
 
 
-use syntax::abi::{OsWin32, OsMacos};
+use syntax::abi::{OsWin32, OsMacos, OsiOS};
 use lib::llvm::*;
 use super::cabi::*;
 use super::common::*;
@@ -36,7 +36,7 @@ pub fn compute_abi_info(ccx: &CrateContext,
 
         enum Strategy { RetValue(Type), RetPointer }
         let strategy = match ccx.sess().targ_cfg.os {
-            OsWin32 | OsMacos => {
+            OsWin32 | OsMacos | OsiOS => {
                 match llsize_of_alloc(ccx, rty) {
                     1 => RetValue(Type::i8(ccx)),
                     2 => RetValue(Type::i16(ccx)),
@@ -59,7 +59,8 @@ pub fn compute_abi_info(ccx: &CrateContext,
             }
         }
     } else {
-        ret_ty = ArgType::direct(rty, None, None, None);
+        let attr = if rty == Type::bool(ccx) { Some(ZExtAttribute) } else { None };
+        ret_ty = ArgType::direct(rty, None, None, attr);
     }
 
     for &t in atys.iter() {
@@ -72,7 +73,10 @@ pub fn compute_abi_info(ccx: &CrateContext,
                     ArgType::indirect(t, Some(ByValAttribute))
                 }
             }
-            _ => ArgType::direct(t, None, None, None),
+            _ => {
+                let attr = if t == Type::bool(ccx) { Some(ZExtAttribute) } else { None };
+                ArgType::direct(t, None, None, attr)
+            }
         };
         arg_tys.push(ty);
     }

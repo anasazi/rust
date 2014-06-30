@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use collections::HashMap;
+use std::collections::HashMap;
 use std::fmt;
 use std::from_str::from_str;
 use std::str::{MaybeOwned, Owned, Slice};
@@ -18,8 +18,10 @@ use parse;
 use vm;
 use vm::{CaptureLocs, MatchKind, Exists, Location, Submatches};
 
-/// Escapes all regular expression meta characters in `text` so that it may be
-/// safely used in a regular expression as a literal string.
+/// Escapes all regular expression meta characters in `text`.
+///
+/// The string returned may be safely used as a literal in a regular
+/// expression.
 pub fn quote(text: &str) -> String {
     let mut quoted = String::with_capacity(text.len());
     for c in text.chars() {
@@ -45,9 +47,10 @@ pub fn is_match(regex: &str, text: &str) -> Result<bool, parse::Error> {
     Regex::new(regex).map(|r| r.is_match(text))
 }
 
-/// Regex is a compiled regular expression, represented as either a sequence
-/// of bytecode instructions (dynamic) or as a specialized Rust function
-/// (native). It can be used to search, split
+/// A compiled regular expression
+///
+/// It is represented as either a sequence of bytecode instructions (dynamic)
+/// or as a specialized Rust function (native). It can be used to search, split
 /// or replace text. All searching is done with an implicit `.*?` at the
 /// beginning and end of an expression. To force an expression to match the
 /// whole string (or a prefix or a suffix), you must use an anchor like `^` or
@@ -55,7 +58,7 @@ pub fn is_match(regex: &str, text: &str) -> Result<bool, parse::Error> {
 ///
 /// While this crate will handle Unicode strings (whether in the regular
 /// expression or in the search text), all positions returned are **byte
-/// indices**. Every byte index is guaranteed to be at a UTF8 codepoint
+/// indices**. Every byte index is guaranteed to be at a Unicode code point
 /// boundary.
 ///
 /// The lifetimes `'r` and `'t` in this crate correspond to the lifetime of a
@@ -84,7 +87,7 @@ pub fn is_match(regex: &str, text: &str) -> Result<bool, parse::Error> {
 /// ```rust
 /// #![feature(phase)]
 /// extern crate regex;
-/// #[phase(syntax)] extern crate regex_macros;
+/// #[phase(plugin)] extern crate regex_macros;
 ///
 /// fn main() {
 ///     let re = regex!(r"\d+");
@@ -169,7 +172,7 @@ impl Regex {
     ///
     /// ```rust
     /// # #![feature(phase)]
-    /// # extern crate regex; #[phase(syntax)] extern crate regex_macros;
+    /// # extern crate regex; #[phase(plugin)] extern crate regex_macros;
     /// # fn main() {
     /// let text = "I categorically deny having triskaidekaphobia.";
     /// let matched = regex!(r"\b\w{13}\b").is_match(text);
@@ -189,12 +192,12 @@ impl Regex {
     ///
     /// # Example
     ///
-    /// Find the start and end location of every word with exactly 13
+    /// Find the start and end location of the first word with exactly 13
     /// characters:
     ///
     /// ```rust
     /// # #![feature(phase)]
-    /// # extern crate regex; #[phase(syntax)] extern crate regex_macros;
+    /// # extern crate regex; #[phase(plugin)] extern crate regex_macros;
     /// # fn main() {
     /// let text = "I categorically deny having triskaidekaphobia.";
     /// let pos = regex!(r"\b\w{13}\b").find(text);
@@ -216,12 +219,12 @@ impl Regex {
     ///
     /// # Example
     ///
-    /// Find the start and end location of the first word with exactly 13
+    /// Find the start and end location of every word with exactly 13
     /// characters:
     ///
     /// ```rust
     /// # #![feature(phase)]
-    /// # extern crate regex; #[phase(syntax)] extern crate regex_macros;
+    /// # extern crate regex; #[phase(plugin)] extern crate regex_macros;
     /// # fn main() {
     /// let text = "Retroactively relinquishing remunerations is reprehensible.";
     /// for pos in regex!(r"\b\w{13}\b").find_iter(text) {
@@ -260,7 +263,7 @@ impl Regex {
     ///
     /// ```rust
     /// # #![feature(phase)]
-    /// # extern crate regex; #[phase(syntax)] extern crate regex_macros;
+    /// # extern crate regex; #[phase(plugin)] extern crate regex_macros;
     /// # fn main() {
     /// let re = regex!(r"'([^']+)'\s+\((\d{4})\)");
     /// let text = "Not my favorite movie: 'Citizen Kane' (1941).";
@@ -278,7 +281,7 @@ impl Regex {
     ///
     /// ```rust
     /// # #![feature(phase)]
-    /// # extern crate regex; #[phase(syntax)] extern crate regex_macros;
+    /// # extern crate regex; #[phase(plugin)] extern crate regex_macros;
     /// # fn main() {
     /// let re = regex!(r"'(?P<title>[^']+)'\s+\((?P<year>\d{4})\)");
     /// let text = "Not my favorite movie: 'Citizen Kane' (1941).";
@@ -311,7 +314,7 @@ impl Regex {
     ///
     /// ```rust
     /// # #![feature(phase)]
-    /// # extern crate regex; #[phase(syntax)] extern crate regex_macros;
+    /// # extern crate regex; #[phase(plugin)] extern crate regex_macros;
     /// # fn main() {
     /// let re = regex!(r"'(?P<title>[^']+)'\s+\((?P<year>\d{4})\)");
     /// let text = "'Citizen Kane' (1941), 'The Wizard of Oz' (1939), 'M' (1931).";
@@ -347,7 +350,7 @@ impl Regex {
     ///
     /// ```rust
     /// # #![feature(phase)]
-    /// # extern crate regex; #[phase(syntax)] extern crate regex_macros;
+    /// # extern crate regex; #[phase(plugin)] extern crate regex_macros;
     /// # fn main() {
     /// let re = regex!(r"[ \t]+");
     /// let fields: Vec<&str> = re.split("a b \t  c\td    e").collect();
@@ -377,7 +380,7 @@ impl Regex {
     ///
     /// ```rust
     /// # #![feature(phase)]
-    /// # extern crate regex; #[phase(syntax)] extern crate regex_macros;
+    /// # extern crate regex; #[phase(plugin)] extern crate regex_macros;
     /// # fn main() {
     /// let re = regex!(r"\W+");
     /// let fields: Vec<&str> = re.splitn("Hey! How are you?", 3).collect();
@@ -407,7 +410,7 @@ impl Regex {
     ///
     /// ```rust
     /// # #![feature(phase)]
-    /// # extern crate regex; #[phase(syntax)] extern crate regex_macros;
+    /// # extern crate regex; #[phase(plugin)] extern crate regex_macros;
     /// # fn main() {
     /// let re = regex!("[^01]+");
     /// assert_eq!(re.replace("1078910", "").as_slice(), "1010");
@@ -421,7 +424,7 @@ impl Regex {
     ///
     /// ```rust
     /// # #![feature(phase)]
-    /// # extern crate regex; #[phase(syntax)] extern crate regex_macros;
+    /// # extern crate regex; #[phase(plugin)] extern crate regex_macros;
     /// # use regex::Captures; fn main() {
     /// let re = regex!(r"([^,\s]+),\s+(\S+)");
     /// let result = re.replace("Springsteen, Bruce", |caps: &Captures| {
@@ -438,7 +441,7 @@ impl Regex {
     ///
     /// ```rust
     /// # #![feature(phase)]
-    /// # extern crate regex; #[phase(syntax)] extern crate regex_macros;
+    /// # extern crate regex; #[phase(plugin)] extern crate regex_macros;
     /// # fn main() {
     /// let re = regex!(r"(?P<last>[^,\s]+),\s+(?P<first>\S+)");
     /// let result = re.replace("Springsteen, Bruce", "$first $last");
@@ -455,7 +458,7 @@ impl Regex {
     ///
     /// ```rust
     /// # #![feature(phase)]
-    /// # extern crate regex; #[phase(syntax)] extern crate regex_macros;
+    /// # extern crate regex; #[phase(plugin)] extern crate regex_macros;
     /// # fn main() {
     /// use regex::NoExpand;
     ///
@@ -577,8 +580,8 @@ impl<'t> Replacer for &'t str {
     }
 }
 
-impl<'a> Replacer for |&Captures|: 'a -> String {
-    fn reg_replace<'r>(&'r mut self, caps: &Captures) -> MaybeOwned<'r> {
+impl<'t> Replacer for |&Captures|: 't -> String {
+    fn reg_replace<'a>(&'a mut self, caps: &Captures) -> MaybeOwned<'a> {
         Owned((*self)(caps))
     }
 }
@@ -772,7 +775,7 @@ impl<'t> Captures<'t> {
     }
 }
 
-impl<'t> Container for Captures<'t> {
+impl<'t> Collection for Captures<'t> {
     /// Returns the number of captured groups.
     #[inline]
     fn len(&self) -> uint {
@@ -823,8 +826,9 @@ impl<'t> Iterator<Option<(uint, uint)>> for SubCapturesPos<'t> {
 }
 
 /// An iterator that yields all non-overlapping capture groups matching a
-/// particular regular expression. The iterator stops when no more matches can
-/// be found.
+/// particular regular expression.
+///
+/// The iterator stops when no more matches can be found.
 ///
 /// `'r` is the lifetime of the compiled expression and `'t` is the lifetime
 /// of the matched string.

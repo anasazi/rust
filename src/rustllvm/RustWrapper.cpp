@@ -318,7 +318,7 @@ extern "C" LLVMValueRef LLVMDIBuilderCreateStructType(
         unwrapDI<DIArray>(Elements),
         RunTimeLang,
         unwrapDI<DIType>(VTableHolder)
-#if LLVM_VERSION_MINOR >= 5
+#if LLVM_VERSION_MINOR >= 4
         ,UniqueId
 #endif
         ));
@@ -510,7 +510,7 @@ extern "C" LLVMValueRef LLVMDIBuilderCreateUnionType(
         Flags,
         unwrapDI<DIArray>(Elements),
         RunTimeLang
-#if LLVM_VERSION_MINOR >= 5
+#if LLVM_VERSION_MINOR >= 4
         ,UniqueId
 #endif
         ));
@@ -659,7 +659,7 @@ LLVMRustLinkInExternalBitcode(LLVMModuleRef dst, char *bc, size_t len) {
 extern "C" void*
 LLVMRustOpenArchive(char *path) {
     std::unique_ptr<MemoryBuffer> buf;
-    error_code err = MemoryBuffer::getFile(path, buf);
+    std::error_code err = MemoryBuffer::getFile(path, buf);
     if (err) {
         LLVMRustSetLastError(err.message().c_str());
         return NULL;
@@ -694,14 +694,18 @@ LLVMRustArchiveReadSection(Archive *ar, char *name, size_t *size) {
 #if LLVM_VERSION_MINOR >= 5
     Archive::child_iterator child = ar->child_begin(),
                               end = ar->child_end();
+    for (; child != end; ++child) {
+        ErrorOr<StringRef> name_or_err = child->getName();
+        if (name_or_err.getError()) continue;
+        StringRef sect_name = name_or_err.get();
 #else
     Archive::child_iterator child = ar->begin_children(),
                               end = ar->end_children();
-#endif
     for (; child != end; ++child) {
         StringRef sect_name;
         error_code err = child->getName(sect_name);
         if (err) continue;
+#endif
         if (sect_name.trim(" ") == name) {
             StringRef buf = child->getBuffer();
             *size = buf.size();
@@ -734,6 +738,11 @@ LLVMVersionMinor() {
     return LLVM_VERSION_MINOR;
 }
 
+extern "C" int
+LLVMVersionMajor() {
+    return LLVM_VERSION_MAJOR;
+}
+
 // Note that the two following functions look quite similar to the
 // LLVMGetSectionName function. Sadly, it appears that this function only
 // returns a char* pointer, which isn't guaranteed to be null-terminated. The
@@ -752,7 +761,11 @@ inline section_iterator *unwrap(LLVMSectionIteratorRef SI) {
 extern "C" int
 LLVMRustGetSectionName(LLVMSectionIteratorRef SI, const char **ptr) {
     StringRef ret;
+#if LLVM_VERSION_MINOR >= 5
+    if (std::error_code ec = (*unwrap(SI))->getName(ret))
+#else
     if (error_code ec = (*unwrap(SI))->getName(ret))
+#endif
       report_fatal_error(ec.message());
     *ptr = ret.data();
     return ret.size();

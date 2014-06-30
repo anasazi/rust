@@ -21,19 +21,20 @@
 #![crate_type = "rlib"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk.png",
        html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-       html_root_url = "http://doc.rust-lang.org/")]
+       html_root_url = "http://doc.rust-lang.org/",
+       html_playground_url = "http://play.rust-lang.org/")]
 
 #![feature(macro_rules, phase, globs)]
 #![no_std]
 #![experimental]
 
-#[phase(syntax, link)]
+#[phase(plugin, link)]
 extern crate core;
 
+#[cfg(test)] #[phase(plugin, link)] extern crate std;
+#[cfg(test)] #[phase(plugin, link)] extern crate log;
 #[cfg(test)] extern crate native;
 #[cfg(test)] extern crate debug;
-#[cfg(test)] #[phase(syntax, link)] extern crate std;
-#[cfg(test)] #[phase(syntax, link)] extern crate log;
 
 use core::prelude::*;
 
@@ -110,7 +111,7 @@ pub trait Rng {
         // (3) adds more `unsafe` that needs to be checked, (4)
         // probably doesn't give much performance gain if
         // optimisations are on.
-        let mut count = 0;
+        let mut count = 0i;
         let mut num = 0;
         for byte in dest.mut_iter() {
             if count == 0 {
@@ -179,7 +180,7 @@ pub trait Rng {
     /// let mut rng = task_rng();
     /// let n: uint = rng.gen_range(0u, 10);
     /// println!("{}", n);
-    /// let m: f64 = rng.gen_range(-40.0, 1.3e5);
+    /// let m: f64 = rng.gen_range(-40.0f64, 1.3e5f64);
     /// println!("{}", m);
     /// ```
     fn gen_range<T: PartialOrd + SampleRange>(&mut self, low: T, high: T) -> T {
@@ -224,7 +225,7 @@ pub trait Rng {
     /// ```
     /// use std::rand::{task_rng, Rng};
     ///
-    /// let choices = [1, 2, 4, 8, 16, 32];
+    /// let choices = [1i, 2, 4, 8, 16, 32];
     /// let mut rng = task_rng();
     /// println!("{}", rng.choose(choices));
     /// assert_eq!(rng.choose(choices.slice_to(0)), None);
@@ -251,7 +252,7 @@ pub trait Rng {
     /// use std::rand::{task_rng, Rng};
     ///
     /// let mut rng = task_rng();
-    /// let mut y = [1,2,3];
+    /// let mut y = [1i, 2, 3];
     /// rng.shuffle(y);
     /// println!("{}", y.as_slice());
     /// rng.shuffle(y);
@@ -291,9 +292,9 @@ pub struct AsciiGenerator<'a, R> {
 impl<'a, R: Rng> Iterator<char> for AsciiGenerator<'a, R> {
     fn next(&mut self) -> Option<char> {
         static GEN_ASCII_STR_CHARSET: &'static [u8] =
-            bytes!("ABCDEFGHIJKLMNOPQRSTUVWXYZ\
-                    abcdefghijklmnopqrstuvwxyz\
-                    0123456789");
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZ\
+              abcdefghijklmnopqrstuvwxyz\
+              0123456789";
         Some(*self.rng.choose(GEN_ASCII_STR_CHARSET).unwrap() as char)
     }
 }

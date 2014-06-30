@@ -8,9 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::rt::env::max_cached_stacks;
+use std::sync::atomics;
 use std::os::{errno, page_size, MemoryMap, MapReadable, MapWritable,
-              MapNonStandardFlags, MapVirtual};
+              MapNonStandardFlags, MapVirtual, getenv};
 use libc;
 
 /// A task's stack. The name "Stack" is a vestige of segmented stacks.
@@ -78,14 +78,14 @@ impl Stack {
     }
 
     /// Point to the low end of the allocated stack
-    pub fn start(&self) -> *uint {
-        self.buf.data as *uint
+    pub fn start(&self) -> *const uint {
+        self.buf.data as *const uint
     }
 
     /// Point one uint beyond the high end of the allocated stack
-    pub fn end(&self) -> *uint {
+    pub fn end(&self) -> *const uint {
         unsafe {
-            self.buf.data.offset(self.buf.len as int) as *uint
+            self.buf.data.offset(self.buf.len as int) as *const uint
         }
     }
 }
@@ -96,7 +96,7 @@ fn protect_last_page(stack: &MemoryMap) -> bool {
         // This may seem backwards: the start of the segment is the last page?
         // Yes! The stack grows from higher addresses (the end of the allocated
         // block) to lower addresses (the start of the allocated block).
-        let last_page = stack.data as *libc::c_void;
+        let last_page = stack.data as *mut libc::c_void;
         libc::mprotect(last_page, page_size() as libc::size_t,
                        libc::PROT_NONE) != -1
     }
@@ -151,9 +151,25 @@ impl StackPool {
     }
 }
 
+fn max_cached_stacks() -> uint {
+    static mut AMT: atomics::AtomicUint = atomics::INIT_ATOMIC_UINT;
+    match unsafe { AMT.load(atomics::SeqCst) } {
+        0 => {}
+        n => return n - 1,
+    }
+    let amt = getenv("RUST_MAX_CACHED_STACKS").and_then(|s| from_str(s.as_slice()));
+    // This default corresponds to 20M of cache per scheduler (at the
+    // default size).
+    let amt = amt.unwrap_or(10);
+    // 0 is our sentinel value, so ensure that we'll never see 0 after
+    // initialization has run
+    unsafe { AMT.store(amt + 1, atomics::SeqCst); }
+    return amt;
+}
+
 extern {
-    fn rust_valgrind_stack_register(start: *libc::uintptr_t,
-                                    end: *libc::uintptr_t) -> libc::c_uint;
+    fn rust_valgrind_stack_register(start: *const libc::uintptr_t,
+                                    end: *const libc::uintptr_t) -> libc::c_uint;
     fn rust_valgrind_stack_deregister(id: libc::c_uint);
 }
 

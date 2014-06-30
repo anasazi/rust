@@ -17,13 +17,13 @@ impl<A:Clone + 'static> repeat<A> for Box<A> {
     }
 }
 
-fn repeater<A:Clone + 'static>(v: Box<A>) -> Box<repeat<A>:> {
+fn repeater<A:Clone + 'static>(v: Box<A>) -> Box<repeat<A>> {
     // Note: owned kind is not necessary as A appears in the trait type
-    box v as Box<repeat<A>:> // No
+    box v as Box<repeat<A>> // No
 }
 
 pub fn main() {
-    let x = 3;
+    let x = 3i;
     let y = repeater(box x);
     assert_eq!(x, y.get());
 }

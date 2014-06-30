@@ -15,7 +15,9 @@
 //! useful an upstream crate must define failure for libcore to use. The current
 //! interface for failure is:
 //!
-//!     fn begin_unwind(fmt: &fmt::Arguments, file: &str, line: uint) -> !;
+//! ```ignore
+//! fn begin_unwind(fmt: &fmt::Arguments, file: &str, line: uint) -> !;
+//! ```
 //!
 //! This definition allows for failing with any general message, but it does not
 //! allow for failing with a `~Any` value. The reason for this is that libcore
@@ -33,7 +35,6 @@ use intrinsics;
 
 #[cold] #[inline(never)] // this is the slow path, always
 #[lang="fail_"]
-#[cfg(not(test))]
 fn fail_(expr: &'static str, file: &'static str, line: uint) -> ! {
     format_args!(|args| -> () {
         begin_unwind(args, file, line);
@@ -44,7 +45,6 @@ fn fail_(expr: &'static str, file: &'static str, line: uint) -> ! {
 
 #[cold]
 #[lang="fail_bounds_check"]
-#[cfg(not(test))]
 fn fail_bounds_check(file: &'static str, line: uint,
                      index: uint, len: uint) -> ! {
     format_args!(|args| -> () {

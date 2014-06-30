@@ -18,10 +18,10 @@ use util::interner;
 
 use serialize::{Decodable, Decoder, Encodable, Encoder};
 use std::fmt;
-use std::path::BytesContainer;
+use std::gc::Gc;
 use std::mem;
+use std::path::BytesContainer;
 use std::rc::Rc;
-use std::string::String;
 
 #[allow(non_camel_case_types)]
 #[deriving(Clone, Encodable, Decodable, PartialEq, Eq, Hash, Show)]
@@ -78,6 +78,7 @@ pub enum Token {
     DOLLAR,
 
     /* Literals */
+    LIT_BYTE(u8),
     LIT_CHAR(char),
     LIT_INT(i64, ast::IntTy),
     LIT_UINT(u64, ast::UintTy),
@@ -86,6 +87,8 @@ pub enum Token {
     LIT_FLOAT_UNSUFFIXED(ast::Ident),
     LIT_STR(ast::Ident),
     LIT_STR_RAW(ast::Ident, uint), /* raw str delimited by n hash symbols */
+    LIT_BINARY(Rc<Vec<u8>>),
+    LIT_BINARY_RAW(Rc<Vec<u8>>, uint), /* raw binary str delimited by n hash symbols */
 
     /* Name components */
     // an identifier contains an "is_mod_name" boolean,
@@ -105,16 +108,17 @@ pub enum Token {
 #[deriving(Clone, Encodable, Decodable, PartialEq, Eq, Hash)]
 /// For interpolation during macro expansion.
 pub enum Nonterminal {
-    NtItem(@ast::Item),
+    NtItem(Gc<ast::Item>),
     NtBlock(P<ast::Block>),
-    NtStmt(@ast::Stmt),
-    NtPat( @ast::Pat),
-    NtExpr(@ast::Expr),
+    NtStmt(Gc<ast::Stmt>),
+    NtPat( Gc<ast::Pat>),
+    NtExpr(Gc<ast::Expr>),
     NtTy(  P<ast::Ty>),
+    // see IDENT, above, for meaning of bool in NtIdent:
     NtIdent(Box<ast::Ident>, bool),
-    NtMeta(@ast::MetaItem), // stuff inside brackets for attributes
+    NtMeta(Gc<ast::MetaItem>), // stuff inside brackets for attributes
     NtPath(Box<ast::Path>),
-    NtTT(  @ast::TokenTree), // needs @ed to break a circularity
+    NtTT(  Gc<ast::TokenTree>), // needs @ed to break a circularity
     NtMatchers(Vec<ast::Matcher> )
 }
 
@@ -136,18 +140,18 @@ impl fmt::Show for Nonterminal {
     }
 }
 
-pub fn binop_to_str(o: BinOp) -> String {
+pub fn binop_to_str(o: BinOp) -> &'static str {
     match o {
-      PLUS => "+".to_string(),
-      MINUS => "-".to_string(),
-      STAR => "*".to_string(),
-      SLASH => "/".to_string(),
-      PERCENT => "%".to_string(),
-      CARET => "^".to_string(),
-      AND => "&".to_string(),
-      OR => "|".to_string(),
-      SHL => "<<".to_string(),
-      SHR => ">>".to_string()
+      PLUS => "+",
+      MINUS => "-",
+      STAR => "*",
+      SLASH => "/",
+      PERCENT => "%",
+      CARET => "^",
+      AND => "&",
+      OR => "|",
+      SHL => "<<",
+      SHR => ">>"
     }
 }
 
@@ -164,9 +168,9 @@ pub fn to_str(t: &Token) -> String {
       TILDE => "~".to_string(),
       OROR => "||".to_string(),
       ANDAND => "&&".to_string(),
-      BINOP(op) => binop_to_str(op),
+      BINOP(op) => binop_to_str(op).to_string(),
       BINOPEQ(op) => {
-          let mut s = binop_to_str(op);
+          let mut s = binop_to_str(op).to_string();
           s.push_str("=");
           s
       }
@@ -193,6 +197,14 @@ pub fn to_str(t: &Token) -> String {
       DOLLAR => "$".to_string(),
 
       /* Literals */
+      LIT_BYTE(b) => {
+          let mut res = String::from_str("b'");
+          (b as char).escape_default(|c| {
+              res.push_char(c);
+          });
+          res.push_char('\'');
+          res
+      }
       LIT_CHAR(c) => {
           let mut res = String::from_str("'");
           c.escape_default(|c| {
@@ -201,11 +213,9 @@ pub fn to_str(t: &Token) -> String {
           res.push_char('\'');
           res
       }
-      LIT_INT(i, t) => ast_util::int_ty_to_str(t, Some(i),
-                                               ast_util::ForceSuffix),
-      LIT_UINT(u, t) => ast_util::uint_ty_to_str(t, Some(u),
-                                                 ast_util::ForceSuffix),
-      LIT_INT_UNSUFFIXED(i) => { (i as u64).to_str().to_string() }
+      LIT_INT(i, t) => ast_util::int_ty_to_str(t, Some(i)),
+      LIT_UINT(u, t) => ast_util::uint_ty_to_str(t, Some(u)),
+      LIT_INT_UNSUFFIXED(i) => { (i as u64).to_str() }
       LIT_FLOAT(s, t) => {
         let mut body = String::from_str(get_ident(s).get());
         if body.as_slice().ends_with(".") {
@@ -222,17 +232,26 @@ pub fn to_str(t: &Token) -> String {
         body
       }
       LIT_STR(s) => {
-          (format!("\"{}\"", get_ident(s).get().escape_default())).to_string()
+          format!("\"{}\"", get_ident(s).get().escape_default())
       }
       LIT_STR_RAW(s, n) => {
-          (format!("r{delim}\"{string}\"{delim}",
-                  delim="#".repeat(n), string=get_ident(s))).to_string()
+        format!("r{delim}\"{string}\"{delim}",
+                 delim="#".repeat(n), string=get_ident(s))
+      }
+      LIT_BINARY(ref v) => {
+          format!(
+            "b\"{}\"",
+            v.iter().map(|&b| b as char).collect::<String>().escape_default())
+      }
+      LIT_BINARY_RAW(ref s, n) => {
+        format!("br{delim}\"{string}\"{delim}",
+                 delim="#".repeat(n), string=s.as_slice().to_ascii().as_str_ascii())
       }
 
       /* Name components */
       IDENT(s, _) => get_ident(s).get().to_string(),
       LIFETIME(s) => {
-          (format!("'{}", get_ident(s))).to_string()
+          format!("{}", get_ident(s))
       }
       UNDERSCORE => "_".to_string(),
 
@@ -241,8 +260,8 @@ pub fn to_str(t: &Token) -> String {
       EOF => "<eof>".to_string(),
       INTERPOLATED(ref nt) => {
         match nt {
-            &NtExpr(e) => ::print::pprust::expr_to_str(e),
-            &NtMeta(e) => ::print::pprust::meta_item_to_str(e),
+            &NtExpr(ref e) => ::print::pprust::expr_to_str(&**e),
+            &NtMeta(ref e) => ::print::pprust::meta_item_to_str(&**e),
             _ => {
                 let mut s = "an interpolated ".to_string();
                 match *nt {
@@ -273,6 +292,7 @@ pub fn can_begin_expr(t: &Token) -> bool {
       IDENT(_, _) => true,
       UNDERSCORE => true,
       TILDE => true,
+      LIT_BYTE(_) => true,
       LIT_CHAR(_) => true,
       LIT_INT(_, _) => true,
       LIT_UINT(_, _) => true,
@@ -281,6 +301,8 @@ pub fn can_begin_expr(t: &Token) -> bool {
       LIT_FLOAT_UNSUFFIXED(_) => true,
       LIT_STR(_) => true,
       LIT_STR_RAW(_, _) => true,
+      LIT_BINARY(_) => true,
+      LIT_BINARY_RAW(_, _) => true,
       POUND => true,
       AT => true,
       NOT => true,
@@ -311,6 +333,7 @@ pub fn close_delimiter_for(t: &Token) -> Option<Token> {
 
 pub fn is_lit(t: &Token) -> bool {
     match *t {
+      LIT_BYTE(_) => true,
       LIT_CHAR(_) => true,
       LIT_INT(_, _) => true,
       LIT_UINT(_, _) => true,
@@ -319,6 +342,8 @@ pub fn is_lit(t: &Token) -> bool {
       LIT_FLOAT_UNSUFFIXED(_) => true,
       LIT_STR(_) => true,
       LIT_STR_RAW(_, _) => true,
+      LIT_BINARY(_) => true,
+      LIT_BINARY_RAW(_, _) => true,
       _ => false
     }
 }
@@ -423,77 +448,82 @@ macro_rules! declare_special_idents_and_keywords {(
 static SELF_KEYWORD_NAME: Name = 1;
 static STATIC_KEYWORD_NAME: Name = 2;
 
+// NB: leaving holes in the ident table is bad! a different ident will get
+// interned with the id from the hole, but it will be between the min and max
+// of the reserved words, and thus tagged as "reserved".
+
 declare_special_idents_and_keywords! {
     pub mod special_idents {
         // These ones are statics
         (0,                          invalid,                "");
         (super::SELF_KEYWORD_NAME,   self_,                  "self");
         (super::STATIC_KEYWORD_NAME, statik,                 "static");
+        (3,                          static_lifetime,        "'static");
 
         // for matcher NTs
-        (3,                          tt,                     "tt");
-        (4,                          matchers,               "matchers");
+        (4,                          tt,                     "tt");
+        (5,                          matchers,               "matchers");
 
         // outside of libsyntax
-        (5,                          clownshoe_abi,          "__rust_abi");
-        (6,                          opaque,                 "<opaque>");
-        (7,                          unnamed_field,          "<unnamed_field>");
-        (8,                          type_self,              "Self");
+        (6,                          clownshoe_abi,          "__rust_abi");
+        (7,                          opaque,                 "<opaque>");
+        (8,                          unnamed_field,          "<unnamed_field>");
+        (9,                          type_self,              "Self");
     }
 
     pub mod keywords {
         // These ones are variants of the Keyword enum
 
         'strict:
-        (9,                          As,         "as");
-        (10,                         Break,      "break");
-        (11,                         Crate,      "crate");
-        (12,                         Else,       "else");
-        (13,                         Enum,       "enum");
-        (14,                         Extern,     "extern");
-        (15,                         False,      "false");
-        (16,                         Fn,         "fn");
-        (17,                         For,        "for");
-        (18,                         If,         "if");
-        (19,                         Impl,       "impl");
-        (20,                         In,         "in");
-        (21,                         Let,        "let");
-        (22,                         Loop,       "loop");
-        (23,                         Match,      "match");
-        (24,                         Mod,        "mod");
-        (25,                         Mut,        "mut");
-        (26,                         Once,       "once");
-        (27,                         Pub,        "pub");
-        (28,                         Ref,        "ref");
-        (29,                         Return,     "return");
+        (10,                         As,         "as");
+        (11,                         Break,      "break");
+        (12,                         Crate,      "crate");
+        (13,                         Else,       "else");
+        (14,                         Enum,       "enum");
+        (15,                         Extern,     "extern");
+        (16,                         False,      "false");
+        (17,                         Fn,         "fn");
+        (18,                         For,        "for");
+        (19,                         If,         "if");
+        (20,                         Impl,       "impl");
+        (21,                         In,         "in");
+        (22,                         Let,        "let");
+        (23,                         Loop,       "loop");
+        (24,                         Match,      "match");
+        (25,                         Mod,        "mod");
+        (26,                         Mut,        "mut");
+        (27,                         Once,       "once");
+        (28,                         Pub,        "pub");
+        (29,                         Ref,        "ref");
+        (30,                         Return,     "return");
         // Static and Self are also special idents (prefill de-dupes)
         (super::STATIC_KEYWORD_NAME, Static,     "static");
         (super::SELF_KEYWORD_NAME,   Self,       "self");
-        (30,                         Struct,     "struct");
-        (31,                         Super,      "super");
-        (32,                         True,       "true");
-        (33,                         Trait,      "trait");
-        (34,                         Type,       "type");
-        (35,                         Unsafe,     "unsafe");
-        (36,                         Use,        "use");
-        (37,                         Virtual,    "virtual");
-        (38,                         While,      "while");
-        (39,                         Continue,   "continue");
-        (40,                         Proc,       "proc");
-        (41,                         Box,        "box");
+        (31,                         Struct,     "struct");
+        (32,                         Super,      "super");
+        (33,                         True,       "true");
+        (34,                         Trait,      "trait");
+        (35,                         Type,       "type");
+        (36,                         Unsafe,     "unsafe");
+        (37,                         Use,        "use");
+        (38,                         Virtual,    "virtual");
+        (39,                         While,      "while");
+        (40,                         Continue,   "continue");
+        (41,                         Proc,       "proc");
+        (42,                         Box,        "box");
+        (43,                         Const,      "const");
 
         'reserved:
-        (42,                         Alignof,    "alignof");
-        (43,                         Be,         "be");
-        (44,                         Const,      "const");
-        (45,                         Offsetof,   "offsetof");
-        (46,                         Priv,       "priv");
-        (47,                         Pure,       "pure");
-        (48,                         Sizeof,     "sizeof");
-        (49,                         Typeof,     "typeof");
-        (50,                         Unsized,    "unsized");
-        (51,                         Yield,      "yield");
-        (52,                         Do,         "do");
+        (44,                         Alignof,    "alignof");
+        (45,                         Be,         "be");
+        (46,                         Offsetof,   "offsetof");
+        (47,                         Priv,       "priv");
+        (48,                         Pure,       "pure");
+        (49,                         Sizeof,     "sizeof");
+        (50,                         Typeof,     "typeof");
+        (51,                         Unsized,    "unsized");
+        (52,                         Yield,      "yield");
+        (53,                         Do,         "do");
     }
 }
 

@@ -34,7 +34,7 @@ fn read_u32v_be(dst: &mut[u32], input: &[u8]) {
     assert!(dst.len() * 4 == input.len());
     unsafe {
         let mut x = dst.unsafe_mut_ref(0) as *mut _ as *mut u32;
-        let mut y = input.unsafe_ref(0) as *_ as *u32;
+        let mut y = input.unsafe_ref(0) as *const _ as *const u32;
         for _ in range(0, dst.len()) {
             *x = to_be32(*y);
             x = x.offset(1);
@@ -61,12 +61,12 @@ fn add_bytes_to_bits<T: Int + CheckedAdd + ToBits>(bits: T, bytes: T) -> T {
     let (new_high_bits, new_low_bits) = bytes.to_bits();
 
     if new_high_bits > Zero::zero() {
-        fail!("numeric overflow occured.")
+        fail!("numeric overflow occurred.")
     }
 
     match bits.checked_add(&new_low_bits) {
         Some(x) => return x,
-        None => fail!("numeric overflow occured.")
+        None => fail!("numeric overflow occurred.")
     }
 }
 
@@ -599,7 +599,7 @@ mod tests {
 
         let mut sh = box Sha256::new();
 
-        test_hash(sh, tests.as_slice());
+        test_hash(&mut *sh, tests.as_slice());
     }
 
     /// Feed 1,000,000 'a's into the digest with varying input sizes and check that the result is

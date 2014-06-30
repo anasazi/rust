@@ -10,16 +10,14 @@
 
 use libc::{pid_t, c_void, c_int};
 use libc;
+use std::c_str::CString;
 use std::io;
 use std::mem;
 use std::os;
 use std::ptr;
+use std::rt::rtio::{ProcessConfig, IoResult, IoError};
 use std::rt::rtio;
-use std::rt::rtio::ProcessConfig;
-use std::c_str::CString;
-use p = std::io::process;
 
-use super::IoResult;
 use super::file;
 use super::util;
 
@@ -45,10 +43,10 @@ pub struct Process {
     /// A handle to the process - on unix this will always be NULL, but on
     /// windows it will be a HANDLE to the process, which will prevent the
     /// pid being re-used until the handle is closed.
-    handle: *(),
+    handle: *mut (),
 
     /// None until finish() is called.
-    exit_code: Option<p::ProcessExit>,
+    exit_code: Option<rtio::ProcessExit>,
 
     /// Manually delivered signal
     exit_signal: Option<int>,
@@ -59,7 +57,7 @@ pub struct Process {
 
 #[cfg(unix)]
 enum Req {
-    NewChild(libc::pid_t, Sender<p::ProcessExit>, u64),
+    NewChild(libc::pid_t, Sender<rtio::ProcessExit>, u64),
 }
 
 impl Process {
@@ -67,55 +65,52 @@ impl Process {
     /// by the OS. Operations on this process will be blocking instead of using
     /// the runtime for sleeping just this current task.
     pub fn spawn(cfg: ProcessConfig)
-        -> Result<(Process, Vec<Option<file::FileDesc>>), io::IoError>
+        -> IoResult<(Process, Vec<Option<file::FileDesc>>)>
     {
         // right now we only handle stdin/stdout/stderr.
         if cfg.extra_io.len() > 0 {
             return Err(super::unimpl());
         }
 
-        fn get_io(io: p::StdioContainer, ret: &mut Vec<Option<file::FileDesc>>)
-            -> (Option<os::Pipe>, c_int)
+        fn get_io(io: rtio::StdioContainer,
+                  ret: &mut Vec<Option<file::FileDesc>>)
+            -> IoResult<Option<file::FileDesc>>
         {
             match io {
-                p::Ignored => { ret.push(None); (None, -1) }
-                p::InheritFd(fd) => { ret.push(None); (None, fd) }
-                p::CreatePipe(readable, _writable) => {
-                    let pipe = os::pipe();
+                rtio::Ignored => { ret.push(None); Ok(None) }
+                rtio::InheritFd(fd) => {
+                    ret.push(None);
+                    Ok(Some(file::FileDesc::new(fd, true)))
+                }
+                rtio::CreatePipe(readable, _writable) => {
+                    let (reader, writer) = try!(pipe());
                     let (theirs, ours) = if readable {
-                        (pipe.input, pipe.out)
+                        (reader, writer)
                     } else {
-                        (pipe.out, pipe.input)
+                        (writer, reader)
                     };
-                    ret.push(Some(file::FileDesc::new(ours, true)));
-                    (Some(pipe), theirs)
+                    ret.push(Some(ours));
+                    Ok(Some(theirs))
                 }
             }
         }
 
         let mut ret_io = Vec::new();
-        let (in_pipe, in_fd) = get_io(cfg.stdin, &mut ret_io);
-        let (out_pipe, out_fd) = get_io(cfg.stdout, &mut ret_io);
-        let (err_pipe, err_fd) = get_io(cfg.stderr, &mut ret_io);
-
-        let res = spawn_process_os(cfg, in_fd, out_fd, err_fd);
-
-        unsafe {
-            for pipe in in_pipe.iter() { let _ = libc::close(pipe.input); }
-            for pipe in out_pipe.iter() { let _ = libc::close(pipe.out); }
-            for pipe in err_pipe.iter() { let _ = libc::close(pipe.out); }
-        }
+        let res = spawn_process_os(cfg,
+                                   try!(get_io(cfg.stdin, &mut ret_io)),
+                                   try!(get_io(cfg.stdout, &mut ret_io)),
+                                   try!(get_io(cfg.stderr, &mut ret_io)));
 
         match res {
             Ok(res) => {
-                Ok((Process {
-                        pid: res.pid,
-                        handle: res.handle,
-                        exit_code: None,
-                        exit_signal: None,
-                        deadline: 0,
-                    },
-                    ret_io))
+                let p = Process {
+                    pid: res.pid,
+                    handle: res.handle,
+                    exit_code: None,
+                    exit_signal: None,
+                    deadline: 0,
+                };
+                Ok((p, ret_io))
             }
             Err(e) => Err(e)
         }
@@ -133,7 +128,7 @@ impl rtio::RtioProcess for Process {
         self.deadline = timeout.map(|i| i + ::io::timer::now()).unwrap_or(0);
     }
 
-    fn wait(&mut self) -> IoResult<p::ProcessExit> {
+    fn wait(&mut self) -> IoResult<rtio::ProcessExit> {
         match self.exit_code {
             Some(code) => Ok(code),
             None => {
@@ -143,7 +138,7 @@ impl rtio::RtioProcess for Process {
                 // consider it as having died via a signal.
                 let code = match self.exit_signal {
                     None => code,
-                    Some(signal) if cfg!(windows) => p::ExitSignal(signal),
+                    Some(signal) if cfg!(windows) => rtio::ExitSignal(signal),
                     Some(..) => code,
                 };
                 self.exit_code = Some(code);
@@ -152,7 +147,10 @@ impl rtio::RtioProcess for Process {
         }
     }
 
-    fn kill(&mut self, signum: int) -> Result<(), io::IoError> {
+    fn kill(&mut self, signum: int) -> IoResult<()> {
+        #[cfg(unix)] use ERROR = libc::EINVAL;
+        #[cfg(windows)] use ERROR = libc::ERROR_NOTHING_TO_TERMINATE;
+
         // On linux (and possibly other unices), a process that has exited will
         // continue to accept signals because it is "defunct". The delivery of
         // signals will only fail once the child has been reaped. For this
@@ -169,10 +167,10 @@ impl rtio::RtioProcess for Process {
         // and we kill it, then on unix we might ending up killing a
         // newer process that happens to have the same (re-used) id
         match self.exit_code {
-            Some(..) => return Err(io::IoError {
-                kind: io::OtherIoError,
-                desc: "can't kill an exited process",
-                detail: None,
+            Some(..) => return Err(IoError {
+                code: ERROR as uint,
+                extra: 0,
+                detail: Some("can't kill an exited process".to_str()),
             }),
             None => {}
         }
@@ -193,8 +191,39 @@ impl Drop for Process {
     }
 }
 
+fn pipe() -> IoResult<(file::FileDesc, file::FileDesc)> {
+    #[cfg(unix)] use ERROR = libc::EMFILE;
+    #[cfg(windows)] use ERROR = libc::WSAEMFILE;
+    struct Closer { fd: libc::c_int }
+
+    let os::Pipe { reader, writer } = match unsafe { os::pipe() } {
+        Ok(p) => p,
+        Err(io::IoError { detail, .. }) => return Err(IoError {
+            code: ERROR as uint,
+            extra: 0,
+            detail: detail,
+        })
+    };
+    let mut reader = Closer { fd: reader };
+    let mut writer = Closer { fd: writer };
+
+    let native_reader = file::FileDesc::new(reader.fd, true);
+    reader.fd = -1;
+    let native_writer = file::FileDesc::new(writer.fd, true);
+    writer.fd = -1;
+    return Ok((native_reader, native_writer));
+
+    impl Drop for Closer {
+        fn drop(&mut self) {
+            if self.fd != -1 {
+                let _ = unsafe { libc::close(self.fd) };
+            }
+        }
+    }
+}
+
 #[cfg(windows)]
-unsafe fn killpid(pid: pid_t, signal: int) -> Result<(), io::IoError> {
+unsafe fn killpid(pid: pid_t, signal: int) -> IoResult<()> {
     let handle = libc::OpenProcess(libc::PROCESS_TERMINATE |
                                    libc::PROCESS_QUERY_INFORMATION,
                                    libc::FALSE, pid as libc::DWORD);
@@ -209,23 +238,23 @@ unsafe fn killpid(pid: pid_t, signal: int) -> Result<(), io::IoError> {
             if ret == 0 {
                 Err(super::last_error())
             } else if status != libc::STILL_ACTIVE {
-                Err(io::IoError {
-                    kind: io::OtherIoError,
-                    desc: "process no longer alive",
+                Err(IoError {
+                    code: libc::ERROR_NOTHING_TO_TERMINATE as uint,
+                    extra: 0,
                     detail: None,
                 })
             } else {
                 Ok(())
             }
         }
-        io::process::PleaseExitSignal | io::process::MustDieSignal => {
+        15 | 9 => { // sigterm or sigkill
             let ret = libc::TerminateProcess(handle, 1);
             super::mkerr_winbool(ret)
         }
-        _ => Err(io::IoError {
-            kind: io::OtherIoError,
-            desc: "unsupported signal on windows",
-            detail: None,
+        _ => Err(IoError {
+            code: libc::ERROR_CALL_NOT_IMPLEMENTED as uint,
+            extra: 0,
+            detail: Some("unsupported signal on windows".to_string()),
         })
     };
     let _ = libc::CloseHandle(handle);
@@ -233,19 +262,21 @@ unsafe fn killpid(pid: pid_t, signal: int) -> Result<(), io::IoError> {
 }
 
 #[cfg(not(windows))]
-unsafe fn killpid(pid: pid_t, signal: int) -> Result<(), io::IoError> {
+unsafe fn killpid(pid: pid_t, signal: int) -> IoResult<()> {
     let r = libc::funcs::posix88::signal::kill(pid, signal as c_int);
     super::mkerr_libc(r)
 }
 
 struct SpawnProcessResult {
     pid: pid_t,
-    handle: *(),
+    handle: *mut (),
 }
 
 #[cfg(windows)]
 fn spawn_process_os(cfg: ProcessConfig,
-                    in_fd: c_int, out_fd: c_int, err_fd: c_int)
+                    in_fd: Option<file::FileDesc>,
+                    out_fd: Option<file::FileDesc>,
+                    err_fd: Option<file::FileDesc>)
                  -> IoResult<SpawnProcessResult> {
     use libc::types::os::arch::extra::{DWORD, HANDLE, STARTUPINFO};
     use libc::consts::os::extra::{
@@ -263,12 +294,14 @@ fn spawn_process_os(cfg: ProcessConfig,
     use libc::funcs::extra::msvcrt::get_osfhandle;
 
     use std::mem;
+    use std::iter::Iterator;
+    use std::str::StrSlice;
 
     if cfg.gid.is_some() || cfg.uid.is_some() {
-        return Err(io::IoError {
-            kind: io::OtherIoError,
-            desc: "unsupported gid/uid requested on windows",
-            detail: None,
+        return Err(IoError {
+            code: libc::ERROR_CALL_NOT_IMPLEMENTED as uint,
+            extra: 0,
+            detail: Some("unsupported gid/uid requested on windows".to_str()),
         })
     }
 
@@ -282,48 +315,52 @@ fn spawn_process_os(cfg: ProcessConfig,
         // Similarly to unix, we don't actually leave holes for the stdio file
         // descriptors, but rather open up /dev/null equivalents. These
         // equivalents are drawn from libuv's windows process spawning.
-        let set_fd = |fd: c_int, slot: &mut HANDLE, is_stdin: bool| {
-            if fd == -1 {
-                let access = if is_stdin {
-                    libc::FILE_GENERIC_READ
-                } else {
-                    libc::FILE_GENERIC_WRITE | libc::FILE_READ_ATTRIBUTES
-                };
-                let size = mem::size_of::<libc::SECURITY_ATTRIBUTES>();
-                let mut sa = libc::SECURITY_ATTRIBUTES {
-                    nLength: size as libc::DWORD,
-                    lpSecurityDescriptor: ptr::mut_null(),
-                    bInheritHandle: 1,
-                };
-                *slot = os::win32::as_utf16_p("NUL", |filename| {
-                    libc::CreateFileW(filename,
-                                      access,
-                                      libc::FILE_SHARE_READ |
-                                          libc::FILE_SHARE_WRITE,
-                                      &mut sa,
-                                      libc::OPEN_EXISTING,
-                                      0,
-                                      ptr::mut_null())
-                });
-                if *slot == INVALID_HANDLE_VALUE as libc::HANDLE {
-                    return Err(super::last_error())
+        let set_fd = |fd: &Option<file::FileDesc>, slot: &mut HANDLE,
+                      is_stdin: bool| {
+            match *fd {
+                None => {
+                    let access = if is_stdin {
+                        libc::FILE_GENERIC_READ
+                    } else {
+                        libc::FILE_GENERIC_WRITE | libc::FILE_READ_ATTRIBUTES
+                    };
+                    let size = mem::size_of::<libc::SECURITY_ATTRIBUTES>();
+                    let mut sa = libc::SECURITY_ATTRIBUTES {
+                        nLength: size as libc::DWORD,
+                        lpSecurityDescriptor: ptr::mut_null(),
+                        bInheritHandle: 1,
+                    };
+                    let filename: Vec<u16> = "NUL".utf16_units().collect();
+                    let filename = filename.append_one(0);
+                    *slot = libc::CreateFileW(filename.as_ptr(),
+                                              access,
+                                              libc::FILE_SHARE_READ |
+                                                  libc::FILE_SHARE_WRITE,
+                                              &mut sa,
+                                              libc::OPEN_EXISTING,
+                                              0,
+                                              ptr::mut_null());
+                    if *slot == INVALID_HANDLE_VALUE as libc::HANDLE {
+                        return Err(super::last_error())
+                    }
                 }
-            } else {
-                let orig = get_osfhandle(fd) as HANDLE;
-                if orig == INVALID_HANDLE_VALUE as HANDLE {
-                    return Err(super::last_error())
-                }
-                if DuplicateHandle(cur_proc, orig, cur_proc, slot,
-                                   0, TRUE, DUPLICATE_SAME_ACCESS) == FALSE {
-                    return Err(super::last_error())
+                Some(ref fd) => {
+                    let orig = get_osfhandle(fd.fd()) as HANDLE;
+                    if orig == INVALID_HANDLE_VALUE as HANDLE {
+                        return Err(super::last_error())
+                    }
+                    if DuplicateHandle(cur_proc, orig, cur_proc, slot,
+                                       0, TRUE, DUPLICATE_SAME_ACCESS) == FALSE {
+                        return Err(super::last_error())
+                    }
                 }
             }
             Ok(())
         };
 
-        try!(set_fd(in_fd, &mut si.hStdInput, true));
-        try!(set_fd(out_fd, &mut si.hStdOutput, false));
-        try!(set_fd(err_fd, &mut si.hStdError, false));
+        try!(set_fd(&in_fd, &mut si.hStdInput, true));
+        try!(set_fd(&out_fd, &mut si.hStdOutput, false));
+        try!(set_fd(&err_fd, &mut si.hStdError, false));
 
         let cmd_str = make_command_line(cfg.program, cfg.args);
         let mut pi = zeroed_process_information();
@@ -337,18 +374,18 @@ fn spawn_process_os(cfg: ProcessConfig,
 
         with_envp(cfg.env, |envp| {
             with_dirp(cfg.cwd, |dirp| {
-                os::win32::as_mut_utf16_p(cmd_str.as_slice(), |cmdp| {
-                    let created = CreateProcessW(ptr::null(),
-                                                 cmdp,
-                                                 ptr::mut_null(),
-                                                 ptr::mut_null(),
-                                                 TRUE,
-                                                 flags, envp, dirp,
-                                                 &mut si, &mut pi);
-                    if created == FALSE {
-                        create_err = Some(super::last_error());
-                    }
-                })
+                let mut cmd_str: Vec<u16> = cmd_str.as_slice().utf16_units().collect();
+                cmd_str = cmd_str.append_one(0);
+                let created = CreateProcessW(ptr::null(),
+                                             cmd_str.as_mut_ptr(),
+                                             ptr::mut_null(),
+                                             ptr::mut_null(),
+                                             TRUE,
+                                             flags, envp, dirp,
+                                             &mut si, &mut pi);
+                if created == FALSE {
+                    create_err = Some(super::last_error());
+                }
             })
         });
 
@@ -370,7 +407,7 @@ fn spawn_process_os(cfg: ProcessConfig,
 
         Ok(SpawnProcessResult {
             pid: pi.dwProcessId as pid_t,
-            handle: pi.hProcess as *()
+            handle: pi.hProcess as *mut ()
         })
     }
 }
@@ -465,7 +502,10 @@ fn make_command_line(prog: &CString, args: &[CString]) -> String {
 }
 
 #[cfg(unix)]
-fn spawn_process_os(cfg: ProcessConfig, in_fd: c_int, out_fd: c_int, err_fd: c_int)
+fn spawn_process_os(cfg: ProcessConfig,
+                    in_fd: Option<file::FileDesc>,
+                    out_fd: Option<file::FileDesc>,
+                    err_fd: Option<file::FileDesc>)
                 -> IoResult<SpawnProcessResult>
 {
     use libc::funcs::posix88::unistd::{fork, dup2, close, chdir, execvp};
@@ -479,14 +519,14 @@ fn spawn_process_os(cfg: ProcessConfig, in_fd: c_int, out_fd: c_int, err_fd: c_i
     }
 
     #[cfg(target_os = "macos")]
-    unsafe fn set_environ(envp: *c_void) {
-        extern { fn _NSGetEnviron() -> *mut *c_void; }
+    unsafe fn set_environ(envp: *const c_void) {
+        extern { fn _NSGetEnviron() -> *mut *const c_void; }
 
         *_NSGetEnviron() = envp;
     }
     #[cfg(not(target_os = "macos"))]
-    unsafe fn set_environ(envp: *c_void) {
-        extern { static mut environ: *c_void; }
+    unsafe fn set_environ(envp: *const c_void) {
+        extern { static mut environ: *const c_void; }
         environ = envp;
     }
 
@@ -495,13 +535,15 @@ fn spawn_process_os(cfg: ProcessConfig, in_fd: c_int, out_fd: c_int, err_fd: c_i
         assert_eq!(ret, 0);
     }
 
-    let dirp = cfg.cwd.map(|c| c.with_ref(|p| p)).unwrap_or(ptr::null());
+    let dirp = cfg.cwd.map(|c| c.as_ptr()).unwrap_or(ptr::null());
+
+    let cfg = unsafe {
+        mem::transmute::<ProcessConfig,ProcessConfig<'static>>(cfg)
+    };
 
     with_envp(cfg.env, proc(envp) {
         with_argv(cfg.program, cfg.args, proc(argv) unsafe {
-            let pipe = os::pipe();
-            let mut input = file::FileDesc::new(pipe.input, true);
-            let mut output = file::FileDesc::new(pipe.out, true);
+            let (mut input, mut output) = try!(pipe());
 
             // We may use this in the child, so perform allocations before the
             // fork
@@ -511,7 +553,7 @@ fn spawn_process_os(cfg: ProcessConfig, in_fd: c_int, out_fd: c_int, err_fd: c_i
 
             let pid = fork();
             if pid < 0 {
-                fail!("failure in fork: {}", os::last_os_error());
+                return Err(super::last_error())
             } else if pid > 0 {
                 drop(output);
                 let mut bytes = [0, ..4];
@@ -521,15 +563,16 @@ fn spawn_process_os(cfg: ProcessConfig, in_fd: c_int, out_fd: c_int, err_fd: c_i
                                     (bytes[1] << 16) as i32 |
                                     (bytes[2] <<  8) as i32 |
                                     (bytes[3] <<  0) as i32;
-                        Err(io::IoError::from_errno(errno as uint, false))
+                        Err(IoError {
+                            code: errno as uint,
+                            detail: None,
+                            extra: 0,
+                        })
                     }
-                    Err(e) => {
-                        assert!(e.kind == io::BrokenPipe ||
-                                e.kind == io::EndOfFile,
-                                "unexpected error: {}", e);
+                    Err(..) => {
                         Ok(SpawnProcessResult {
                             pid: pid,
-                            handle: ptr::null()
+                            handle: ptr::mut_null()
                         })
                     }
                     Ok(..) => fail!("short read on the cloexec pipe"),
@@ -586,16 +629,24 @@ fn spawn_process_os(cfg: ProcessConfig, in_fd: c_int, out_fd: c_int, err_fd: c_i
             // up /dev/null into that file descriptor. Otherwise, the first file
             // descriptor opened up in the child would be numbered as one of the
             // stdio file descriptors, which is likely to wreak havoc.
-            let setup = |src: c_int, dst: c_int| {
-                let src = if src == -1 {
-                    let flags = if dst == libc::STDIN_FILENO {
-                        libc::O_RDONLY
-                    } else {
-                        libc::O_RDWR
-                    };
-                    devnull.with_ref(|p| libc::open(p, flags, 0))
-                } else {
-                    src
+            let setup = |src: Option<file::FileDesc>, dst: c_int| {
+                let src = match src {
+                    None => {
+                        let flags = if dst == libc::STDIN_FILENO {
+                            libc::O_RDONLY
+                        } else {
+                            libc::O_RDWR
+                        };
+                        libc::open(devnull.as_ptr(), flags, 0)
+                    }
+                    Some(obj) => {
+                        let fd = obj.fd();
+                        // Leak the memory and the file descriptor. We're in the
+                        // child now an all our resources are going to be
+                        // cleaned up very soon
+                        mem::forget(obj);
+                        fd
+                    }
                 };
                 src != -1 && retry(|| dup2(src, dst)) != -1
             };
@@ -621,17 +672,18 @@ fn spawn_process_os(cfg: ProcessConfig, in_fd: c_int, out_fd: c_int, err_fd: c_i
             }
             match cfg.uid {
                 Some(u) => {
-                    // When dropping privileges from root, the `setgroups` call will
-                    // remove any extraneous groups. If we don't call this, then
-                    // even though our uid has dropped, we may still have groups
-                    // that enable us to do super-user things. This will fail if we
-                    // aren't root, so don't bother checking the return value, this
-                    // is just done as an optimistic privilege dropping function.
+                    // When dropping privileges from root, the `setgroups` call
+                    // will remove any extraneous groups. If we don't call this,
+                    // then even though our uid has dropped, we may still have
+                    // groups that enable us to do super-user things. This will
+                    // fail if we aren't root, so don't bother checking the
+                    // return value, this is just done as an optimistic
+                    // privilege dropping function.
                     extern {
                         fn setgroups(ngroups: libc::c_int,
-                                     ptr: *libc::c_void) -> libc::c_int;
+                                     ptr: *const libc::c_void) -> libc::c_int;
                     }
-                    let _ = setgroups(0, 0 as *libc::c_void);
+                    let _ = setgroups(0, 0 as *const libc::c_void);
 
                     if libc::setuid(u as libc::uid_t) != 0 {
                         fail(&mut output);
@@ -651,23 +703,24 @@ fn spawn_process_os(cfg: ProcessConfig, in_fd: c_int, out_fd: c_int, err_fd: c_i
             if !envp.is_null() {
                 set_environ(envp);
             }
-            let _ = execvp(*argv, argv);
+            let _ = execvp(*argv, argv as *mut _);
             fail(&mut output);
         })
     })
 }
 
 #[cfg(unix)]
-fn with_argv<T>(prog: &CString, args: &[CString], cb: proc(**libc::c_char) -> T) -> T {
-    let mut ptrs: Vec<*libc::c_char> = Vec::with_capacity(args.len()+1);
+fn with_argv<T>(prog: &CString, args: &[CString],
+                cb: proc(*const *const libc::c_char) -> T) -> T {
+    let mut ptrs: Vec<*const libc::c_char> = Vec::with_capacity(args.len()+1);
 
     // Convert the CStrings into an array of pointers. Note: the
     // lifetime of the various CStrings involved is guaranteed to be
     // larger than the lifetime of our invocation of cb, but this is
     // technically unsafe as the callback could leak these pointers
     // out of our scope.
-    ptrs.push(prog.with_ref(|buf| buf));
-    ptrs.extend(args.iter().map(|tmp| tmp.with_ref(|buf| buf)));
+    ptrs.push(prog.as_ptr());
+    ptrs.extend(args.iter().map(|tmp| tmp.as_ptr()));
 
     // Add a terminating null pointer (required by libc).
     ptrs.push(ptr::null());
@@ -676,7 +729,8 @@ fn with_argv<T>(prog: &CString, args: &[CString], cb: proc(**libc::c_char) -> T)
 }
 
 #[cfg(unix)]
-fn with_envp<T>(env: Option<&[(CString, CString)]>, cb: proc(*c_void) -> T) -> T {
+fn with_envp<T>(env: Option<&[(CString, CString)]>,
+                cb: proc(*const c_void) -> T) -> T {
     // On posixy systems we can pass a char** for envp, which is a
     // null-terminated array of "k=v\0" strings. Since we must create
     // these strings locally, yet expose a raw pointer to them, we
@@ -695,13 +749,13 @@ fn with_envp<T>(env: Option<&[(CString, CString)]>, cb: proc(*c_void) -> T) -> T
             }
 
             // As with `with_argv`, this is unsafe, since cb could leak the pointers.
-            let mut ptrs: Vec<*libc::c_char> =
+            let mut ptrs: Vec<*const libc::c_char> =
                 tmps.iter()
-                    .map(|tmp| tmp.as_ptr() as *libc::c_char)
+                    .map(|tmp| tmp.as_ptr() as *const libc::c_char)
                     .collect();
             ptrs.push(ptr::null());
 
-            cb(ptrs.as_ptr() as *c_void)
+            cb(ptrs.as_ptr() as *const c_void)
         }
         _ => cb(ptr::null())
     }
@@ -720,7 +774,7 @@ fn with_envp<T>(env: Option<&[(CString, CString)]>, cb: |*mut c_void| -> T) -> T
                 let kv = format!("{}={}",
                                  pair.ref0().as_str().unwrap(),
                                  pair.ref1().as_str().unwrap());
-                blk.push_all(kv.to_utf16().as_slice());
+                blk.extend(kv.as_slice().utf16_units());
                 blk.push(0);
             }
 
@@ -733,31 +787,34 @@ fn with_envp<T>(env: Option<&[(CString, CString)]>, cb: |*mut c_void| -> T) -> T
 }
 
 #[cfg(windows)]
-fn with_dirp<T>(d: Option<&CString>, cb: |*u16| -> T) -> T {
+fn with_dirp<T>(d: Option<&CString>, cb: |*const u16| -> T) -> T {
     match d {
       Some(dir) => {
           let dir_str = dir.as_str()
                            .expect("expected workingdirectory to be utf-8 encoded");
-          os::win32::as_utf16_p(dir_str, cb)
+          let dir_str: Vec<u16> = dir_str.utf16_units().collect();
+          let dir_str = dir_str.append_one(0);
+
+          cb(dir_str.as_ptr())
       },
       None => cb(ptr::null())
     }
 }
 
 #[cfg(windows)]
-fn free_handle(handle: *()) {
+fn free_handle(handle: *mut ()) {
     assert!(unsafe {
         libc::CloseHandle(mem::transmute(handle)) != 0
     })
 }
 
 #[cfg(unix)]
-fn free_handle(_handle: *()) {
+fn free_handle(_handle: *mut ()) {
     // unix has no process handle object, just a pid
 }
 
 #[cfg(unix)]
-fn translate_status(status: c_int) -> p::ProcessExit {
+fn translate_status(status: c_int) -> rtio::ProcessExit {
     #![allow(non_snake_case_functions)]
     #[cfg(target_os = "linux")]
     #[cfg(target_os = "android")]
@@ -768,6 +825,7 @@ fn translate_status(status: c_int) -> p::ProcessExit {
     }
 
     #[cfg(target_os = "macos")]
+    #[cfg(target_os = "ios")]
     #[cfg(target_os = "freebsd")]
     mod imp {
         pub fn WIFEXITED(status: i32) -> bool { (status & 0x7f) == 0 }
@@ -776,9 +834,9 @@ fn translate_status(status: c_int) -> p::ProcessExit {
     }
 
     if imp::WIFEXITED(status) {
-        p::ExitStatus(imp::WEXITSTATUS(status) as int)
+        rtio::ExitStatus(imp::WEXITSTATUS(status) as int)
     } else {
-        p::ExitSignal(imp::WTERMSIG(status) as int)
+        rtio::ExitSignal(imp::WTERMSIG(status) as int)
     }
 }
 
@@ -793,7 +851,7 @@ fn translate_status(status: c_int) -> p::ProcessExit {
  * with the same id.
  */
 #[cfg(windows)]
-fn waitpid(pid: pid_t, deadline: u64) -> IoResult<p::ProcessExit> {
+fn waitpid(pid: pid_t, deadline: u64) -> IoResult<rtio::ProcessExit> {
     use libc::types::os::arch::extra::DWORD;
     use libc::consts::os::extra::{
         SYNCHRONIZE,
@@ -828,7 +886,7 @@ fn waitpid(pid: pid_t, deadline: u64) -> IoResult<p::ProcessExit> {
             }
             if status != STILL_ACTIVE {
                 assert!(CloseHandle(process) != 0);
-                return Ok(p::ExitStatus(status as int));
+                return Ok(rtio::ExitStatus(status as int));
             }
             let interval = if deadline == 0 {
                 INFINITE
@@ -853,7 +911,7 @@ fn waitpid(pid: pid_t, deadline: u64) -> IoResult<p::ProcessExit> {
 }
 
 #[cfg(unix)]
-fn waitpid(pid: pid_t, deadline: u64) -> IoResult<p::ProcessExit> {
+fn waitpid(pid: pid_t, deadline: u64) -> IoResult<rtio::ProcessExit> {
     use std::cmp;
     use std::comm;
 
@@ -862,7 +920,7 @@ fn waitpid(pid: pid_t, deadline: u64) -> IoResult<p::ProcessExit> {
     let mut status = 0 as c_int;
     if deadline == 0 {
         return match retry(|| unsafe { c::waitpid(pid, &mut status, 0) }) {
-            -1 => fail!("unknown waitpid error: {}", super::last_error()),
+            -1 => fail!("unknown waitpid error: {}", super::last_error().code),
             _ => Ok(translate_status(status)),
         }
     }
@@ -921,19 +979,22 @@ fn waitpid(pid: pid_t, deadline: u64) -> IoResult<p::ProcessExit> {
 
     // Register a new SIGCHLD handler, returning the reading half of the
     // self-pipe plus the old handler registered (return value of sigaction).
+    //
+    // Be sure to set up the self-pipe first because as soon as we register a
+    // handler we're going to start receiving signals.
     fn register_sigchld() -> (libc::c_int, c::sigaction) {
         unsafe {
+            let mut pipes = [0, ..2];
+            assert_eq!(libc::pipe(pipes.as_mut_ptr()), 0);
+            util::set_nonblocking(pipes[0], true).ok().unwrap();
+            util::set_nonblocking(pipes[1], true).ok().unwrap();
+            WRITE_FD = pipes[1];
+
             let mut old: c::sigaction = mem::zeroed();
             let mut new: c::sigaction = mem::zeroed();
             new.sa_handler = sigchld_handler;
             new.sa_flags = c::SA_NOCLDSTOP;
             assert_eq!(c::sigaction(c::SIGCHLD, &new, &mut old), 0);
-
-            let mut pipes = [0, ..2];
-            assert_eq!(libc::pipe(pipes.as_mut_ptr()), 0);
-            util::set_nonblocking(pipes[0], true).unwrap();
-            util::set_nonblocking(pipes[1], true).unwrap();
-            WRITE_FD = pipes[1];
             (pipes[0], old)
         }
     }
@@ -942,10 +1003,10 @@ fn waitpid(pid: pid_t, deadline: u64) -> IoResult<p::ProcessExit> {
     fn waitpid_helper(input: libc::c_int,
                       messages: Receiver<Req>,
                       (read_fd, old): (libc::c_int, c::sigaction)) {
-        util::set_nonblocking(input, true).unwrap();
+        util::set_nonblocking(input, true).ok().unwrap();
         let mut set: c::fd_set = unsafe { mem::zeroed() };
         let mut tv: libc::timeval;
-        let mut active = Vec::<(libc::pid_t, Sender<p::ProcessExit>, u64)>::new();
+        let mut active = Vec::<(libc::pid_t, Sender<rtio::ProcessExit>, u64)>::new();
         let max = cmp::max(input, read_fd) + 1;
 
         'outer: loop {
@@ -962,15 +1023,16 @@ fn waitpid(pid: pid_t, deadline: u64) -> IoResult<p::ProcessExit> {
                     let now = ::io::timer::now();
                     let ms = if now < deadline {deadline - now} else {0};
                     tv = util::ms_to_timeval(ms);
-                    (&tv as *_, idx)
+                    (&mut tv as *mut _, idx)
                 }
-                None => (ptr::null(), -1),
+                None => (ptr::mut_null(), -1),
             };
 
             // Wait for something to happen
             c::fd_set(&mut set, input);
             c::fd_set(&mut set, read_fd);
-            match unsafe { c::select(max, &set, ptr::null(), ptr::null(), p) } {
+            match unsafe { c::select(max, &mut set, ptr::mut_null(),
+                                     ptr::mut_null(), p) } {
                 // interrupted, retry
                 -1 if os::errno() == libc::EINTR as int => continue,
 
@@ -1080,9 +1142,9 @@ fn waitpid(pid: pid_t, deadline: u64) -> IoResult<p::ProcessExit> {
     // which will wake up the other end at some point, so we just allow this
     // signal to be coalesced with the pending signals on the pipe.
     extern fn sigchld_handler(_signum: libc::c_int) {
-        let mut msg = 1;
+        let msg = 1i;
         match unsafe {
-            libc::write(WRITE_FD, &mut msg as *mut _ as *libc::c_void, 1)
+            libc::write(WRITE_FD, &msg as *const _ as *const libc::c_void, 1)
         } {
             1 => {}
             -1 if util::wouldblock() => {} // see above comments
@@ -1091,22 +1153,23 @@ fn waitpid(pid: pid_t, deadline: u64) -> IoResult<p::ProcessExit> {
     }
 }
 
-fn waitpid_nowait(pid: pid_t) -> Option<p::ProcessExit> {
+fn waitpid_nowait(pid: pid_t) -> Option<rtio::ProcessExit> {
     return waitpid_os(pid);
 
     // This code path isn't necessary on windows
     #[cfg(windows)]
-    fn waitpid_os(_pid: pid_t) -> Option<p::ProcessExit> { None }
+    fn waitpid_os(_pid: pid_t) -> Option<rtio::ProcessExit> { None }
 
     #[cfg(unix)]
-    fn waitpid_os(pid: pid_t) -> Option<p::ProcessExit> {
+    fn waitpid_os(pid: pid_t) -> Option<rtio::ProcessExit> {
         let mut status = 0 as c_int;
         match retry(|| unsafe {
             c::waitpid(pid, &mut status, c::WNOHANG)
         }) {
             n if n == pid => Some(translate_status(status)),
             0 => None,
-            n => fail!("unknown waitpid error `{}`: {}", n, super::last_error()),
+            n => fail!("unknown waitpid error `{}`: {}", n,
+                       super::last_error().code),
         }
     }
 }

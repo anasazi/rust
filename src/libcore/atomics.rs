@@ -94,7 +94,7 @@ impl AtomicBool {
     /// Load the value
     #[inline]
     pub fn load(&self, order: Ordering) -> bool {
-        unsafe { atomic_load(self.v.get() as *uint, order) > 0 }
+        unsafe { atomic_load(self.v.get() as *const uint, order) > 0 }
     }
 
     /// Store the value
@@ -121,16 +121,14 @@ impl AtomicBool {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// # // FIXME: Needs PR #12430
-    /// extern crate sync;
-    ///
-    /// use sync::Arc;
+    /// ```rust
+    /// use std::sync::Arc;
     /// use std::sync::atomics::{AtomicBool, SeqCst};
+    /// use std::task::deschedule;
     ///
     /// fn main() {
     ///     let spinlock = Arc::new(AtomicBool::new(false));
-    ///     let spinlock_clone = spin_lock.clone();
+    ///     let spinlock_clone = spinlock.clone();
     ///
     ///     spawn(proc() {
     ///         with_lock(&spinlock, || println!("task 1 in lock"));
@@ -155,7 +153,7 @@ impl AtomicBool {
     ///     f();
     ///
     ///     // Release the lock
-    ///     spinlock.store(false);
+    ///     spinlock.store(false, SeqCst);
     /// }
     /// ```
     #[inline]
@@ -297,7 +295,7 @@ impl AtomicInt {
     /// Load the value
     #[inline]
     pub fn load(&self, order: Ordering) -> int {
-        unsafe { atomic_load(self.v.get() as *int, order) }
+        unsafe { atomic_load(self.v.get() as *const int, order) }
     }
 
     /// Store the value
@@ -409,7 +407,7 @@ impl AtomicUint {
     /// Load the value
     #[inline]
     pub fn load(&self, order: Ordering) -> uint {
-        unsafe { atomic_load(self.v.get() as *uint, order) }
+        unsafe { atomic_load(self.v.get() as *const uint, order) }
     }
 
     /// Store the value
@@ -522,7 +520,7 @@ impl<T> AtomicPtr<T> {
     #[inline]
     pub fn load(&self, order: Ordering) -> *mut T {
         unsafe {
-            atomic_load(self.p.get() as **mut T, order) as *mut T
+            atomic_load(self.p.get() as *const *mut T, order) as *mut T
         }
     }
 
@@ -562,7 +560,7 @@ unsafe fn atomic_store<T>(dst: *mut T, val: T, order:Ordering) {
 }
 
 #[inline]
-unsafe fn atomic_load<T>(dst: *T, order:Ordering) -> T {
+unsafe fn atomic_load<T>(dst: *const T, order:Ordering) -> T {
     match order {
         Acquire => intrinsics::atomic_load_acq(dst),
         Relaxed => intrinsics::atomic_load_relaxed(dst),
@@ -692,100 +690,6 @@ pub fn fence(order: Ordering) {
             AcqRel  => intrinsics::atomic_fence_acqrel(),
             SeqCst  => intrinsics::atomic_fence(),
             Relaxed => fail!("there is no such thing as a relaxed fence")
-        }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn bool_() {
-        let a = AtomicBool::new(false);
-        assert_eq!(a.compare_and_swap(false, true, SeqCst), false);
-        assert_eq!(a.compare_and_swap(false, true, SeqCst), true);
-
-        a.store(false, SeqCst);
-        assert_eq!(a.compare_and_swap(false, true, SeqCst), false);
-    }
-
-    #[test]
-    fn bool_and() {
-        let a = AtomicBool::new(true);
-        assert_eq!(a.fetch_and(false, SeqCst),true);
-        assert_eq!(a.load(SeqCst),false);
-    }
-
-    #[test]
-    fn uint_and() {
-        let x = AtomicUint::new(0xf731);
-        assert_eq!(x.fetch_and(0x137f, SeqCst), 0xf731);
-        assert_eq!(x.load(SeqCst), 0xf731 & 0x137f);
-    }
-
-    #[test]
-    fn uint_or() {
-        let x = AtomicUint::new(0xf731);
-        assert_eq!(x.fetch_or(0x137f, SeqCst), 0xf731);
-        assert_eq!(x.load(SeqCst), 0xf731 | 0x137f);
-    }
-
-    #[test]
-    fn uint_xor() {
-        let x = AtomicUint::new(0xf731);
-        assert_eq!(x.fetch_xor(0x137f, SeqCst), 0xf731);
-        assert_eq!(x.load(SeqCst), 0xf731 ^ 0x137f);
-    }
-
-    #[test]
-    fn int_and() {
-        let x = AtomicInt::new(0xf731);
-        assert_eq!(x.fetch_and(0x137f, SeqCst), 0xf731);
-        assert_eq!(x.load(SeqCst), 0xf731 & 0x137f);
-    }
-
-    #[test]
-    fn int_or() {
-        let x = AtomicInt::new(0xf731);
-        assert_eq!(x.fetch_or(0x137f, SeqCst), 0xf731);
-        assert_eq!(x.load(SeqCst), 0xf731 | 0x137f);
-    }
-
-    #[test]
-    fn int_xor() {
-        let x = AtomicInt::new(0xf731);
-        assert_eq!(x.fetch_xor(0x137f, SeqCst), 0xf731);
-        assert_eq!(x.load(SeqCst), 0xf731 ^ 0x137f);
-    }
-
-    static mut S_BOOL : AtomicBool = INIT_ATOMIC_BOOL;
-    static mut S_INT  : AtomicInt  = INIT_ATOMIC_INT;
-    static mut S_UINT : AtomicUint = INIT_ATOMIC_UINT;
-
-    #[test]
-    fn static_init() {
-        unsafe {
-            assert!(!S_BOOL.load(SeqCst));
-            assert!(S_INT.load(SeqCst) == 0);
-            assert!(S_UINT.load(SeqCst) == 0);
-        }
-    }
-
-    #[test]
-    fn different_sizes() {
-        unsafe {
-            let mut slot = 0u16;
-            assert_eq!(super::atomic_swap(&mut slot, 1, SeqCst), 0);
-
-            let mut slot = 0u8;
-            assert_eq!(super::atomic_compare_and_swap(&mut slot, 1, 2, SeqCst), 0);
-
-            let slot = 0u32;
-            assert_eq!(super::atomic_load(&slot, SeqCst), 0);
-
-            let mut slot = 0u64;
-            super::atomic_store(&mut slot, 2, SeqCst);
         }
     }
 }

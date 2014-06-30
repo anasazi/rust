@@ -10,9 +10,11 @@
 
 #![feature(managed_boxes)]
 
+use std::gc::{Gc, GC};
+
 // Tests for if as expressions returning boxed types
 fn test_box() {
-    let rs = if true { @100 } else { @101 };
+    let rs = if true { box(GC) 100i } else { box(GC) 101i };
     assert_eq!(*rs, 100);
 }
 

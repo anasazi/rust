@@ -11,7 +11,7 @@
 use std::fmt;
 
 #[deriving(PartialEq)]
-pub enum Os { OsWin32, OsMacos, OsLinux, OsAndroid, OsFreebsd, }
+pub enum Os { OsWin32, OsMacos, OsLinux, OsAndroid, OsFreebsd, OsiOS, }
 
 #[deriving(PartialEq, Eq, Hash, Encodable, Decodable, Clone)]
 pub enum Abi {
@@ -41,7 +41,8 @@ pub enum Architecture {
     X86,
     X86_64,
     Arm,
-    Mips
+    Mips,
+    Mipsel
 }
 
 static IntelBits: u32 = (1 << (X86 as uint)) | (1 << (X86_64 as uint));
@@ -149,13 +150,26 @@ impl Abi {
 
 impl Architecture {
     fn bit(&self) -> u32 {
-        1 << (*self as u32)
+        1 << (*self as uint)
     }
 }
 
 impl fmt::Show for Abi {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "\"{}\"", self.name())
+    }
+}
+
+impl fmt::Show for Os {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            OsLinux => "linux".fmt(f),
+            OsWin32 => "win32".fmt(f),
+            OsMacos => "macos".fmt(f),
+            OsiOS => "ios".fmt(f),
+            OsAndroid => "android".fmt(f),
+            OsFreebsd => "freebsd".fmt(f)
+        }
     }
 }
 
@@ -184,11 +198,11 @@ fn indices_are_correct() {
         assert_eq!(i, abi_data.abi.index());
     }
 
-    let bits = 1 << (X86 as u32);
-    let bits = bits | 1 << (X86_64 as u32);
+    let bits = 1 << (X86 as uint);
+    let bits = bits | 1 << (X86_64 as uint);
     assert_eq!(IntelBits, bits);
 
-    let bits = 1 << (Arm as u32);
+    let bits = 1 << (Arm as uint);
     assert_eq!(ArmBits, bits);
 }
 

@@ -65,7 +65,7 @@
 //!
 //! ```rust
 //! #![feature(phase)]
-//! #[phase(syntax)]
+//! #[phase(plugin)]
 //! extern crate regex_macros;
 //! extern crate regex;
 //!
@@ -95,7 +95,7 @@
 //!
 //! ```rust
 //! # #![feature(phase)]
-//! # extern crate regex; #[phase(syntax)] extern crate regex_macros;
+//! # extern crate regex; #[phase(plugin)] extern crate regex_macros;
 //! # fn main() {
 //! let re = regex!(r"(\d{4})-(\d{2})-(\d{2})");
 //! let text = "2012-03-14, 2013-01-01 and 2014-07-05";
@@ -121,7 +121,7 @@
 //!
 //! ```rust
 //! # #![feature(phase)]
-//! # extern crate regex; #[phase(syntax)] extern crate regex_macros;
+//! # extern crate regex; #[phase(plugin)] extern crate regex_macros;
 //! # fn main() {
 //! let re = regex!(r"(?P<y>\d{4})-(?P<m>\d{2})-(?P<d>\d{2})");
 //! let before = "2012-03-14, 2013-01-01 and 2014-07-05";
@@ -155,19 +155,20 @@
 //! # Unicode
 //!
 //! This implementation executes regular expressions **only** on sequences of
-//! UTF8 codepoints while exposing match locations as byte indices.
+//! Unicode code points while exposing match locations as byte indices into the
+//! search string.
 //!
 //! Currently, only naive case folding is supported. Namely, when matching
 //! case insensitively, the characters are first converted to their uppercase
 //! forms and then compared.
 //!
 //! Regular expressions themselves are also **only** interpreted as a sequence
-//! of UTF8 codepoints. This means you can embed Unicode characters directly
-//! into your expression:
+//! of Unicode code points. This means you can use Unicode characters
+//! directly in your expression:
 //!
 //! ```rust
 //! # #![feature(phase)]
-//! # extern crate regex; #[phase(syntax)] extern crate regex_macros;
+//! # extern crate regex; #[phase(plugin)] extern crate regex_macros;
 //! # fn main() {
 //! let re = regex!(r"(?i)Δ+");
 //! assert_eq!(re.find("ΔδΔ"), Some((0, 6)));
@@ -180,7 +181,7 @@
 //!
 //! ```rust
 //! # #![feature(phase)]
-//! # extern crate regex; #[phase(syntax)] extern crate regex_macros;
+//! # extern crate regex; #[phase(plugin)] extern crate regex_macros;
 //! # fn main() {
 //! let re = regex!(r"[\pN\p{Greek}\p{Cherokee}]+");
 //! assert_eq!(re.find("abcΔᎠβⅠᏴγδⅡxyz"), Some((3, 23)));
@@ -229,10 +230,10 @@
 //! x*?       zero or more of x (ungreedy)
 //! x+?       one or more of x (ungreedy)
 //! x??       zero or one of x (ungreedy)
-//! x{n,m}    at least n and at most x (greedy)
+//! x{n,m}    at least n x and at most m x (greedy)
 //! x{n,}     at least n x (greedy)
 //! x{n}      exactly n x
-//! x{n,m}?   at least n and at most x (ungreedy)
+//! x{n,m}?   at least n x and at most m x (ungreedy)
 //! x{n,}?    at least n x (ungreedy)
 //! x{n}?     exactly n x
 //! </pre>
@@ -277,7 +278,7 @@
 //!
 //! ```rust
 //! # #![feature(phase)]
-//! # extern crate regex; #[phase(syntax)] extern crate regex_macros;
+//! # extern crate regex; #[phase(plugin)] extern crate regex_macros;
 //! # fn main() {
 //! let re = regex!(r"(?i)a+(?-i)b+");
 //! let cap = re.captures("AaAaAbbBBBb").unwrap();
@@ -300,7 +301,7 @@
 //! \v         vertical tab (\x0B)
 //! \123       octal character code (up to three digits)
 //! \x7F       hex character code (exactly two digits)
-//! \x{10FFFF} any hex character code corresponding to a valid UTF8 codepoint
+//! \x{10FFFF} any hex character code corresponding to a Unicode code point
 //! </pre>
 //!
 //! ## Perl character classes (Unicode friendly)
@@ -359,12 +360,12 @@
 #![license = "MIT/ASL2"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
        html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-       html_root_url = "http://doc.rust-lang.org/")]
+       html_root_url = "http://doc.rust-lang.org/",
+       html_playground_url = "http://play.rust-lang.org/")]
 
 #![feature(macro_rules, phase)]
-#![deny(missing_doc, deprecated_owned_vector)]
+#![deny(missing_doc)]
 
-extern crate collections;
 #[cfg(test)]
 extern crate stdtest = "test";
 #[cfg(test)]
@@ -390,7 +391,7 @@ mod vm;
 #[cfg(test, not(windows))]
 mod test;
 
-/// The `program` module exists to support the `regex!` macro. Do not use.
+/// The `native` module exists to support the `regex!` macro. Do not use.
 #[doc(hidden)]
 pub mod native {
     // Exporting this stuff is bad form, but it's necessary for two reasons.

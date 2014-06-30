@@ -11,7 +11,6 @@
 #![feature(globs)]
 #![deny(unused_imports)]
 #![allow(dead_code)]
-#![allow(deprecated_owned_vector)]
 
 use cal = bar::c::cc;
 
@@ -56,7 +55,7 @@ mod bar {
     pub mod c {
         use foo::Point;
         use foo::Square; //~ ERROR unused import
-        pub fn cc(p: Point) -> int { return 2 * (p.x + p.y); }
+        pub fn cc(p: Point) -> int { return 2i * (p.x + p.y); }
     }
 
     #[allow(unused_imports)]
@@ -67,8 +66,8 @@ mod bar {
 
 fn main() {
     cal(foo::Point{x:3, y:9});
-    let mut a = 3;
-    let mut b = 4;
+    let mut a = 3i;
+    let mut b = 4i;
     swap(&mut a, &mut b);
     test::C.b();
     let _a = foo();

@@ -20,6 +20,7 @@ pub static FIONBIO: libc::c_long = 0x8004667e;
 static FD_SETSIZE: uint = 64;
 pub static MSG_DONTWAIT: libc::c_int = 0;
 
+#[repr(C)]
 pub struct WSADATA {
     pub wVersion: libc::WORD,
     pub wHighVersion: libc::WORD,
@@ -27,11 +28,12 @@ pub struct WSADATA {
     pub szSystemStatus: [u8, ..WSASYS_STATUS_LEN + 1],
     pub iMaxSockets: u16,
     pub iMaxUdpDg: u16,
-    pub lpVendorInfo: *u8,
+    pub lpVendorInfo: *mut u8,
 }
 
 pub type LPWSADATA = *mut WSADATA;
 
+#[repr(C)]
 pub struct fd_set {
     fd_count: libc::c_uint,
     fd_array: [libc::SOCKET, ..FD_SETSIZE],
@@ -51,10 +53,10 @@ extern "system" {
     pub fn ioctlsocket(s: libc::SOCKET, cmd: libc::c_long,
                        argp: *mut libc::c_ulong) -> libc::c_int;
     pub fn select(nfds: libc::c_int,
-                  readfds: *fd_set,
-                  writefds: *fd_set,
-                  exceptfds: *fd_set,
-                  timeout: *libc::timeval) -> libc::c_int;
+                  readfds: *mut fd_set,
+                  writefds: *mut fd_set,
+                  exceptfds: *mut fd_set,
+                  timeout: *mut libc::timeval) -> libc::c_int;
     pub fn getsockopt(sockfd: libc::SOCKET,
                       level: libc::c_int,
                       optname: libc::c_int,
@@ -68,23 +70,28 @@ extern "system" {
 
 pub mod compat {
     use std::intrinsics::{atomic_store_relaxed, transmute};
+    use std::iter::Iterator;
     use libc::types::os::arch::extra::{LPCWSTR, HMODULE, LPCSTR, LPVOID};
-    use std::os::win32::as_utf16_p;
 
     extern "system" {
         fn GetModuleHandleW(lpModuleName: LPCWSTR) -> HMODULE;
         fn GetProcAddress(hModule: HMODULE, lpProcName: LPCSTR) -> LPVOID;
     }
 
-    // store_func() is idempotent, so using relaxed ordering for the atomics should be enough.
-    // This way, calling a function in this compatibility layer (after it's loaded) shouldn't
-    // be any slower than a regular DLL call.
-    unsafe fn store_func<T: Copy>(ptr: *mut T, module: &str, symbol: &str, fallback: T) {
-        as_utf16_p(module, |module| {
-            symbol.with_c_str(|symbol| {
-                let handle = GetModuleHandleW(module);
-                let func: Option<T> = transmute(GetProcAddress(handle, symbol));
-                atomic_store_relaxed(ptr, func.unwrap_or(fallback))
+    // store_func() is idempotent, so using relaxed ordering for the atomics
+    // should be enough.  This way, calling a function in this compatibility
+    // layer (after it's loaded) shouldn't be any slower than a regular DLL
+    // call.
+    unsafe fn store_func(ptr: *mut uint, module: &str, symbol: &str, fallback: uint) {
+        let module: Vec<u16> = module.utf16_units().collect();
+        let module = module.append_one(0);
+        symbol.with_c_str(|symbol| {
+            let handle = GetModuleHandleW(module.as_ptr());
+            let func: uint = transmute(GetProcAddress(handle, symbol));
+            atomic_store_relaxed(ptr, if func == 0 {
+                fallback
+            } else {
+                func
             })
         })
     }
@@ -109,10 +116,10 @@ pub mod compat {
 
                 extern "system" fn thunk($($argname: $argtype),*) -> $rettype {
                     unsafe {
-                        ::io::c::compat::store_func(&mut ptr,
-                                                             stringify!($module),
-                                                             stringify!($symbol),
-                                                             fallback);
+                        ::io::c::compat::store_func(&mut ptr as *mut _ as *mut uint,
+                                                    stringify!($module),
+                                                    stringify!($symbol),
+                                                    fallback as uint);
                         ::std::intrinsics::atomic_load_relaxed(&ptr)($($argname),*)
                     }
                 }

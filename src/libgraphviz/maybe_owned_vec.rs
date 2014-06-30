@@ -8,8 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use std::collections::Collection;
+use std::default::Default;
 use std::fmt;
 use std::iter::FromIterator;
+use std::path::BytesContainer;
 use std::slice;
 
 // Note 1: It is not clear whether the flexibility of providing both
@@ -26,17 +29,13 @@ use std::slice;
 // of the contents of `Vec<T>`, since we anticipate that to be a
 // frequent way to dynamically construct a vector.
 
-/// MaybeOwnedVector<'a,T> abstracts over `Vec<T>`, `~[T]`, `&'a [T]`.
+/// MaybeOwnedVector<'a,T> abstracts over `Vec<T>`, `&'a [T]`.
 ///
 /// Some clients will have a pre-allocated vector ready to hand off in
 /// a slice; others will want to create the set on the fly and hand
-/// off ownership, via either `Growable` or `FixedLen` depending on
-/// which kind of vector they have constructed.  (The `FixedLen`
-/// variant is provided for interoperability with `std::slice` methods
-/// that return `~[T]`.)
+/// off ownership, via `Growable`.
 pub enum MaybeOwnedVector<'a,T> {
     Growable(Vec<T>),
-    FixedLen(~[T]),
     Borrowed(&'a [T]),
 }
 
@@ -51,11 +50,6 @@ impl<'a,T> IntoMaybeOwnedVector<'a,T> for Vec<T> {
     fn into_maybe_owned(self) -> MaybeOwnedVector<'a,T> { Growable(self) }
 }
 
-impl<'a,T> IntoMaybeOwnedVector<'a,T> for ~[T] {
-    #[inline]
-    fn into_maybe_owned(self) -> MaybeOwnedVector<'a,T> { FixedLen(self) }
-}
-
 impl<'a,T> IntoMaybeOwnedVector<'a,T> for &'a [T] {
     #[inline]
     fn into_maybe_owned(self) -> MaybeOwnedVector<'a,T> { Borrowed(self) }
@@ -65,9 +59,34 @@ impl<'a,T> MaybeOwnedVector<'a,T> {
     pub fn iter(&'a self) -> slice::Items<'a,T> {
         match self {
             &Growable(ref v) => v.iter(),
-            &FixedLen(ref v) => v.iter(),
             &Borrowed(ref v) => v.iter(),
         }
+    }
+}
+
+impl<'a, T: PartialEq> PartialEq for MaybeOwnedVector<'a, T> {
+    fn eq(&self, other: &MaybeOwnedVector<T>) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl<'a, T: Eq> Eq for MaybeOwnedVector<'a, T> {}
+
+impl<'a, T: PartialOrd> PartialOrd for MaybeOwnedVector<'a, T> {
+    fn partial_cmp(&self, other: &MaybeOwnedVector<T>) -> Option<Ordering> {
+        self.as_slice().partial_cmp(&other.as_slice())
+    }
+}
+
+impl<'a, T: Ord> Ord for MaybeOwnedVector<'a, T> {
+    fn cmp(&self, other: &MaybeOwnedVector<T>) -> Ordering {
+        self.as_slice().cmp(&other.as_slice())
+    }
+}
+
+impl<'a, T: PartialEq, V: Vector<T>> Equiv<V> for MaybeOwnedVector<'a, T> {
+    fn equiv(&self, other: &V) -> bool {
+        self.as_slice() == other.as_slice()
     }
 }
 
@@ -84,7 +103,6 @@ impl<'b,T> slice::Vector<T> for MaybeOwnedVector<'b,T> {
     fn as_slice<'a>(&'a self) -> &'a [T] {
         match self {
             &Growable(ref v) => v.as_slice(),
-            &FixedLen(ref v) => v.as_slice(),
             &Borrowed(ref v) => v.as_slice(),
         }
     }
@@ -106,17 +124,44 @@ impl<'a,T:fmt::Show> fmt::Show for MaybeOwnedVector<'a,T> {
 
 impl<'a,T:Clone> CloneableVector<T> for MaybeOwnedVector<'a,T> {
     /// Returns a copy of `self`.
-    fn to_owned(&self) -> ~[T] {
+    fn to_owned(&self) -> Vec<T> {
         self.as_slice().to_owned()
     }
 
     /// Convert `self` into an owned slice, not making a copy if possible.
-    fn into_owned(self) -> ~[T] {
+    fn into_owned(self) -> Vec<T> {
         match self {
             Growable(v) => v.as_slice().to_owned(),
-            FixedLen(v) => v,
             Borrowed(v) => v.to_owned(),
         }
+    }
+}
+
+impl<'a, T: Clone> Clone for MaybeOwnedVector<'a, T> {
+    fn clone(&self) -> MaybeOwnedVector<'a, T> {
+        match *self {
+            Growable(ref v) => Growable(v.to_owned()),
+            Borrowed(v) => Borrowed(v)
+        }
+    }
+}
+
+
+impl<'a, T> Default for MaybeOwnedVector<'a, T> {
+    fn default() -> MaybeOwnedVector<'a, T> {
+        Growable(Vec::new())
+    }
+}
+
+impl<'a, T> Collection for MaybeOwnedVector<'a, T> {
+    fn len(&self) -> uint {
+        self.as_slice().len()
+    }
+}
+
+impl<'a> BytesContainer for MaybeOwnedVector<'a, u8> {
+    fn container_as_bytes<'a>(&'a self) -> &'a [u8] {
+        self.as_slice()
     }
 }
 
@@ -125,7 +170,6 @@ impl<'a,T:Clone> MaybeOwnedVector<'a,T> {
     pub fn into_vec(self) -> Vec<T> {
         match self {
             Growable(v) => v,
-            FixedLen(v) => Vec::from_slice(v.as_slice()),
             Borrowed(v) => Vec::from_slice(v),
         }
     }

@@ -12,6 +12,8 @@
 
 #![feature(managed_boxes)]
 
+use std::gc::GC;
+
 fn test_nil() {
     assert_eq!((), ());
     assert!((!(() != ())));
@@ -45,14 +47,14 @@ fn test_bool() {
 }
 
 fn test_box() {
-    assert_eq!(@10, @10);
+    assert_eq!(box(GC) 10i, box(GC) 10i);
 }
 
 fn test_ptr() {
     unsafe {
-        let p1: *u8 = ::std::mem::transmute(0);
-        let p2: *u8 = ::std::mem::transmute(0);
-        let p3: *u8 = ::std::mem::transmute(1);
+        let p1: *const u8 = ::std::mem::transmute(0u);
+        let p2: *const u8 = ::std::mem::transmute(0u);
+        let p3: *const u8 = ::std::mem::transmute(1u);
 
         assert_eq!(p1, p2);
         assert!(p1 != p3);
@@ -84,8 +86,8 @@ fn test_class() {
 
   unsafe {
   println!("q = {:x}, r = {:x}",
-         (::std::mem::transmute::<*p, uint>(&q)),
-         (::std::mem::transmute::<*p, uint>(&r)));
+         (::std::mem::transmute::<*const p, uint>(&q)),
+         (::std::mem::transmute::<*const p, uint>(&r)));
   }
   assert_eq!(q, r);
   r.y = 17;

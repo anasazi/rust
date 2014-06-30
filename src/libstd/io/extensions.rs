@@ -15,7 +15,7 @@
 // FIXME: Not sure how this should be structured
 // FIXME: Iteration should probably be considered separately
 
-use container::Container;
+use collections::Collection;
 use iter::Iterator;
 use option::{Option, Some, None};
 use result::{Ok, Err};
@@ -93,7 +93,7 @@ pub fn u64_to_le_bytes<T>(n: u64, size: uint, f: |v: &[u8]| -> T) -> T {
         let mut n = n;
         while i > 0u {
             bytes.push((n & 255_u64) as u8);
-            n >>= 8_u64;
+            n >>= 8;
             i -= 1u;
         }
         f(bytes.as_slice())
@@ -130,7 +130,7 @@ pub fn u64_to_be_bytes<T>(n: u64, size: uint, f: |v: &[u8]| -> T) -> T {
         let mut bytes = vec!();
         let mut i = size;
         while i > 0u {
-            let shift = ((i - 1u) * 8u) as u64;
+            let shift = (i - 1u) * 8u;
             bytes.push((n >> shift) as u8);
             i -= 1u;
         }
@@ -166,7 +166,7 @@ pub fn u64_from_be_bytes(data: &[u8], start: uint, size: uint) -> u64 {
         let ptr = data.as_ptr().offset(start as int);
         let out = buf.as_mut_ptr();
         copy_nonoverlapping_memory(out.offset((8 - size) as int), ptr, size);
-        from_be64(*(out as *u64))
+        from_be64(*(out as *const u64))
     }
 }
 
@@ -447,10 +447,10 @@ mod test {
     #[test]
     fn test_read_f32() {
         //big-endian floating-point 8.1250
-        let buf = box [0x41, 0x02, 0x00, 0x00];
+        let buf = vec![0x41, 0x02, 0x00, 0x00];
 
         let mut writer = MemWriter::new();
-        writer.write(buf).unwrap();
+        writer.write(buf.as_slice()).unwrap();
 
         let mut reader = MemReader::new(writer.unwrap());
         let f = reader.read_be_f32().unwrap();
@@ -504,7 +504,7 @@ mod test {
 mod bench {
     extern crate test;
 
-    use container::Container;
+    use collections::Collection;
     use prelude::*;
     use self::test::Bencher;
 
