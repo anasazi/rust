@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![crate_id = "rustdoc#0.11.0-pre"]
+#![crate_name = "rustdoc"]
 #![experimental]
 #![desc = "rustdoc, the Rust documentation extractor"]
 #![license = "MIT/ASL2"]
@@ -365,7 +365,7 @@ fn json_input(input: &str) -> Result<Output, String> {
         }
     };
     match json::from_reader(&mut input) {
-        Err(s) => Err(s.to_str()),
+        Err(s) => Err(s.to_string()),
         Ok(json::Object(obj)) => {
             let mut obj = obj;
             // Make sure the schema is what we expect
@@ -408,18 +408,17 @@ fn json_output(krate: clean::Crate, res: Vec<plugins::PluginJson> ,
     //   "crate": { parsed crate ... },
     //   "plugins": { output of plugins ... }
     // }
-    let mut json = box std::collections::TreeMap::new();
-    json.insert("schema".to_string(),
-                json::String(SCHEMA_VERSION.to_string()));
-    let plugins_json = box res.move_iter()
-                              .filter_map(|opt| {
-                                  match opt {
-                                      None => None,
-                                      Some((string, json)) => {
-                                          Some((string.to_string(), json))
-                                      }
+    let mut json = std::collections::TreeMap::new();
+    json.insert("schema".to_string(), json::String(SCHEMA_VERSION.to_string()));
+    let plugins_json = res.move_iter()
+                          .filter_map(|opt| {
+                              match opt {
+                                  None => None,
+                                  Some((string, json)) => {
+                                      Some((string.to_string(), json))
                                   }
-                              }).collect();
+                              }
+                          }).collect();
 
     // FIXME #8335: yuck, Rust -> str -> JSON round trip! No way to .encode
     // straight to the Rust JSON representation.
@@ -429,7 +428,7 @@ fn json_output(krate: clean::Crate, res: Vec<plugins::PluginJson> ,
             let mut encoder = json::Encoder::new(&mut w as &mut io::Writer);
             krate.encode(&mut encoder).unwrap();
         }
-        str::from_utf8(w.unwrap().as_slice()).unwrap().to_string()
+        str::from_utf8_owned(w.unwrap()).unwrap()
     };
     let crate_json = match json::from_str(crate_json_str.as_slice()) {
         Ok(j) => j,
@@ -440,6 +439,5 @@ fn json_output(krate: clean::Crate, res: Vec<plugins::PluginJson> ,
     json.insert("plugins".to_string(), json::Object(plugins_json));
 
     let mut file = try!(File::create(&dst));
-    try!(json::Object(json).to_writer(&mut file));
-    Ok(())
+    json::Object(json).to_writer(&mut file)
 }

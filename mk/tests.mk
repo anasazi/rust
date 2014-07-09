@@ -15,11 +15,11 @@
 
 # The names of crates that must be tested
 
-# libcore tests are in a separate crate
+# libcore/libunicode tests are in a separate crate
 DEPS_coretest :=
 $(eval $(call RUST_CRATE,coretest))
 
-TEST_TARGET_CRATES = $(filter-out core,$(TARGET_CRATES)) coretest
+TEST_TARGET_CRATES = $(filter-out core unicode,$(TARGET_CRATES)) coretest
 TEST_DOC_CRATES = $(DOC_CRATES)
 TEST_HOST_CRATES = $(HOST_CRATES)
 TEST_CRATES = $(TEST_TARGET_CRATES) $(TEST_HOST_CRATES)
@@ -171,7 +171,7 @@ endif
 # Main test targets
 ######################################################################
 
-check: cleantmptestlogs cleantestlibs tidy check-notidy
+check: cleantmptestlogs cleantestlibs check-notidy tidy
 
 check-notidy: cleantmptestlogs cleantestlibs all check-stage2
 	$(Q)$(CFG_PYTHON) $(S)src/etc/check-summary.py tmp/*.log

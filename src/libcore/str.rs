@@ -22,7 +22,7 @@ use cmp;
 use cmp::{PartialEq, Eq};
 use collections::Collection;
 use default::Default;
-use iter::{Filter, Map, Iterator};
+use iter::{Map, Iterator};
 use iter::{DoubleEndedIterator, ExactSize};
 use iter::range;
 use num::{CheckedMul, Saturating};
@@ -203,10 +203,6 @@ pub struct CharSplitsN<'a, Sep> {
     count: uint,
     invert: bool,
 }
-
-/// An iterator over the words of a string, separated by a sequence of whitespace
-pub type Words<'a> =
-    Filter<'a, &'a str, CharSplits<'a, extern "Rust" fn(char) -> bool>>;
 
 /// An iterator over the lines of a string, separated by either `\n` or (`\r\n`).
 pub type AnyLines<'a> =
@@ -1209,48 +1205,6 @@ pub trait StrSlice<'a> {
     /// ```
     fn lines_any(&self) -> AnyLines<'a>;
 
-    /// An iterator over the words of a string (subsequences separated
-    /// by any sequence of whitespace). Sequences of whitespace are
-    /// collapsed, so empty "words" are not included.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let some_words = " Mary   had\ta little  \n\t lamb";
-    /// let v: Vec<&str> = some_words.words().collect();
-    /// assert_eq!(v, vec!["Mary", "had", "a", "little", "lamb"]);
-    /// ```
-    fn words(&self) -> Words<'a>;
-
-    /// Returns true if the string contains only whitespace.
-    ///
-    /// Whitespace characters are determined by `char::is_whitespace`.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// assert!(" \t\n".is_whitespace());
-    /// assert!("".is_whitespace());
-    ///
-    /// assert!( !"abc".is_whitespace());
-    /// ```
-    fn is_whitespace(&self) -> bool;
-
-    /// Returns true if the string contains only alphanumeric code
-    /// points.
-    ///
-    /// Alphanumeric characters are determined by `char::is_alphanumeric`.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// assert!("Löwe老虎Léopard123".is_alphanumeric());
-    /// assert!("".is_alphanumeric());
-    ///
-    /// assert!( !" &*~".is_alphanumeric());
-    /// ```
-    fn is_alphanumeric(&self) -> bool;
-
     /// Returns the number of Unicode code points (`char`) that a
     /// string holds.
     ///
@@ -1367,15 +1321,6 @@ pub trait StrSlice<'a> {
 
     /// Returns true if `needle` is a suffix of the string.
     fn ends_with(&self, needle: &str) -> bool;
-
-    /// Returns a string with leading and trailing whitespace removed.
-    fn trim(&self) -> &'a str;
-
-    /// Returns a string with leading whitespace removed.
-    fn trim_left(&self) -> &'a str;
-
-    /// Returns a string with trailing whitespace removed.
-    fn trim_right(&self) -> &'a str;
 
     /// Returns a string with characters that match `to_trim` removed.
     ///
@@ -1743,28 +1688,19 @@ impl<'a> StrSlice<'a> for &'a str {
     fn lines_any(&self) -> AnyLines<'a> {
         self.lines().map(|line| {
             let l = line.len();
-            if l > 0 && line[l - 1] == '\r' as u8 { line.slice(0, l - 1) }
+            if l > 0 && line.as_bytes()[l - 1] == '\r' as u8 { line.slice(0, l - 1) }
             else { line }
         })
     }
-
-    #[inline]
-    fn words(&self) -> Words<'a> {
-        self.split(char::is_whitespace).filter(|s| !s.is_empty())
-    }
-
-    #[inline]
-    fn is_whitespace(&self) -> bool { self.chars().all(char::is_whitespace) }
-
-    #[inline]
-    fn is_alphanumeric(&self) -> bool { self.chars().all(char::is_alphanumeric) }
 
     #[inline]
     fn char_len(&self) -> uint { self.chars().count() }
 
     #[inline]
     fn slice(&self, begin: uint, end: uint) -> &'a str {
-        assert!(self.is_char_boundary(begin) && self.is_char_boundary(end));
+        assert!(self.is_char_boundary(begin) && self.is_char_boundary(end),
+                "index {} and/or {} in `{}` do not lie on character boundary", begin,
+                end, *self);
         unsafe { raw::slice_bytes(*self, begin, end) }
     }
 
@@ -1775,7 +1711,8 @@ impl<'a> StrSlice<'a> for &'a str {
 
     #[inline]
     fn slice_to(&self, end: uint) -> &'a str {
-        assert!(self.is_char_boundary(end));
+        assert!(self.is_char_boundary(end), "index {} in `{}` does not lie on \
+                a character boundary", end, *self);
         unsafe { raw::slice_bytes(*self, 0, end) }
     }
 
@@ -1812,21 +1749,6 @@ impl<'a> StrSlice<'a> for &'a str {
     fn ends_with(&self, needle: &str) -> bool {
         let (m, n) = (self.len(), needle.len());
         m >= n && needle.as_bytes() == self.as_bytes().slice_from(m - n)
-    }
-
-    #[inline]
-    fn trim(&self) -> &'a str {
-        self.trim_left().trim_right()
-    }
-
-    #[inline]
-    fn trim_left(&self) -> &'a str {
-        self.trim_left_chars(char::is_whitespace)
-    }
-
-    #[inline]
-    fn trim_right(&self) -> &'a str {
-        self.trim_right_chars(char::is_whitespace)
     }
 
     #[inline]
@@ -1867,26 +1789,26 @@ impl<'a> StrSlice<'a> for &'a str {
     fn is_char_boundary(&self, index: uint) -> bool {
         if index == self.len() { return true; }
         if index > self.len() { return false; }
-        let b = self[index];
+        let b = self.as_bytes()[index];
         return b < 128u8 || b >= 192u8;
     }
 
     #[inline]
     fn char_range_at(&self, i: uint) -> CharRange {
-        if self[i] < 128u8 {
-            return CharRange {ch: self[i] as char, next: i + 1 };
+        if self.as_bytes()[i] < 128u8 {
+            return CharRange {ch: self.as_bytes()[i] as char, next: i + 1 };
         }
 
         // Multibyte case is a fn to allow char_range_at to inline cleanly
         fn multibyte_char_range_at(s: &str, i: uint) -> CharRange {
-            let mut val = s[i] as u32;
+            let mut val = s.as_bytes()[i] as u32;
             let w = UTF8_CHAR_WIDTH[val as uint] as uint;
             assert!((w != 0));
 
             val = utf8_first_byte!(val, w);
-            val = utf8_acc_cont_byte!(val, s[i + 1]);
-            if w > 2 { val = utf8_acc_cont_byte!(val, s[i + 2]); }
-            if w > 3 { val = utf8_acc_cont_byte!(val, s[i + 3]); }
+            val = utf8_acc_cont_byte!(val, s.as_bytes()[i + 1]);
+            if w > 2 { val = utf8_acc_cont_byte!(val, s.as_bytes()[i + 2]); }
+            if w > 3 { val = utf8_acc_cont_byte!(val, s.as_bytes()[i + 3]); }
 
             return CharRange {ch: unsafe { mem::transmute(val) }, next: i + w};
         }
@@ -1899,23 +1821,25 @@ impl<'a> StrSlice<'a> for &'a str {
         let mut prev = start;
 
         prev = prev.saturating_sub(1);
-        if self[prev] < 128 { return CharRange{ch: self[prev] as char, next: prev} }
+        if self.as_bytes()[prev] < 128 {
+            return CharRange{ch: self.as_bytes()[prev] as char, next: prev}
+        }
 
         // Multibyte case is a fn to allow char_range_at_reverse to inline cleanly
         fn multibyte_char_range_at_reverse(s: &str, mut i: uint) -> CharRange {
             // while there is a previous byte == 10......
-            while i > 0 && s[i] & 192u8 == TAG_CONT_U8 {
+            while i > 0 && s.as_bytes()[i] & 192u8 == TAG_CONT_U8 {
                 i -= 1u;
             }
 
-            let mut val = s[i] as u32;
+            let mut val = s.as_bytes()[i] as u32;
             let w = UTF8_CHAR_WIDTH[val as uint] as uint;
             assert!((w != 0));
 
             val = utf8_first_byte!(val, w);
-            val = utf8_acc_cont_byte!(val, s[i + 1]);
-            if w > 2 { val = utf8_acc_cont_byte!(val, s[i + 2]); }
-            if w > 3 { val = utf8_acc_cont_byte!(val, s[i + 3]); }
+            val = utf8_acc_cont_byte!(val, s.as_bytes()[i + 1]);
+            if w > 2 { val = utf8_acc_cont_byte!(val, s.as_bytes()[i + 2]); }
+            if w > 3 { val = utf8_acc_cont_byte!(val, s.as_bytes()[i + 3]); }
 
             return CharRange {ch: unsafe { mem::transmute(val) }, next: i};
         }

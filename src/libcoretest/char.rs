@@ -168,12 +168,6 @@ fn test_escape_unicode() {
 }
 
 #[test]
-fn test_to_str() {
-    let s = 't'.to_str();
-    assert_eq!(s.as_slice(), "t");
-}
-
-#[test]
 fn test_encode_utf8() {
     fn check(input: char, expect: &[u8]) {
         let mut buf = [0u8, ..4];
@@ -199,4 +193,31 @@ fn test_encode_utf16() {
     check('\u00e9', [0x00e9]);
     check('\ua66e', [0xa66e]);
     check('\U0001f4a9', [0xd83d, 0xdca9]);
+}
+
+#[test]
+fn test_width() {
+    assert_eq!('\x00'.width(false),Some(0));
+    assert_eq!('\x00'.width(true),Some(0));
+
+    assert_eq!('\x0A'.width(false),None);
+    assert_eq!('\x0A'.width(true),None);
+
+    assert_eq!('w'.width(false),Some(1));
+    assert_eq!('w'.width(true),Some(1));
+
+    assert_eq!('ｈ'.width(false),Some(2));
+    assert_eq!('ｈ'.width(true),Some(2));
+
+    assert_eq!('\xAD'.width(false),Some(1));
+    assert_eq!('\xAD'.width(true),Some(1));
+
+    assert_eq!('\u1160'.width(false),Some(0));
+    assert_eq!('\u1160'.width(true),Some(0));
+
+    assert_eq!('\u00a1'.width(false),Some(1));
+    assert_eq!('\u00a1'.width(true),Some(2));
+
+    assert_eq!('\u0300'.width(false),Some(0));
+    assert_eq!('\u0300'.width(true),Some(0));
 }

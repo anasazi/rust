@@ -37,6 +37,10 @@ pub struct FnStyleSpace(pub ast::FnStyle);
 pub struct Method<'a>(pub &'a clean::SelfTy, pub &'a clean::FnDecl);
 /// Similar to VisSpace, but used for mutability
 pub struct MutableSpace(pub clean::Mutability);
+/// Wrapper struct for properly emitting the stability level.
+pub struct Stability<'a>(pub &'a Option<clean::Stability>);
+/// Wrapper struct for emitting the stability level concisely.
+pub struct ConciseStability<'a>(pub &'a Option<clean::Stability>);
 
 impl VisSpace {
     pub fn get(&self) -> Option<ast::Visibility> {
@@ -347,7 +351,7 @@ impl fmt::Show for clean::Type {
                 tybounds(f, typarams)
             }
             clean::Self(..) => f.write("Self".as_bytes()),
-            clean::Primitive(prim) => primitive_link(f, prim, prim.to_str()),
+            clean::Primitive(prim) => primitive_link(f, prim, prim.to_string()),
             clean::Closure(ref decl, ref region) => {
                 write!(f, "{style}{lifetimes}|{args}|{bounds}{arrow}",
                        style = FnStyleSpace(decl.fn_style),
@@ -358,7 +362,7 @@ impl fmt::Show for clean::Type {
                        },
                        args = decl.decl.inputs,
                        arrow = match decl.decl.output {
-                           clean::Primitive(clean::Nil) => "".to_string(),
+                           clean::Primitive(clean::Unit) => "".to_string(),
                            _ => format!(" -&gt; {}", decl.decl.output),
                        },
                        bounds = {
@@ -401,13 +405,13 @@ impl fmt::Show for clean::Type {
                        } else {
                            let mut m = decl.bounds
                                            .iter()
-                                           .map(|s| s.to_str());
+                                           .map(|s| s.to_string());
                            format!(
                                ": {}",
                                m.collect::<Vec<String>>().connect(" + "))
                        },
                        arrow = match decl.decl.output {
-                           clean::Primitive(clean::Nil) => "".to_string(),
+                           clean::Primitive(clean::Unit) => "".to_string(),
                            _ => format!(" -&gt; {}", decl.decl.output)
                        })
             }
@@ -468,7 +472,7 @@ impl fmt::Show for clean::FnDecl {
         write!(f, "({args}){arrow}",
                args = self.inputs,
                arrow = match self.output {
-                   clean::Primitive(clean::Nil) => "".to_string(),
+                   clean::Primitive(clean::Unit) => "".to_string(),
                    _ => format!(" -&gt; {}", self.output),
                })
     }
@@ -501,7 +505,7 @@ impl<'a> fmt::Show for Method<'a> {
         write!(f, "({args}){arrow}",
                args = args,
                arrow = match d.output {
-                   clean::Primitive(clean::Nil) => "".to_string(),
+                   clean::Primitive(clean::Unit) => "".to_string(),
                    _ => format!(" -&gt; {}", d.output),
                })
     }
@@ -593,6 +597,37 @@ impl fmt::Show for MutableSpace {
         match *self {
             MutableSpace(clean::Immutable) => Ok(()),
             MutableSpace(clean::Mutable) => write!(f, "mut "),
+        }
+    }
+}
+
+impl<'a> fmt::Show for Stability<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let Stability(stab) = *self;
+        match *stab {
+            Some(ref stability) => {
+                write!(f, "<a class='stability {lvl}' title='{reason}'>{lvl}</a>",
+                       lvl = stability.level.to_string(),
+                       reason = stability.text)
+            }
+            None => Ok(())
+        }
+    }
+}
+
+impl<'a> fmt::Show for ConciseStability<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let ConciseStability(stab) = *self;
+        match *stab {
+            Some(ref stability) => {
+                write!(f, "<a class='stability {lvl}' title='{lvl}{colon}{reason}'></a>",
+                       lvl = stability.level.to_string(),
+                       colon = if stability.text.len() > 0 { ": " } else { "" },
+                       reason = stability.text)
+            }
+            None => {
+                write!(f, "<a class='stability Unmarked' title='No stability level'></a>")
+            }
         }
     }
 }
