@@ -8,14 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use std::sync::mpsc::channel;
+use std::thread;
+
 fn main() {
     let (tx, rx) = channel();
-    spawn(proc() {
+    let _t = thread::spawn(move|| -> () {
         loop {
             let tx = tx;
             //~^ ERROR: use of moved value: `tx`
-            tx.send(1i);
+            tx.send(1);
         }
     });
 }
-

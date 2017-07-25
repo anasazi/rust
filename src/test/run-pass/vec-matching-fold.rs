@@ -8,34 +8,51 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn foldl<T,U:Clone>(values: &[T],
-                    initial: U,
-                    function: |partial: U, element: &T| -> U)
-                    -> U {
-    match values {
-        [ref head, ..tail] =>
+
+#![feature(advanced_slice_patterns)]
+#![feature(slice_patterns)]
+
+use std::fmt::Debug;
+
+fn foldl<T, U, F>(values: &[T],
+                  initial: U,
+                  mut function: F)
+                  -> U where
+    U: Clone+Debug, T:Debug,
+    F: FnMut(U, &T) -> U,
+{    match values {
+        &[ref head, ref tail..] =>
             foldl(tail, function(initial, head), function),
-        [] => initial.clone()
+        &[] => {
+            // FIXME: call guards
+            let res = initial.clone(); res
+        }
     }
 }
 
-fn foldr<T,U:Clone>(values: &[T],
-                    initial: U,
-                    function: |element: &T, partial: U| -> U)
-                    -> U {
+fn foldr<T, U, F>(values: &[T],
+                  initial: U,
+                  mut function: F)
+                  -> U where
+    U: Clone,
+    F: FnMut(&T, U) -> U,
+{
     match values {
-        [..head, ref tail] =>
+        &[ref head.., ref tail] =>
             foldr(head, function(tail, initial), function),
-        [] => initial.clone()
+        &[] => {
+            // FIXME: call guards
+            let res = initial.clone(); res
+        }
     }
 }
 
 pub fn main() {
-    let x = [1i, 2, 3, 4, 5];
+    let x = &[1, 2, 3, 4, 5];
 
-    let product = foldl(x, 1i, |a, b| a * *b);
+    let product = foldl(x, 1, |a, b| a * *b);
     assert_eq!(product, 120);
 
-    let sum = foldr(x, 0i, |a, b| *a + b);
+    let sum = foldr(x, 0, |a, b| *a + b);
     assert_eq!(sum, 15);
 }

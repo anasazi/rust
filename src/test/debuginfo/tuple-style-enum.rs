@@ -9,27 +9,55 @@
 // except according to those terms.
 
 // ignore-tidy-linelength
-// ignore-android: FIXME(#10381)
+// min-lldb-version: 310
+// ignore-gdb-version: 7.11.90 - 7.12.9
 
 // compile-flags:-g
+
+// === GDB TESTS ===================================================================================
+
 // gdb-command:set print union on
-// gdb-command:rbreak zzz
 // gdb-command:run
-// gdb-command:finish
 
 // gdb-command:print case1
-// gdb-check:$1 = {{Case1, 0, 31868, 31868, 31868, 31868}, {Case1, 0, 2088533116, 2088533116}, {Case1, 0, 8970181431921507452}}
+// gdbg-check:$1 = {{RUST$ENUM$DISR = Case1, __0 = 0, __1 = 31868, __2 = 31868, __3 = 31868, __4 = 31868}, {RUST$ENUM$DISR = Case1, [...]}, {RUST$ENUM$DISR = Case1, [...]}}
+// gdbr-check:$1 = tuple_style_enum::Regular::Case1(0, 31868, 31868, 31868, 31868)
 
 // gdb-command:print case2
-// gdb-check:$2 = {{Case2, 0, 4369, 4369, 4369, 4369}, {Case2, 0, 286331153, 286331153}, {Case2, 0, 1229782938247303441}}
+// gdbg-check:$2 = {{RUST$ENUM$DISR = Case2, [...]}, {RUST$ENUM$DISR = Case2, __0 = 0, __1 = 286331153, __2 = 286331153}, {RUST$ENUM$DISR = Case2, [...]}}
+// gdbr-check:$2 = tuple_style_enum::Regular::Case2(0, 286331153, 286331153)
 
 // gdb-command:print case3
-// gdb-check:$3 = {{Case3, 0, 22873, 22873, 22873, 22873}, {Case3, 0, 1499027801, 1499027801}, {Case3, 0, 6438275382588823897}}
+// gdbg-check:$3 = {{RUST$ENUM$DISR = Case3, [...]}, {RUST$ENUM$DISR = Case3, [...]}, {RUST$ENUM$DISR = Case3, __0 = 0, __1 = 6438275382588823897}}
+// gdbr-check:$3 = tuple_style_enum::Regular::Case3(0, 6438275382588823897)
 
 // gdb-command:print univariant
-// gdb-check:$4 = {{-1}}
+// gdbg-check:$4 = {{__0 = -1}}
+// gdbr-check:$4 = tuple_style_enum::Univariant::TheOnlyCase(-1)
 
-#![allow(unused_variable)]
+
+// === LLDB TESTS ==================================================================================
+
+// lldb-command:run
+
+// lldb-command:print case1
+// lldb-check:[...]$0 = Case1(0, 31868, 31868, 31868, 31868)
+
+// lldb-command:print case2
+// lldb-check:[...]$1 = Case2(0, 286331153, 286331153)
+
+// lldb-command:print case3
+// lldb-check:[...]$2 = Case3(0, 6438275382588823897)
+
+// lldb-command:print univariant
+// lldb-check:[...]$3 = TheOnlyCase(-1)
+
+#![allow(unused_variables)]
+#![feature(omit_gdb_pretty_printer_section)]
+#![omit_gdb_pretty_printer_section]
+
+use self::Regular::{Case1, Case2, Case3};
+use self::Univariant::TheOnlyCase;
 
 // The first element is to ensure proper alignment, irrespective of the machines word size. Since
 // the size of the discriminant value is machine dependent, this has be taken into account when
@@ -46,7 +74,7 @@ enum Univariant {
 
 fn main() {
 
-    // In order to avoid endianess trouble all of the following test values consist of a single
+    // In order to avoid endianness trouble all of the following test values consist of a single
     // repeated byte. This way each interpretation of the union should look the same, no matter if
     // this is a big or little endian machine.
 
@@ -70,7 +98,7 @@ fn main() {
 
     let univariant = TheOnlyCase(-1);
 
-    zzz();
+    zzz(); // #break
 }
 
 fn zzz() {()}

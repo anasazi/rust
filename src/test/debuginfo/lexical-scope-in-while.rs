@@ -8,114 +8,166 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-android: FIXME(#10381)
+// min-lldb-version: 310
 
 // compile-flags:-g
-// gdb-command:rbreak zzz
+
+// === GDB TESTS ===================================================================================
+
 // gdb-command:run
 
 // FIRST ITERATION
-// gdb-command:finish
 // gdb-command:print x
 // gdb-check:$1 = 0
 // gdb-command:continue
 
-// gdb-command:finish
 // gdb-command:print x
 // gdb-check:$2 = 1
 // gdb-command:continue
 
-// gdb-command:finish
 // gdb-command:print x
 // gdb-check:$3 = 101
 // gdb-command:continue
 
-// gdb-command:finish
 // gdb-command:print x
 // gdb-check:$4 = 101
 // gdb-command:continue
 
-// gdb-command:finish
 // gdb-command:print x
 // gdb-check:$5 = -987
 // gdb-command:continue
 
-// gdb-command:finish
 // gdb-command:print x
 // gdb-check:$6 = 101
 // gdb-command:continue
 
 
 // SECOND ITERATION
-// gdb-command:finish
 // gdb-command:print x
 // gdb-check:$7 = 1
 // gdb-command:continue
 
-// gdb-command:finish
 // gdb-command:print x
 // gdb-check:$8 = 2
 // gdb-command:continue
 
-// gdb-command:finish
 // gdb-command:print x
 // gdb-check:$9 = 102
 // gdb-command:continue
 
-// gdb-command:finish
 // gdb-command:print x
 // gdb-check:$10 = 102
 // gdb-command:continue
 
-// gdb-command:finish
 // gdb-command:print x
 // gdb-check:$11 = -987
 // gdb-command:continue
 
-// gdb-command:finish
 // gdb-command:print x
 // gdb-check:$12 = 102
 // gdb-command:continue
 
-// gdb-command:finish
 // gdb-command:print x
 // gdb-check:$13 = 2
 // gdb-command:continue
 
+
+// === LLDB TESTS ==================================================================================
+
+// lldb-command:run
+
+// FIRST ITERATION
+// lldb-command:print x
+// lldb-check:[...]$0 = 0
+// lldb-command:continue
+
+// lldb-command:print x
+// lldb-check:[...]$1 = 1
+// lldb-command:continue
+
+// lldb-command:print x
+// lldb-check:[...]$2 = 101
+// lldb-command:continue
+
+// lldb-command:print x
+// lldb-check:[...]$3 = 101
+// lldb-command:continue
+
+// lldb-command:print x
+// lldb-check:[...]$4 = -987
+// lldb-command:continue
+
+// lldb-command:print x
+// lldb-check:[...]$5 = 101
+// lldb-command:continue
+
+
+// SECOND ITERATION
+// lldb-command:print x
+// lldb-check:[...]$6 = 1
+// lldb-command:continue
+
+// lldb-command:print x
+// lldb-check:[...]$7 = 2
+// lldb-command:continue
+
+// lldb-command:print x
+// lldb-check:[...]$8 = 102
+// lldb-command:continue
+
+// lldb-command:print x
+// lldb-check:[...]$9 = 102
+// lldb-command:continue
+
+// lldb-command:print x
+// lldb-check:[...]$10 = -987
+// lldb-command:continue
+
+// lldb-command:print x
+// lldb-check:[...]$11 = 102
+// lldb-command:continue
+
+// lldb-command:print x
+// lldb-check:[...]$12 = 2
+// lldb-command:continue
+
+#![feature(omit_gdb_pretty_printer_section)]
+#![omit_gdb_pretty_printer_section]
+
 fn main() {
 
-    let mut x = 0i;
+    let mut x = 0;
 
     while x < 2 {
-        zzz();
+        zzz(); // #break
         sentinel();
 
         x += 1;
-        zzz();
+        zzz(); // #break
         sentinel();
 
         // Shadow x
         let x = x + 100;
-        zzz();
+        zzz(); // #break
         sentinel();
 
         // open scope within loop's top level scope
         {
-            zzz();
+            zzz(); // #break
             sentinel();
 
-            let x = -987i;
+            let x = -987;
 
-            zzz();
+            zzz(); // #break
             sentinel();
         }
 
         // Check that we get the x before the inner scope again
-        zzz();
+        zzz(); // #break
         sentinel();
     }
 
-    zzz();
+    zzz(); // #break
     sentinel();
 }
 

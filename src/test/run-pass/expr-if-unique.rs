@@ -10,12 +10,14 @@
 
 
 
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
 
 // Tests for if as expressions returning boxed types
 fn test_box() {
-    let rs = if true { box 100i } else { box 101i };
-    assert_eq!(*rs, 100i);
+    let rs: Box<_> = if true { box 100 } else { box 101 };
+    assert_eq!(*rs, 100);
 }
 
 pub fn main() { test_box(); }

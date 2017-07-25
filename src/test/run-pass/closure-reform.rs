@@ -11,30 +11,18 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
-use std::mem;
-use std::io::stdio::println;
-
-fn call_it(f: proc(String) -> String) {
+fn call_it<F>(f: F)
+    where F : FnOnce(String) -> String
+{
     println!("{}", f("Fred".to_string()))
 }
 
-fn call_a_thunk(f: ||) {
+fn call_a_thunk<F>(f: F) where F: FnOnce() {
     f();
 }
 
-fn call_this(f: |&str|:Send) {
+fn call_this<F>(f: F) where F: FnOnce(&str) + Send {
     f("Hello!");
-}
-
-fn call_that(f: <'a>|&'a int, &'a int|: -> int) {
-    let (ten, forty_two) = (10, 42);
-    println!("Your lucky number is {}", f(&ten, &forty_two));
-}
-
-fn call_cramped(f:||->uint,g:<'a>||->&'a uint) {
-    let number = f();
-    let other_number = *g();
-    println!("Ticket {} wins an all-expenses-paid trip to Mountain View", number + other_number);
 }
 
 fn call_bare(f: fn(&str)) {
@@ -49,15 +37,15 @@ pub fn main() {
     // Procs
 
     let greeting = "Hello ".to_string();
-    call_it(proc(s) {
+    call_it(|s| {
         format!("{}{}", greeting, s)
     });
 
     let greeting = "Goodbye ".to_string();
-    call_it(proc(s) format!("{}{}", greeting, s));
+    call_it(|s| format!("{}{}", greeting, s));
 
     let greeting = "How's life, ".to_string();
-    call_it(proc(s: String) -> String {
+    call_it(|s: String| -> String {
         format!("{}{}", greeting, s)
     });
 
@@ -67,20 +55,10 @@ pub fn main() {
 
     call_this(|s| println!("{}", s));
 
-    call_that(|x, y| *x + *y);
-
-    let z = 100;
-    call_that(|x, y| *x + *y - z);
-
-    call_cramped(|| 1, || unsafe {
-        static a: uint = 100;
-        mem::transmute(&a)
-    });
-
     // External functions
 
-    call_bare(println);
+    fn foo(s: &str) {}
+    call_bare(foo);
 
-    call_bare_again(println);
+    call_bare_again(foo);
 }
-

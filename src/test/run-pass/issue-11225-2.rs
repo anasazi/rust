@@ -10,8 +10,11 @@
 
 // aux-build:issue-11225-2.rs
 
-extern crate foo = "issue-11225-2";
+// pretty-expanded FIXME #23616
+
+extern crate issue_11225_2 as foo;
 
 pub fn main() {
-    foo::foo(1i);
+    foo::foo(1);
+    foo::foo_ufcs(1);
 }

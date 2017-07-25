@@ -8,18 +8,20 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![feature(box_syntax)]
+
 // Issue #12470.
 
 trait X {
-    fn get_i(&self) -> int;
+    fn get_i(&self) -> isize;
 }
 
 struct B {
-    i: int
+    i: isize
 }
 
 impl X for B {
-    fn get_i(&self) -> int {
+    fn get_i(&self) -> isize {
         self.i
     }
 }
@@ -31,18 +33,18 @@ impl Drop for B {
 }
 
 struct A<'r> {
-    p: &'r X
+    p: &'r (X+'r)
 }
 
-fn make_a<'r>(p:&'r X) -> A<'r> {
+fn make_a(p:&X) -> A {
     A{p:p}
 }
 
-fn make_make_a() -> A {
+fn make_make_a<'a>() -> A<'a> {
     let b: Box<B> = box B {
         i: 1,
     };
-    let bb: &B = b; //~ ERROR `*b` does not live long enough
+    let bb: &B = &*b; //~ ERROR `*b` does not live long enough
     make_a(bb)
 }
 

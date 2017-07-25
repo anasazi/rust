@@ -1,4 +1,4 @@
-// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013-2015 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,8 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate debug;
-
 fn main() {
-    format!("{:?}", None); //~ ERROR: cannot determine a type for this bounded
+    // Unconstrained type:
+    format!("{:?}", None);
+    //~^ ERROR type annotations needed [E0282]
 }

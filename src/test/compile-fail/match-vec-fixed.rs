@@ -8,8 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![feature(slice_patterns)]
+#![deny(unreachable_patterns)]
+
 fn a() {
-    let v = [1i, 2, 3];
+    let v = [1, 2, 3];
     match v {
         [_, _, _] => {}
         [_, _, _] => {} //~ ERROR unreachable pattern

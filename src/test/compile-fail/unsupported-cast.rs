@@ -8,11 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-test FIXME: #13993
-// error-pattern:unsupported cast
+// error-pattern:casting
+
+#![feature(libc)]
 
 extern crate libc;
 
 fn main() {
-  println!("{:?}", 1.0 as *libc::FILE); // Can't cast float to foreign.
+  println!("{:?}", 1.0 as *const libc::FILE); // Can't cast float to foreign.
 }

@@ -8,6 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+
 use std::sync::Arc;
 fn dispose(_x: Arc<bool>) { }
 
@@ -16,6 +17,6 @@ pub fn main() {
     let x = Some(p);
     match x {
         Some(z) => { dispose(z); },
-        None => fail!()
+        None => panic!()
     }
 }

@@ -9,8 +9,10 @@
 // except according to those terms.
 
 
-pub use local_alias = local;
+// pretty-expanded FIXME #23616
 
-mod local { }
+pub use local as local_alias;
+
+pub mod local { }
 
 pub fn main() {}

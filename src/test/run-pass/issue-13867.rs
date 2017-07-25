@@ -11,46 +11,47 @@
 // Test that codegen works correctly when there are multiple refutable
 // patterns in match expression.
 
+
 enum Foo {
-    FooUint(uint),
+    FooUint(usize),
     FooNullary,
 }
 
 fn main() {
-    let r = match (FooNullary, 'a') {
-        (FooUint(..), 'a'..'z') => 1i,
-        (FooNullary, 'x') => 2i,
+    let r = match (Foo::FooNullary, 'a') {
+        (Foo::FooUint(..), 'a'...'z') => 1,
+        (Foo::FooNullary, 'x') => 2,
         _ => 0
     };
     assert_eq!(r, 0);
 
-    let r = match (FooUint(0), 'a') {
-        (FooUint(1), 'a'..'z') => 1i,
-        (FooUint(..), 'x') => 2i,
-        (FooNullary, 'a') => 3i,
+    let r = match (Foo::FooUint(0), 'a') {
+        (Foo::FooUint(1), 'a'...'z') => 1,
+        (Foo::FooUint(..), 'x') => 2,
+        (Foo::FooNullary, 'a') => 3,
         _ => 0
     };
     assert_eq!(r, 0);
 
-    let r = match ('a', FooUint(0)) {
-        ('a'..'z', FooUint(1)) => 1i,
-        ('x', FooUint(..)) => 2i,
-        ('a', FooNullary) => 3i,
-        _ => 0
-    };
-    assert_eq!(r, 0);
-
-    let r = match ('a', 'a') {
-        ('a'..'z', 'b') => 1i,
-        ('x', 'a'..'z') => 2i,
+    let r = match ('a', Foo::FooUint(0)) {
+        ('a'...'z', Foo::FooUint(1)) => 1,
+        ('x', Foo::FooUint(..)) => 2,
+        ('a', Foo::FooNullary) => 3,
         _ => 0
     };
     assert_eq!(r, 0);
 
     let r = match ('a', 'a') {
-        ('a'..'z', 'b') => 1i,
-        ('x', 'a'..'z') => 2i,
-        ('a', 'a') => 3i,
+        ('a'...'z', 'b') => 1,
+        ('x', 'a'...'z') => 2,
+        _ => 0
+    };
+    assert_eq!(r, 0);
+
+    let r = match ('a', 'a') {
+        ('a'...'z', 'b') => 1,
+        ('x', 'a'...'z') => 2,
+        ('a', 'a') => 3,
         _ => 0
     };
     assert_eq!(r, 3);

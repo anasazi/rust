@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![feature(box_syntax)]
+
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -32,10 +34,5 @@ struct A {
 
 fn main() {
     let a = A {v: box B{v: None} as Box<Foo+Send>};
-    //~^ ERROR cannot pack type `Box<B>`, which does not fulfill `Send`
-    let v = Rc::new(RefCell::new(a));
-    let w = v.clone();
-    let b = &*v;
-    let mut b = b.borrow_mut();
-    b.v.set(w.clone());
+    //~^ ERROR `std::rc::Rc<std::cell::RefCell<A>>: std::marker::Send` is not satisfied
 }

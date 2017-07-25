@@ -8,68 +8,103 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-android: FIXME(#10381)
+// min-lldb-version: 310
 
 // compile-flags:-g
-// gdb-command:rbreak zzz
+
+// === GDB TESTS ===================================================================================
+
 // gdb-command:run
 
 // FIRST ITERATION
-// gdb-command:finish
 // gdb-command:print x
 // gdb-check:$1 = 1
 // gdb-command:continue
 
-// gdb-command:finish
 // gdb-command:print x
 // gdb-check:$2 = -1
 // gdb-command:continue
 
 // SECOND ITERATION
-// gdb-command:finish
 // gdb-command:print x
 // gdb-check:$3 = 2
 // gdb-command:continue
 
-// gdb-command:finish
 // gdb-command:print x
 // gdb-check:$4 = -2
 // gdb-command:continue
 
 // THIRD ITERATION
-// gdb-command:finish
 // gdb-command:print x
 // gdb-check:$5 = 3
 // gdb-command:continue
 
-// gdb-command:finish
 // gdb-command:print x
 // gdb-check:$6 = -3
 // gdb-command:continue
 
 // AFTER LOOP
-// gdb-command:finish
 // gdb-command:print x
 // gdb-check:$7 = 1000000
 // gdb-command:continue
 
+
+// === LLDB TESTS ==================================================================================
+
+// lldb-command:run
+
+// FIRST ITERATION
+// lldb-command:print x
+// lldb-check:[...]$0 = 1
+// lldb-command:continue
+
+// lldb-command:print x
+// lldb-check:[...]$1 = -1
+// lldb-command:continue
+
+// SECOND ITERATION
+// lldb-command:print x
+// lldb-check:[...]$2 = 2
+// lldb-command:continue
+
+// lldb-command:print x
+// lldb-check:[...]$3 = -2
+// lldb-command:continue
+
+// THIRD ITERATION
+// lldb-command:print x
+// lldb-check:[...]$4 = 3
+// lldb-command:continue
+
+// lldb-command:print x
+// lldb-check:[...]$5 = -3
+// lldb-command:continue
+
+// AFTER LOOP
+// lldb-command:print x
+// lldb-check:[...]$6 = 1000000
+// lldb-command:continue
+
+#![feature(omit_gdb_pretty_printer_section)]
+#![omit_gdb_pretty_printer_section]
+
 fn main() {
 
-    let range = [1i, 2, 3];
+    let range = [1, 2, 3];
 
-    let x = 1000000i; // wan meeeljen doollaars!
+    let x = 1000000; // wan meeeljen doollaars!
 
-    for &x in range.iter() {
-        zzz();
+    for &x in &range {
+        zzz(); // #break
         sentinel();
 
-        let x = -1i * x;
+        let x = -1 * x;
 
-        zzz();
+        zzz(); // #break
         sentinel();
     }
 
-    zzz();
+    zzz(); // #break
     sentinel();
 }
 

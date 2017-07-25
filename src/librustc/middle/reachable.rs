@@ -15,83 +15,73 @@
 // makes all other generics or inline functions that it references
 // reachable as well.
 
-use driver::config;
-use middle::def;
-use middle::ty;
-use middle::typeck;
+use hir::map as hir_map;
+use hir::def::Def;
+use hir::def_id::{DefId, CrateNum};
+use std::rc::Rc;
+use ty::{self, TyCtxt};
+use ty::maps::Providers;
 use middle::privacy;
-use util::nodemap::NodeSet;
+use session::config;
+use util::nodemap::{NodeSet, FxHashSet};
 
-use std::collections::HashSet;
-use syntax::abi;
+use syntax::abi::Abi;
 use syntax::ast;
-use syntax::ast_map;
-use syntax::ast_util::is_local;
-use syntax::ast_util;
-use syntax::attr::{InlineAlways, InlineHint, InlineNever, InlineNone};
 use syntax::attr;
-use syntax::visit::Visitor;
-use syntax::visit;
-
-// Returns true if the given set of attributes contains the `#[inline]`
-// attribute.
-fn attributes_specify_inlining(attrs: &[ast::Attribute]) -> bool {
-    match attr::find_inline_attr(attrs) {
-        InlineNone | InlineNever => false,
-        InlineAlways | InlineHint => true,
-    }
-}
+use hir;
+use hir::def_id::LOCAL_CRATE;
+use hir::intravisit::{Visitor, NestedVisitorMap};
+use hir::itemlikevisit::ItemLikeVisitor;
+use hir::intravisit;
 
 // Returns true if the given set of generics implies that the item it's
 // associated with must be inlined.
-fn generics_require_inlining(generics: &ast::Generics) -> bool {
+fn generics_require_inlining(generics: &hir::Generics) -> bool {
     !generics.ty_params.is_empty()
 }
 
 // Returns true if the given item must be inlined because it may be
 // monomorphized or it was marked with `#[inline]`. This will only return
 // true for functions.
-fn item_might_be_inlined(item: &ast::Item) -> bool {
-    if attributes_specify_inlining(item.attrs.as_slice()) {
+fn item_might_be_inlined(item: &hir::Item) -> bool {
+    if attr::requests_inline(&item.attrs) {
         return true
     }
 
     match item.node {
-        ast::ItemImpl(ref generics, _, _, _) |
-        ast::ItemFn(_, _, _, ref generics, _) => {
+        hir::ItemImpl(_, _, _, ref generics, ..) |
+        hir::ItemFn(.., ref generics, _) => {
             generics_require_inlining(generics)
         }
         _ => false,
     }
 }
 
-fn method_might_be_inlined(tcx: &ty::ctxt, method: &ast::Method,
-                           impl_src: ast::DefId) -> bool {
-    if attributes_specify_inlining(method.attrs.as_slice()) ||
-        generics_require_inlining(&method.generics) {
+fn method_might_be_inlined<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
+                                     sig: &hir::MethodSig,
+                                     impl_item: &hir::ImplItem,
+                                     impl_src: DefId) -> bool {
+    if attr::requests_inline(&impl_item.attrs) ||
+        generics_require_inlining(&sig.generics) {
         return true
     }
-    if is_local(impl_src) {
-        {
-            match tcx.map.find(impl_src.node) {
-                Some(ast_map::NodeItem(item)) => {
-                    item_might_be_inlined(&*item)
-                }
-                Some(..) | None => {
-                    tcx.sess.span_bug(method.span, "impl did is not an item")
-                }
-            }
+    if let Some(impl_node_id) = tcx.hir.as_local_node_id(impl_src) {
+        match tcx.hir.find(impl_node_id) {
+            Some(hir_map::NodeItem(item)) =>
+                item_might_be_inlined(&item),
+            Some(..) | None =>
+                span_bug!(impl_item.span, "impl did is not an item")
         }
     } else {
-        tcx.sess.span_bug(method.span, "found a foreign impl as a parent of a \
-                                        local method")
+        span_bug!(impl_item.span, "found a foreign impl as a parent of a local method")
     }
 }
 
 // Information needed while computing reachability.
-struct ReachableContext<'a> {
+struct ReachableContext<'a, 'tcx: 'a> {
     // The type context.
-    tcx: &'a ty::ctxt,
+    tcx: TyCtxt<'a, 'tcx, 'tcx>,
+    tables: &'a ty::TypeckTables<'tcx>,
     // The set of items which must be exported in the linkage sense.
     reachable_symbols: NodeSet,
     // A worklist of item IDs. Each item ID in this worklist will be inlined
@@ -101,119 +91,106 @@ struct ReachableContext<'a> {
     any_library: bool,
 }
 
-impl<'a> Visitor<()> for ReachableContext<'a> {
-
-    fn visit_expr(&mut self, expr: &ast::Expr, _: ()) {
-
-        match expr.node {
-            ast::ExprPath(_) => {
-                let def = match self.tcx.def_map.borrow().find(&expr.id) {
-                    Some(&def) => def,
-                    None => {
-                        self.tcx.sess.span_bug(expr.span,
-                                               "def ID not in def map?!")
-                    }
-                };
-
-                let def_id = def.def_id();
-                if is_local(def_id) {
-                    if self.def_id_represents_local_inlined_item(def_id) {
-                        self.worklist.push(def_id.node)
-                    } else {
-                        match def {
-                            // If this path leads to a static, then we may have
-                            // to do some work to figure out whether the static
-                            // is indeed reachable. (Inlineable statics are
-                            // never reachable.)
-                            def::DefStatic(..) => {
-                                self.worklist.push(def_id.node);
-                            }
-
-                            // If this wasn't a static, then this destination is
-                            // surely reachable.
-                            _ => {
-                                self.reachable_symbols.insert(def_id.node);
-                            }
-                        }
-                    }
-                }
-            }
-            ast::ExprMethodCall(..) => {
-                let method_call = typeck::MethodCall::expr(expr.id);
-                match self.tcx.method_map.borrow().get(&method_call).origin {
-                    typeck::MethodStatic(def_id) => {
-                        if is_local(def_id) {
-                            if self.def_id_represents_local_inlined_item(def_id) {
-                                self.worklist.push(def_id.node)
-                            }
-                            self.reachable_symbols.insert(def_id.node);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            _ => {}
-        }
-
-        visit::walk_expr(self, expr, ())
+impl<'a, 'tcx> Visitor<'tcx> for ReachableContext<'a, 'tcx> {
+    fn nested_visit_map<'this>(&'this mut self) -> NestedVisitorMap<'this, 'tcx> {
+        NestedVisitorMap::None
     }
 
-    fn visit_item(&mut self, _item: &ast::Item, _: ()) {
-        // Do not recurse into items. These items will be added to the worklist
-        // and recursed into manually if necessary.
+    fn visit_nested_body(&mut self, body: hir::BodyId) {
+        let old_tables = self.tables;
+        self.tables = self.tcx.body_tables(body);
+        let body = self.tcx.hir.body(body);
+        self.visit_body(body);
+        self.tables = old_tables;
+    }
+
+    fn visit_expr(&mut self, expr: &'tcx hir::Expr) {
+        let def = match expr.node {
+            hir::ExprPath(ref qpath) => {
+                Some(self.tables.qpath_def(qpath, expr.id))
+            }
+            hir::ExprMethodCall(..) => {
+                Some(self.tables.type_dependent_defs[&expr.id])
+            }
+            _ => None
+        };
+
+        if let Some(def) = def {
+            let def_id = def.def_id();
+            if let Some(node_id) = self.tcx.hir.as_local_node_id(def_id) {
+                if self.def_id_represents_local_inlined_item(def_id) {
+                    self.worklist.push(node_id);
+                } else {
+                    match def {
+                        // If this path leads to a constant, then we need to
+                        // recurse into the constant to continue finding
+                        // items that are reachable.
+                        Def::Const(..) | Def::AssociatedConst(..) => {
+                            self.worklist.push(node_id);
+                        }
+
+                        // If this wasn't a static, then the destination is
+                        // surely reachable.
+                        _ => {
+                            self.reachable_symbols.insert(node_id);
+                        }
+                    }
+                }
+            }
+        }
+
+        intravisit::walk_expr(self, expr)
     }
 }
 
-impl<'a> ReachableContext<'a> {
-    // Creates a new reachability computation context.
-    fn new(tcx: &'a ty::ctxt) -> ReachableContext<'a> {
-        let any_library = tcx.sess.crate_types.borrow().iter().any(|ty| {
-            *ty != config::CrateTypeExecutable
-        });
-        ReachableContext {
-            tcx: tcx,
-            reachable_symbols: NodeSet::new(),
-            worklist: Vec::new(),
-            any_library: any_library,
-        }
-    }
-
+impl<'a, 'tcx> ReachableContext<'a, 'tcx> {
     // Returns true if the given def ID represents a local item that is
     // eligible for inlining and false otherwise.
-    fn def_id_represents_local_inlined_item(&self, def_id: ast::DefId) -> bool {
-        if def_id.krate != ast::LOCAL_CRATE {
-            return false
-        }
+    fn def_id_represents_local_inlined_item(&self, def_id: DefId) -> bool {
+        let node_id = match self.tcx.hir.as_local_node_id(def_id) {
+            Some(node_id) => node_id,
+            None => { return false; }
+        };
 
-        let node_id = def_id.node;
-        match self.tcx.map.find(node_id) {
-            Some(ast_map::NodeItem(item)) => {
+        match self.tcx.hir.find(node_id) {
+            Some(hir_map::NodeItem(item)) => {
                 match item.node {
-                    ast::ItemFn(..) => item_might_be_inlined(&*item),
+                    hir::ItemFn(..) => item_might_be_inlined(&item),
                     _ => false,
                 }
             }
-            Some(ast_map::NodeTraitMethod(trait_method)) => {
-                match *trait_method {
-                    ast::Required(_) => false,
-                    ast::Provided(_) => true,
+            Some(hir_map::NodeTraitItem(trait_method)) => {
+                match trait_method.node {
+                    hir::TraitItemKind::Const(_, ref default) => default.is_some(),
+                    hir::TraitItemKind::Method(_, hir::TraitMethod::Provided(_)) => true,
+                    hir::TraitItemKind::Method(_, hir::TraitMethod::Required(_)) |
+                    hir::TraitItemKind::Type(..) => false,
                 }
             }
-            Some(ast_map::NodeMethod(method)) => {
-                if generics_require_inlining(&method.generics) ||
-                        attributes_specify_inlining(method.attrs.as_slice()) {
-                    true
-                } else {
-                    let impl_did = self.tcx.map.get_parent_did(node_id);
-                    // Check the impl. If the generics on the self type of the
-                    // impl require inlining, this method does too.
-                    assert!(impl_did.krate == ast::LOCAL_CRATE);
-                    match self.tcx.map.expect_item(impl_did.node).node {
-                        ast::ItemImpl(ref generics, _, _, _) => {
-                            generics_require_inlining(generics)
+            Some(hir_map::NodeImplItem(impl_item)) => {
+                match impl_item.node {
+                    hir::ImplItemKind::Const(..) => true,
+                    hir::ImplItemKind::Method(ref sig, _) => {
+                        if generics_require_inlining(&sig.generics) ||
+                                attr::requests_inline(&impl_item.attrs) {
+                            true
+                        } else {
+                            let impl_did = self.tcx
+                                               .hir
+                                               .get_parent_did(node_id);
+                            // Check the impl. If the generics on the self
+                            // type of the impl require inlining, this method
+                            // does too.
+                            let impl_node_id = self.tcx.hir.as_local_node_id(impl_did).unwrap();
+                            match self.tcx.hir.expect_item(impl_node_id).node {
+                                hir::ItemImpl(_, _, _, ref generics, ..) => {
+                                    generics_require_inlining(generics)
+                                }
+                                _ => false
+                            }
                         }
-                        _ => false
                     }
+                    hir::ImplItemKind::Type(_) => false,
                 }
             }
             Some(_) => false,
@@ -223,49 +200,38 @@ impl<'a> ReachableContext<'a> {
 
     // Step 2: Mark all symbols that the symbols on the worklist touch.
     fn propagate(&mut self) {
-        let mut scanned = HashSet::new();
+        let mut scanned = FxHashSet();
         loop {
-            if self.worklist.len() == 0 {
-                break
-            }
-            let search_item = self.worklist.pop().unwrap();
-            if scanned.contains(&search_item) {
+            let search_item = match self.worklist.pop() {
+                Some(item) => item,
+                None => break,
+            };
+            if !scanned.insert(search_item) {
                 continue
             }
 
-            scanned.insert(search_item);
-            match self.tcx.map.find(search_item) {
-                Some(ref item) => self.propagate_node(item, search_item),
-                None if search_item == ast::CRATE_NODE_ID => {}
-                None => {
-                    self.tcx.sess.bug(format!("found unmapped ID in worklist: \
-                                               {}",
-                                              search_item).as_slice())
-                }
+            if let Some(ref item) = self.tcx.hir.find(search_item) {
+                self.propagate_node(item, search_item);
             }
         }
     }
 
-    fn propagate_node(&mut self, node: &ast_map::Node,
+    fn propagate_node(&mut self, node: &hir_map::Node<'tcx>,
                       search_item: ast::NodeId) {
         if !self.any_library {
-            // If we are building an executable, then there's no need to flag
-            // anything as external except for `extern fn` types. These
-            // functions may still participate in some form of native interface,
-            // but all other rust-only interfaces can be private (they will not
-            // participate in linkage after this product is produced)
-            match *node {
-                ast_map::NodeItem(item) => {
-                    match item.node {
-                        ast::ItemFn(_, _, abi, _, _) => {
-                            if abi != abi::Rust {
-                                self.reachable_symbols.insert(search_item);
-                            }
-                        }
-                        _ => {}
-                    }
+            // If we are building an executable, only explicitly extern
+            // types need to be exported.
+            if let hir_map::NodeItem(item) = *node {
+                let reachable = if let hir::ItemFn(.., abi, _, _) = item.node {
+                    abi != Abi::Rust
+                } else {
+                    false
+                };
+                let is_extern = attr::contains_extern_indicator(&self.tcx.sess.diagnostic(),
+                                                                &item.attrs);
+                if reachable || is_extern {
+                    self.reachable_symbols.insert(search_item);
                 }
-                _ => {}
             }
         } else {
             // If we are building a library, then reachable symbols will
@@ -276,113 +242,179 @@ impl<'a> ReachableContext<'a> {
         }
 
         match *node {
-            ast_map::NodeItem(item) => {
+            hir_map::NodeItem(item) => {
                 match item.node {
-                    ast::ItemFn(_, _, _, _, ref search_block) => {
-                        if item_might_be_inlined(&*item) {
-                            visit::walk_block(self, &**search_block, ())
+                    hir::ItemFn(.., body) => {
+                        if item_might_be_inlined(&item) {
+                            self.visit_nested_body(body);
                         }
                     }
 
-                    // Statics with insignificant addresses are not reachable
-                    // because they're inlined specially into all other crates.
-                    ast::ItemStatic(_, mutbl, ref init) => {
-                        if !ast_util::static_has_significant_address(
-                                mutbl,
-                                item.attrs.as_slice()) {
-                            self.reachable_symbols.remove(&search_item);
-                        }
-                        visit::walk_expr(self, &**init, ());
+                    // Reachable constants will be inlined into other crates
+                    // unconditionally, so we need to make sure that their
+                    // contents are also reachable.
+                    hir::ItemConst(_, init) => {
+                        self.visit_nested_body(init);
                     }
 
                     // These are normal, nothing reachable about these
                     // inherently and their children are already in the
                     // worklist, as determined by the privacy pass
-                    ast::ItemTy(..) |
-                    ast::ItemMod(..) | ast::ItemForeignMod(..) |
-                    ast::ItemImpl(..) | ast::ItemTrait(..) |
-                    ast::ItemStruct(..) | ast::ItemEnum(..) => {}
-
-                    _ => {
-                        self.tcx.sess.span_bug(item.span,
-                                               "found non-function item \
-                                                in worklist?!")
-                    }
+                    hir::ItemExternCrate(_) | hir::ItemUse(..) |
+                    hir::ItemTy(..) | hir::ItemStatic(..) |
+                    hir::ItemMod(..) | hir::ItemForeignMod(..) |
+                    hir::ItemImpl(..) | hir::ItemTrait(..) |
+                    hir::ItemStruct(..) | hir::ItemEnum(..) |
+                    hir::ItemUnion(..) | hir::ItemDefaultImpl(..) |
+                    hir::ItemGlobalAsm(..) => {}
                 }
             }
-            ast_map::NodeTraitMethod(trait_method) => {
-                match *trait_method {
-                    ast::Required(..) => {
+            hir_map::NodeTraitItem(trait_method) => {
+                match trait_method.node {
+                    hir::TraitItemKind::Const(_, None) |
+                    hir::TraitItemKind::Method(_, hir::TraitMethod::Required(_)) => {
                         // Keep going, nothing to get exported
                     }
-                    ast::Provided(ref method) => {
-                        visit::walk_block(self, &*method.body, ())
+                    hir::TraitItemKind::Const(_, Some(body_id)) |
+                    hir::TraitItemKind::Method(_, hir::TraitMethod::Provided(body_id)) => {
+                        self.visit_nested_body(body_id);
                     }
+                    hir::TraitItemKind::Type(..) => {}
                 }
             }
-            ast_map::NodeMethod(method) => {
-                let did = self.tcx.map.get_parent_did(search_item);
-                if method_might_be_inlined(self.tcx, &*method, did) {
-                    visit::walk_block(self, &*method.body, ())
+            hir_map::NodeImplItem(impl_item) => {
+                match impl_item.node {
+                    hir::ImplItemKind::Const(_, body) => {
+                        self.visit_nested_body(body);
+                    }
+                    hir::ImplItemKind::Method(ref sig, body) => {
+                        let did = self.tcx.hir.get_parent_did(search_item);
+                        if method_might_be_inlined(self.tcx, sig, impl_item, did) {
+                            self.visit_nested_body(body)
+                        }
+                    }
+                    hir::ImplItemKind::Type(_) => {}
                 }
             }
             // Nothing to recurse on for these
-            ast_map::NodeForeignItem(_) |
-            ast_map::NodeVariant(_) |
-            ast_map::NodeStructCtor(_) => {}
+            hir_map::NodeForeignItem(_) |
+            hir_map::NodeVariant(_) |
+            hir_map::NodeStructCtor(_) |
+            hir_map::NodeField(_) |
+            hir_map::NodeTy(_) => {}
             _ => {
-                self.tcx
-                    .sess
-                    .bug(format!("found unexpected thingy in worklist: {}",
-                                 self.tcx
-                                     .map
-                                     .node_to_string(search_item)).as_slice())
-            }
-        }
-    }
-
-    // Step 3: Mark all destructors as reachable.
-    //
-    // FIXME(pcwalton): This is a conservative overapproximation, but fixing
-    // this properly would result in the necessity of computing *type*
-    // reachability, which might result in a compile time loss.
-    fn mark_destructors_reachable(&mut self) {
-        for (_, destructor_def_id) in self.tcx.destructor_for_type.borrow().iter() {
-            if destructor_def_id.krate == ast::LOCAL_CRATE {
-                self.reachable_symbols.insert(destructor_def_id.node);
+                bug!("found unexpected thingy in worklist: {}",
+                     self.tcx.hir.node_to_string(search_item))
             }
         }
     }
 }
 
-pub fn find_reachable(tcx: &ty::ctxt,
-                      exported_items: &privacy::ExportedItems)
-                      -> NodeSet {
-    let mut reachable_context = ReachableContext::new(tcx);
+// Some methods from non-exported (completely private) trait impls still have to be
+// reachable if they are called from inlinable code. Generally, it's not known until
+// monomorphization if a specific trait impl item can be reachable or not. So, we
+// conservatively mark all of them as reachable.
+// FIXME: One possible strategy for pruning the reachable set is to avoid marking impl
+// items of non-exported traits (or maybe all local traits?) unless their respective
+// trait items are used from inlinable code through method call syntax or UFCS, or their
+// trait is a lang item.
+struct CollectPrivateImplItemsVisitor<'a, 'tcx: 'a> {
+    tcx: TyCtxt<'a, 'tcx, 'tcx>,
+    access_levels: &'a privacy::AccessLevels,
+    worklist: &'a mut Vec<ast::NodeId>,
+}
+
+impl<'a, 'tcx: 'a> ItemLikeVisitor<'tcx> for CollectPrivateImplItemsVisitor<'a, 'tcx> {
+    fn visit_item(&mut self, item: &hir::Item) {
+        // We need only trait impls here, not inherent impls, and only non-exported ones
+        if let hir::ItemImpl(.., Some(ref trait_ref), _, ref impl_item_refs) = item.node {
+            if !self.access_levels.is_reachable(item.id) {
+                for impl_item_ref in impl_item_refs {
+                    self.worklist.push(impl_item_ref.id.node_id);
+                }
+
+                let trait_def_id = match trait_ref.path.def {
+                    Def::Trait(def_id) => def_id,
+                    _ => unreachable!()
+                };
+
+                if !trait_def_id.is_local() {
+                    return
+                }
+
+                for default_method in self.tcx.provided_trait_methods(trait_def_id) {
+                    let node_id = self.tcx
+                                      .hir
+                                      .as_local_node_id(default_method.def_id)
+                                      .unwrap();
+                    self.worklist.push(node_id);
+                }
+            }
+        }
+    }
+
+    fn visit_trait_item(&mut self, _trait_item: &hir::TraitItem) {}
+
+    fn visit_impl_item(&mut self, _impl_item: &hir::ImplItem) {
+        // processed in visit_item above
+    }
+}
+
+pub fn find_reachable<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>) -> Rc<NodeSet> {
+    tcx.reachable_set(LOCAL_CRATE)
+}
+
+fn reachable_set<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, crate_num: CrateNum) -> Rc<NodeSet> {
+    debug_assert!(crate_num == LOCAL_CRATE);
+
+    let access_levels = &tcx.privacy_access_levels(LOCAL_CRATE);
+
+    let any_library = tcx.sess.crate_types.borrow().iter().any(|ty| {
+        *ty == config::CrateTypeRlib || *ty == config::CrateTypeDylib ||
+        *ty == config::CrateTypeProcMacro
+    });
+    let mut reachable_context = ReachableContext {
+        tcx,
+        tables: &ty::TypeckTables::empty(),
+        reachable_symbols: NodeSet(),
+        worklist: Vec::new(),
+        any_library,
+    };
 
     // Step 1: Seed the worklist with all nodes which were found to be public as
-    //         a result of the privacy pass along with all local lang items. If
-    //         other crates link to us, they're going to expect to be able to
+    //         a result of the privacy pass along with all local lang items and impl items.
+    //         If other crates link to us, they're going to expect to be able to
     //         use the lang items, so we need to be sure to mark them as
     //         exported.
-    for &id in exported_items.iter() {
-        reachable_context.worklist.push(id);
+    for (id, _) in &access_levels.map {
+        reachable_context.worklist.push(*id);
     }
-    for (_, item) in tcx.lang_items.items() {
-        match *item {
-            Some(did) if is_local(did) => {
-                reachable_context.worklist.push(did.node);
+    for item in tcx.lang_items.items().iter() {
+        if let Some(did) = *item {
+            if let Some(node_id) = tcx.hir.as_local_node_id(did) {
+                reachable_context.worklist.push(node_id);
             }
-            _ => {}
         }
+    }
+    {
+        let mut collect_private_impl_items = CollectPrivateImplItemsVisitor {
+            tcx,
+            access_levels,
+            worklist: &mut reachable_context.worklist,
+        };
+        tcx.hir.krate().visit_all_item_likes(&mut collect_private_impl_items);
     }
 
     // Step 2: Mark all symbols that the symbols on the worklist touch.
     reachable_context.propagate();
 
-    // Step 3: Mark all destructors as reachable.
-    reachable_context.mark_destructors_reachable();
-
     // Return the set of reachable symbols.
-    reachable_context.reachable_symbols
+    Rc::new(reachable_context.reachable_symbols)
+}
+
+pub fn provide(providers: &mut Providers) {
+    *providers = Providers {
+        reachable_set,
+        ..*providers
+    };
 }

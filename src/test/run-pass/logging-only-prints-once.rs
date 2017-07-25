@@ -8,31 +8,30 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-win32
+// ignore-windows
+// ignore-emscripten no threads support
 // exec-env:RUST_LOG=debug
 
 use std::cell::Cell;
 use std::fmt;
+use std::thread;
 
-struct Foo(Cell<int>);
+struct Foo(Cell<isize>);
 
-impl fmt::Show for Foo {
+impl fmt::Debug for Foo {
     fn fmt(&self, _fmt: &mut fmt::Formatter) -> fmt::Result {
         let Foo(ref f) = *self;
-        assert!(f.get() == 0);
+        assert_eq!(f.get(), 0);
         f.set(1);
         Ok(())
     }
 }
 
 pub fn main() {
-    let (tx, rx) = channel();
-    spawn(proc() {
+    thread::spawn(move|| {
         let mut f = Foo(Cell::new(0));
-        println!("{}", f);
+        println!("{:?}", f);
         let Foo(ref mut f) = f;
-        assert!(f.get() == 1);
-        tx.send(());
-    });
-    rx.recv();
+        assert_eq!(f.get(), 1);
+    }).join().ok().unwrap();
 }

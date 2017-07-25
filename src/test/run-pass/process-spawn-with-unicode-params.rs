@@ -16,31 +16,33 @@
 // non-ASCII characters.  The child process ensures all the strings are
 // intact.
 
-extern crate native;
+// ignore-aarch64
+// ignore-emscripten
 
+use std::io::prelude::*;
 use std::io;
-use std::io::fs;
-use std::io::Command;
-use std::os;
+use std::fs;
+use std::process::Command;
+use std::env;
 use std::path::Path;
 
 fn main() {
-    let my_args = os::args();
-    let my_cwd  = os::getcwd();
-    let my_env  = os::env();
-    let my_path = Path::new(os::self_exe_name().unwrap());
-    let my_dir  = my_path.dir_path();
-    let my_ext  = my_path.extension_str().unwrap_or("");
+    let my_args = env::args().collect::<Vec<_>>();
+    let my_cwd  = env::current_dir().unwrap();
+    let my_env  = env::vars().collect::<Vec<_>>();
+    let my_path = env::current_exe().unwrap();
+    let my_dir  = my_path.parent().unwrap();
+    let my_ext  = my_path.extension().and_then(|s| s.to_str()).unwrap_or("");
 
     // some non-ASCII characters
-    let blah       = "\u03c0\u042f\u97f3\u00e6\u221e";
+    let blah       = "\u{3c0}\u{42f}\u{97f3}\u{e6}\u{221e}";
 
     let child_name = "child";
     let child_dir  = format!("process-spawn-with-unicode-params-{}", blah);
 
     // parameters sent to child / expected to be received from parent
     let arg = blah;
-    let cwd = my_dir.join(Path::new(child_dir.clone()));
+    let cwd = my_dir.join(&child_dir);
     let env = ("RUST_TEST_PROC_SPAWN_UNICODE".to_string(), blah.to_string());
 
     // am I the parent or the child?
@@ -48,22 +50,22 @@ fn main() {
 
         let child_filestem = Path::new(child_name);
         let child_filename = child_filestem.with_extension(my_ext);
-        let child_path     = cwd.join(child_filename.clone());
+        let child_path     = cwd.join(&child_filename);
 
         // make a separate directory for the child
-        drop(fs::mkdir(&cwd, io::UserRWX).is_ok());
-        assert!(fs::copy(&my_path, &child_path).is_ok());
+        let _ = fs::create_dir(&cwd);
+        fs::copy(&my_path, &child_path).unwrap();
 
         // run child
         let p = Command::new(&child_path)
                         .arg(arg)
-                        .cwd(&cwd)
-                        .env(my_env.append_one(env).as_slice())
+                        .current_dir(&cwd)
+                        .env(&env.0, &env.1)
                         .spawn().unwrap().wait_with_output().unwrap();
 
         // display the output
-        assert!(io::stdout().write(p.output.as_slice()).is_ok());
-        assert!(io::stderr().write(p.error.as_slice()).is_ok());
+        io::stdout().write_all(&p.stdout).unwrap();
+        io::stderr().write_all(&p.stderr).unwrap();
 
         // make sure the child succeeded
         assert!(p.status.success());
@@ -71,10 +73,10 @@ fn main() {
     } else {                            // child
 
         // check working directory (don't try to compare with `cwd` here!)
-        assert!(my_cwd.ends_with_path(&Path::new(child_dir)));
+        assert!(my_cwd.ends_with(&child_dir));
 
         // check arguments
-        assert_eq!(my_args.get(1).as_slice(), arg);
+        assert_eq!(&*my_args[1], arg);
 
         // check environment variable
         assert!(my_env.contains(&env));

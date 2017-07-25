@@ -8,10 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::task;
+#![allow(unknown_features)]
+#![feature(std_misc)]
+
+use std::thread;
+use std::sync::mpsc::Sender;
 
 type RingBuffer = Vec<f64> ;
-type SamplesFn = proc(samples: &RingBuffer):Send;
+type SamplesFn = Box<FnMut(&RingBuffer) + Send>;
 
 enum Msg
 {
@@ -19,15 +23,17 @@ enum Msg
 }
 
 fn foo(name: String, samples_chan: Sender<Msg>) {
-    task::spawn(proc() {
+    thread::spawn(move|| {
         let mut samples_chan = samples_chan;
-        let callback: SamplesFn = proc(buffer) {
-            for i in range(0u, buffer.len()) {
-                println!("{}: {}", i, *buffer.get(i))
+
+        let callback: SamplesFn = Box::new(move |buffer| {
+            for i in 0..buffer.len() {
+                println!("{}: {}", i, buffer[i])
             }
-        };
-        samples_chan.send(GetSamples(name.clone(), callback));
-    });
+        });
+
+        samples_chan.send(Msg::GetSamples(name.clone(), callback));
+    }).join();
 }
 
 pub fn main() {}

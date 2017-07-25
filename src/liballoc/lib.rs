@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2014-2017 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,37 +8,34 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Rust's core allocation library
+//! # The Rust core allocation and collections library
 //!
-//! This is the lowest level library through which allocation in Rust can be
-//! performed where the allocation is assumed to succeed. This library will
-//! trigger a task failure when allocation fails.
+//! This library provides smart pointers and collections for managing
+//! heap-allocated values.
 //!
 //! This library, like libcore, is not intended for general usage, but rather as
 //! a building block of other libraries. The types and interfaces in this
 //! library are reexported through the [standard library](../std/index.html),
 //! and should not be used through this library.
 //!
-//! Currently, there are four major definitions in this library.
+//! ## Boxed values
 //!
-//! ## Owned pointers
+//! The [`Box`](boxed/index.html) type is a smart pointer type. There can
+//! only be one owner of a `Box`, and the owner can decide to mutate the
+//! contents, which live on the heap.
 //!
-//! The [`Box`](owned/index.html) type is the core owned pointer type in rust.
-//! There can only be one owner of a `Box`, and the owner can decide to mutate
-//! the contents.
-//!
-//! This type can be sent among tasks efficiently as the size of a `Box` value
-//! is just a pointer. Tree-like data structures are often built on owned
-//! pointers because each node often has only one owner, the parent.
+//! This type can be sent among threads efficiently as the size of a `Box` value
+//! is the same as that of a pointer. Tree-like data structures are often built
+//! with boxes because each node often has only one owner, the parent.
 //!
 //! ## Reference counted pointers
 //!
 //! The [`Rc`](rc/index.html) type is a non-threadsafe reference-counted pointer
-//! type intended for sharing memory within a task. An `Rc` pointer wraps a
+//! type intended for sharing memory within a thread. An `Rc` pointer wraps a
 //! type, `T`, and only allows access to `&T`, a shared reference.
 //!
-//! This type is useful when inherited mutability is too constraining for an
-//! application (such as using `Box`), and is often paired with the `Cell` or
+//! This type is useful when inherited mutability (such as using `Box`) is too
+//! constraining for an application, and is often paired with the `Cell` or
 //! `RefCell` types in order to allow mutation.
 //!
 //! ## Atomically reference counted pointers
@@ -48,79 +45,232 @@
 //! that the contained type `T` is shareable. Additionally, `Arc<T>` is itself
 //! sendable while `Rc<T>` is not.
 //!
-//! This types allows for shared access to the contained data, and is often
+//! This type allows for shared access to the contained data, and is often
 //! paired with synchronization primitives such as mutexes to allow mutation of
 //! shared resources.
 //!
+//! ## Collections
+//!
+//! Implementations of the most common general purpose data structures are
+//! defined in this library. They are reexported through the
+//! [standard collections library](../std/collections/index.html).
+//!
 //! ## Heap interfaces
 //!
-//! The [`heap`](heap/index.html) and [`libc_heap`](libc_heap/index.html)
-//! modules are the unsafe interfaces to the underlying allocation systems. The
-//! `heap` module is considered the default heap, and is not necessarily backed
-//! by libc malloc/free.  The `libc_heap` module is defined to be wired up to
-//! the system malloc/free.
+//! The [`heap`](heap/index.html) module defines the low-level interface to the
+//! default global allocator. It is not compatible with the libc allocator API.
 
 #![crate_name = "alloc"]
-#![experimental]
-#![license = "MIT/ASL2"]
 #![crate_type = "rlib"]
-#![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
-       html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-       html_root_url = "http://doc.rust-lang.org/")]
-
+#![allow(unused_attributes)]
+#![unstable(feature = "alloc",
+            reason = "this library is unlikely to be stabilized in its current \
+                      form or name",
+            issue = "27783")]
+#![doc(html_logo_url = "https://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
+       html_favicon_url = "https://doc.rust-lang.org/favicon.ico",
+       html_root_url = "https://doc.rust-lang.org/nightly/",
+       issue_tracker_base_url = "https://github.com/rust-lang/rust/issues/",
+       test(no_crate_inject, attr(allow(unused_variables), deny(warnings))))]
 #![no_std]
-#![feature(lang_items, phase, unsafe_destructor)]
+#![needs_allocator]
+#![deny(warnings)]
+#![deny(missing_debug_implementations)]
 
-#[phase(plugin, link)]
-extern crate core;
-extern crate libc;
+#![cfg_attr(test, allow(deprecated))] // rand
+#![cfg_attr(test, feature(placement_in))]
+#![cfg_attr(not(test), feature(char_escape_debug))]
+#![cfg_attr(not(test), feature(core_float))]
+#![cfg_attr(not(test), feature(exact_size_is_empty))]
+#![cfg_attr(not(test), feature(slice_rotate))]
+#![cfg_attr(not(test), feature(str_checked_slicing))]
+#![cfg_attr(test, feature(rand, test))]
+#![cfg_attr(stage0, feature(allocator))]
+#![feature(allow_internal_unstable)]
+#![feature(box_patterns)]
+#![feature(box_syntax)]
+#![feature(cfg_target_has_atomic)]
+#![feature(coerce_unsized)]
+#![feature(const_fn)]
+#![feature(core_intrinsics)]
+#![feature(custom_attribute)]
+#![feature(dropck_eyepatch)]
+#![feature(exact_size_is_empty)]
+#![feature(fmt_internals)]
+#![feature(fundamental)]
+#![feature(fused)]
+#![feature(generic_param_attrs)]
+#![feature(i128_type)]
+#![feature(inclusive_range)]
+#![feature(lang_items)]
+#![feature(manually_drop)]
+#![feature(needs_allocator)]
+#![feature(nonzero)]
+#![feature(offset_to)]
+#![feature(optin_builtin_traits)]
+#![feature(pattern)]
+#![feature(placement_in_syntax)]
+#![feature(placement_new_protocol)]
+#![feature(shared)]
+#![feature(slice_get_slice)]
+#![feature(slice_patterns)]
+#![feature(slice_rsplit)]
+#![feature(specialization)]
+#![feature(staged_api)]
+#![feature(str_internals)]
+#![feature(str_mut_extras)]
+#![feature(trusted_len)]
+#![feature(unboxed_closures)]
+#![feature(unicode)]
+#![feature(unique)]
+#![feature(unsize)]
+#![cfg_attr(not(stage0), feature(allocator_internals))]
+
+#![cfg_attr(not(test), feature(fused, fn_traits, placement_new_protocol))]
+#![cfg_attr(test, feature(test, box_heap))]
 
 // Allow testing this library
 
-#[cfg(test)] extern crate debug;
-#[cfg(test)] extern crate native;
-#[cfg(test)] #[phase(plugin, link)] extern crate std;
-#[cfg(test)] #[phase(plugin, link)] extern crate log;
+#[cfg(test)]
+#[macro_use]
+extern crate std;
+#[cfg(test)]
+extern crate test;
+
+extern crate std_unicode;
+
+// Module with internal macros used by other modules (needs to be included before other modules).
+#[macro_use]
+mod macros;
+
+// Allocator trait and helper struct definitions
+
+pub mod allocator;
 
 // Heaps provided for low-level allocation strategies
 
 pub mod heap;
-pub mod libc_heap;
-pub mod util;
 
 // Primitive types using the heaps above
 
+// Need to conditionally define the mod from `boxed.rs` to avoid
+// duplicating the lang-items when building in test cfg; but also need
+// to allow code to have `use boxed::HEAP;`
+// and `use boxed::Box;` declarations.
 #[cfg(not(test))]
-pub mod owned;
+pub mod boxed;
+#[cfg(test)]
+mod boxed {
+    pub use std::boxed::{Box, IntermediateBox, HEAP};
+}
+#[cfg(test)]
+mod boxed_test;
+#[cfg(target_has_atomic = "ptr")]
 pub mod arc;
 pub mod rc;
+pub mod raw_vec;
 
-/// Common OOM routine used by liballoc
-fn oom() -> ! {
-    // FIXME(#14674): This really needs to do something other than just abort
-    //                here, but any printing done must be *guaranteed* to not
-    //                allocate.
-    unsafe { core::intrinsics::abort() }
+// collections modules
+pub mod binary_heap;
+mod btree;
+pub mod borrow;
+pub mod fmt;
+pub mod linked_list;
+pub mod range;
+pub mod slice;
+pub mod str;
+pub mod string;
+pub mod vec;
+pub mod vec_deque;
+
+#[stable(feature = "rust1", since = "1.0.0")]
+pub mod btree_map {
+    //! A map based on a B-Tree.
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub use btree::map::*;
 }
 
-// FIXME(#14344): When linking liballoc with libstd, this library will be linked
-//                as an rlib (it only exists as an rlib). It turns out that an
-//                optimized standard library doesn't actually use *any* symbols
-//                from this library. Everything is inlined and optimized away.
-//                This means that linkers will actually omit the object for this
-//                file, even though it may be needed in the future.
-//
-//                To get around this for now, we define a dummy symbol which
-//                will never get inlined so the stdlib can call it. The stdlib's
-//                reference to this symbol will cause this library's object file
-//                to get linked in to libstd successfully (the linker won't
-//                optimize it out).
-#[doc(hidden)]
-pub fn fixme_14344_be_sure_to_link_to_collections() {}
+#[stable(feature = "rust1", since = "1.0.0")]
+pub mod btree_set {
+    //! A set based on a B-Tree.
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub use btree::set::*;
+}
 
 #[cfg(not(test))]
-#[doc(hidden)]
 mod std {
-    pub use core::fmt;
-    pub use core::option;
+    pub use core::ops;      // RangeFull
 }
+
+/// An endpoint of a range of keys.
+///
+/// # Examples
+///
+/// `Bound`s are range endpoints:
+///
+/// ```
+/// #![feature(collections_range)]
+///
+/// use std::collections::range::RangeArgument;
+/// use std::collections::Bound::*;
+///
+/// assert_eq!((..100).start(), Unbounded);
+/// assert_eq!((1..12).start(), Included(&1));
+/// assert_eq!((1..12).end(), Excluded(&12));
+/// ```
+///
+/// Using a tuple of `Bound`s as an argument to [`BTreeMap::range`].
+/// Note that in most cases, it's better to use range syntax (`1..5`) instead.
+///
+/// ```
+/// use std::collections::BTreeMap;
+/// use std::collections::Bound::{Excluded, Included, Unbounded};
+///
+/// let mut map = BTreeMap::new();
+/// map.insert(3, "a");
+/// map.insert(5, "b");
+/// map.insert(8, "c");
+///
+/// for (key, value) in map.range((Excluded(3), Included(8))) {
+///     println!("{}: {}", key, value);
+/// }
+///
+/// assert_eq!(Some((&3, &"a")), map.range((Unbounded, Included(5))).next());
+/// ```
+///
+/// [`BTreeMap::range`]: btree_map/struct.BTreeMap.html#method.range
+#[stable(feature = "collections_bound", since = "1.17.0")]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum Bound<T> {
+    /// An inclusive bound.
+    #[stable(feature = "collections_bound", since = "1.17.0")]
+    Included(#[stable(feature = "collections_bound", since = "1.17.0")] T),
+    /// An exclusive bound.
+    #[stable(feature = "collections_bound", since = "1.17.0")]
+    Excluded(#[stable(feature = "collections_bound", since = "1.17.0")] T),
+    /// An infinite endpoint. Indicates that there is no bound in this direction.
+    #[stable(feature = "collections_bound", since = "1.17.0")]
+    Unbounded,
+}
+
+/// An intermediate trait for specialization of `Extend`.
+#[doc(hidden)]
+trait SpecExtend<I: IntoIterator> {
+    /// Extends `self` with the contents of the given iterator.
+    fn spec_extend(&mut self, iter: I);
+}
+
+#[doc(no_inline)]
+pub use binary_heap::BinaryHeap;
+#[doc(no_inline)]
+pub use btree_map::BTreeMap;
+#[doc(no_inline)]
+pub use btree_set::BTreeSet;
+#[doc(no_inline)]
+pub use linked_list::LinkedList;
+#[doc(no_inline)]
+pub use vec_deque::VecDeque;
+#[doc(no_inline)]
+pub use string::String;
+#[doc(no_inline)]
+pub use vec::Vec;

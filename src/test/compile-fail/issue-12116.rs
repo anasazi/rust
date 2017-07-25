@@ -8,17 +8,23 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![feature(box_patterns)]
+#![feature(box_syntax)]
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![deny(unreachable_patterns)]
+
 enum IntList {
-    Cons(int, Box<IntList>),
+    Cons(isize, Box<IntList>),
     Nil
 }
 
 fn tail(source_list: &IntList) -> IntList {
     match source_list {
-        &Cons(val, box ref next_list) => tail(next_list),
-        &Cons(val, box Nil)           => Cons(val, box Nil),
-        //~^ ERROR: unreachable pattern
-        _                          => fail!()
+        &IntList::Cons(val, box ref next_list) => tail(next_list),
+        &IntList::Cons(val, box IntList::Nil)  => IntList::Cons(val, box IntList::Nil),
+//~^ ERROR unreachable pattern
+        _                          => panic!()
     }
 }
 

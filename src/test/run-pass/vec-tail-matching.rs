@@ -9,30 +9,33 @@
 // except according to those terms.
 
 
+
+#![feature(slice_patterns)]
+
 struct Foo {
-    string: String
+    string: &'static str
 }
 
 pub fn main() {
     let x = [
-        Foo { string: "foo".to_string() },
-        Foo { string: "bar".to_string() },
-        Foo { string: "baz".to_string() }
+        Foo { string: "foo" },
+        Foo { string: "bar" },
+        Foo { string: "baz" }
     ];
     match x {
-        [ref first, ..tail] => {
-            assert!(first.string == "foo".to_string());
+        [ref first, ref tail..] => {
+            assert_eq!(first.string, "foo");
             assert_eq!(tail.len(), 2);
-            assert!(tail[0].string == "bar".to_string());
-            assert!(tail[1].string == "baz".to_string());
+            assert_eq!(tail[0].string, "bar");
+            assert_eq!(tail[1].string, "baz");
 
-            match tail {
-                [Foo { .. }, _, Foo { .. }, .. _tail] => {
+            match *(tail as &[_]) {
+                [Foo { .. }, _, Foo { .. }, ref _tail..] => {
                     unreachable!();
                 }
                 [Foo { string: ref a }, Foo { string: ref b }] => {
-                    assert_eq!("bar", a.as_slice().slice(0, a.len()));
-                    assert_eq!("baz", b.as_slice().slice(0, b.len()));
+                    assert_eq!("bar", &a[0..a.len()]);
+                    assert_eq!("baz", &b[0..b.len()]);
                 }
                 _ => {
                     unreachable!();

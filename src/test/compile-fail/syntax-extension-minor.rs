@@ -8,15 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// this now fails (correctly, I claim) because hygiene prevents
-// the assembled identifier from being a reference to the binding.
 #![feature(concat_idents)]
 
 pub fn main() {
-    let asdf_fdsa = "<.<".to_string();
-    assert_eq!(concat_idents!(asd, f_f, dsa), "<.<".to_string());
-    //~^ ERROR: unresolved name `asdf_fdsa`
+    struct Foo;
+    let _: concat_idents!(F, oo) = Foo; // Test that `concat_idents!` can be used in type positions
 
-    assert!(stringify!(use_mention_distinction) ==
-                "use_mention_distinction");
+    let asdf_fdsa = "<.<".to_string();
+    // this now fails (correctly, I claim) because hygiene prevents
+    // the assembled identifier from being a reference to the binding.
+    assert!(concat_idents!(asd, f_f, dsa) == "<.<".to_string());
+    //~^ ERROR cannot find value `asdf_fdsa` in this scope
+
+    assert_eq!(stringify!(use_mention_distinction), "use_mention_distinction");
 }

@@ -8,12 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn test<'x>(x: &'x int) { //~ NOTE the lifetime 'x as defined
-    drop::< <'z>|&'z int| -> &'z int>(|z| {
-        //~^ ERROR mismatched types
-        //~^^ ERROR cannot infer an appropriate lifetime
-        x
-    });
+fn test<'x>(x: &'x isize) {
+    drop::<Box<for<'z> FnMut(&'z isize) -> &'z isize>>(Box::new(|z| {
+        x //~ ERROR E0312
+    }));
 }
 
 fn main() {}

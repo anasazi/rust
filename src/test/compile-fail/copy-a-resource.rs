@@ -8,17 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate debug;
-
+#[derive(Debug)]
 struct foo {
-  i: int,
+  i: isize,
 }
 
 impl Drop for foo {
     fn drop(&mut self) {}
 }
 
-fn foo(i:int) -> foo {
+fn foo(i:isize) -> foo {
     foo {
         i: i
     }
@@ -27,6 +26,6 @@ fn foo(i:int) -> foo {
 fn main() {
     let x = foo(10);
     let _y = x.clone();
-    //~^ ERROR does not implement any method in scope
+    //~^ ERROR no method named `clone` found
     println!("{:?}", x);
 }

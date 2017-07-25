@@ -9,15 +9,18 @@
 // except according to those terms.
 
 
+#![allow(unknown_features)]
+#![feature(box_syntax)]
+
 trait double {
-    fn double(~self) -> uint;
+    fn double(self: Box<Self>) -> usize;
 }
 
-impl double for Box<uint> {
-    fn double(~self) -> uint { **self * 2u }
+impl double for Box<usize> {
+    fn double(self: Box<Box<usize>>) -> usize { **self * 2 }
 }
 
 pub fn main() {
-    let x = box box box box box 3u;
-    assert_eq!(x.double(), 6u);
+    let x: Box<Box<Box<Box<Box<_>>>>> = box box box box box 3;
+    assert_eq!(x.double(), 6);
 }

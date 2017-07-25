@@ -13,11 +13,13 @@
 // error-pattern:bye
 
 #![allow(unreachable_code)]
-#![allow(unused_variable)]
+#![allow(unused_variables)]
 
-struct T { t: String }
+struct T {
+    t: String,
+}
 
 fn main() {
-    let pth = fail!("bye");
-    let _rs: T = T {t: pth};
+    let pth = panic!("bye");
+    let _rs: T = T { t: pth };
 }

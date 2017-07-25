@@ -8,13 +8,19 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::task;
+// ignore-emscripten no threads support
+
+#![allow(unknown_features)]
+#![feature(box_syntax)]
+
+use std::thread;
 
 fn f() {
-    let _a = box 0i;
-    fail!();
+    let _a: Box<_> = box 0;
+    panic!();
 }
 
 pub fn main() {
-    task::spawn(f);
+    let t = thread::spawn(f);
+    drop(t.join());
 }

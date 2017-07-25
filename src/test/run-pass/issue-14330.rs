@@ -8,8 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(phase)]
+// pretty-expanded FIXME #23616
 
-#[phase(plugin, link)] extern crate std;
+#[macro_use] extern crate std as std2;
 
 fn main() {}

@@ -13,16 +13,19 @@
 // will have headers that must be skipped over.
 
 
+#![allow(unknown_features)]
+#![feature(box_syntax)]
+
 trait FooTrait {
-    fn foo(~self) -> uint;
+    fn foo(self: Box<Self>) -> usize;
 }
 
 struct BarStruct {
-    x: uint
+    x: usize
 }
 
 impl FooTrait for BarStruct {
-    fn foo(~self) -> uint {
+    fn foo(self: Box<BarStruct>) -> usize {
         self.x
     }
 }

@@ -9,11 +9,12 @@
 // except according to those terms.
 
 
-fn test(f: |uint| -> uint) -> uint {
-    return f(22u);
+
+fn test<F>(f: F) -> usize where F: FnOnce(usize) -> usize {
+    return f(22);
 }
 
 pub fn main() {
-    let y = test(|x| 4u * x);
-    assert_eq!(y, 88u);
+    let y = test(|x| 4 * x);
+    assert_eq!(y, 88);
 }

@@ -9,7 +9,10 @@
 // except according to those terms.
 
 
-struct Triple {a: int, b: int, c: int}
+#![allow(unknown_features)]
+#![feature(box_syntax)]
+
+struct Triple {a: isize, b: isize, c: isize}
 
 fn test(foo: Box<Triple>) -> Box<Triple> {
     let foo = foo;
@@ -22,5 +25,5 @@ fn test(foo: Box<Triple>) -> Box<Triple> {
 pub fn main() {
     let x = box Triple{a: 1, b: 2, c: 3};
     let y = test(x);
-    assert!((y.c == 3));
+    assert_eq!(y.c, 3);
 }

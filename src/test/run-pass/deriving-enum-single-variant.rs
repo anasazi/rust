@@ -8,9 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-type task_id = int;
+// pretty-expanded FIXME #23616
 
-#[deriving(PartialEq)]
+pub type task_id = isize;
+
+#[derive(PartialEq)]
 pub enum Task {
     TaskHandle(task_id)
 }

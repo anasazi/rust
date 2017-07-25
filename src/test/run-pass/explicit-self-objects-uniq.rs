@@ -9,16 +9,19 @@
 // except according to those terms.
 
 
+#![allow(unknown_features)]
+#![feature(box_syntax)]
+
 trait Foo {
-    fn f(~self);
+    fn f(self: Box<Self>);
 }
 
 struct S {
-    x: int
+    x: isize
 }
 
 impl Foo for S {
-    fn f(~self) {
+    fn f(self: Box<S>) {
         assert_eq!(self.x, 3);
     }
 }

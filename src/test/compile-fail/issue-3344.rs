@@ -8,9 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[deriving(PartialEq)]
-struct thing(uint);
-impl PartialOrd for thing { //~ ERROR not all trait methods implemented, missing: `partial_cmp`
+#[derive(PartialEq)]
+struct thing(usize);
+impl PartialOrd for thing { //~ ERROR not all trait items implemented, missing: `partial_cmp`
     fn le(&self, other: &thing) -> bool { true }
     fn ge(&self, other: &thing) -> bool { true }
 }

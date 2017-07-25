@@ -8,22 +8,22 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(globs)]
+// pretty-expanded FIXME #23616
+
 #![allow(unused_imports, dead_code)]
 
-use foo::GC;
+use foo::Foo;
 
 mod foo {
-    use d::*;
-    pub use m::GC; // this should shadow d::GC
+    pub use m::Foo; // this should shadow d::Foo
 }
 
 mod m {
-    pub struct GC;
+    pub struct Foo;
 }
 
 mod d {
-    pub struct GC;
+    pub struct Foo;
 }
 
 fn main() {}

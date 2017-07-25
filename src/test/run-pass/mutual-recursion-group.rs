@@ -8,16 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(managed_boxes)]
 
-use std::gc::Gc;
+// pretty-expanded FIXME #23616
 
 enum colour { red, green, blue, }
 
-enum tree { children(Gc<list>), leaf(colour), }
+enum tree { children(Box<list>), leaf(colour), }
 
-enum list { cons(Gc<tree>, Gc<list>), nil, }
+enum list { cons(Box<tree>, Box<list>), nil, }
 
-enum small_list { kons(int, Gc<small_list>), neel, }
+enum small_list { kons(isize, Box<small_list>), neel, }
 
 pub fn main() { }

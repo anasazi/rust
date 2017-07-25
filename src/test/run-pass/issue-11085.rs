@@ -10,17 +10,17 @@
 
 // compile-flags: --cfg foo
 
-#![feature(struct_variant)]
+// pretty-expanded FIXME #23616
 
 struct Foo {
     #[cfg(fail)]
     bar: baz,
-    foo: int,
+    foo: isize,
 }
 
 struct Foo2 {
     #[cfg(foo)]
-    foo: int,
+    foo: isize,
 }
 
 enum Bar1 {
@@ -37,8 +37,8 @@ enum Bar2 {
 enum Bar3 {
     Bar3_1 {
         #[cfg(fail)]
-        foo: int,
-        bar: int,
+        foo: isize,
+        bar: isize,
     }
 }
 
@@ -46,9 +46,9 @@ pub fn main() {
     let _f = Foo { foo: 3 };
     let _f = Foo2 { foo: 3 };
 
-    match Bar1_1 {
-        Bar1_1 => {}
+    match Bar1::Bar1_1 {
+        Bar1::Bar1_1 => {}
     }
 
-    let _f = Bar3_1 { bar: 3 };
+    let _f = Bar3::Bar3_1 { bar: 3 };
 }

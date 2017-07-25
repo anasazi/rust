@@ -10,7 +10,9 @@
 
 // aux-build:issue-9968.rs
 
-extern crate lib = "issue-9968";
+// pretty-expanded FIXME #23616
+
+extern crate issue_9968 as lib;
 
 use lib::{Trait, Struct};
 

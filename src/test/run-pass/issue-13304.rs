@@ -8,59 +8,41 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-fast
+// ignore-aarch64
+// ignore-emscripten
+#![feature(io, process_capture)]
 
-extern crate green;
-extern crate rustuv;
-extern crate native;
-
-use std::os;
+use std::env;
+use std::io::prelude::*;
 use std::io;
+use std::process::{Command, Stdio};
 use std::str;
 
-#[start]
-fn start(argc: int, argv: *const *const u8) -> int {
-    green::start(argc, argv, rustuv::event_loop, main)
-}
-
 fn main() {
-    let args = os::args();
-    let args = args.as_slice();
-    if args.len() > 1 && args[1].as_slice() == "child" {
-        if args[2].as_slice() == "green" {
-            child();
-        } else {
-            let (tx, rx) = channel();
-            native::task::spawn(proc() { tx.send(child()); });
-            rx.recv();
-        }
+    let args: Vec<String> = env::args().collect();
+    if args.len() > 1 && args[1] == "child" {
+        child();
     } else {
-        parent("green".to_string());
-        parent("native".to_string());
-        let (tx, rx) = channel();
-        native::task::spawn(proc() {
-            parent("green".to_string());
-            parent("native".to_string());
-            tx.send(());
-        });
-        rx.recv();
+        parent();
     }
 }
 
-fn parent(flavor: String) {
-    let args = os::args();
-    let args = args.as_slice();
-    let mut p = io::process::Command::new(args[0].as_slice())
-                                     .arg("child").arg(flavor).spawn().unwrap();
-    p.stdin.get_mut_ref().write_str("test1\ntest2\ntest3").unwrap();
+fn parent() {
+    let args: Vec<String> = env::args().collect();
+    let mut p = Command::new(&args[0]).arg("child")
+                        .stdout(Stdio::piped())
+                        .stdin(Stdio::piped())
+                        .spawn().unwrap();
+    p.stdin.as_mut().unwrap().write_all(b"test1\ntest2\ntest3").unwrap();
     let out = p.wait_with_output().unwrap();
     assert!(out.status.success());
-    let s = str::from_utf8(out.output.as_slice()).unwrap();
-    assert_eq!(s, "test1\n\ntest2\n\ntest3\n");
+    let s = str::from_utf8(&out.stdout).unwrap();
+    assert_eq!(s, "test1\ntest2\ntest3\n");
 }
 
 fn child() {
-    for line in io::stdin().lines() {
+    let mut stdin = io::stdin();
+    for line in stdin.lock().lines() {
         println!("{}", line.unwrap());
     }
 }

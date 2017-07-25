@@ -8,13 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+
 use std::cell::Cell;
 use std::ops::{Deref, DerefMut};
 use std::vec::Vec;
 
 struct DerefCounter<T> {
-    count_imm: Cell<uint>,
-    count_mut: uint,
+    count_imm: Cell<usize>,
+    count_mut: usize,
     value: T
 }
 
@@ -27,27 +28,29 @@ impl<T> DerefCounter<T> {
         }
     }
 
-    fn counts(&self) -> (uint, uint) {
+    fn counts(&self) -> (usize, usize) {
         (self.count_imm.get(), self.count_mut)
     }
 }
 
-impl<T> Deref<T> for DerefCounter<T> {
-    fn deref<'a>(&'a self) -> &'a T {
+impl<T> Deref for DerefCounter<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
         self.count_imm.set(self.count_imm.get() + 1);
         &self.value
     }
 }
 
-impl<T> DerefMut<T> for DerefCounter<T> {
-    fn deref_mut<'a>(&'a mut self) -> &'a mut T {
+impl<T> DerefMut for DerefCounter<T> {
+    fn deref_mut(&mut self) -> &mut T {
         self.count_mut += 1;
         &mut self.value
     }
 }
 
 pub fn main() {
-    let mut n = DerefCounter::new(0i);
+    let mut n = DerefCounter::new(0);
     let mut v = DerefCounter::new(Vec::new());
 
     let _ = *n; // Immutable deref + copy a POD.
@@ -60,7 +63,7 @@ pub fn main() {
     assert_eq!(n.counts(), (2, 1)); assert_eq!(v.counts(), (1, 1));
 
     let mut v2 = Vec::new();
-    v2.push(1i);
+    v2.push(1);
 
     *n = 5; *v = v2; // Mutable deref + assignment.
     assert_eq!(n.counts(), (2, 2)); assert_eq!(v.counts(), (1, 2));
@@ -68,12 +71,10 @@ pub fn main() {
     *n -= 3; // Mutable deref + assignment with binary operation.
     assert_eq!(n.counts(), (2, 3));
 
-    // Mutable deref used for calling a method taking &self.
-    // N.B. This is required because method lookup hasn't been performed so
-    // we don't know whether the called method takes mutable self, before
-    // the dereference itself is type-checked (a chicken-and-egg problem).
+    // Immutable deref used for calling a method taking &self. (The
+    // typechecker is smarter now about doing this.)
     (*n).to_string();
-    assert_eq!(n.counts(), (2, 4));
+    assert_eq!(n.counts(), (3, 3));
 
     // Mutable deref used for calling a method taking &mut self.
     (*v).push(2);
@@ -81,5 +82,6 @@ pub fn main() {
 
     // Check the final states.
     assert_eq!(*n, 2);
-    assert_eq!((*v).as_slice(), &[1, 2]);
+    let expected: &[_] = &[1, 2];
+    assert_eq!((*v), expected);
 }

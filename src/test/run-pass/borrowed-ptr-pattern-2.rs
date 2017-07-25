@@ -8,8 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+
 fn foo(s: &String) -> bool {
-    match s.as_slice() {
+    match &**s {
         "kitty" => true,
         _ => false
     }

@@ -8,9 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate debug;
-
-struct A { x: uint }
+struct A { x: usize }
 
 impl Drop for A {
     fn drop(&mut self) {}
@@ -20,5 +18,5 @@ pub fn main() {
     let a = A { x: 0 };
 
     let A { x: ref x } = a;
-    println!("{:?}", x)
+    println!("{}", x)
 }

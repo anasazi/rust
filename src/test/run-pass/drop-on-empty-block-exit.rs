@@ -8,13 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(managed_boxes)]
+// pretty-expanded FIXME #23616
 
-use std::gc::{Gc, GC};
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
-enum t { foo(Gc<int>), }
+enum t { foo(Box<isize>), }
 
 pub fn main() {
-    let tt = foo(box(GC) 10);
-    match tt { foo(_z) => { } }
+    let tt = t::foo(box 10);
+    match tt { t::foo(_z) => { } }
 }

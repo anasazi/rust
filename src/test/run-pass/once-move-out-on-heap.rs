@@ -11,16 +11,16 @@
 // Testing guarantees provided by once functions.
 
 
-#![feature(once_fns)]
+
 use std::sync::Arc;
 
-fn foo(blk: proc()) {
+fn foo<F:FnOnce()>(blk: F) {
     blk();
 }
 
 pub fn main() {
     let x = Arc::new(true);
-    foo(proc() {
+    foo(move|| {
         assert!(*x);
         drop(x);
     });

@@ -10,15 +10,14 @@
 
 // ignore-freebsd FIXME fails on BSD
 
-#![feature(managed_boxes)]
 
 trait noisy {
   fn speak(&mut self);
 }
 
 struct cat {
-  meows: uint,
-  how_hungry: int,
+  meows: usize,
+  how_hungry: isize,
   name: String,
 }
 
@@ -43,14 +42,14 @@ impl cat {
 impl cat {
     fn meow(&mut self) {
       println!("Meow");
-      self.meows += 1u;
-      if self.meows % 5u == 0u {
+      self.meows += 1;
+      if self.meows % 5 == 0 {
           self.how_hungry += 1;
       }
     }
 }
 
-fn cat(in_x : uint, in_y : int, in_name: String) -> cat {
+fn cat(in_x : usize, in_y : isize, in_name: String) -> cat {
     cat {
         meows: in_x,
         how_hungry: in_y,
@@ -60,7 +59,7 @@ fn cat(in_x : uint, in_y : int, in_name: String) -> cat {
 
 
 pub fn main() {
-    let mut nyan = cat(0u, 2, "nyan".to_string());
+    let mut nyan = cat(0, 2, "nyan".to_string());
     let mut nyan: &mut noisy = &mut nyan;
     nyan.speak();
 }

@@ -8,14 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-trait Foo {
+// pretty-expanded FIXME #23616
+
+trait Foo: Sized {
     fn bar(&self);
     fn baz(&self) { }
     fn bah(_: Option<Self>) { }
 }
 
 struct BarTy {
-    x : int,
+    x : isize,
     y : f64,
 }
 
@@ -24,7 +26,7 @@ impl BarTy {
     fn b(&self) {}
 }
 
-// If these fail, it's necessary to update middle::resolve and the cfail tests.
+// If these fail, it's necessary to update rustc_resolve and the cfail tests.
 impl Foo for *const BarTy {
     fn bar(&self) {
         self.baz();
@@ -33,7 +35,7 @@ impl Foo for *const BarTy {
     }
 }
 
-// If these fail, it's necessary to update middle::resolve and the cfail tests.
+// If these fail, it's necessary to update rustc_resolve and the cfail tests.
 impl<'a> Foo for &'a BarTy {
     fn bar(&self) {
         self.baz();
@@ -45,7 +47,7 @@ impl<'a> Foo for &'a BarTy {
     }
 }
 
-// If these fail, it's necessary to update middle::resolve and the cfail tests.
+// If these fail, it's necessary to update rustc_resolve and the cfail tests.
 impl<'a> Foo for &'a mut BarTy {
     fn bar(&self) {
         self.baz();
@@ -57,7 +59,7 @@ impl<'a> Foo for &'a mut BarTy {
     }
 }
 
-// If these fail, it's necessary to update middle::resolve and the cfail tests.
+// If these fail, it's necessary to update rustc_resolve and the cfail tests.
 impl Foo for Box<BarTy> {
     fn bar(&self) {
         self.baz();
@@ -65,35 +67,35 @@ impl Foo for Box<BarTy> {
     }
 }
 
-// If these fail, it's necessary to update middle::resolve and the cfail tests.
-impl Foo for *const int {
+// If these fail, it's necessary to update rustc_resolve and the cfail tests.
+impl Foo for *const isize {
     fn bar(&self) {
         self.baz();
-        Foo::bah(None::<*const int>);
+        Foo::bah(None::<*const isize>);
     }
 }
 
-// If these fail, it's necessary to update middle::resolve and the cfail tests.
-impl<'a> Foo for &'a int {
+// If these fail, it's necessary to update rustc_resolve and the cfail tests.
+impl<'a> Foo for &'a isize {
     fn bar(&self) {
         self.baz();
-        Foo::bah(None::<&int>);
+        Foo::bah(None::<&isize>);
     }
 }
 
-// If these fail, it's necessary to update middle::resolve and the cfail tests.
-impl<'a> Foo for &'a mut int {
+// If these fail, it's necessary to update rustc_resolve and the cfail tests.
+impl<'a> Foo for &'a mut isize {
     fn bar(&self) {
         self.baz();
-        Foo::bah(None::<&mut int>);
+        Foo::bah(None::<&mut isize>);
     }
 }
 
-// If these fail, it's necessary to update middle::resolve and the cfail tests.
-impl Foo for Box<int> {
+// If these fail, it's necessary to update rustc_resolve and the cfail tests.
+impl Foo for Box<isize> {
     fn bar(&self) {
         self.baz();
-        Foo::bah(None::<Box<int>>);
+        Foo::bah(None::<Box<isize>>);
     }
 }
 

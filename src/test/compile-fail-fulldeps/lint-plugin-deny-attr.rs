@@ -11,11 +11,9 @@
 // aux-build:lint_plugin_test.rs
 // ignore-stage1
 
-#![feature(phase)]
+#![feature(plugin)]
+#![plugin(lint_plugin_test)]
 #![deny(test_lint)]
-
-#[phase(plugin)]
-extern crate lint_plugin_test;
 
 fn lintme() { } //~ ERROR item is named 'lintme'
 

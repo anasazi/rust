@@ -11,13 +11,18 @@
 // Tests that an `&` pointer to something inherently mutable is itself
 // to be considered mutable.
 
-use std::kinds::marker;
+#![feature(optin_builtin_traits)]
 
-enum Foo { A(marker::NoShare) }
+use std::marker::Sync;
 
-fn bar<T: Share>(_: T) {}
+struct NoSync;
+impl !Sync for NoSync {}
+
+enum Foo { A(NoSync) }
+
+fn bar<T: Sync>(_: T) {}
 
 fn main() {
-    let x = A(marker::NoShare);
-    bar(&x); //~ ERROR type parameter with an incompatible type
+    let x = Foo::A(NoSync);
+    bar(&x); //~ ERROR `NoSync: std::marker::Sync` is not satisfied
 }

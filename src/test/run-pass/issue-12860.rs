@@ -8,16 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-
-extern crate collections;
-
 use std::collections::HashSet;
 
-#[deriving(PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 struct XYZ {
-    x: int,
-    y: int,
-    z: int
+    x: isize,
+    y: isize,
+    z: isize
 }
 
 fn main() {
@@ -27,7 +24,7 @@ fn main() {
     let middle = XYZ{x: 0, y: 0, z: 0};
     border.insert(middle);
 
-    while border.len() > 0 && connected.len() < 10000 {
+    while !border.is_empty() && connected.len() < 10000 {
         let choice = *(border.iter().next().unwrap());
         border.remove(&choice);
         connected.insert(choice);

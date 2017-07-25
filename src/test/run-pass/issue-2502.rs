@@ -9,6 +9,8 @@
 // except according to those terms.
 
 
+// pretty-expanded FIXME #23616
+
 struct font<'a> {
     fontbuf: &'a Vec<u8> ,
 }
@@ -19,7 +21,7 @@ impl<'a> font<'a> {
     }
 }
 
-fn font<'r>(fontbuf: &'r Vec<u8> ) -> font<'r> {
+fn font(fontbuf: &Vec<u8> ) -> font {
     font {
         fontbuf: fontbuf
     }

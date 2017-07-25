@@ -8,6 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+
 extern fn foopy() {}
 
 static f: extern "C" fn() = foopy;
@@ -18,6 +19,6 @@ struct S {
 }
 
 pub fn main() {
-    assert!(foopy == f);
+    assert!(foopy as extern "C" fn() == f);
     assert!(f == s.f);
 }

@@ -1,4 +1,4 @@
-// Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2015 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -10,81 +10,68 @@
 
 use std::fmt;
 
-#[deriving(PartialEq)]
-pub enum Os { OsWin32, OsMacos, OsLinux, OsAndroid, OsFreebsd, OsiOS, }
-
-#[deriving(PartialEq, Eq, Hash, Encodable, Decodable, Clone)]
+#[derive(PartialEq, Eq, Hash, RustcEncodable, RustcDecodable, Clone, Copy, Debug)]
 pub enum Abi {
     // NB: This ordering MUST match the AbiDatas array below.
     // (This is ensured by the test indices_are_correct().)
 
-    // Single platform ABIs come first (`for_arch()` relies on this)
+    // Single platform ABIs
     Cdecl,
     Stdcall,
     Fastcall,
+    Vectorcall,
+    Thiscall,
     Aapcs,
     Win64,
+    SysV64,
+    PtxKernel,
+    Msp430Interrupt,
+    X86Interrupt,
 
-    // Multiplatform ABIs second
+    // Multiplatform / generic ABIs
     Rust,
     C,
     System,
     RustIntrinsic,
+    RustCall,
+    PlatformIntrinsic,
+    Unadjusted
 }
 
-#[allow(non_camel_case_types)]
-#[deriving(PartialEq)]
-pub enum Architecture {
-    // NB. You cannot change the ordering of these
-    // constants without adjusting IntelBits below.
-    // (This is ensured by the test indices_are_correct().)
-    X86,
-    X86_64,
-    Arm,
-    Mips,
-    Mipsel
-}
-
-static IntelBits: u32 = (1 << (X86 as uint)) | (1 << (X86_64 as uint));
-static ArmBits: u32 = (1 << (Arm as uint));
-
+#[derive(Copy, Clone)]
 pub struct AbiData {
     abi: Abi,
 
-    // Name of this ABI as we like it called.
+    /// Name of this ABI as we like it called.
     name: &'static str,
 
-    // Is it specific to a platform? If so, which one?  Also, what is
-    // the name that LLVM gives it (in case we disagree)
-    abi_arch: AbiArchitecture
+    /// A generic ABI is supported on all platforms.
+    generic: bool,
 }
 
-pub enum AbiArchitecture {
-    /// Not a real ABI (e.g., intrinsic)
-    RustArch,
-    /// An ABI that specifies cross-platform defaults (e.g., "C")
-    AllArch,
-    /// Multiple architectures (bitset)
-    Archs(u32)
-}
-
-static AbiDatas: &'static [AbiData] = &[
+#[allow(non_upper_case_globals)]
+const AbiDatas: &'static [AbiData] = &[
     // Platform-specific ABIs
-    AbiData {abi: Cdecl, name: "cdecl", abi_arch: Archs(IntelBits)},
-    AbiData {abi: Stdcall, name: "stdcall", abi_arch: Archs(IntelBits)},
-    AbiData {abi: Fastcall, name:"fastcall", abi_arch: Archs(IntelBits)},
-    AbiData {abi: Aapcs, name: "aapcs", abi_arch: Archs(ArmBits)},
-    AbiData {abi: Win64, name: "win64",
-             abi_arch: Archs(1 << (X86_64 as uint))},
+    AbiData {abi: Abi::Cdecl, name: "cdecl", generic: false },
+    AbiData {abi: Abi::Stdcall, name: "stdcall", generic: false },
+    AbiData {abi: Abi::Fastcall, name: "fastcall", generic: false },
+    AbiData {abi: Abi::Vectorcall, name: "vectorcall", generic: false},
+    AbiData {abi: Abi::Thiscall, name: "thiscall", generic: false},
+    AbiData {abi: Abi::Aapcs, name: "aapcs", generic: false },
+    AbiData {abi: Abi::Win64, name: "win64", generic: false },
+    AbiData {abi: Abi::SysV64, name: "sysv64", generic: false },
+    AbiData {abi: Abi::PtxKernel, name: "ptx-kernel", generic: false },
+    AbiData {abi: Abi::Msp430Interrupt, name: "msp430-interrupt", generic: false },
+    AbiData {abi: Abi::X86Interrupt, name: "x86-interrupt", generic: false },
 
     // Cross-platform ABIs
-    //
-    // NB: Do not adjust this ordering without
-    // adjusting the indices below.
-    AbiData {abi: Rust, name: "Rust", abi_arch: RustArch},
-    AbiData {abi: C, name: "C", abi_arch: AllArch},
-    AbiData {abi: System, name: "system", abi_arch: AllArch},
-    AbiData {abi: RustIntrinsic, name: "rust-intrinsic", abi_arch: RustArch},
+    AbiData {abi: Abi::Rust, name: "Rust", generic: true },
+    AbiData {abi: Abi::C, name: "C", generic: true },
+    AbiData {abi: Abi::System, name: "system", generic: true },
+    AbiData {abi: Abi::RustIntrinsic, name: "rust-intrinsic", generic: true },
+    AbiData {abi: Abi::RustCall, name: "rust-call", generic: true },
+    AbiData {abi: Abi::PlatformIntrinsic, name: "platform-intrinsic", generic: true },
+    AbiData {abi: Abi::Unadjusted, name: "unadjusted", generic: true },
 ];
 
 /// Returns the ABI with the given name (if any).
@@ -98,8 +85,8 @@ pub fn all_names() -> Vec<&'static str> {
 
 impl Abi {
     #[inline]
-    pub fn index(&self) -> uint {
-        *self as uint
+    pub fn index(&self) -> usize {
+        *self as usize
     }
 
     #[inline]
@@ -111,49 +98,18 @@ impl Abi {
         self.data().name
     }
 
-    pub fn for_target(&self, os: Os, arch: Architecture) -> Option<Abi> {
-        // If this ABI isn't actually for the specified architecture, then we
-        // short circuit early
-        match self.data().abi_arch {
-            Archs(a) if a & arch.bit() == 0 => return None,
-            Archs(_) | RustArch | AllArch => {}
-        }
-        // Transform this ABI as appropriate for the requested os/arch
-        // combination.
-        Some(match (*self, os, arch) {
-            (System, OsWin32, X86) => Stdcall,
-            (System, _, _) => C,
-            (me, _, _) => me,
-        })
+    pub fn generic(&self) -> bool {
+        self.data().generic
     }
 }
 
-impl Architecture {
-    fn bit(&self) -> u32 {
-        1 << (*self as uint)
-    }
-}
-
-impl fmt::Show for Abi {
+impl fmt::Display for Abi {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "\"{}\"", self.name())
     }
 }
 
-impl fmt::Show for Os {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            OsLinux => "linux".fmt(f),
-            OsWin32 => "win32".fmt(f),
-            OsMacos => "macos".fmt(f),
-            OsiOS => "ios".fmt(f),
-            OsAndroid => "android".fmt(f),
-            OsFreebsd => "freebsd".fmt(f)
-        }
-    }
-}
-
-#[allow(non_snake_case_functions)]
+#[allow(non_snake_case)]
 #[test]
 fn lookup_Rust() {
     let abi = lookup("Rust");
@@ -177,23 +133,4 @@ fn indices_are_correct() {
     for (i, abi_data) in AbiDatas.iter().enumerate() {
         assert_eq!(i, abi_data.abi.index());
     }
-
-    let bits = 1 << (X86 as uint);
-    let bits = bits | 1 << (X86_64 as uint);
-    assert_eq!(IntelBits, bits);
-
-    let bits = 1 << (Arm as uint);
-    assert_eq!(ArmBits, bits);
-}
-
-#[test]
-fn pick_uniplatform() {
-    assert_eq!(Stdcall.for_target(OsLinux, X86), Some(Stdcall));
-    assert_eq!(Stdcall.for_target(OsLinux, Arm), None);
-    assert_eq!(System.for_target(OsLinux, X86), Some(C));
-    assert_eq!(System.for_target(OsWin32, X86), Some(Stdcall));
-    assert_eq!(System.for_target(OsWin32, X86_64), Some(C));
-    assert_eq!(System.for_target(OsWin32, Arm), Some(C));
-    assert_eq!(Stdcall.for_target(OsWin32, X86), Some(Stdcall));
-    assert_eq!(Stdcall.for_target(OsWin32, X86_64), Some(Stdcall));
 }

@@ -8,19 +8,25 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::task;
+// ignore-emscripten no threads support
+
+#![feature(std_misc)]
+
+use std::thread;
+use std::sync::mpsc::{channel, Sender};
 
 fn producer(tx: &Sender<Vec<u8>>) {
     tx.send(
-         vec!(1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8, 8u8, 9u8, 10u8, 11u8, 12u8,
-          13u8));
+         vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+          13]).unwrap();
 }
 
 pub fn main() {
     let (tx, rx) = channel::<Vec<u8>>();
-    let _prod = task::spawn(proc() {
+    let prod = thread::spawn(move|| {
         producer(&tx)
     });
 
-    let _data: Vec<u8> = rx.recv();
+    let _data: Vec<u8> = rx.recv().unwrap();
+    prod.join();
 }

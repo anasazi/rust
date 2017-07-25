@@ -8,14 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::gc::{GC,Gc};
+#![feature(box_syntax)]
 
 fn main() {
-    let x: Box<int> = box 0;
-    let y: Gc<int> = box (GC) 0;
+    let x: Box<isize> = box 0;
 
-    println!("{}", x + 1); //~ ERROR binary operation `+` cannot be applied to type `Box<int>`
-    //~^ ERROR cannot determine a type for this bounded type parameter: unconstrained type
-    println!("{}", y + 1);
-    //~^ ERROR binary operation `+` cannot be applied to type `Gc<int>`
+    println!("{}", x + 1);
+    //~^ ERROR binary operation `+` cannot be applied to type `std::boxed::Box<isize>`
 }

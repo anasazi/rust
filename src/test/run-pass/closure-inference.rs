@@ -9,9 +9,10 @@
 // except according to those terms.
 
 
-fn foo(i: int) -> int { i + 1 }
 
-fn apply<A>(f: |A| -> A, v: A) -> A { f(v) }
+fn foo(i: isize) -> isize { i + 1 }
+
+fn apply<A, F>(f: F, v: A) -> A where F: FnOnce(A) -> A { f(v) }
 
 pub fn main() {
     let f = {|i| foo(i)};

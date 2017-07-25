@@ -10,9 +10,11 @@
 
 // aux-build:issue-9906.rs
 
-extern crate testmod = "issue-9906";
+// pretty-expanded FIXME #23616
+
+extern crate issue_9906 as testmod;
 
 pub fn main() {
     testmod::foo();
-    testmod::FooBar::new(1i);
+    testmod::FooBar::new(1);
 }

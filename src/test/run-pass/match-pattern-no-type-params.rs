@@ -10,10 +10,10 @@
 
 enum maybe<T> { nothing, just(T), }
 
-fn foo(x: maybe<int>) {
+fn foo(x: maybe<isize>) {
     match x {
-        nothing => { println!("A"); }
-        just(_a) => { println!("B"); }
+        maybe::nothing => { println!("A"); }
+        maybe::just(_a) => { println!("B"); }
     }
 }
 

@@ -8,21 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(macro_rules)]
-
-static A: uint = { 1u; 2 };
-//~^ ERROR: blocks in constants are limited to items and tail expressions
-
-static B: uint = { { } 2 };
-//~^ ERROR: blocks in constants are limited to items and tail expressions
-
-macro_rules! foo {
-    () => (()) //~ ERROR: blocks in constants are limited to items and tail expressions
+enum Foo {
+    Bar = { let x = 1; 3 }
+    //~^ ERROR: blocks in constants are limited to items and tail expressions
+    //~^^ ERROR: blocks in constants are limited to items and tail expressions
 }
-static C: uint = { foo!() 2 };
 
-static D: uint = { let x = 4u; 2 };
+type Array = [u32; {  let x = 2; 5 }];
 //~^ ERROR: blocks in constants are limited to items and tail expressions
+//~^^ ERROR: blocks in constants are limited to items and tail expressions
 
-pub fn main() {
-}
+pub fn main() {}

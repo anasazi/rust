@@ -13,9 +13,24 @@
 extern crate use_from_trait_xc;
 
 use use_from_trait_xc::Trait::foo;
-//~^ ERROR unresolved import `use_from_trait_xc::Trait::foo`. Cannot import from a trait or type imp
+//~^ ERROR `foo` is not directly importable
 
-use use_from_trait_xc::Foo::new;
-//~^ ERROR unresolved import `use_from_trait_xc::Foo::new`. Cannot import from a trait or type imple
+use use_from_trait_xc::Trait::Assoc;
+//~^ ERROR `Assoc` is not directly importable
+
+use use_from_trait_xc::Trait::CONST;
+//~^ ERROR `CONST` is not directly importable
+
+use use_from_trait_xc::Foo::new; //~ ERROR struct `Foo` is private
+//~^ ERROR unresolved import `use_from_trait_xc::Foo::new`
+
+use use_from_trait_xc::Foo::C; //~ ERROR struct `Foo` is private
+//~^ ERROR unresolved import `use_from_trait_xc::Foo::C`
+
+use use_from_trait_xc::Bar::new as bnew;
+//~^ ERROR unresolved import `use_from_trait_xc::Bar::new`
+
+use use_from_trait_xc::Baz::new as baznew;
+//~^ ERROR unresolved import `use_from_trait_xc::Baz::new`
 
 fn main() {}

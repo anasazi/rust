@@ -8,8 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// gate-test-drop_types_in_const
 
-static mut a: Box<int> = box 3;
-//~^ ERROR mutable static items are not allowed to have owned pointers
+#![feature(box_syntax)]
+
+static mut a: Box<isize> = box 3;
+//~^ ERROR allocations are not allowed in statics
+//~^^ ERROR destructors in statics are an unstable feature
 
 fn main() {}

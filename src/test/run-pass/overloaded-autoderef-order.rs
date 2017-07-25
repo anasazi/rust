@@ -8,8 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::rc::Rc;
 
+use std::rc::Rc;
+use std::ops::Deref;
+
+#[derive(Copy, Clone)]
 struct DerefWrapper<X, Y> {
     x: X,
     y: Y
@@ -21,13 +24,18 @@ impl<X, Y> DerefWrapper<X, Y> {
     }
 }
 
-impl<X, Y> Deref<Y> for DerefWrapper<X, Y> {
-    fn deref<'a>(&'a self) -> &'a Y {
+impl<X, Y> Deref for DerefWrapper<X, Y> {
+    type Target = Y;
+
+    fn deref(&self) -> &Y {
         &self.y
     }
 }
 
 mod priv_test {
+    use std::ops::Deref;
+
+    #[derive(Copy, Clone)]
     pub struct DerefWrapperHideX<X, Y> {
         x: X,
         pub y: Y
@@ -42,15 +50,17 @@ mod priv_test {
         }
     }
 
-    impl<X, Y> Deref<Y> for DerefWrapperHideX<X, Y> {
-        fn deref<'a>(&'a self) -> &'a Y {
+    impl<X, Y> Deref for DerefWrapperHideX<X, Y> {
+        type Target = Y;
+
+        fn deref(&self) -> &Y {
             &self.y
         }
     }
 }
 
 pub fn main() {
-    let nested = DerefWrapper {x: true, y: DerefWrapper {x: 0i, y: 1i}};
+    let nested = DerefWrapper {x: true, y: DerefWrapper {x: 0, y: 1}};
 
     // Use the first field that you can find.
     assert_eq!(nested.x, true);
@@ -64,7 +74,7 @@ pub fn main() {
     // Also go through multiple levels of indirection.
     assert_eq!(Rc::new(nested).x, true);
 
-    let nested_priv = priv_test::DerefWrapperHideX::new(true, DerefWrapper {x: 0i, y: 1i});
+    let nested_priv = priv_test::DerefWrapperHideX::new(true, DerefWrapper {x: 0, y: 1});
     // FIXME(eddyb) #12808 should skip private fields.
     // assert_eq!(nested_priv.x, 0);
     assert_eq!((*nested_priv).x, 0);

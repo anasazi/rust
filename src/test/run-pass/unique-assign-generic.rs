@@ -8,9 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(managed_boxes)]
 
-use std::gc::GC;
+#![allow(unknown_features)]
+#![feature(box_syntax)]
+
 
 fn f<T>(t: T) -> T {
     let t1 = t;
@@ -18,8 +19,6 @@ fn f<T>(t: T) -> T {
 }
 
 pub fn main() {
-    let t = f(box 100i);
-    assert_eq!(t, box 100i);
-    let t = f(box box(GC) vec!(100i));
-    assert_eq!(t, box box(GC) vec!(100i));
+    let t = f::<Box<_>>(box 100);
+    assert_eq!(t, box 100);
 }

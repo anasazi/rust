@@ -10,21 +10,20 @@
 
 // Tests for "default" bounds inferred for traits with no bounds list.
 
-
 trait Foo {}
 
 fn a(_x: Box<Foo+Send>) {
 }
 
-fn b(_x: &'static Foo) { // should be same as &'static Foo+'static
+fn b(_x: &'static (Foo+'static)) {
 }
 
-fn c(x: Box<Foo+Share>) {
-    a(x); //~ ERROR expected bounds `Send`
+fn c(x: Box<Foo+Sync>) {
+    a(x); //~ ERROR mismatched types
 }
 
-fn d(x: &'static Foo+Share) {
-    b(x); //~ ERROR expected bounds `'static`
+fn d(x: &'static (Foo+Sync)) {
+    b(x);
 }
 
 fn main() {}

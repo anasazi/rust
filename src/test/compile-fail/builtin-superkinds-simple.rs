@@ -13,7 +13,7 @@
 
 trait Foo : Send { }
 
-impl <'a> Foo for &'a mut () { }
-//~^ ERROR which does not fulfill `Send`, cannot implement this trait
+impl Foo for std::rc::Rc<i8> { }
+//~^ ERROR `std::rc::Rc<i8>: std::marker::Send` is not satisfied
 
 fn main() { }

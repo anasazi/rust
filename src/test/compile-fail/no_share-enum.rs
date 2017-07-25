@@ -8,15 +8,19 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::kinds::marker;
+#![feature(optin_builtin_traits)]
 
-enum Foo { A(marker::NoShare) }
+use std::marker::Sync;
 
-fn bar<T: Share>(_: T) {}
+struct NoSync;
+impl !Sync for NoSync {}
+
+enum Foo { A(NoSync) }
+
+fn bar<T: Sync>(_: T) {}
 
 fn main() {
-    let x = A(marker::NoShare);
+    let x = Foo::A(NoSync);
     bar(x);
-    //~^ ERROR instantiating a type parameter with an incompatible type `Foo`,
-    //         which does not fulfill `Share`
+    //~^ ERROR `NoSync: std::marker::Sync` is not satisfied
 }

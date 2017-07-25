@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![deny(non_snake_case_functions)]
+#![deny(non_snake_case)]
 #![allow(dead_code)]
 
 struct Foo;
@@ -23,11 +23,14 @@ impl Foo {
 
     pub fn xyZ(&mut self) {}
     //~^ ERROR method `xyZ` should have a snake case name such as `xy_z`
+
+    fn render_HTML() {}
+    //~^ ERROR method `render_HTML` should have a snake case name such as `render_html`
 }
 
 trait X {
     fn ABC();
-    //~^ ERROR trait method `ABC` should have a snake case name such as `a_b_c`
+    //~^ ERROR trait method `ABC` should have a snake case name such as `abc`
 
     fn a_b_C(&self) {}
     //~^ ERROR trait method `a_b_C` should have a snake case name such as `a_b_c`

@@ -8,28 +8,34 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-android
-
 // Smallest "hello world" with a libc runtime
 
+// ignore-windows
+// ignore-android
+
+#![feature(intrinsics, lang_items, start, no_core, alloc_system)]
+#![feature(global_allocator, allocator_api)]
 #![no_std]
-#![feature(intrinsics, lang_items)]
 
-extern crate libc;
+extern crate alloc_system;
 
-extern { fn puts(s: *const u8); }
-extern "rust-intrinsic" { fn transmute<T, U>(t: T) -> U; }
+use alloc_system::System;
 
-#[lang = "stack_exhausted"] extern fn stack_exhausted() {}
-#[lang = "eh_personality"] extern fn eh_personality() {}
+#[global_allocator]
+static A: System = System;
 
-#[start]
-#[no_split_stack]
-fn main(_: int, _: *const *const u8) -> int {
-    unsafe {
-        let (ptr, _): (*const u8, uint) = transmute("Hello!\0");
-        puts(ptr);
-    }
-    return 0;
+extern {
+    fn puts(s: *const u8);
 }
 
+#[no_mangle]
+#[lang = "eh_personality"] pub extern fn rust_eh_personality() {}
+#[lang = "panic_fmt"] fn panic_fmt() -> ! { loop {} }
+
+#[start]
+fn main(_: isize, _: *const *const u8) -> isize {
+    unsafe {
+        puts("Hello!\0".as_ptr() as *const u8);
+    }
+    return 0
+}

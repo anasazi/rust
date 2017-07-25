@@ -8,21 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// error-pattern:reached the recursion limit while instantiating `generic::<std::option::Option<
+
 // Verify the compiler fails with an error on infinite function
 // recursions.
 
-
-struct Data(Box<Option<Data>>);
-
-fn generic<T>( _ : Vec<(Data,T)> ) {
-    //~^ ERROR reached the recursion limit during monomorphization
-    let rec : Vec<(Data,(bool,T))> = Vec::new();
-    generic( rec );
+fn generic<T>() {
+    generic::<Option<T>>();
 }
 
 
 fn main () {
     // Use generic<T> at least once to trigger instantiation.
-    let input : Vec<(Data,())> = Vec::new();
-    generic(input);
+    generic::<i32>();
 }

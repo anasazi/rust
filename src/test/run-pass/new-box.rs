@@ -8,9 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
-fn f(x: Box<int>) {
-    let y: &int = x;
+fn f(x: Box<isize>) {
+    let y: &isize = &*x;
     println!("{}", *x);
     println!("{}", *y);
 }
@@ -29,7 +31,7 @@ impl Trait for Struct {
 
 fn g(x: Box<Trait>) {
     x.printme();
-    let y: &Trait = x;
+    let y: &Trait = &*x;
     y.printme();
 }
 
@@ -37,4 +39,3 @@ fn main() {
     f(box 1234);
     g(box Struct as Box<Trait>);
 }
-

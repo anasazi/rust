@@ -8,8 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// error-pattern:attempted remainder with a divisor of zero
+// error-pattern:attempt to calculate the remainder with a divisor of zero
+
 fn main() {
-    let y = 0i;
-    let _z = 1i % y;
+    let y = 0;
+    let _z = 1 % y;
 }

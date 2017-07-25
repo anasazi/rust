@@ -9,7 +9,10 @@
 // except according to those terms.
 
 
-fn f(i: Box<int>) {
+#![allow(unknown_features)]
+#![feature(box_syntax)]
+
+fn f(i: Box<isize>) {
     assert_eq!(*i, 100);
 }
 

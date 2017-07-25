@@ -8,42 +8,59 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-android: FIXME(#10381)
+// min-lldb-version: 310
 
 // compile-flags:-g
-// gdb-command:rbreak zzz
+
+// === GDB TESTS ===================================================================================
+
 // gdb-command:run
-// gdb-command:finish
 
 // gdb-command:print abc
 // gdb-check:$1 = 10101
 // gdb-command:continue
 
-// gdb-command:finish
 // gdb-command:print abc
 // gdb-check:$2 = 20202
 // gdb-command:continue
 
-// gdb-command:finish
 // gdb-command:print abc
 // gdb-check:$3 = 30303
 
-#![allow(unused_variable)]
+
+// === LLDB TESTS ==================================================================================
+
+// lldb-command:run
+
+// lldb-command:print abc
+// lldb-check:[...]$0 = 10101
+// lldb-command:continue
+
+// lldb-command:print abc
+// lldb-check:[...]$1 = 20202
+// lldb-command:continue
+
+// lldb-command:print abc
+// lldb-check:[...]$2 = 30303
+
+#![allow(unused_variables)]
+#![feature(omit_gdb_pretty_printer_section)]
+#![omit_gdb_pretty_printer_section]
 
 fn function_one() {
-    let abc = 10101i;
-    zzz();
+    let abc = 10101;
+    zzz(); // #break
 }
 
 fn function_two() {
-    let abc = 20202i;
-    zzz();
+    let abc = 20202;
+    zzz(); // #break
 }
 
 
 fn function_three() {
-    let abc = 30303i;
-    zzz();
+    let abc = 30303;
+    zzz(); // #break
 }
 
 

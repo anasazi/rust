@@ -10,7 +10,9 @@
 
 // aux-build:issue-8259.rs
 
-extern crate other = "issue-8259";
-static a: other::Foo<'static> = other::A;
+// pretty-expanded FIXME #23616
+
+extern crate issue_8259 as other;
+static a: other::Foo<'static> = other::Foo::A;
 
 pub fn main() {}

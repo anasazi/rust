@@ -13,8 +13,6 @@
 
 // error-pattern:
 
-#![feature(macro_rules)]
-
 macro_rules! foo{
     () => {{
         macro_rules! bar{() => (())}
@@ -31,4 +29,3 @@ pub fn main() {
     // least throw a conventional error.
     assert!({one! two});
 }
-

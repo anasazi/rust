@@ -9,6 +9,9 @@
 // except according to those terms.
 
 
+#![allow(unknown_features)]
+#![feature(box_syntax)]
+
 trait repeat<A> { fn get(&self) -> A; }
 
 impl<A:Clone + 'static> repeat<A> for Box<A> {
@@ -17,13 +20,12 @@ impl<A:Clone + 'static> repeat<A> for Box<A> {
     }
 }
 
-fn repeater<A:Clone + 'static>(v: Box<A>) -> Box<repeat<A>> {
-    // Note: owned kind is not necessary as A appears in the trait type
-    box v as Box<repeat<A>> // No
+fn repeater<A:Clone + 'static>(v: Box<A>) -> Box<repeat<A>+'static> {
+    box v as Box<repeat<A>+'static> // No
 }
 
 pub fn main() {
-    let x = 3i;
+    let x = 3;
     let y = repeater(box x);
     assert_eq!(x, y.get());
 }

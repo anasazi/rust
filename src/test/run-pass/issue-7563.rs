@@ -8,14 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate debug;
-
 trait IDummy {
     fn do_nothing(&self);
 }
 
-struct A { a: int }
-struct B<'a> { b: int, pa: &'a A }
+#[derive(Debug)]
+struct A { a: isize }
+#[derive(Debug)]
+struct B<'a> { b: isize, pa: &'a A }
 
     impl IDummy for A {
         fn do_nothing(&self) {
@@ -33,5 +33,4 @@ pub fn main() {
 
     println!("sa is {:?}", sa);
     println!("sb is {:?}", sb);
-    println!("sb.pa is {:?}", sb.get_pa());
 }

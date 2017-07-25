@@ -8,13 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![feature(libc)]
+
 extern crate libc;
 
 fn main() {
-    let x : *const Vec<int> = &vec!(1,2,3);
+    let x : *const Vec<isize> = &vec![1,2,3];
     let y : *const libc::c_void = x as *const libc::c_void;
     unsafe {
         let _z = (*y).clone();
-        //~^ ERROR does not implement any method in scope
+        //~^ ERROR no method named `clone` found
     }
 }

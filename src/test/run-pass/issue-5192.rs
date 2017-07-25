@@ -8,12 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// pretty-expanded FIXME #23616
+
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
 pub trait EventLoop {
+    fn dummy(&self) { }
 }
 
 pub struct UvEventLoop {
-    uvio: int
+    uvio: isize
 }
 
 impl UvEventLoop {
@@ -28,12 +33,12 @@ impl EventLoop for UvEventLoop {
 }
 
 pub struct Scheduler {
-    event_loop: Box<EventLoop>,
+    event_loop: Box<EventLoop+'static>,
 }
 
 impl Scheduler {
 
-    pub fn new(event_loop: Box<EventLoop>) -> Scheduler {
+    pub fn new(event_loop: Box<EventLoop+'static>) -> Scheduler {
         Scheduler {
             event_loop: event_loop,
         }

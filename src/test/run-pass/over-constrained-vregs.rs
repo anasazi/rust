@@ -8,14 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate debug;
-
 // Regression test for issue #152.
 pub fn main() {
-    let mut b: uint = 1u;
-    while b <= 32u {
-        0u << b;
-        b <<= 1u;
-        println!("{:?}", b);
+    let mut b: usize = 1_usize;
+    while b < std::mem::size_of::<usize>() {
+        0_usize << b;
+        b <<= 1_usize;
+        println!("{}", b);
     }
 }

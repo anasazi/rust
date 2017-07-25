@@ -12,10 +12,10 @@
 
 
 fn main() {
-    let v: Vec<int> = vec!(10);
-    let x: uint = 0;
-    assert_eq!(*v.get(x), 10);
-    // Bounds-check failure.
+    let v: Vec<isize> = vec![10];
+    let x: usize = 0;
+    assert_eq!(v[x], 10);
+    // Bounds-check panic.
 
-    assert_eq!(*v.get(x + 2), 20);
+    assert_eq!(v[x + 2], 20);
 }

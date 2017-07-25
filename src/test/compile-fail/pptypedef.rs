@@ -8,12 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn let_in<T>(x: T, f: |T|) {}
+fn let_in<T, F>(x: T, f: F) where F: FnOnce(T) {}
 
 fn main() {
-    let_in(3u, |i| { assert!(i == 3i); });
-    //~^ ERROR expected `uint` but found `int`
+    let_in(3u32, |i| { assert!(i == 3i32); });
+    //~^ ERROR mismatched types
+    //~| expected u32, found i32
 
-    let_in(3i, |i| { assert!(i == 3u); });
-    //~^ ERROR expected `int` but found `uint`
+    let_in(3i32, |i| { assert!(i == 3u32); });
+    //~^ ERROR mismatched types
+    //~| expected i32, found u32
 }

@@ -8,17 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(managed_boxes, unsafe_destructor)]
-
 // Make sure the destructor is run for newtype structs.
 
 use std::cell::Cell;
-use std::gc::{Gc, GC};
 
-struct Foo(Gc<Cell<int>>);
+struct Foo<'a>(&'a Cell<isize>);
 
-#[unsafe_destructor]
-impl Drop for Foo {
+impl<'a> Drop for Foo<'a> {
     fn drop(&mut self) {
         let Foo(i) = *self;
         i.set(23);
@@ -26,7 +22,7 @@ impl Drop for Foo {
 }
 
 pub fn main() {
-    let y = box(GC) Cell::new(32);
+    let y = &Cell::new(32);
     {
         let _x = Foo(y);
     }

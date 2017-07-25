@@ -8,20 +8,22 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-pub trait OpInt<'a> { fn call<'a>(&'a mut self, int, int) -> int; }
+// pretty-expanded FIXME #23616
 
-impl<'a> OpInt<'a> for |int, int|: 'a -> int {
-    fn call(&mut self, a:int, b:int) -> int {
+pub trait OpInt { fn call(&mut self, _: isize, _: isize) -> isize; }
+
+impl<F> OpInt for F where F: FnMut(isize, isize) -> isize {
+    fn call(&mut self, a:isize, b:isize) -> isize {
         (*self)(a, b)
     }
 }
 
-fn squarei<'a>(x: int, op: &'a mut OpInt) -> int { op.call(x, x) }
+fn squarei<'a>(x: isize, op: &'a mut OpInt) -> isize { op.call(x, x) }
 
-fn muli(x:int, y:int) -> int { x * y }
+fn muli(x:isize, y:isize) -> isize { x * y }
 
 pub fn main() {
-    let mut f = |x,y| muli(x,y);
+    let mut f = |x, y| muli(x, y);
     {
         let g = &mut f;
         let h = g as &mut OpInt;

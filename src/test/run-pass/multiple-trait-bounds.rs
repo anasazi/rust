@@ -8,9 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// pretty-expanded FIXME #23616
+
 fn f<T:PartialEq + PartialOrd>(_: T) {
 }
 
 pub fn main() {
-    f(3i);
+    f(3);
 }

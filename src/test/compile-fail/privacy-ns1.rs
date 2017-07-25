@@ -11,7 +11,6 @@
 // Check we do the correct privacy checks when we import a name and there is an
 // item with that name in both the value and type namespaces.
 
-#![feature(globs)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
@@ -28,7 +27,7 @@ pub mod foo1 {
 fn test_glob1() {
     use foo1::*;
 
-    Bar();  //~ ERROR unresolved name `Bar`.
+    Bar();  //~ ERROR expected function, found trait `Bar`
 }
 
 // private type, public value
@@ -43,7 +42,7 @@ pub mod foo2 {
 fn test_glob2() {
     use foo2::*;
 
-    let _x: Box<Bar>;  //~ ERROR use of undeclared type name `Bar`
+    let _x: Box<Bar>;  //~ ERROR expected type, found function `Bar`
 }
 
 // neither public
@@ -58,10 +57,9 @@ pub mod foo3 {
 fn test_glob3() {
     use foo3::*;
 
-    Bar();  //~ ERROR unresolved name `Bar`.
-    let _x: Box<Bar>;  //~ ERROR  use of undeclared type name `Bar`
+    Bar();  //~ ERROR cannot find function `Bar` in this scope
+    let _x: Box<Bar>;  //~ ERROR cannot find type `Bar` in this scope
 }
 
 fn main() {
 }
-

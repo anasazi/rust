@@ -8,14 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate debug;
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
 trait T {
     fn print(&self);
 }
 
+#[derive(Debug)]
 struct S {
-    s: int,
+    s: isize,
 }
 
 impl T for S {
@@ -34,8 +36,7 @@ fn print_s(s: &S) {
 
 pub fn main() {
     let s: Box<S> = box S { s: 5 };
-    print_s(s);
+    print_s(&*s);
     let t: Box<T> = s as Box<T>;
-    print_t(t);
-
+    print_t(&*t);
 }

@@ -8,36 +8,33 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-tidy-linelength
-
 #![allow(dead_code)]
-#![deny(uppercase_variables)]
+#![deny(non_snake_case)]
 
-use std::io::File;
-use std::io::IoError;
-
-struct Something {
-    X: uint //~ ERROR structure field names should start with a lowercase character
+mod foo {
+    pub enum Foo { Foo }
 }
 
-fn test(Xx: uint) { //~ ERROR variable names should start with a lowercase character
+struct Something {
+    X: usize //~ ERROR structure field `X` should have a snake case name such as `x`
+}
+
+fn test(Xx: usize) { //~ ERROR variable `Xx` should have a snake case name such as `xx`
     println!("{}", Xx);
 }
 
 fn main() {
-    let Test: uint = 0; //~ ERROR variable names should start with a lowercase character
+    let Test: usize = 0; //~ ERROR variable `Test` should have a snake case name such as `test`
     println!("{}", Test);
 
-    let mut f = File::open(&Path::new("something.txt"));
-    let mut buff = [0u8, ..16];
-    match f.read(buff) {
-        Ok(cnt) => println!("read this many bytes: {}", cnt),
-        Err(IoError{ kind: EndOfFile, .. }) => println!("Got end of file: {}", EndOfFile.to_string()),
-                        //~^ ERROR variable names should start with a lowercase character
+    match foo::Foo::Foo {
+        Foo => {}
+//~^ ERROR variable `Foo` should have a snake case name such as `foo`
+//~^^ WARN `Foo` is named the same as one of the variants of the type `foo::Foo`
+//~^^^ WARN unused variable: `Foo`
     }
 
     test(1);
 
     let _ = Something { X: 0 };
 }
-

@@ -8,9 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-pretty - token trees can't pretty print
-
-#![feature(macro_rules)]
+#![feature(custom_attribute)]
 
 macro_rules! compiles_fine {
     (#[$at:meta]) => {
@@ -27,7 +25,7 @@ macro_rules! compiles_fine {
 }
 
 // item
-compiles_fine!(#[foo])
+compiles_fine!(#[foo]);
 
 pub fn main() {
     // statement

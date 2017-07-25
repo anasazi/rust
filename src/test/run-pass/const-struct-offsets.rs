@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// pretty-expanded FIXME #23616
+
 enum Foo {
     IntVal(i32),
     Int64Val(i64)
@@ -18,6 +20,6 @@ struct Bar {
     v: Foo
 }
 
-static bar: Bar = Bar { i: 0, v: IntVal(0) };
+static bar: Bar = Bar { i: 0, v: Foo::IntVal(0) };
 
 pub fn main() {}

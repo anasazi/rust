@@ -8,21 +8,25 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate debug;
+// ignore-emscripten no threads support
 
-use std::task;
+#![feature(std_misc)]
+
+use std::thread;
+use std::sync::mpsc::{channel, Sender};
 
 pub fn main() {
     let (tx, rx) = channel();
-    let _t = task::spawn(proc() { child(&tx) });
-    let y = rx.recv();
+    let t = thread::spawn(move|| { child(&tx) });
+    let y = rx.recv().unwrap();
     println!("received");
-    println!("{:?}", y);
+    println!("{}", y);
     assert_eq!(y, 10);
+    t.join();
 }
 
-fn child(c: &Sender<int>) {
+fn child(c: &Sender<isize>) {
     println!("sending");
-    c.send(10);
+    c.send(10).unwrap();
     println!("value sent");
 }

@@ -9,7 +9,10 @@
 // except according to those terms.
 
 
-fn f(i: &mut Box<int>) {
+#![allow(unknown_features)]
+#![feature(box_syntax)]
+
+fn f(i: &mut Box<isize>) {
     *i = box 200;
 }
 

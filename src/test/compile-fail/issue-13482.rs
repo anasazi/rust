@@ -8,11 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![feature(slice_patterns)]
+
 fn main() {
   let x = [1,2];
   let y = match x {
-    [] => None,
-//~^ ERROR expected `[<generic integer #1>, .. 2]` but found a fixed vector pattern of size 0
+    [] => None, //~ ERROR pattern requires 0 elements but array has 2
     [a,_] => Some(a)
   };
 }

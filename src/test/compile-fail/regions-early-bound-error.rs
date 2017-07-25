@@ -15,7 +15,7 @@ trait GetRef<'a, T> {
     fn get(&self) -> &'a T;
 }
 
-struct Box<'a, T> {
+struct Box<'a, T:'a> {
     t: &'a T
 }
 
@@ -25,8 +25,9 @@ impl<'a,T:Clone> GetRef<'a,T> for Box<'a,T> {
     }
 }
 
-fn get<'a,'b,G:GetRef<'a, int>>(g1: G, b: &'b int) -> &'b int {
-    g1.get() //~ ERROR lifetime mismatch
+fn get<'a,'b,G:GetRef<'a, isize>>(g1: G, b: &'b isize) -> &'b isize {
+    g1.get()
+    //~^ ERROR E0312
 }
 
 fn main() {

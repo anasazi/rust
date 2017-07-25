@@ -9,8 +9,14 @@
 // except according to those terms.
 
 pub fn main() {
-    assert!(Some(box() ()).is_some());
+    assert!(Some(Box::new(())).is_some());
+
+    let xs: Box<[()]> = Box::<[(); 0]>::new([]);
+    assert!(Some(xs).is_some());
 
     struct Foo;
-    assert!(Some(box Foo).is_some());
+    assert!(Some(Box::new(Foo)).is_some());
+
+    let ys: Box<[Foo]> = Box::<[Foo; 0]>::new([]);
+    assert!(Some(ys).is_some());
 }

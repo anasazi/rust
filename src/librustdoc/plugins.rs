@@ -8,15 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![allow(deprecated)]
+
 use clean;
 
-use dl = std::dynamic_lib;
-use serialize::json;
 use std::mem;
 use std::string::String;
+use std::path::PathBuf;
 
-pub type PluginJson = Option<(String, json::Json)>;
-pub type PluginResult = (clean::Crate, PluginJson);
+use rustc_back::dynamic_lib as dl;
+
+pub type PluginResult = clean::Crate;
 pub type PluginCallback = fn (clean::Crate) -> PluginResult;
 
 /// Manages loading and running of plugins
@@ -24,12 +26,12 @@ pub struct PluginManager {
     dylibs: Vec<dl::DynamicLibrary> ,
     callbacks: Vec<PluginCallback> ,
     /// The directory plugins will be loaded from
-    pub prefix: Path,
+    pub prefix: PathBuf,
 }
 
 impl PluginManager {
     /// Create a new plugin manager
-    pub fn new(prefix: Path) -> PluginManager {
+    pub fn new(prefix: PathBuf) -> PluginManager {
         PluginManager {
             dylibs: Vec::new(),
             callbacks: Vec::new(),
@@ -40,7 +42,7 @@ impl PluginManager {
     /// Load a plugin with the given name.
     ///
     /// Turns `name` into the proper dynamic library filename for the given
-    /// platform. On windows, it turns into name.dll, on OS X, name.dylib, and
+    /// platform. On windows, it turns into name.dll, on macOS, name.dylib, and
     /// elsewhere, libname.so.
     pub fn load_plugin(&mut self, name: String) {
         let x = self.prefix.join(libname(name));
@@ -61,19 +63,15 @@ impl PluginManager {
         self.callbacks.push(plugin);
     }
     /// Run all the loaded plugins over the crate, returning their results
-    pub fn run_plugins(&self, krate: clean::Crate) -> (clean::Crate, Vec<PluginJson> ) {
-        let mut out_json = Vec::new();
-        let mut krate = krate;
-        for &callback in self.callbacks.iter() {
-            let (c, res) = callback(krate);
-            krate = c;
-            out_json.push(res);
+    pub fn run_plugins(&self, mut krate: clean::Crate) -> clean::Crate {
+        for &callback in &self.callbacks {
+            krate = callback(krate);
         }
-        (krate, out_json)
+        krate
     }
 }
 
-#[cfg(target_os="win32")]
+#[cfg(target_os = "windows")]
 fn libname(mut n: String) -> String {
     n.push_str(".dll");
     n
@@ -85,10 +83,10 @@ fn libname(mut n: String) -> String {
     n
 }
 
-#[cfg(not(target_os="win32"), not(target_os="macos"))]
+#[cfg(all(not(target_os="windows"), not(target_os="macos")))]
 fn libname(n: String) -> String {
-    let mut i = String::from_str("lib");
-    i.push_str(n.as_slice());
+    let mut i = String::from("lib");
+    i.push_str(&n);
     i.push_str(".so");
     i
 }

@@ -10,10 +10,6 @@
 
 // Binop corner cases
 
-#![feature(managed_boxes)]
-
-use std::gc::GC;
-
 fn test_nil() {
     assert_eq!((), ());
     assert!((!(() != ())));
@@ -46,15 +42,11 @@ fn test_bool() {
     assert_eq!(true ^ true, false);
 }
 
-fn test_box() {
-    assert_eq!(box(GC) 10i, box(GC) 10i);
-}
-
 fn test_ptr() {
     unsafe {
-        let p1: *const u8 = ::std::mem::transmute(0u);
-        let p2: *const u8 = ::std::mem::transmute(0u);
-        let p3: *const u8 = ::std::mem::transmute(1u);
+        let p1: *const u8 = ::std::mem::transmute(0_usize);
+        let p2: *const u8 = ::std::mem::transmute(0_usize);
+        let p3: *const u8 = ::std::mem::transmute(1_usize);
 
         assert_eq!(p1, p2);
         assert!(p1 != p3);
@@ -67,13 +59,13 @@ fn test_ptr() {
     }
 }
 
-#[deriving(PartialEq, Show)]
+#[derive(PartialEq, Debug)]
 struct p {
-  x: int,
-  y: int,
+  x: isize,
+  y: isize,
 }
 
-fn p(x: int, y: int) -> p {
+fn p(x: isize, y: isize) -> p {
     p {
         x: x,
         y: y
@@ -86,8 +78,8 @@ fn test_class() {
 
   unsafe {
   println!("q = {:x}, r = {:x}",
-         (::std::mem::transmute::<*const p, uint>(&q)),
-         (::std::mem::transmute::<*const p, uint>(&r)));
+         (::std::mem::transmute::<*const p, usize>(&q)),
+         (::std::mem::transmute::<*const p, usize>(&r)));
   }
   assert_eq!(q, r);
   r.y = 17;
@@ -99,7 +91,6 @@ fn test_class() {
 pub fn main() {
     test_nil();
     test_bool();
-    test_box();
     test_ptr();
     test_class();
 }

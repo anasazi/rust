@@ -8,6 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+
 fn foo<T:Clone>(x: &T) -> T{
     match x {
         &ref a => (*a).clone()
@@ -15,6 +16,6 @@ fn foo<T:Clone>(x: &T) -> T{
 }
 
 pub fn main() {
-    assert_eq!(foo(&3i), 3i);
+    assert_eq!(foo(&3), 3);
     assert_eq!(foo(&'a'), 'a');
 }

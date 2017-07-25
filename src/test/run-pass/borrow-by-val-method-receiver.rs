@@ -8,16 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-
 trait Foo {
     fn foo(self);
 }
 
-impl<'a> Foo for &'a [int] {
+impl<'a> Foo for &'a [isize] {
     fn foo(self) {}
 }
 
 pub fn main() {
-    let items = vec!( 3, 5, 1, 2, 4 );
-    items.as_slice().foo();
+    let items = vec![ 3, 5, 1, 2, 4 ];
+    items.foo();
 }

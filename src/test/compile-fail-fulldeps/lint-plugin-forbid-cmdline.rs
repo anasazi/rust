@@ -12,10 +12,8 @@
 // ignore-stage1
 // compile-flags: -F test-lint
 
-#![feature(phase)]
-
-#[phase(plugin)]
-extern crate lint_plugin_test;
+#![feature(plugin)]
+#![plugin(lint_plugin_test)]
 
 fn lintme() { } //~ ERROR item is named 'lintme'
 

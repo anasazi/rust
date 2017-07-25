@@ -9,19 +9,20 @@
 // except according to those terms.
 
 
-type compare<'a, T> = |T, T|: 'a -> bool;
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
-fn test_generic<T:Clone>(expected: T, eq: compare<T>) {
+fn test_generic<T: Clone, F>(expected: T, eq: F) where F: FnOnce(T, T) -> bool {
     let actual: T = match true {
         true => expected.clone(),
-        _ => fail!("wat")
+        _ => panic!("wat")
     };
-    assert!((eq(expected, actual)));
+    assert!(eq(expected, actual));
 }
 
 fn test_vec() {
-    fn compare_box(v1: Box<int>, v2: Box<int>) -> bool { return v1 == v2; }
-    test_generic::<Box<int>>(box 1, compare_box);
+    fn compare_box(v1: Box<isize>, v2: Box<isize>) -> bool { return v1 == v2; }
+    test_generic::<Box<isize>, _>(box 1, compare_box);
 }
 
 pub fn main() { test_vec(); }

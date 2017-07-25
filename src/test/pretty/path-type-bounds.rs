@@ -11,14 +11,15 @@
 // pp-exact
 
 
-trait Tr { }
-impl Tr for int { }
+trait Tr {
+    fn dummy(&self) { }
+}
+impl Tr for isize { }
 
-fn foo(x: Box<Tr+ Share>) -> Box<Tr+ Share> { x }
+fn foo<'a>(x: Box< Tr + Sync + 'a>) -> Box< Tr + Sync + 'a> { x }
 
 fn main() {
-    let x: Box<Tr+ Share>;
+    let x: Box< Tr + Sync>;
 
-    box() 1i as Box<Tr+ Share>;
+    Box::new(1isize) as Box< Tr + Sync>;
 }
-

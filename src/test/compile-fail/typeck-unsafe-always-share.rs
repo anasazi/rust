@@ -8,36 +8,35 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Verify that Unsafe is *always* share regardles `T` is share.
+// Verify that UnsafeCell is *always* !Sync regardless if `T` is sync.
 
-// ignore-tidy-linelength
+#![feature(optin_builtin_traits)]
 
-use std::ty::Unsafe;
-use std::kinds::marker;
+use std::cell::UnsafeCell;
+use std::marker::Sync;
 
-struct MyShare<T> {
-    u: Unsafe<T>
+struct MySync<T> {
+    u: UnsafeCell<T>
 }
 
-struct NoShare {
-    m: marker::NoShare
-}
+struct NoSync;
+impl !Sync for NoSync {}
 
-fn test<T: Share>(s: T){
-
-}
+fn test<T: Sync>(s: T) {}
 
 fn main() {
-    let us = Unsafe::new(MyShare{u: Unsafe::new(0i)});
+    let us = UnsafeCell::new(MySync{u: UnsafeCell::new(0)});
     test(us);
+    //~^ ERROR `std::cell::UnsafeCell<MySync<{integer}>>: std::marker::Sync` is not satisfied
 
-    let uns = Unsafe::new(NoShare{m: marker::NoShare});
+    let uns = UnsafeCell::new(NoSync);
     test(uns);
+    //~^ ERROR `std::cell::UnsafeCell<NoSync>: std::marker::Sync` is not satisfied
 
-    let ms = MyShare{u: uns};
+    let ms = MySync{u: uns};
     test(ms);
+    //~^ ERROR `std::cell::UnsafeCell<NoSync>: std::marker::Sync` is not satisfied
 
-    let ns = NoShare{m: marker::NoShare};
-    test(ns);
-    //~^ ERROR instantiating a type parameter with an incompatible type `NoShare`, which does not fulfill `Share`
+    test(NoSync);
+    //~^ ERROR `NoSync: std::marker::Sync` is not satisfied
 }

@@ -8,11 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(managed_boxes)]
 
 use std::cell::Cell;
 use std::mem::swap;
-use std::gc::{Gc, GC};
 
 // Just a grab bag of stuff that you wouldn't want to actually write.
 
@@ -24,10 +22,10 @@ fn funny() {
 }
 
 fn what() {
-    fn the(x: Gc<Cell<bool>>) {
+    fn the(x: &Cell<bool>) {
         return while !x.get() { x.set(true); };
     }
-    let i = box(GC) Cell::new(false);
+    let i = &Cell::new(false);
     let dont = {||the(i)};
     dont();
     assert!((i.get()));
@@ -38,7 +36,7 @@ fn zombiejesus() {
         while (return) {
             if (return) {
                 match (return) {
-                    1i => {
+                    1 => {
                         if (return) {
                             return
                         } else {
@@ -56,28 +54,58 @@ fn zombiejesus() {
 }
 
 fn notsure() {
-    let mut _x: int;
+    let mut _x: isize;
     let mut _y = (_x = 0) == (_x = 0);
     let mut _z = (_x = 0) < (_x = 0);
     let _a = (_x += 0) == (_x = 0);
     let _b = swap(&mut _y, &mut _z) == swap(&mut _y, &mut _z);
 }
 
-fn canttouchthis() -> uint {
+fn canttouchthis() -> usize {
     fn p() -> bool { true }
     let _a = (assert!((true)) == (assert!(p())));
     let _c = (assert!((p())) == ());
-    let _b: bool = (println!("{}", 0i) == (return 0u));
+    let _b: bool = (println!("{}", 0) == (return 0));
 }
 
 fn angrydome() {
     loop { if break { } }
-    let mut i = 0i;
-    loop { i += 1; if i == 1 { match (continue) { 1i => { }, _ => fail!("wat") } }
+    let mut i = 0;
+    loop { i += 1; if i == 1 { match (continue) { 1 => { }, _ => panic!("wat") } }
       break; }
 }
 
 fn evil_lincoln() { let _evil = println!("lincoln"); }
+
+fn dots() {
+    assert_eq!(String::from(".................................................."),
+               format!("{:?}", .. .. .. .. .. .. .. .. .. .. .. .. ..
+                               .. .. .. .. .. .. .. .. .. .. .. ..));
+}
+
+fn you_eight() {
+    assert_eq!(8, {
+        macro_rules! u8 {
+            (u8) => {
+                mod u8 {
+                    pub fn u8<'u8>(u8: &'u8 u8) -> &'u8 u8 {
+                        "u8";
+                        u8
+                    }
+                }
+            };
+        }
+
+        u8!(u8);
+        let &u8: &u8 = u8::u8(&8u8);
+        u8
+    });
+}
+
+fn fishy() {
+    assert_eq!(String::from("><>"),
+               String::<>::from::<>("><>").chars::<>().rev::<>().collect::<String>());
+}
 
 pub fn main() {
     strange();
@@ -88,4 +116,7 @@ pub fn main() {
     canttouchthis();
     angrydome();
     evil_lincoln();
+    dots();
+    you_eight();
+    fishy();
 }

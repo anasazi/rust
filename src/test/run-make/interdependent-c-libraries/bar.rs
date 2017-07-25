@@ -12,7 +12,7 @@
 
 extern crate foo;
 
-#[link(name = "bar")]
+#[link(name = "bar", kind = "static")]
 extern {
     fn bar();
 }
@@ -20,4 +20,3 @@ extern {
 pub fn doit() {
     unsafe { bar(); }
 }
-

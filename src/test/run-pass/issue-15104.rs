@@ -8,14 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+
+#![feature(slice_patterns)]
+
 fn main() {
     assert_eq!(count_members(&[1, 2, 3, 4]), 4);
 }
 
-fn count_members(v: &[uint]) -> uint {
-    match v {
+fn count_members(v: &[usize]) -> usize {
+    match *v {
         []         => 0,
         [_]        => 1,
-        [_x, ..xs] => 1 + count_members(xs)
+        [_, ref xs..] => 1 + count_members(xs)
     }
 }

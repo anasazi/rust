@@ -8,16 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(struct_variant)]
-
-#[deriving(PartialEq, Show)]
+#[derive(PartialEq, Debug)]
 enum S {
-    X { x: int, y: int },
+    X { x: isize, y: isize },
     Y
 }
 
 pub fn main() {
-    let x = X { x: 1, y: 2 };
+    let x = S::X { x: 1, y: 2 };
     assert_eq!(x, x);
     assert!(!(x != x));
 }

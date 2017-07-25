@@ -8,34 +8,37 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-android: FIXME(#10381)
+// LLDB can't handle zero-sized values
+// ignore-lldb
+
 
 // compile-flags:-g
-// gdb-command:rbreak zzz
 // gdb-command:run
-// gdb-command:finish
 
 // gdb-command:print first
-// gdb-check:$1 = {<No data fields>}
+// gdbg-check:$1 = {<No data fields>}
+// gdbr-check:$1 = <error reading variable>
 
 // gdb-command:print second
-// gdb-check:$2 = {<No data fields>}
+// gdbg-check:$2 = {<No data fields>}
+// gdbr-check:$2 = <error reading variable>
 
-#![allow(unused_variable)]
+#![allow(unused_variables)]
+#![feature(omit_gdb_pretty_printer_section)]
+#![omit_gdb_pretty_printer_section]
 
 enum ANilEnum {}
 enum AnotherNilEnum {}
 
-// I (mw) am not sure this test case makes much sense...
-// Also, it relies on some implementation details:
-// 1. That empty enums as well as '()' are represented as empty structs
-// 2. That gdb prints the string "{<No data fields>}" for empty structs (which may change some time)
+// This test relies on gdbg printing the string "{<No data fields>}" for empty
+// structs (which may change some time)
+// The error from gdbr is expected since nil enums are not supposed to exist.
 fn main() {
     unsafe {
-        let first: ANilEnum = std::mem::transmute(());
-        let second: AnotherNilEnum = std::mem::transmute(());
+        let first: ANilEnum = ::std::mem::zeroed();
+        let second: AnotherNilEnum = ::std::mem::zeroed();
 
-        zzz();
+        zzz(); // #break
     }
 }
 

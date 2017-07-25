@@ -8,13 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::u8;
+// pretty-expanded FIXME #23616
 
-static NUM: uint = u8::BITS as uint;
+mod u8 {
+    pub const BITS: usize = 8;
+}
 
-struct MyStruct { nums: [uint, ..8] }
+const NUM: usize = u8::BITS;
 
+struct MyStruct { nums: [usize; 8] }
 
 fn main() {
-    let _s = MyStruct { nums: [0, ..NUM] };
+    let _s = MyStruct { nums: [0; NUM] };
 }

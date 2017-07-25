@@ -8,8 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+
+use std::cmp::Ordering;
+
 // Test default methods in PartialOrd and PartialEq
 //
+#[derive(Debug)]
 struct Fool(bool);
 
 impl PartialEq for Fool {
@@ -20,7 +24,7 @@ impl PartialEq for Fool {
     }
 }
 
-struct Int(int);
+struct Int(isize);
 
 impl PartialEq for Int {
     fn eq(&self, other: &Int) -> bool {
@@ -38,7 +42,7 @@ impl PartialOrd for Int {
     }
 }
 
-struct RevInt(int);
+struct RevInt(isize);
 
 impl PartialEq for RevInt {
     fn eq(&self, other: &RevInt) -> bool {
@@ -71,8 +75,8 @@ pub fn main() {
     assert!(RevInt(1) >= RevInt(2));
     assert!(RevInt(1) >= RevInt(1));
 
-    assert!(Fool(true)  == Fool(false));
+    assert_eq!(Fool(true), Fool(false));
     assert!(Fool(true)  != Fool(true));
     assert!(Fool(false) != Fool(false));
-    assert!(Fool(false) == Fool(true));
+    assert_eq!(Fool(false), Fool(true));
 }

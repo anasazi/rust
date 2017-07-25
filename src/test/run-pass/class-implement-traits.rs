@@ -13,19 +13,19 @@ trait noisy {
     fn speak(&mut self);
 }
 
-#[deriving(Clone)]
+#[derive(Clone)]
 struct cat {
-    meows : uint,
+    meows : usize,
 
-    how_hungry : int,
+    how_hungry : isize,
     name : String,
 }
 
 impl cat {
     fn meow(&mut self) {
         println!("Meow");
-        self.meows += 1u;
-        if self.meows % 5u == 0u {
+        self.meows += 1_usize;
+        if self.meows % 5_usize == 0_usize {
             self.how_hungry += 1;
         }
     }
@@ -48,7 +48,7 @@ impl noisy for cat {
     fn speak(&mut self) { self.meow(); }
 }
 
-fn cat(in_x : uint, in_y : int, in_name: String) -> cat {
+fn cat(in_x : usize, in_y : isize, in_name: String) -> cat {
     cat {
         meows: in_x,
         how_hungry: in_y,
@@ -62,10 +62,10 @@ fn make_speak<C:noisy>(mut c: C) {
 }
 
 pub fn main() {
-    let mut nyan = cat(0u, 2, "nyan".to_string());
+    let mut nyan = cat(0_usize, 2, "nyan".to_string());
     nyan.eat();
     assert!((!nyan.eat()));
-    for _ in range(1u, 10u) {
+    for _ in 1_usize..10_usize {
         make_speak(nyan.clone());
     }
 }

@@ -8,8 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// ignore-emscripten no threads support
 
-use std::task;
+use std::sync::mpsc::{channel, Sender};
+use std::thread;
 
 struct complainer {
     tx: Sender<bool>,
@@ -18,7 +20,7 @@ struct complainer {
 impl Drop for complainer {
     fn drop(&mut self) {
         println!("About to send!");
-        self.tx.send(true);
+        self.tx.send(true).unwrap();
         println!("Sent!");
     }
 }
@@ -32,12 +34,13 @@ fn complainer(tx: Sender<bool>) -> complainer {
 
 fn f(tx: Sender<bool>) {
     let _tx = complainer(tx);
-    fail!();
+    panic!();
 }
 
 pub fn main() {
     let (tx, rx) = channel();
-    task::spawn(proc() f(tx.clone()));
+    let t = thread::spawn(move|| f(tx.clone()));
     println!("hiiiiiiiii");
-    assert!(rx.recv());
+    assert!(rx.recv().unwrap());
+    drop(t.join());
 }

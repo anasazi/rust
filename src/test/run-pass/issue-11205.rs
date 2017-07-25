@@ -8,85 +8,87 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// pretty-expanded FIXME #23616
+
 #![allow(dead_code)]
 
-trait Foo {}
-impl Foo for int {}
-fn foo(_: [&Foo, ..2]) {}
+trait Foo { fn dummy(&self) { } }
+impl Foo for isize {}
+fn foo(_: [&Foo; 2]) {}
 fn foos(_: &[&Foo]) {}
 fn foog<T>(_: &[T], _: &[T]) {}
 
-fn bar(_: [Box<Foo>, ..2]) {}
-fn bars(_: &[Box<Foo>]) {}
+fn bar(_: [Box<Foo>; 2]) {}
+fn bars(_: &[Box<Foo+'static>]) {}
 
 fn main() {
-    let x: [&Foo, ..2] = [&1i, &2i];
+    let x: [&Foo; 2] = [&1, &2];
     foo(x);
-    foo([&1i, &2i]);
+    foo([&1, &2]);
 
-    let r = &1i;
-    let x: [&Foo, ..2] = [r, ..2];
+    let r = &1;
+    let x: [&Foo; 2] = [r; 2];
     foo(x);
-    foo([&1i, ..2]);
+    foo([&1; 2]);
 
-    let x: &[&Foo] = &[&1i, &2i];
+    let x: &[&Foo] = &[&1, &2];
     foos(x);
-    foos(&[&1i, &2i]);
+    foos(&[&1, &2]);
 
-    let x: &[&Foo] = &[&1i, &2i];
-    let r = &1i;
+    let x: &[&Foo] = &[&1, &2];
+    let r = &1;
     foog(x, &[r]);
 
-    let x: [Box<Foo>, ..2] = [box 1i, box 2i];
+    let x: [Box<Foo>; 2] = [Box::new(1), Box::new(2)];
     bar(x);
-    bar([box 1i, box 2i]);
+    bar([Box::new(1), Box::new(2)]);
 
-    let x: &[Box<Foo>] = &[box 1i, box 2i];
+    let x: &[Box<Foo+'static>] = &[Box::new(1), Box::new(2)];
     bars(x);
-    bars(&[box 1i, box 2i]);
+    bars(&[Box::new(1), Box::new(2)]);
 
-    let x: &[Box<Foo>] = &[box 1i, box 2i];
-    foog(x, &[box 1i]);
+    let x: &[Box<Foo+'static>] = &[Box::new(1), Box::new(2)];
+    foog(x, &[Box::new(1)]);
 
     struct T<'a> {
-        t: [&'a Foo, ..2]
+        t: [&'a (Foo+'a); 2]
     }
     let _n = T {
-        t: [&1i, &2i]
+        t: [&1, &2]
     };
-    let r = &1i;
+    let r = &1;
     let _n = T {
-        t: [r, ..2]
+        t: [r; 2]
     };
-    let x: [&Foo, ..2] = [&1i, &2i];
+    let x: [&Foo; 2] = [&1, &2];
     let _n = T {
         t: x
     };
 
     struct F<'b> {
-        t: &'b [&'b Foo]
+        t: &'b [&'b (Foo+'b)]
     }
     let _n = F {
-        t: &[&1i, &2i]
+        t: &[&1, &2]
     };
-    let r = &1i;
-    let r: [&Foo, ..2] = [r, ..2];
+    let r = &1;
+    let r: [&Foo; 2] = [r; 2];
     let _n = F {
-        t: r
+        t: &r
     };
-    let x: [&Foo, ..2] = [&1i, &2i];
+    let x: [&Foo; 2] = [&1, &2];
     let _n = F {
-        t: x
+        t: &x
     };
 
     struct M<'a> {
-        t: &'a [Box<Foo>]
+        t: &'a [Box<Foo+'static>]
     }
     let _n = M {
-        t: &[box 1i, box 2i]
+        t: &[Box::new(1), Box::new(2)]
     };
-    let x: [Box<Foo>, ..2] = [box 1i, box 2i];
+    let x: [Box<Foo>; 2] = [Box::new(1), Box::new(2)];
     let _n = M {
-        t: x
+        t: &x
     };
 }

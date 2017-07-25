@@ -8,23 +8,24 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+
 enum X {
-    Foo(uint),
+    Foo(usize),
     Bar(bool)
 }
 
 fn main() {
-    let x = match Foo(42) {
-        Foo(..) => 1i,
+    let x = match X::Foo(42) {
+        X::Foo(..) => 1,
         _ if true => 0,
-        Bar(..) => fail!("Oh dear")
+        X::Bar(..) => panic!("Oh dear")
     };
     assert_eq!(x, 1);
 
-    let x = match Foo(42) {
-        _ if true => 0i,
-        Foo(..) => 1,
-        Bar(..) => fail!("Oh dear")
+    let x = match X::Foo(42) {
+        _ if true => 0,
+        X::Foo(..) => 1,
+        X::Bar(..) => panic!("Oh dear")
     };
     assert_eq!(x, 0);
 }

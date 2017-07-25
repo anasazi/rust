@@ -10,7 +10,8 @@
 
 // Checks that immutable static items can't have mutable slices
 
-static TEST: &'static mut [int] = &mut [];
-//~^ ERROR static items are not allowed to have mutable slices
+static TEST: &'static mut [isize] = &mut [];
+//~^ ERROR references in statics may only refer to immutable values
+//~^^ ERROR references in statics may only refer to immutable values
 
 pub fn main() { }

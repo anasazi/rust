@@ -8,19 +8,34 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::io::{ChanReader, ChanWriter};
-use std::task::TaskBuilder;
+// ignore-emscripten no threads support
+
+#![feature(box_syntax, set_stdio)]
+
+use std::io::prelude::*;
+use std::io;
+use std::str;
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+struct Sink(Arc<Mutex<Vec<u8>>>);
+impl Write for Sink {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        Write::write(&mut *self.0.lock().unwrap(), data)
+    }
+    fn flush(&mut self) -> io::Result<()> { Ok(()) }
+}
 
 fn main() {
-    let (tx, rx) = channel();
-    let mut reader = ChanReader::new(rx);
-    let stderr = ChanWriter::new(tx);
-
-    let res = TaskBuilder::new().stderr(box stderr as Box<Writer + Send>).try(proc() -> () {
-        fail!("Hello, world!")
-    });
+    let data = Arc::new(Mutex::new(Vec::new()));
+    let sink = Sink(data.clone());
+    let res = thread::Builder::new().spawn(move|| -> () {
+        io::set_panic(Some(Box::new(sink)));
+        panic!("Hello, world!")
+    }).unwrap().join();
     assert!(res.is_err());
 
-    let output = reader.read_to_string().unwrap();
-    assert!(output.as_slice().contains("Hello, world!"));
+    let output = data.lock().unwrap();
+    let output = str::from_utf8(&output).unwrap();
+    assert!(output.contains("Hello, world!"));
 }

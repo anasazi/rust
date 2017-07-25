@@ -1,4 +1,6 @@
- // Copyright 2013 The Rust Project Developers. See the COPYRIGHT
+// pretty-expanded FIXME #23616
+
+// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,22 +10,23 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(managed_boxes)]
 #![allow(unnecessary_allocation)]
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
-// Tests for a previous bug that occured due to an interaction
+// Tests for a previous bug that occurred due to an interaction
 // between struct field initialization and the auto-coercion
 // from a vector to a slice. The drop glue was being invoked on
 // the temporary slice with a wrong type, triggering an LLVM assert.
 
 
 struct Thing1<'a> {
-    baz: &'a [Box<int>],
+    baz: &'a [Box<isize>],
     bar: Box<u64>,
 }
 
 struct Thing2<'a> {
-    baz: &'a [Box<int>],
+    baz: &'a [Box<isize>],
     bar: u64,
 }
 
@@ -33,7 +36,7 @@ pub fn main() {
         bar: box 32,
     };
     Thing1 {
-        baz: Vec::new().as_slice(),
+        baz: &Vec::new(),
         bar: box 32,
     };
     let _t2_fixed = Thing2 {
@@ -41,7 +44,7 @@ pub fn main() {
         bar: 32,
     };
     Thing2 {
-        baz: Vec::new().as_slice(),
+        baz: &Vec::new(),
         bar: 32,
     };
 }

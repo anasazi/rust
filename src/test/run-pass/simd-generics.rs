@@ -9,19 +9,28 @@
 // except according to those terms.
 
 
-#![feature(simd)]
+
+#![feature(repr_simd, platform_intrinsics)]
 
 use std::ops;
 
-#[simd] struct f32x4(f32, f32, f32, f32);
+#[repr(simd)]
+#[derive(Copy, Clone)]
+struct f32x4(f32, f32, f32, f32);
 
-fn add<T: ops::Add<T, T>>(lhs: T, rhs: T) -> T {
+extern "platform-intrinsic" {
+    fn simd_add<T>(x: T, y: T) -> T;
+}
+
+fn add<T: ops::Add<Output=T>>(lhs: T, rhs: T) -> T {
     lhs + rhs
 }
 
-impl ops::Add<f32x4, f32x4> for f32x4 {
-    fn add(&self, rhs: &f32x4) -> f32x4 {
-        *self + *rhs
+impl ops::Add for f32x4 {
+    type Output = f32x4;
+
+    fn add(self, rhs: f32x4) -> f32x4 {
+        unsafe {simd_add(self, rhs)}
     }
 }
 

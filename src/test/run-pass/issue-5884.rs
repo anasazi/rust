@@ -8,21 +8,22 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(managed_boxes)]
+// pretty-expanded FIXME #23616
 
-use std::gc::Gc;
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
 pub struct Foo {
-    a: int,
+    a: isize,
 }
 
 struct Bar<'a> {
-    a: Box<Option<int>>,
+    a: Box<Option<isize>>,
     b: &'a Foo,
 }
 
-fn check(a: Gc<Foo>) {
-    let _ic = Bar{ b: a, a: box None };
+fn check(a: Box<Foo>) {
+    let _ic = Bar{ b: &*a, a: box None };
 }
 
 pub fn main(){}

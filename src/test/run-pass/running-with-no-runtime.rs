@@ -8,54 +8,51 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate native;
+// ignore-emscripten
 
-use std::io::process::{Command, ProcessOutput};
-use std::os;
+#![feature(start)]
+
+use std::ffi::CStr;
+use std::process::{Command, Output};
+use std::panic;
 use std::str;
-use std::rt::unwind::try;
-
-local_data_key!(foo: int)
 
 #[start]
-fn start(argc: int, argv: *const *const u8) -> int {
+fn start(argc: isize, argv: *const *const u8) -> isize {
     if argc > 1 {
         unsafe {
-            match **argv.offset(1) {
-                1 => {}
-                2 => println!("foo"),
-                3 => assert!(try(|| {}).is_ok()),
-                4 => assert!(try(|| fail!()).is_err()),
-                5 => assert!(try(|| spawn(proc() {})).is_err()),
-                6 => assert!(Command::new("test").spawn().is_err()),
-                7 => assert!(foo.get().is_none()),
-                8 => assert!(try(|| { foo.replace(Some(3)); }).is_err()),
-                _ => fail!()
+            match **argv.offset(1) as char {
+                '1' => {}
+                '2' => println!("foo"),
+                '3' => assert!(panic::catch_unwind(|| {}).is_ok()),
+                '4' => assert!(panic::catch_unwind(|| panic!()).is_err()),
+                '5' => assert!(Command::new("test").spawn().is_err()),
+                _ => panic!()
             }
         }
         return 0
     }
 
-    native::start(argc, argv, main)
+    let args = unsafe {
+        (0..argc as usize).map(|i| {
+            let ptr = *argv.offset(i as isize) as *const _;
+            CStr::from_ptr(ptr).to_bytes().to_vec()
+        }).collect::<Vec<_>>()
+    };
+    let me = String::from_utf8(args[0].to_vec()).unwrap();
+
+    pass(Command::new(&me).arg("1").output().unwrap());
+    pass(Command::new(&me).arg("2").output().unwrap());
+    pass(Command::new(&me).arg("3").output().unwrap());
+    pass(Command::new(&me).arg("4").output().unwrap());
+    pass(Command::new(&me).arg("5").output().unwrap());
+
+    0
 }
 
-fn main() {
-    let args = os::args();
-    let me = args.get(0).as_slice();
-
-    pass(Command::new(me).arg(&[1u8]).output().unwrap());
-    pass(Command::new(me).arg(&[2u8]).output().unwrap());
-    pass(Command::new(me).arg(&[3u8]).output().unwrap());
-    pass(Command::new(me).arg(&[4u8]).output().unwrap());
-    pass(Command::new(me).arg(&[5u8]).output().unwrap());
-    pass(Command::new(me).arg(&[6u8]).output().unwrap());
-    pass(Command::new(me).arg(&[7u8]).output().unwrap());
-    pass(Command::new(me).arg(&[8u8]).output().unwrap());
-}
-
-fn pass(output: ProcessOutput) {
+fn pass(output: Output) {
     if !output.status.success() {
-        println!("{}", str::from_utf8(output.output.as_slice()));
-        println!("{}", str::from_utf8(output.error.as_slice()));
+        println!("{:?}", str::from_utf8(&output.stdout));
+        println!("{:?}", str::from_utf8(&output.stderr));
     }
 }

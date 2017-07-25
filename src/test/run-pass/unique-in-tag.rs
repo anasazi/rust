@@ -8,15 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate debug;
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
 fn test1() {
-    enum bar { u(Box<int>), w(int), }
+    enum bar { u(Box<isize>), w(isize), }
 
-    let x = u(box 10);
+    let x = bar::u(box 10);
     assert!(match x {
-      u(a) => {
-        println!("{:?}", a);
+      bar::u(a) => {
+        println!("{}", a);
         *a
       }
       _ => { 66 }

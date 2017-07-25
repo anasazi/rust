@@ -8,24 +8,46 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-android: FIXME(#10381)
+// ignore-tidy-linelength
+// min-lldb-version: 310
+// ignore-gdb-version: 7.11.90 - 7.12.9
 
 // compile-flags:-g
-// gdb-command:rbreak zzz
+
+// === GDB TESTS ===================================================================================
+
 // gdb-command:run
-// gdb-command:finish
 
 // gdb-command:print *the_a
-// gdb-check:$1 = {{TheA, x = 0, y = 8970181431921507452}, {TheA, 0, 2088533116, 2088533116}}
+// gdbg-check:$1 = {{RUST$ENUM$DISR = TheA, x = 0, y = 8970181431921507452}, {RUST$ENUM$DISR = TheA, [...]}}
+// gdbr-check:$1 = unique_enum::ABC::TheA{x: 0, y: 8970181431921507452}
 
 // gdb-command:print *the_b
-// gdb-check:$2 = {{TheB, x = 0, y = 1229782938247303441}, {TheB, 0, 286331153, 286331153}}
+// gdbg-check:$2 = {{RUST$ENUM$DISR = TheB, [...]}, {RUST$ENUM$DISR = TheB, __0 = 0, __1 = 286331153, __2 = 286331153}}
+// gdbr-check:$2 = unique_enum::ABC::TheB(0, 286331153, 286331153)
 
 // gdb-command:print *univariant
-// gdb-check:$3 = {{123234}}
+// gdbg-check:$3 = {{__0 = 123234}}
+// gdbr-check:$3 = unique_enum::Univariant::TheOnlyCase(123234)
 
-#![allow(unused_variable)]
-#![feature(struct_variant)]
+
+// === LLDB TESTS ==================================================================================
+
+// lldb-command:run
+
+// lldb-command:print *the_a
+// lldb-check:[...]$0 = TheA { x: 0, y: 8970181431921507452 }
+
+// lldb-command:print *the_b
+// lldb-check:[...]$1 = TheB(0, 286331153, 286331153)
+
+// lldb-command:print *univariant
+// lldb-check:[...]$2 = TheOnlyCase(123234)
+
+#![allow(unused_variables)]
+#![feature(box_syntax)]
+#![feature(omit_gdb_pretty_printer_section)]
+#![omit_gdb_pretty_printer_section]
 
 // The first element is to ensure proper alignment, irrespective of the machines word size. Since
 // the size of the discriminant value is machine dependent, this has be taken into account when
@@ -42,7 +64,7 @@ enum Univariant {
 
 fn main() {
 
-    // In order to avoid endianess trouble all of the following test values consist of a single
+    // In order to avoid endianness trouble all of the following test values consist of a single
     // repeated byte. This way each interpretation of the union should look the same, no matter if
     // this is a big or little endian machine.
 
@@ -50,17 +72,17 @@ fn main() {
     // 0b01111100011111000111110001111100 = 2088533116
     // 0b0111110001111100 = 31868
     // 0b01111100 = 124
-    let the_a = box TheA { x: 0, y: 8970181431921507452 };
+    let the_a: Box<_> = box ABC::TheA { x: 0, y: 8970181431921507452 };
 
     // 0b0001000100010001000100010001000100010001000100010001000100010001 = 1229782938247303441
     // 0b00010001000100010001000100010001 = 286331153
     // 0b0001000100010001 = 4369
     // 0b00010001 = 17
-    let the_b = box TheB (0, 286331153, 286331153);
+    let the_b: Box<_> = box ABC::TheB (0, 286331153, 286331153);
 
-    let univariant = box TheOnlyCase(123234);
+    let univariant: Box<_> = box Univariant::TheOnlyCase(123234);
 
-    zzz();
+    zzz(); // #break
 }
 
 fn zzz() {()}

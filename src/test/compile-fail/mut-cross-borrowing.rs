@@ -8,10 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn f(_: &mut int) {}
+#![feature(box_syntax)]
+
+fn f(_: &mut isize) {}
 
 fn main() {
-    let mut x = box 3i;
+    let mut x: Box<_> = box 3;
     f(x)    //~ ERROR mismatched types
 }
-

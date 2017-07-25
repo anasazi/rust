@@ -10,9 +10,9 @@
 
 extern crate lib;
 
-use std::task;
+use std::thread;
 
-static mut statik: int = 0;
+static mut statik: isize = 0;
 
 struct A;
 impl Drop for A {
@@ -22,14 +22,13 @@ impl Drop for A {
 }
 
 fn main() {
-    task::try(proc() {
+    thread::spawn(move|| {
         let _a = A;
-        lib::callback(|| fail!());
-        1i
-    });
+        lib::callback(|| panic!());
+    }).join().unwrap_err();
 
     unsafe {
-        assert!(lib::statik == 1);
-        assert!(statik == 1);
+        assert_eq!(lib::statik, 1);
+        assert_eq!(statik, 1);
     }
 }

@@ -9,8 +9,11 @@
 // except according to those terms.
 
 enum test {
-    div_zero = 1/0, //~ERROR expected constant: attempted to divide by zero
-    rem_zero = 1%0  //~ERROR expected constant: attempted remainder with a divisor of zero
+    div_zero = 1/0, //~ ERROR E0080
+                    //~| attempt to divide by zero
+    rem_zero = 1%0,
+    //~^ ERROR E0080
+    //~| attempt to calculate the remainder with a divisor of zero
 }
 
 fn main() {}

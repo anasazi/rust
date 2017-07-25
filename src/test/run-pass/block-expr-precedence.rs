@@ -13,6 +13,7 @@
 
 // no-reformat
 
+
 /*
  *
  *  When you write a block-expression thing followed by
@@ -58,9 +59,9 @@ pub fn main() {
 
   let num = 12;
 
-  assert_eq!(if (true) { 12i } else { 12 } - num, 0);
-  assert_eq!(12i - if (true) { 12i } else { 12 }, 0);
-  if (true) { 12i; } {-num};
-  if (true) { 12i; }; {-num};
-  if (true) { 12i; };;; -num;
+  assert_eq!(if (true) { 12 } else { 12 } - num, 0);
+  assert_eq!(12 - if (true) { 12 } else { 12 }, 0);
+  if (true) { 12; } {-num};
+  if (true) { 12; }; {-num};
+  if (true) { 12; };;; -num;
 }

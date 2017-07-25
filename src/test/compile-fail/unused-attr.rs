@@ -7,13 +7,15 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
-#![deny(unused_attribute)]
+
+#![deny(unused_attributes)]
 #![allow(dead_code, unused_imports)]
+#![feature(custom_attribute)]
 
 #![foo] //~ ERROR unused attribute
 
 #[foo] //~ ERROR unused attribute
-extern crate std;
+extern crate core;
 
 #[foo] //~ ERROR unused attribute
 use std::collections;
@@ -37,22 +39,22 @@ mod foo {
 fn bar(f: foo::Foo) {
     match f {
         #[foo] //~ ERROR unused attribute
-        foo::Bar => {}
+        foo::Foo::Bar => {}
     }
 }
 
 #[foo] //~ ERROR unused attribute
 struct Foo {
     #[foo] //~ ERROR unused attribute
-    a: int
+    a: isize
 }
 
 #[foo] //~ ERROR unused attribute
 trait Baz {
     #[foo] //~ ERROR unused attribute
-    fn blah();
+    fn blah(&self);
     #[foo] //~ ERROR unused attribute
-    fn blah2() {}
+    fn blah2(&self) {}
 }
 
 fn main() {}

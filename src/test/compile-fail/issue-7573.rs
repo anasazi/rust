@@ -24,24 +24,22 @@ impl CrateId {
 }
 
 pub fn remove_package_from_database() {
-    let mut lines_to_use: Vec<&CrateId> = Vec::new();
+    let mut lines_to_use: Vec<&CrateId> = Vec::new(); //~ ERROR E0495
     let push_id = |installed_id: &CrateId| {
         lines_to_use.push(installed_id);
-        //~^ ERROR cannot infer an appropriate lifetime for automatic coercion due to
-        // conflicting requirements
     };
     list_database(push_id);
 
-    for l in lines_to_use.iter() {
+    for l in &lines_to_use {
         println!("{}", l.local_path);
     }
 
 }
 
-pub fn list_database(f: |&CrateId|) {
+pub fn list_database<F>(mut f: F) where F: FnMut(&CrateId) {
     let stuff = ["foo", "bar"];
 
-    for l in stuff.iter() {
+    for l in &stuff {
         f(&CrateId::new(*l));
     }
 }

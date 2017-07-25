@@ -21,6 +21,7 @@
 // Last 7 bytes of Request struct are not occupied by any fields.
 
 
+
 enum TestOption<T> {
     TestNone,
     TestSome(T),
@@ -35,7 +36,7 @@ fn default_instance() -> &'static Request {
     static instance: Request = Request {
         // LLVM does not allow to specify alignment of expressions, thus
         // alignment of `foo` in constant is 1, not 8.
-        foo: TestNone,
+        foo: TestOption::TestNone,
         bar: 17,
         // Space after last field is not occupied by any data, but it is
         // reserved to make struct aligned properly. If compiler does
@@ -48,7 +49,7 @@ fn default_instance() -> &'static Request {
 
 fn non_default_instance() -> &'static Request {
     static instance: Request = Request {
-        foo: TestSome(0x1020304050607080),
+        foo: TestOption::TestSome(0x1020304050607080),
         bar: 19,
     };
     &instance
@@ -56,11 +57,11 @@ fn non_default_instance() -> &'static Request {
 
 pub fn main() {
     match default_instance() {
-        &Request { foo: TestNone, bar: 17 } => {},
-        _ => fail!(),
+        &Request { foo: TestOption::TestNone, bar: 17 } => {},
+        _ => panic!(),
     };
     match non_default_instance() {
-        &Request { foo: TestSome(0x1020304050607080), bar: 19 } => {},
-        _ => fail!(),
+        &Request { foo: TestOption::TestSome(0x1020304050607080), bar: 19 } => {},
+        _ => panic!(),
     };
 }

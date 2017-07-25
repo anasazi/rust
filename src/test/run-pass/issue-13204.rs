@@ -11,8 +11,9 @@
 // Test that when instantiating trait default methods, typeck handles
 // lifetime parameters defined on the method bound correctly.
 
+
 pub trait Foo {
-    fn bar<'a, I: Iterator<&'a ()>>(&self, it: I) -> uint {
+    fn bar<'a, I: Iterator<Item=&'a ()>>(&self, it: I) -> usize {
         let mut xs = it.filter(|_| true);
         xs.count()
     }
@@ -27,6 +28,6 @@ impl Foo for Baz {
 
 fn main() {
     let x = Baz;
-    let y = vec!((), (), ());
+    let y = vec![(), (), ()];
     assert_eq!(x.bar(y.iter()), 3);
 }

@@ -8,7 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate url;
-use url; //~ ERROR unresolved import (maybe you meant `url::*`?)
+extern crate core;
+use core;
+//~^ ERROR the name `core` is defined multiple times
 
 fn main() {}

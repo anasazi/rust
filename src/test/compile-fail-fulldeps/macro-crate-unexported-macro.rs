@@ -9,14 +9,11 @@
 // except according to those terms.
 
 // aux-build:macro_crate_test.rs
-// ignore-stage1
-// ignore-android
 
-#![feature(phase)]
-
-#[phase(plugin)]
+#[macro_use] #[no_link]
 extern crate macro_crate_test;
 
 fn main() {
-    assert_eq!(3, unexported_macro!()); //~ ERROR macro undefined: 'unexported_macro'
+    unexported_macro!();
+    //~^ ERROR cannot find macro `unexported_macro!` in this scope
 }

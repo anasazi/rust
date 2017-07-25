@@ -8,8 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+
 fn main() {
     let x = "\\\\\
     ";
-    assert!(x == r"\\"); // extraneous whitespace stripped
+    assert_eq!(x, r"\\"); // extraneous whitespace stripped
 }

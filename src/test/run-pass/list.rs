@@ -8,10 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(managed_boxes)]
+// pretty-expanded FIXME #23616
 
-use std::gc::{Gc, GC};
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
-enum list { cons(int, Gc<list>), nil, }
+enum list { cons(isize, Box<list>), nil, }
 
-pub fn main() { cons(10, box(GC) cons(11, box(GC) cons(12, box(GC) nil))); }
+pub fn main() { list::cons(10, box list::cons(11, box list::cons(12, box list::nil))); }

@@ -8,35 +8,38 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate debug;
+// ignore-emscripten no threads support
 
-use std::task;
+#![feature(std_misc)]
+
+use std::thread;
+use std::sync::mpsc::{channel, Sender};
 
 pub fn main() { test00(); }
 
-fn test00_start(c: &Sender<int>, number_of_messages: int) {
-    let mut i: int = 0;
-    while i < number_of_messages { c.send(i + 0); i += 1; }
+fn test00_start(c: &Sender<isize>, number_of_messages: isize) {
+    let mut i: isize = 0;
+    while i < number_of_messages { c.send(i + 0).unwrap(); i += 1; }
 }
 
 fn test00() {
-    let r: int = 0;
-    let mut sum: int = 0;
+    let r: isize = 0;
+    let mut sum: isize = 0;
     let (tx, rx) = channel();
-    let number_of_messages: int = 10;
+    let number_of_messages: isize = 10;
 
-    let result = task::try_future(proc() {
+    let result = thread::spawn(move|| {
         test00_start(&tx, number_of_messages);
     });
 
-    let mut i: int = 0;
+    let mut i: isize = 0;
     while i < number_of_messages {
-        sum += rx.recv();
-        println!("{:?}", r);
+        sum += rx.recv().unwrap();
+        println!("{}", r);
         i += 1;
     }
 
-    result.unwrap();
+    result.join();
 
     assert_eq!(sum, number_of_messages * (number_of_messages - 1) / 2);
 }

@@ -8,18 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-pretty FIXME(#14193)
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
-#![feature(managed_boxes)]
-
-use std::gc::{Gc, GC};
-
-enum list<T> { cons(Gc<T>, Gc<list<T>>), nil, }
+enum list<T> { cons(Box<T>, Box<list<T>>), nil, }
 
 pub fn main() {
-    let _a: list<int> =
-        cons::<int>(box(GC) 10,
-        box(GC) cons::<int>(box(GC) 12,
-        box(GC) cons::<int>(box(GC) 13,
-        box(GC) nil::<int>)));
+    let _a: list<isize> =
+        list::cons::<isize>(box 10,
+        box list::cons::<isize>(box 12,
+        box list::cons::<isize>(box 13,
+        box list::nil::<isize>)));
 }

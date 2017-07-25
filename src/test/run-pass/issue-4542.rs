@@ -8,11 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::os;
+// pretty-expanded FIXME #23616
+
+use std::env;
 
 pub fn main() {
-    for arg in os::args().iter() {
-        match (*arg).clone() {
+    for arg in env::args() {
+        match arg.clone() {
             _s => { }
         }
     }

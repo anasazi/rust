@@ -8,11 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// pretty-expanded FIXME #23616
 
-type Connection = |Vec<u8>|: 'static;
+type Connection = Box<FnMut(Vec<u8>) + 'static>;
 
 fn f() -> Option<Connection> {
-    let mock_connection: Connection = |_| {};
+    let mock_connection: Connection = Box::new(|_| {});
     Some(mock_connection)
 }
 

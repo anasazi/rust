@@ -8,14 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(managed_boxes)]
 
-use std::gc::GC;
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
-fn foo<'r>(x: &'r uint) -> &'r uint { x }
-fn bar(x: &uint) -> uint { *x }
+fn foo(x: &usize) -> &usize { x }
+fn bar(x: &usize) -> usize { *x }
 
 pub fn main() {
-    let p = box(GC) 3u;
-    assert_eq!(bar(foo(p)), 3);
+    let p: Box<_> = box 3;
+    assert_eq!(bar(foo(&*p)), 3);
 }

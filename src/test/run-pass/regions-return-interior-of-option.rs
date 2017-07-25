@@ -8,22 +8,23 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn get<'r, T>(opt: &'r Option<T>) -> &'r T {
+
+fn get<T>(opt: &Option<T>) -> &T {
     match *opt {
       Some(ref v) => v,
-      None => fail!("none")
+      None => panic!("none")
     }
 }
 
 pub fn main() {
-    let mut x = Some(23i);
+    let mut x = Some(23);
 
     {
         let y = get(&x);
         assert_eq!(*y, 23);
     }
 
-    x = Some(24i);
+    x = Some(24);
 
     {
         let y = get(&x);

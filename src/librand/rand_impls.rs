@@ -10,20 +10,18 @@
 
 //! The implementations of `Rand` for the built-in types.
 
-use core::prelude::*;
 use core::char;
-use core::int;
-use core::uint;
+use core::mem;
 
-use {Rand,Rng};
+use {Rand, Rng};
 
-impl Rand for int {
+impl Rand for isize {
     #[inline]
-    fn rand<R: Rng>(rng: &mut R) -> int {
-        if int::BITS == 32 {
-            rng.gen::<i32>() as int
+    fn rand<R: Rng>(rng: &mut R) -> isize {
+        if mem::size_of::<isize>() == 4 {
+            rng.gen::<i32>() as isize
         } else {
-            rng.gen::<i64>() as int
+            rng.gen::<i64>() as isize
         }
     }
 }
@@ -56,13 +54,13 @@ impl Rand for i64 {
     }
 }
 
-impl Rand for uint {
+impl Rand for usize {
     #[inline]
-    fn rand<R: Rng>(rng: &mut R) -> uint {
-        if uint::BITS == 32 {
-            rng.gen::<u32>() as uint
+    fn rand<R: Rng>(rng: &mut R) -> usize {
+        if mem::size_of::<usize>() == 4 {
+            rng.gen::<u32>() as usize
         } else {
-            rng.gen::<u64>() as uint
+            rng.gen::<u64>() as usize
         }
     }
 }
@@ -96,11 +94,11 @@ impl Rand for u64 {
 }
 
 macro_rules! float_impls {
-    ($mod_name:ident, $ty:ty, $mantissa_bits:expr, $method_name:ident, $ignored_bits:expr) => {
+    ($mod_name:ident, $ty:ty, $mantissa_bits:expr, $method_name:ident) => {
         mod $mod_name {
             use {Rand, Rng, Open01, Closed01};
 
-            static SCALE: $ty = (1u64 << $mantissa_bits) as $ty;
+            const SCALE: $ty = (1u64 << $mantissa_bits) as $ty;
 
             impl Rand for $ty {
                 /// Generate a floating point number in the half-open
@@ -110,11 +108,7 @@ macro_rules! float_impls {
                 /// and `Open01` for the open interval `(0,1)`.
                 #[inline]
                 fn rand<R: Rng>(rng: &mut R) -> $ty {
-                    // using any more than `mantissa_bits` bits will
-                    // cause (e.g.) 0xffff_ffff to correspond to 1
-                    // exactly, so we need to drop some (8 for f32, 11
-                    // for f64) to guarantee the open end.
-                    (rng.$method_name() >> $ignored_bits) as $ty / SCALE
+                    rng.$method_name()
                 }
             }
             impl Rand for Open01<$ty> {
@@ -124,36 +118,34 @@ macro_rules! float_impls {
                     // the precision of f64/f32 at 1.0), so that small
                     // numbers are larger than 0, but large numbers
                     // aren't pushed to/above 1.
-                    Open01(((rng.$method_name() >> $ignored_bits) as $ty + 0.25) / SCALE)
+                    Open01(rng.$method_name() + 0.25 / SCALE)
                 }
             }
             impl Rand for Closed01<$ty> {
                 #[inline]
                 fn rand<R: Rng>(rng: &mut R) -> Closed01<$ty> {
-                    // divide by the maximum value of the numerator to
-                    // get a non-zero probability of getting exactly
-                    // 1.0.
-                    Closed01((rng.$method_name() >> $ignored_bits) as $ty / (SCALE - 1.0))
+                    // rescale so that 1.0 - epsilon becomes 1.0
+                    // precisely.
+                    Closed01(rng.$method_name() * SCALE / (SCALE - 1.0))
                 }
             }
         }
     }
 }
-float_impls! { f64_rand_impls, f64, 53, next_u64, 11 }
-float_impls! { f32_rand_impls, f32, 24, next_u32, 8 }
+float_impls! { f64_rand_impls, f64, 53, next_f64 }
+float_impls! { f32_rand_impls, f32, 24, next_f32 }
 
 impl Rand for char {
     #[inline]
     fn rand<R: Rng>(rng: &mut R) -> char {
         // a char is 21 bits
-        static CHAR_MASK: u32 = 0x001f_ffff;
+        const CHAR_MASK: u32 = 0x001f_ffff;
         loop {
             // Rejection sampling. About 0.2% of numbers with at most
             // 21-bits are invalid codepoints (surrogates), so this
             // will succeed first go almost every time.
-            match char::from_u32(rng.next_u32() & CHAR_MASK) {
-                Some(c) => return c,
-                None => {}
+            if let Some(c) = char::from_u32(rng.next_u32() & CHAR_MASK) {
+                return c;
             }
         }
     }
@@ -191,7 +183,9 @@ macro_rules! tuple_impl {
 
 impl Rand for () {
     #[inline]
-    fn rand<R: Rng>(_: &mut R) -> () { () }
+    fn rand<R: Rng>(_: &mut R) -> () {
+        ()
+    }
 }
 tuple_impl!{A}
 tuple_impl!{A, B}
@@ -206,66 +200,9 @@ tuple_impl!{A, B, C, D, E, F, G, H, I, J}
 tuple_impl!{A, B, C, D, E, F, G, H, I, J, K}
 tuple_impl!{A, B, C, D, E, F, G, H, I, J, K, L}
 
-impl<T:Rand> Rand for Option<T> {
+impl<T: Rand> Rand for Option<T> {
     #[inline]
     fn rand<R: Rng>(rng: &mut R) -> Option<T> {
-        if rng.gen() {
-            Some(rng.gen())
-        } else {
-            None
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::prelude::*;
-    use std::rand::{Rng, task_rng, Open01, Closed01};
-
-    struct ConstantRng(u64);
-    impl Rng for ConstantRng {
-        fn next_u32(&mut self) -> u32 {
-            let ConstantRng(v) = *self;
-            v as u32
-        }
-        fn next_u64(&mut self) -> u64 {
-            let ConstantRng(v) = *self;
-            v
-        }
-    }
-
-    #[test]
-    fn floating_point_edge_cases() {
-        // the test for exact equality is correct here.
-        assert!(ConstantRng(0xffff_ffff).gen::<f32>() != 1.0)
-        assert!(ConstantRng(0xffff_ffff_ffff_ffff).gen::<f64>() != 1.0)
-    }
-
-    #[test]
-    fn rand_open() {
-        // this is unlikely to catch an incorrect implementation that
-        // generates exactly 0 or 1, but it keeps it sane.
-        let mut rng = task_rng();
-        for _ in range(0u, 1_000) {
-            // strict inequalities
-            let Open01(f) = rng.gen::<Open01<f64>>();
-            assert!(0.0 < f && f < 1.0);
-
-            let Open01(f) = rng.gen::<Open01<f32>>();
-            assert!(0.0 < f && f < 1.0);
-        }
-    }
-
-    #[test]
-    fn rand_closed() {
-        let mut rng = task_rng();
-        for _ in range(0u, 1_000) {
-            // strict inequalities
-            let Closed01(f) = rng.gen::<Closed01<f64>>();
-            assert!(0.0 <= f && f <= 1.0);
-
-            let Closed01(f) = rng.gen::<Closed01<f32>>();
-            assert!(0.0 <= f && f <= 1.0);
-        }
+        if rng.gen() { Some(rng.gen()) } else { None }
     }
 }

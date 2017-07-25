@@ -10,9 +10,11 @@
 
 // aux-build:issue-8044.rs
 
-extern crate minimal = "issue-8044";
+// pretty-expanded FIXME #23616
+
+extern crate issue_8044 as minimal;
 use minimal::{BTree, leaf};
 
 pub fn main() {
-    BTree::<int> { node: leaf(1i) };
+    BTree::<isize> { node: leaf(1) };
 }

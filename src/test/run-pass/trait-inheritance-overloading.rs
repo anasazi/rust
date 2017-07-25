@@ -9,22 +9,29 @@
 // except according to those terms.
 
 use std::cmp::PartialEq;
+use std::ops::{Add, Sub, Mul};
 
-trait MyNum : Add<Self,Self> + Sub<Self,Self> + Mul<Self,Self> + PartialEq { }
+trait MyNum : Add<Output=Self> + Sub<Output=Self> + Mul<Output=Self> + PartialEq + Clone { }
 
-#[deriving(Show)]
-struct MyInt { val: int }
+#[derive(Clone, Debug)]
+struct MyInt { val: isize }
 
-impl Add<MyInt, MyInt> for MyInt {
-    fn add(&self, other: &MyInt) -> MyInt { mi(self.val + other.val) }
+impl Add for MyInt {
+    type Output = MyInt;
+
+    fn add(self, other: MyInt) -> MyInt { mi(self.val + other.val) }
 }
 
-impl Sub<MyInt, MyInt> for MyInt {
-    fn sub(&self, other: &MyInt) -> MyInt { mi(self.val - other.val) }
+impl Sub for MyInt {
+    type Output = MyInt;
+
+    fn sub(self, other: MyInt) -> MyInt { mi(self.val - other.val) }
 }
 
-impl Mul<MyInt, MyInt> for MyInt {
-    fn mul(&self, other: &MyInt) -> MyInt { mi(self.val * other.val) }
+impl Mul for MyInt {
+    type Output = MyInt;
+
+    fn mul(self, other: MyInt) -> MyInt { mi(self.val * other.val) }
 }
 
 impl PartialEq for MyInt {
@@ -35,10 +42,10 @@ impl PartialEq for MyInt {
 impl MyNum for MyInt {}
 
 fn f<T:MyNum>(x: T, y: T) -> (T, T, T) {
-    return (x + y, x - y, x * y);
+    return (x.clone() + y.clone(), x.clone() - y.clone(), x * y);
 }
 
-fn mi(v: int) -> MyInt { MyInt { val: v } }
+fn mi(v: isize) -> MyInt { MyInt { val: v } }
 
 pub fn main() {
     let (x, y) = (mi(3), mi(5));

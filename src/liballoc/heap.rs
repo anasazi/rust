@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2014-2015 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,328 +8,278 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// FIXME: #13994: port to the sized deallocation API when available
-// FIXME: #13996: mark the `allocate` and `reallocate` return value as `noalias`
-//                and `nonnull`
+#![unstable(feature = "allocator_api",
+            reason = "the precise API and guarantees it provides may be tweaked \
+                      slightly, especially to possibly take into account the \
+                      types being stored to make room for a future \
+                      tracing garbage collector",
+            issue = "32838")]
 
-#[cfg(not(test))] use core::raw;
-#[cfg(not(test))] use util;
+use core::intrinsics::{min_align_of_val, size_of_val};
+use core::mem::{self, ManuallyDrop};
+use core::usize;
 
-/// Return a pointer to `size` bytes of memory.
-///
-/// Behavior is undefined if the requested size is 0 or the alignment is not a
-/// power of 2. The alignment must be no larger than the largest supported page
-/// size on the platform.
-#[inline]
-pub unsafe fn allocate(size: uint, align: uint) -> *mut u8 {
-    imp::allocate(size, align)
+pub use allocator::*;
+#[doc(hidden)]
+pub mod __core {
+    pub use core::*;
 }
 
-/// Extend or shrink the allocation referenced by `ptr` to `size` bytes of
-/// memory.
-///
-/// Behavior is undefined if the requested size is 0 or the alignment is not a
-/// power of 2. The alignment must be no larger than the largest supported page
-/// size on the platform.
-///
-/// The `old_size` and `align` parameters are the parameters that were used to
-/// create the allocation referenced by `ptr`. The `old_size` parameter may also
-/// be the value returned by `usable_size` for the requested size.
-#[inline]
-pub unsafe fn reallocate(ptr: *mut u8, size: uint, align: uint,
-                         old_size: uint) -> *mut u8 {
-    imp::reallocate(ptr, size, align, old_size)
+extern "Rust" {
+    #[allocator]
+    fn __rust_alloc(size: usize, align: usize, err: *mut u8) -> *mut u8;
+    fn __rust_oom(err: *const u8) -> !;
+    fn __rust_dealloc(ptr: *mut u8, size: usize, align: usize);
+    fn __rust_usable_size(layout: *const u8,
+                          min: *mut usize,
+                          max: *mut usize);
+    fn __rust_realloc(ptr: *mut u8,
+                      old_size: usize,
+                      old_align: usize,
+                      new_size: usize,
+                      new_align: usize,
+                      err: *mut u8) -> *mut u8;
+    fn __rust_alloc_zeroed(size: usize, align: usize, err: *mut u8) -> *mut u8;
+    fn __rust_alloc_excess(size: usize,
+                           align: usize,
+                           excess: *mut usize,
+                           err: *mut u8) -> *mut u8;
+    fn __rust_realloc_excess(ptr: *mut u8,
+                             old_size: usize,
+                             old_align: usize,
+                             new_size: usize,
+                             new_align: usize,
+                             excess: *mut usize,
+                             err: *mut u8) -> *mut u8;
+    fn __rust_grow_in_place(ptr: *mut u8,
+                            old_size: usize,
+                            old_align: usize,
+                            new_size: usize,
+                            new_align: usize) -> u8;
+    fn __rust_shrink_in_place(ptr: *mut u8,
+                              old_size: usize,
+                              old_align: usize,
+                              new_size: usize,
+                              new_align: usize) -> u8;
 }
 
-/// Extend or shrink the allocation referenced by `ptr` to `size` bytes of
-/// memory in-place.
-///
-/// Return true if successful, otherwise false if the allocation was not
-/// altered.
-///
-/// Behavior is undefined if the requested size is 0 or the alignment is not a
-/// power of 2. The alignment must be no larger than the largest supported page
-/// size on the platform.
-///
-/// The `old_size` and `align` parameters are the parameters that were used to
-/// create the allocation referenced by `ptr`. The `old_size` parameter may be
-/// any value in range_inclusive(requested_size, usable_size).
-#[inline]
-pub unsafe fn reallocate_inplace(ptr: *mut u8, size: uint, align: uint,
-                                 old_size: uint) -> bool {
-    imp::reallocate_inplace(ptr, size, align, old_size)
+#[derive(Copy, Clone, Default, Debug)]
+pub struct Heap;
+
+unsafe impl Alloc for Heap {
+    #[inline]
+    unsafe fn alloc(&mut self, layout: Layout) -> Result<*mut u8, AllocErr> {
+        let mut err = ManuallyDrop::new(mem::uninitialized::<AllocErr>());
+        let ptr = __rust_alloc(layout.size(),
+                               layout.align(),
+                               &mut *err as *mut AllocErr as *mut u8);
+        if ptr.is_null() {
+            Err(ManuallyDrop::into_inner(err))
+        } else {
+            Ok(ptr)
+        }
+    }
+
+    #[inline]
+    fn oom(&mut self, err: AllocErr) -> ! {
+        unsafe {
+            __rust_oom(&err as *const AllocErr as *const u8)
+        }
+    }
+
+    #[inline]
+    unsafe fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {
+        __rust_dealloc(ptr, layout.size(), layout.align())
+    }
+
+    #[inline]
+    fn usable_size(&self, layout: &Layout) -> (usize, usize) {
+        let mut min = 0;
+        let mut max = 0;
+        unsafe {
+            __rust_usable_size(layout as *const Layout as *const u8,
+                               &mut min,
+                               &mut max);
+        }
+        (min, max)
+    }
+
+    #[inline]
+    unsafe fn realloc(&mut self,
+                      ptr: *mut u8,
+                      layout: Layout,
+                      new_layout: Layout)
+                      -> Result<*mut u8, AllocErr>
+    {
+        let mut err = ManuallyDrop::new(mem::uninitialized::<AllocErr>());
+        let ptr = __rust_realloc(ptr,
+                                 layout.size(),
+                                 layout.align(),
+                                 new_layout.size(),
+                                 new_layout.align(),
+                                 &mut *err as *mut AllocErr as *mut u8);
+        if ptr.is_null() {
+            Err(ManuallyDrop::into_inner(err))
+        } else {
+            mem::forget(err);
+            Ok(ptr)
+        }
+    }
+
+    #[inline]
+    unsafe fn alloc_zeroed(&mut self, layout: Layout) -> Result<*mut u8, AllocErr> {
+        let mut err = ManuallyDrop::new(mem::uninitialized::<AllocErr>());
+        let ptr = __rust_alloc_zeroed(layout.size(),
+                                      layout.align(),
+                                      &mut *err as *mut AllocErr as *mut u8);
+        if ptr.is_null() {
+            Err(ManuallyDrop::into_inner(err))
+        } else {
+            Ok(ptr)
+        }
+    }
+
+    #[inline]
+    unsafe fn alloc_excess(&mut self, layout: Layout) -> Result<Excess, AllocErr> {
+        let mut err = ManuallyDrop::new(mem::uninitialized::<AllocErr>());
+        let mut size = 0;
+        let ptr = __rust_alloc_excess(layout.size(),
+                                      layout.align(),
+                                      &mut size,
+                                      &mut *err as *mut AllocErr as *mut u8);
+        if ptr.is_null() {
+            Err(ManuallyDrop::into_inner(err))
+        } else {
+            Ok(Excess(ptr, size))
+        }
+    }
+
+    #[inline]
+    unsafe fn realloc_excess(&mut self,
+                             ptr: *mut u8,
+                             layout: Layout,
+                             new_layout: Layout) -> Result<Excess, AllocErr> {
+        let mut err = ManuallyDrop::new(mem::uninitialized::<AllocErr>());
+        let mut size = 0;
+        let ptr = __rust_realloc_excess(ptr,
+                                        layout.size(),
+                                        layout.align(),
+                                        new_layout.size(),
+                                        new_layout.align(),
+                                        &mut size,
+                                        &mut *err as *mut AllocErr as *mut u8);
+        if ptr.is_null() {
+            Err(ManuallyDrop::into_inner(err))
+        } else {
+            Ok(Excess(ptr, size))
+        }
+    }
+
+    #[inline]
+    unsafe fn grow_in_place(&mut self,
+                            ptr: *mut u8,
+                            layout: Layout,
+                            new_layout: Layout)
+                            -> Result<(), CannotReallocInPlace>
+    {
+        debug_assert!(new_layout.size() >= layout.size());
+        debug_assert!(new_layout.align() == layout.align());
+        let ret = __rust_grow_in_place(ptr,
+                                       layout.size(),
+                                       layout.align(),
+                                       new_layout.size(),
+                                       new_layout.align());
+        if ret != 0 {
+            Ok(())
+        } else {
+            Err(CannotReallocInPlace)
+        }
+    }
+
+    #[inline]
+    unsafe fn shrink_in_place(&mut self,
+                              ptr: *mut u8,
+                              layout: Layout,
+                              new_layout: Layout) -> Result<(), CannotReallocInPlace> {
+        debug_assert!(new_layout.size() <= layout.size());
+        debug_assert!(new_layout.align() == layout.align());
+        let ret = __rust_shrink_in_place(ptr,
+                                         layout.size(),
+                                         layout.align(),
+                                         new_layout.size(),
+                                         new_layout.align());
+        if ret != 0 {
+            Ok(())
+        } else {
+            Err(CannotReallocInPlace)
+        }
+    }
 }
 
-/// Deallocate the memory referenced by `ptr`.
+/// An arbitrary non-null address to represent zero-size allocations.
 ///
-/// The `ptr` parameter must not be null.
-///
-/// The `size` and `align` parameters are the parameters that were used to
-/// create the allocation referenced by `ptr`. The `size` parameter may also be
-/// the value returned by `usable_size` for the requested size.
-#[inline]
-pub unsafe fn deallocate(ptr: *mut u8, size: uint, align: uint) {
-    imp::deallocate(ptr, size, align)
-}
-
-/// Return the usable size of an allocation created with the specified the
-/// `size` and `align`.
-#[inline]
-pub fn usable_size(size: uint, align: uint) -> uint {
-    imp::usable_size(size, align)
-}
-
-/// Print implementation-defined allocator statistics.
-///
-/// These statistics may be inconsistent if other threads use the allocator
-/// during the call.
-#[unstable]
-pub fn stats_print() {
-    imp::stats_print();
-}
-
-// The compiler never calls `exchange_free` on ~ZeroSizeType, so zero-size
-// allocations can point to this `static`. It would be incorrect to use a null
-// pointer, due to enums assuming types like unique pointers are never null.
-pub static mut EMPTY: uint = 12345;
+/// This preserves the non-null invariant for types like `Box<T>`. The address
+/// may overlap with non-zero-size memory allocations.
+#[rustc_deprecated(since = "1.19", reason = "Use Unique/Shared::empty() instead")]
+#[unstable(feature = "heap_api", issue = "27700")]
+pub const EMPTY: *mut () = 1 as *mut ();
 
 /// The allocator for unique pointers.
+// This function must not unwind. If it does, MIR trans will fail.
 #[cfg(not(test))]
-#[lang="exchange_malloc"]
+#[lang = "exchange_malloc"]
 #[inline]
-unsafe fn exchange_malloc(size: uint, align: uint) -> *mut u8 {
+unsafe fn exchange_malloc(size: usize, align: usize) -> *mut u8 {
     if size == 0 {
-        &EMPTY as *const uint as *mut u8
+        align as *mut u8
     } else {
-        allocate(size, align)
+        let layout = Layout::from_size_align_unchecked(size, align);
+        Heap.alloc(layout).unwrap_or_else(|err| {
+            Heap.oom(err)
+        })
     }
 }
 
-#[cfg(not(test))]
-#[lang="exchange_free"]
+#[cfg_attr(not(test), lang = "box_free")]
 #[inline]
-unsafe fn exchange_free(ptr: *mut u8, size: uint, align: uint) {
-    deallocate(ptr, size, align);
-}
-
-// FIXME: #7496
-#[cfg(not(test))]
-#[lang="closure_exchange_malloc"]
-#[inline]
-#[allow(deprecated)]
-unsafe fn closure_exchange_malloc(drop_glue: fn(*mut u8), size: uint,
-                                  align: uint) -> *mut u8 {
-    let total_size = util::get_box_size(size, align);
-    let p = allocate(total_size, 8);
-
-    let alloc = p as *mut raw::Box<()>;
-    (*alloc).drop_glue = drop_glue;
-
-    alloc as *mut u8
-}
-
-#[cfg(jemalloc)]
-mod imp {
-    use core::option::{None, Option};
-    use core::ptr::{RawPtr, mut_null, null};
-    use core::num::Int;
-    use libc::{c_char, c_int, c_void, size_t};
-
-    #[link(name = "jemalloc", kind = "static")]
-    extern {
-        fn je_mallocx(size: size_t, flags: c_int) -> *mut c_void;
-        fn je_rallocx(ptr: *mut c_void, size: size_t,
-                      flags: c_int) -> *mut c_void;
-        fn je_xallocx(ptr: *mut c_void, size: size_t, extra: size_t,
-                      flags: c_int) -> size_t;
-        fn je_dallocx(ptr: *mut c_void, flags: c_int);
-        fn je_nallocx(size: size_t, flags: c_int) -> size_t;
-        fn je_malloc_stats_print(write_cb: Option<extern "C" fn(cbopaque: *mut c_void,
-                                                                *const c_char)>,
-                                 cbopaque: *mut c_void,
-                                 opts: *const c_char);
+pub(crate) unsafe fn box_free<T: ?Sized>(ptr: *mut T) {
+    let size = size_of_val(&*ptr);
+    let align = min_align_of_val(&*ptr);
+    // We do not allocate for Box<T> when T is ZST, so deallocation is also not necessary.
+    if size != 0 {
+        let layout = Layout::from_size_align_unchecked(size, align);
+        Heap.dealloc(ptr as *mut u8, layout);
     }
-
-    // -lpthread needs to occur after -ljemalloc, the earlier argument isn't enough
-    #[cfg(not(windows), not(target_os = "android"))]
-    #[link(name = "pthread")]
-    extern {}
-
-    // MALLOCX_ALIGN(a) macro
-    #[inline(always)]
-    fn mallocx_align(a: uint) -> c_int { a.trailing_zeros() as c_int }
-
-    #[inline]
-    pub unsafe fn allocate(size: uint, align: uint) -> *mut u8 {
-        let ptr = je_mallocx(size as size_t, mallocx_align(align)) as *mut u8;
-        if ptr.is_null() {
-            ::oom()
-        }
-        ptr
-    }
-
-    #[inline]
-    pub unsafe fn reallocate(ptr: *mut u8, size: uint, align: uint,
-                             _old_size: uint) -> *mut u8 {
-        let ptr = je_rallocx(ptr as *mut c_void, size as size_t,
-                             mallocx_align(align)) as *mut u8;
-        if ptr.is_null() {
-            ::oom()
-        }
-        ptr
-    }
-
-    #[inline]
-    pub unsafe fn reallocate_inplace(ptr: *mut u8, size: uint, align: uint,
-                                     _old_size: uint) -> bool {
-        je_xallocx(ptr as *mut c_void, size as size_t, 0,
-                   mallocx_align(align)) == size as size_t
-    }
-
-    #[inline]
-    pub unsafe fn deallocate(ptr: *mut u8, _size: uint, align: uint) {
-        je_dallocx(ptr as *mut c_void, mallocx_align(align))
-    }
-
-    #[inline]
-    pub fn usable_size(size: uint, align: uint) -> uint {
-        unsafe { je_nallocx(size as size_t, mallocx_align(align)) as uint }
-    }
-
-    pub fn stats_print() {
-        unsafe {
-            je_malloc_stats_print(None, mut_null(), null())
-        }
-    }
-}
-
-#[cfg(not(jemalloc), unix)]
-mod imp {
-    use core::mem;
-    use core::ptr;
-    use libc;
-    use libc_heap;
-
-    extern {
-        fn posix_memalign(memptr: *mut *mut libc::c_void,
-                          align: libc::size_t,
-                          size: libc::size_t) -> libc::c_int;
-    }
-
-    #[inline]
-    pub unsafe fn allocate(size: uint, align: uint) -> *mut u8 {
-        // The posix_memalign manpage states
-        //
-        //      alignment [...] must be a power of and a multiple of
-        //      sizeof(void *)
-        //
-        // The `align` parameter to this function is the *minimum* alignment for
-        // a block of memory, so we special case everything under `*uint` to
-        // just pass it to malloc, which is guaranteed to align to at least the
-        // size of `*uint`.
-        if align < mem::size_of::<uint>() {
-            libc_heap::malloc_raw(size)
-        } else {
-            let mut out = 0 as *mut libc::c_void;
-            let ret = posix_memalign(&mut out,
-                                     align as libc::size_t,
-                                     size as libc::size_t);
-            if ret != 0 {
-                ::oom();
-            }
-            out as *mut u8
-        }
-    }
-
-    #[inline]
-    pub unsafe fn reallocate(ptr: *mut u8, size: uint, align: uint,
-                             old_size: uint) -> *mut u8 {
-        let new_ptr = allocate(size, align);
-        ptr::copy_memory(new_ptr, ptr as *const u8, old_size);
-        deallocate(ptr, old_size, align);
-        return new_ptr;
-    }
-
-    #[inline]
-    pub unsafe fn reallocate_inplace(_ptr: *mut u8, _size: uint, _align: uint,
-                                     _old_size: uint) -> bool {
-        false
-    }
-
-    #[inline]
-    pub unsafe fn deallocate(ptr: *mut u8, _size: uint, _align: uint) {
-        libc::free(ptr as *mut libc::c_void)
-    }
-
-    #[inline]
-    pub fn usable_size(size: uint, _align: uint) -> uint {
-        size
-    }
-
-    pub fn stats_print() {
-    }
-}
-
-#[cfg(not(jemalloc), windows)]
-mod imp {
-    use libc::{c_void, size_t};
-    use core::ptr::RawPtr;
-
-    extern {
-        fn _aligned_malloc(size: size_t, align: size_t) -> *mut c_void;
-        fn _aligned_realloc(block: *mut c_void, size: size_t,
-                            align: size_t) -> *mut c_void;
-        fn _aligned_free(ptr: *mut c_void);
-    }
-
-    #[inline]
-    pub unsafe fn allocate(size: uint, align: uint) -> *mut u8 {
-        let ptr = _aligned_malloc(size as size_t, align as size_t);
-        if ptr.is_null() {
-            ::oom();
-        }
-        ptr as *mut u8
-    }
-
-    #[inline]
-    pub unsafe fn reallocate(ptr: *mut u8, size: uint, align: uint,
-                             _old_size: uint) -> *mut u8 {
-        let ptr = _aligned_realloc(ptr as *mut c_void, size as size_t,
-                                   align as size_t);
-        if ptr.is_null() {
-            ::oom();
-        }
-        ptr as *mut u8
-    }
-
-    #[inline]
-    pub unsafe fn reallocate_inplace(_ptr: *mut u8, _size: uint, _align: uint,
-                                     _old_size: uint) -> bool {
-        false
-    }
-
-    #[inline]
-    pub unsafe fn deallocate(ptr: *mut u8, _size: uint, _align: uint) {
-        _aligned_free(ptr as *mut c_void)
-    }
-
-    #[inline]
-    pub fn usable_size(size: uint, _align: uint) -> uint {
-        size
-    }
-
-    pub fn stats_print() {}
 }
 
 #[cfg(test)]
-mod bench {
+mod tests {
     extern crate test;
     use self::test::Bencher;
+    use boxed::Box;
+    use heap::{Heap, Alloc, Layout};
+
+    #[test]
+    fn allocate_zeroed() {
+        unsafe {
+            let layout = Layout::from_size_align(1024, 1).unwrap();
+            let ptr = Heap.alloc_zeroed(layout.clone())
+                .unwrap_or_else(|e| Heap.oom(e));
+
+            let end = ptr.offset(layout.size() as isize);
+            let mut i = ptr;
+            while i < end {
+                assert_eq!(*i, 0);
+                i = i.offset(1);
+            }
+            Heap.dealloc(ptr, layout);
+        }
+    }
 
     #[bench]
     fn alloc_owned_small(b: &mut Bencher) {
         b.iter(|| {
-            box 10i
+            let _: Box<_> = box 10;
         })
     }
 }

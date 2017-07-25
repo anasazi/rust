@@ -13,16 +13,20 @@
 // (In this case the mul method should take &f64 and not f64)
 // See: #11450
 
+use std::ops::Mul;
+
 struct Vec1 {
     x: f64
 }
 
-// Expecting ref in input signature
-impl Mul<f64, Vec1> for Vec1 {
-    fn mul(&self, s: f64) -> Vec1 {
-    //~^ ERROR: method `mul` has an incompatible type for trait: expected &-ptr but found f64
+// Expecting value in input signature
+impl Mul<f64> for Vec1 {
+    type Output = Vec1;
+
+    fn mul(self, s: &f64) -> Vec1 {
+    //~^ ERROR method `mul` has an incompatible type for trait
         Vec1 {
-            x: self.x * s
+            x: self.x * *s
         }
     }
 }
@@ -33,9 +37,11 @@ struct Vec2 {
 }
 
 // Wrong type parameter ordering
-impl Mul<Vec2, f64> for Vec2 {
-    fn mul(&self, s: f64) -> Vec2 {
-    //~^ ERROR: method `mul` has an incompatible type for trait: expected &-ptr but found f64
+impl Mul<Vec2> for Vec2 {
+    type Output = f64;
+
+    fn mul(self, s: f64) -> Vec2 {
+    //~^ ERROR method `mul` has an incompatible type for trait
         Vec2 {
             x: self.x * s,
             y: self.y * s
@@ -50,15 +56,24 @@ struct Vec3 {
 }
 
 // Unexpected return type
-impl Mul<f64, i32> for Vec3 {
-    fn mul(&self, s: &f64) -> f64 {
-    //~^ ERROR: method `mul` has an incompatible type for trait: expected i32 but found f64
-        *s
+impl Mul<f64> for Vec3 {
+    type Output = i32;
+
+    fn mul(self, s: f64) -> f64 {
+    //~^ ERROR method `mul` has an incompatible type for trait
+        s
     }
 }
 
 pub fn main() {
-    Vec1 { x: 1.0 } * 2.0;
-    Vec2 { x: 1.0, y: 2.0 } * 2.0;
-    Vec3 { x: 1.0, y: 2.0, z: 3.0 } * 2.0;
+    // Check that the usage goes from the trait declaration:
+
+    let x: Vec1 = Vec1 { x: 1.0 } * 2.0; // this is OK
+
+    let x: Vec2 = Vec2 { x: 1.0, y: 2.0 } * 2.0; // trait had reversed order
+    // (we no longer signal a compile error here, since the
+    //  error in the trait signature will cause compilation to
+    //  abort before we bother looking at function bodies.)
+
+    let x: i32 = Vec3 { x: 1.0, y: 2.0, z: 3.0 } * 2.0;
 }

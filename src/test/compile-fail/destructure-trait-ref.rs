@@ -11,8 +11,11 @@
 // The regression test for #15031 to make sure destructuring trait
 // reference work properly.
 
-trait T {}
-impl T for int {}
+#![feature(box_patterns)]
+#![feature(box_syntax)]
+
+trait T { fn foo(&self) {} }
+impl T for isize {}
 
 fn main() {
     // For an expression of the form:
@@ -25,17 +28,28 @@ fn main() {
     // if n > m, it's a type mismatch error.
 
     // n < m
-    let &x = &(&1i as &T);
-    let &x = &&(&1i as &T);
-    let &&x = &&(&1i as &T);
+    let &x = &(&1isize as &T);
+    let &x = &&(&1isize as &T);
+    let &&x = &&(&1isize as &T);
 
     // n == m
-    let &x = &1i as &T;      //~ ERROR cannot be dereferenced
-    let &&x = &(&1i as &T);  //~ ERROR cannot be dereferenced
-    let box x = box 1i as Box<T>; //~ ERROR cannot be dereferenced
+    let &x = &1isize as &T;      //~ ERROR type `&T` cannot be dereferenced
+    let &&x = &(&1isize as &T);  //~ ERROR type `&T` cannot be dereferenced
+    let box x = box 1isize as Box<T>; //~ ERROR type `std::boxed::Box<T>` cannot be dereferenced
 
     // n > m
-    let &&x = &1i as &T;     //~ ERROR found an `&`-pointer pattern
-    let &&&x = &(&1i as &T); //~ ERROR found an `&`-pointer pattern
-    let box box x = box 1i as Box<T>;    //~ ERROR found a box pattern
+    let &&x = &1isize as &T;
+    //~^ ERROR mismatched types
+    //~| expected type `T`
+    //~| found type `&_`
+    //~| expected trait T, found reference
+    let &&&x = &(&1isize as &T);
+    //~^ ERROR mismatched types
+    //~| expected type `T`
+    //~| found type `&_`
+    //~| expected trait T, found reference
+    let box box x = box 1isize as Box<T>;
+    //~^ ERROR mismatched types
+    //~| expected type `T`
+    //~| found type `std::boxed::Box<_>`
 }

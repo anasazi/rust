@@ -8,48 +8,39 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(phase)]
+// ignore-emscripten
 
-#[phase(plugin, link)]
-extern crate green;
-extern crate native;
+#![feature(io, process_capture)]
 
-use std::io::process;
-use std::io::Command;
+use std::env;
+use std::io::prelude::*;
 use std::io;
-use std::os;
-
-green_start!(main)
+use std::process::{Command, Stdio};
 
 fn main() {
-    let args = os::args();
-    if args.len() > 1 && args.get(1).as_slice() == "child" {
+    let args: Vec<String> = env::args().collect();
+    if args.len() > 1 && args[1] == "child" {
         return child()
     }
 
     test();
-
-    let (tx, rx) = channel();
-    native::task::spawn(proc() {
-        tx.send(test());
-    });
-    rx.recv();
-
 }
 
 fn child() {
-    io::stdout().write_line("foo").unwrap();
-    io::stderr().write_line("bar").unwrap();
-    assert_eq!(io::stdin().read_line().err().unwrap().kind, io::EndOfFile);
+    writeln!(&mut io::stdout(), "foo").unwrap();
+    writeln!(&mut io::stderr(), "bar").unwrap();
+    let mut stdin = io::stdin();
+    let mut s = String::new();
+    stdin.lock().read_line(&mut s).unwrap();
+    assert_eq!(s.len(), 0);
 }
 
 fn test() {
-    let args = os::args();
-    let mut p = Command::new(args.get(0).as_slice()).arg("child")
-                                     .stdin(process::Ignored)
-                                     .stdout(process::Ignored)
-                                     .stderr(process::Ignored)
+    let args: Vec<String> = env::args().collect();
+    let mut p = Command::new(&args[0]).arg("child")
+                                     .stdin(Stdio::piped())
+                                     .stdout(Stdio::piped())
+                                     .stderr(Stdio::piped())
                                      .spawn().unwrap();
     assert!(p.wait().unwrap().success());
 }
-

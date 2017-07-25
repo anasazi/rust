@@ -8,13 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate debug;
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
 fn id<T:Send>(t: T) -> T { return t; }
 
 pub fn main() {
-    let expected = box 100i;
-    let actual = id::<Box<int>>(expected.clone());
-    println!("{:?}", *actual);
+    let expected: Box<_> = box 100;
+    let actual = id::<Box<isize>>(expected.clone());
+    println!("{}", *actual);
     assert_eq!(*expected, *actual);
 }

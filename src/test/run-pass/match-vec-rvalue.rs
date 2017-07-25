@@ -11,13 +11,14 @@
 // Tests that matching rvalues with drops does not crash.
 
 
+
 pub fn main() {
-    match vec!(1i, 2i, 3i) {
+    match vec![1, 2, 3] {
         x => {
             assert_eq!(x.len(), 3);
-            assert_eq!(*x.get(0), 1);
-            assert_eq!(*x.get(1), 2);
-            assert_eq!(*x.get(2), 3);
+            assert_eq!(x[0], 1);
+            assert_eq!(x[1], 2);
+            assert_eq!(x[2], 3);
         }
     }
 }

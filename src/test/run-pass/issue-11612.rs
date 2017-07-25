@@ -12,9 +12,11 @@
 // We weren't updating the auto adjustments with all the resolved
 // type information after type check.
 
-trait A {}
+// pretty-expanded FIXME #23616
 
-struct B<'a, T> {
+trait A { fn dummy(&self) { } }
+
+struct B<'a, T:'a> {
     f: &'a T
 }
 

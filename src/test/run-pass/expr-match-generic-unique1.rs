@@ -9,21 +9,22 @@
 // except according to those terms.
 
 
-type compare<T> = |Box<T>, Box<T>|: 'static -> bool;
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
-fn test_generic<T:Clone>(expected: Box<T>, eq: compare<T>) {
+fn test_generic<T: Clone, F>(expected: Box<T>, eq: F) where F: FnOnce(Box<T>, Box<T>) -> bool {
     let actual: Box<T> = match true {
         true => { expected.clone() },
-        _ => fail!("wat")
+        _ => panic!("wat")
     };
-    assert!((eq(expected, actual)));
+    assert!(eq(expected, actual));
 }
 
 fn test_box() {
     fn compare_box(b1: Box<bool>, b2: Box<bool>) -> bool {
         return *b1 == *b2;
     }
-    test_generic::<bool>(box true, compare_box);
+    test_generic::<bool, _>(box true, compare_box);
 }
 
 pub fn main() { test_box(); }

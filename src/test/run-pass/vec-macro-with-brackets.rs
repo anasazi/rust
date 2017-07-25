@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(macro_rules)]
+// pretty-expanded FIXME #23616
 
 macro_rules! vec [
     ($($e:expr),*) => ({
@@ -16,8 +16,8 @@ macro_rules! vec [
         $(_temp.push($e);)*
         _temp
     })
-]
+];
 
 pub fn main() {
-    let my_vec = vec![1i, 2, 3, 4, 5];
+    let my_vec = vec![1, 2, 3, 4, 5];
 }

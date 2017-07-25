@@ -12,7 +12,7 @@
 //
 // The original issue causing the ICE: the LUB-computations during
 // type inference were encountering late-bound lifetimes, and
-// asserting that such lifetimes should have already been subsituted
+// asserting that such lifetimes should have already been substituted
 // with a concrete lifetime.
 //
 // However, those encounters were occurring within the lexical scope
@@ -22,17 +22,22 @@
 // doing region-folding, when really all clients of the region-folding
 // case only want to see FREE lifetime variables, not bound ones.
 
+// pretty-expanded FIXME #23616
+
+#![allow(unknown_features)]
+#![feature(box_syntax)]
+
 pub fn main() {
     fn explicit() {
-        fn test(_x: Option<|f: <'a> |g: &'a int||>) {}
-        test(Some(|_f: <'a> |g: &'a int|| {}));
+        fn test<F>(_x: Option<Box<F>>) where F: FnMut(Box<for<'a> FnMut(&'a isize)>) {}
+        test(Some(box |_f: Box<for<'a> FnMut(&'a isize)>| {}));
     }
 
     // The code below is shorthand for the code above (and more likely
     // to represent what one encounters in practice).
     fn implicit() {
-        fn test(_x: Option<|f:      |g: &   int||>) {}
-        test(Some(|_f:      |g: &   int|| {}));
+        fn test<F>(_x: Option<Box<F>>) where F: FnMut(Box<        FnMut(&   isize)>) {}
+        test(Some(box |_f: Box<        FnMut(&   isize)>| {}));
     }
 
     explicit();

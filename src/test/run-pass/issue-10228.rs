@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// pretty-expanded FIXME #23616
+
 enum StdioContainer {
     CreatePipe(bool)
 }
@@ -20,6 +22,6 @@ struct Test<'a> {
 pub fn main() {
     let test = Test {
         args: &[],
-        io: &[CreatePipe(true)]
+        io: &[StdioContainer::CreatePipe(true)]
     };
 }

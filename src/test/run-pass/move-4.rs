@@ -8,13 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(managed_boxes)]
 
-use std::gc::{GC, Gc};
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
-struct Triple { a: int, b: int, c: int }
+struct Triple { a: isize, b: isize, c: isize }
 
-fn test(foo: Gc<Triple>) -> Gc<Triple> {
+fn test(foo: Box<Triple>) -> Box<Triple> {
     let foo = foo;
     let bar = foo;
     let baz = bar;
@@ -23,7 +23,7 @@ fn test(foo: Gc<Triple>) -> Gc<Triple> {
 }
 
 pub fn main() {
-    let x = box(GC) Triple{a: 1, b: 2, c: 3};
+    let x = box Triple{a: 1, b: 2, c: 3};
     let y = test(x);
     assert_eq!(y.c, 3);
 }

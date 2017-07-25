@@ -8,25 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-struct A(int);
-struct B;
+
+struct A(isize);
 
 fn main() {
     let x = match A(3) {
-        A(..) => 1i
+        A(..) => 1
     };
     assert_eq!(x, 1);
     let x = match A(4) {
-        A(1) => 1i,
-        A(..) => 2i
+        A(1) => 1,
+        A(..) => 2
     };
     assert_eq!(x, 2);
-
-    // This next test uses a (..) wildcard match on a nullary struct.
-    // There's no particularly good reason to support this, but it's currently allowed,
-    // and this makes sure it doesn't ICE or break LLVM.
-    let x = match B {
-        B(..) => 3i
-    };
-    assert_eq!(x, 3);
 }

@@ -8,11 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-win32: FIXME #13793
+// pretty-expanded FIXME #23616
 
 fn main() {
-    match ("", 1u) {
-        (_, 42u) => (),
+    match ("", 1_usize) {
+        (_, 42_usize) => (),
         ("", _) => (),
         _ => ()
     }

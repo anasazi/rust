@@ -8,28 +8,24 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-trait Tr<T> {
-    fn op(T) -> Self;
+// Test static calls to make sure that we align the Self and input
+// type parameters on a trait correctly.
+
+trait Tr<T> : Sized {
+    fn op(_: T) -> Self;
 }
 
-// these compile as if Self: Tr<U>, even tho only Self: Tr<Self or T>
 trait A:    Tr<Self> {
     fn test<U>(u: U) -> Self {
-        Tr::op(u)   //~ ERROR expected Tr<U>, but found Tr<Self>
+        Tr::op(u)   //~ ERROR E0277
     }
 }
+
 trait B<T>: Tr<T> {
     fn test<U>(u: U) -> Self {
-        Tr::op(u)   //~ ERROR expected Tr<U>, but found Tr<T>
+        Tr::op(u)   //~ ERROR E0277
     }
 }
 
-impl<T> Tr<T> for T {
-    fn op(t: T) -> T { t }
-}
-impl<T> A for T {}
-
 fn main() {
-    std::io::println(A::test((&7306634593706211700, 8)));
 }
-

@@ -10,14 +10,13 @@
 
 // compile-flags: --cfg foo
 
-#![feature(macro_rules)]
 
 #[cfg(foo)]
-macro_rules! foo( () => (1i) )
+macro_rules! foo { () => (1) }
 
 #[cfg(not(foo))]
-macro_rules! foo( () => (2i) )
+macro_rules! foo { () => (2) }
 
 pub fn main() {
-    assert_eq!(foo!(), 1i);
+    assert_eq!(foo!(), 1);
 }

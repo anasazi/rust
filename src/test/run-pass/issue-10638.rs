@@ -8,11 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// pretty-expanded FIXME #23616
+
 pub fn main() {
     //// I am not a doc comment!
     ////////////////// still not a doc comment
     /////**** nope, me neither */
     /*** And neither am I! */
-    5i;
+    5;
     /*****! certainly not I */
 }

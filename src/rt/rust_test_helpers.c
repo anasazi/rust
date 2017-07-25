@@ -12,6 +12,7 @@
 
 #include <stdint.h>
 #include <assert.h>
+#include <stdarg.h>
 
 // These functions are used in the unit tests for C ABI calls.
 
@@ -135,6 +136,8 @@ struct ManyInts {
     struct TwoU8s arg6;
 };
 
+// MSVC doesn't allow empty structs or unions
+#ifndef _MSC_VER
 struct Empty {
 };
 
@@ -148,10 +151,16 @@ rust_dbg_extern_empty_struct(struct ManyInts v1, struct Empty e, struct ManyInts
     assert(v1.arg6.one == v2.arg6.one + 1);
     assert(v1.arg6.two == v2.arg6.two + 1);
 }
+#endif
 
 intptr_t
 rust_get_test_int() {
   return 1;
+}
+
+char *
+rust_get_null_ptr() {
+    return 0;
 }
 
 /* Debug helpers strictly to verify ABI conformance.
@@ -191,9 +200,7 @@ rust_dbg_abi_2(struct floats f) {
 }
 
 int
-rust_dbg_static_mut;
-
-int rust_dbg_static_mut = 3;
+rust_dbg_static_mut = 3;
 
 void
 rust_dbg_static_mut_check_four() {
@@ -217,3 +224,63 @@ uint64_t get_y(struct S s) {
 uint64_t get_z(struct S s) {
     return s.z;
 }
+
+uint64_t get_c_many_params(void *a, void *b, void *c, void *d, struct quad f) {
+    return f.c;
+}
+
+// Calculates the average of `(x + y) / n` where x: i64, y: f64. There must be exactly n pairs
+// passed as variadic arguments.
+double rust_interesting_average(uint64_t n, ...) {
+    va_list pairs;
+    double sum = 0.0;
+    int i;
+    va_start(pairs, n);
+    for(i = 0; i < n; i += 1) {
+        sum += (double)va_arg(pairs, int64_t);
+        sum += va_arg(pairs, double);
+    }
+    va_end(pairs);
+    return sum / n;
+}
+
+int32_t rust_int8_to_int32(int8_t x) {
+    return (int32_t)x;
+}
+
+typedef union LARGE_INTEGER {
+  struct {
+    uint32_t LowPart;
+    uint32_t HighPart;
+  };
+  struct {
+    uint32_t LowPart;
+    uint32_t HighPart;
+  } u;
+  uint64_t QuadPart;
+} LARGE_INTEGER;
+
+LARGE_INTEGER increment_all_parts(LARGE_INTEGER li) {
+    li.LowPart += 1;
+    li.HighPart += 1;
+    li.u.LowPart += 1;
+    li.u.HighPart += 1;
+    li.QuadPart += 1;
+    return li;
+}
+
+#if __SIZEOF_INT128__ == 16
+
+unsigned __int128 identity(unsigned __int128 a) {
+    return a;
+}
+
+__int128 square(__int128 a) {
+    return a * a;
+}
+
+__int128 sub(__int128 a, __int128 b) {
+    return a - b;
+}
+
+#endif

@@ -8,17 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(managed_boxes)]
 
-use std::gc::{Gc, GC};
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
-fn test(foo: Gc<Vec<int>>) { assert!((*foo.get(0) == 10)); }
+fn test(foo: Box<Vec<isize>>) { assert_eq!((*foo)[0], 10); }
 
 pub fn main() {
-    let x = box(GC) vec!(10);
+    let x = box vec![10];
     // Test forgetting a local by move-in
     test(x);
 
     // Test forgetting a temporary by move-in.
-    test(box(GC) vec!(10));
+    test(box vec![10]);
 }

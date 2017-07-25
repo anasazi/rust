@@ -10,14 +10,16 @@
 
 // Test the uninit() construct returning various empty types.
 
+// pretty-expanded FIXME #23616
+
 use std::mem;
 
-#[deriving(Clone)]
+#[derive(Clone)]
 struct Foo;
 
 pub fn main() {
     unsafe {
         let _x: Foo = mem::uninitialized();
-        let _x: [Foo, ..2] = mem::uninitialized();
+        let _x: [Foo; 2] = mem::uninitialized();
     }
 }

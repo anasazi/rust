@@ -8,10 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn main() {
-    let args = vec!("foobie", "asdf::asdf");
-    let arr: Vec<&str> = args.get(1).as_slice().split_str("::").collect();
-    assert_eq!(*arr.get(0), "asdf");
-    assert_eq!(*arr.get(0), "asdf");
-}
 
+fn main() {
+    let args = vec!["foobie", "asdf::asdf"];
+    let arr: Vec<&str> = args[1].split("::").collect();
+    assert_eq!(arr[0], "asdf");
+    assert_eq!(arr[0], "asdf");
+}

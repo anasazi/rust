@@ -8,11 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::task;
+use std::thread;
 
 fn main() {
     let x = "Hello world!".to_string();
-    task::spawn(proc() {
+    thread::spawn(move|| {
         println!("{}", x);
     });
     println!("{}", x); //~ ERROR use of moved value

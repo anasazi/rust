@@ -8,13 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+
 mod x {
-    pub fn g() -> uint {14}
+    pub fn g() -> usize {14}
 }
 
 pub fn main(){
     // should *not* shadow the module x:
-    let x = 9i;
+    let x = 9;
     // use it to avoid warnings:
     x+3;
     assert_eq!(x::g(),14);

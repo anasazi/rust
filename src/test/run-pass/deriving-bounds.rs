@@ -8,7 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[deriving(Share,Send,Copy)]
+#[derive(Copy, Clone)]
 struct Test;
 
 pub fn main() {}

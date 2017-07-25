@@ -8,7 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(managed_boxes)]
+// pretty-expanded FIXME #23616
+
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
 // This is a regression test that the metadata for the
 // name_pool::methods impl in the other crate is reachable from this
@@ -18,12 +21,10 @@
 
 extern crate crate_method_reexport_grrrrrrr2;
 
-use std::gc::GC;
-
 pub fn main() {
     use crate_method_reexport_grrrrrrr2::rust::add;
     use crate_method_reexport_grrrrrrr2::rust::cx;
-    let x = box(GC) ();
+    let x: Box<_> = box ();
     x.cx();
     let y = ();
     y.add("hi".to_string());

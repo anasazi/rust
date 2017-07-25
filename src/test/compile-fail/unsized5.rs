@@ -7,23 +7,31 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
-#![feature(struct_variant)]
 
-// Test `Sized?` types not allowed in fields.
+// Test `?Sized` types not allowed in fields (except the last one).
 
-struct S1<Sized? X> {
-    f1: X, //~ ERROR type `f1` is dynamically sized. dynamically sized types may only appear as the
-    f2: int,
+struct S1<X: ?Sized> {
+    f1: X, //~ ERROR `X: std::marker::Sized` is not satisfied
+    f2: isize,
 }
-struct S2<Sized? X> {
-    f: int,
-    g: X, //~ ERROR type `g` is dynamically sized. dynamically sized types may only appear as the ty
-    h: int,
+struct S2<X: ?Sized> {
+    f: isize,
+    g: X, //~ ERROR `X: std::marker::Sized` is not satisfied
+    h: isize,
 }
-
-enum E<Sized? X> {
-    V1(X, int), //~ERROR type `X` is dynamically sized. dynamically sized types may only appear as t
-    V2{f1: X, f: int}, //~ERROR type `f1` is dynamically sized. dynamically sized types may only app
+struct S3 {
+    f: str, //~ ERROR `str: std::marker::Sized` is not satisfied
+    g: [usize]
+}
+struct S4 {
+    f: [u8], //~ ERROR `[u8]: std::marker::Sized` is not satisfied
+    g: usize
+}
+enum E<X: ?Sized> {
+    V1(X, isize), //~ERROR `X: std::marker::Sized` is not satisfied
+}
+enum F<X: ?Sized> {
+    V2{f1: X, f: isize}, //~ERROR `X: std::marker::Sized` is not satisfied
 }
 
 pub fn main() {

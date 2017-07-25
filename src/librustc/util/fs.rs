@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,96 +8,104 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use std::path::{self, Path, PathBuf};
+use std::ffi::OsString;
+use std::fs;
 use std::io;
-use std::io::fs;
-use std::os;
 
-/// Returns an absolute path in the filesystem that `path` points to. The
-/// returned path does not contain any symlinks in its hierarchy.
-pub fn realpath(original: &Path) -> io::IoResult<Path> {
-    static MAX_LINKS_FOLLOWED: uint = 256;
-    let original = os::make_absolute(original);
+// Unfortunately, on windows, it looks like msvcrt.dll is silently translating
+// verbatim paths under the hood to non-verbatim paths! This manifests itself as
+// gcc looking like it cannot accept paths of the form `\\?\C:\...`, but the
+// real bug seems to lie in msvcrt.dll.
+//
+// Verbatim paths are generally pretty rare, but the implementation of
+// `fs::canonicalize` currently generates paths of this form, meaning that we're
+// going to be passing quite a few of these down to gcc, so we need to deal with
+// this case.
+//
+// For now we just strip the "verbatim prefix" of `\\?\` from the path. This
+// will probably lose information in some cases, but there's not a whole lot
+// more we can do with a buggy msvcrt...
+//
+// For some more information, see this comment:
+//   https://github.com/rust-lang/rust/issues/25505#issuecomment-102876737
+pub fn fix_windows_verbatim_for_gcc(p: &Path) -> PathBuf {
+    if !cfg!(windows) {
+        return p.to_path_buf();
+    }
+    let mut components = p.components();
+    let prefix = match components.next() {
+        Some(path::Component::Prefix(p)) => p,
+        _ => return p.to_path_buf(),
+    };
+    match prefix.kind() {
+        path::Prefix::VerbatimDisk(disk) => {
+            let mut base = OsString::from(format!("{}:", disk as char));
+            base.push(components.as_path());
+            PathBuf::from(base)
+        }
+        path::Prefix::VerbatimUNC(server, share) => {
+            let mut base = OsString::from(r"\\");
+            base.push(server);
+            base.push(r"\");
+            base.push(share);
+            base.push(components.as_path());
+            PathBuf::from(base)
+        }
+        _ => p.to_path_buf(),
+    }
+}
 
-    // Right now lstat on windows doesn't work quite well
-    if cfg!(windows) {
-        return Ok(original)
+pub enum LinkOrCopy {
+    Link,
+    Copy,
+}
+
+/// Copy `p` into `q`, preferring to use hard-linking if possible. If
+/// `q` already exists, it is removed first.
+/// The result indicates which of the two operations has been performed.
+pub fn link_or_copy<P: AsRef<Path>, Q: AsRef<Path>>(p: P, q: Q) -> io::Result<LinkOrCopy> {
+    let p = p.as_ref();
+    let q = q.as_ref();
+    if q.exists() {
+        fs::remove_file(&q)?;
     }
 
-    let result = original.root_path();
-    let mut result = result.expect("make_absolute has no root_path");
-    let mut followed = 0;
-
-    for part in original.components() {
-        result.push(part);
-
-        loop {
-            if followed == MAX_LINKS_FOLLOWED {
-                return Err(io::standard_error(io::InvalidInput))
-            }
-
-            match fs::lstat(&result) {
-                Err(..) => break,
-                Ok(ref stat) if stat.kind != io::TypeSymlink => break,
-                Ok(..) => {
-                    followed += 1;
-                    let path = try!(fs::readlink(&result));
-                    result.pop();
-                    result.push(path);
-                }
+    match fs::hard_link(p, q) {
+        Ok(()) => Ok(LinkOrCopy::Link),
+        Err(_) => {
+            match fs::copy(p, q) {
+                Ok(_) => Ok(LinkOrCopy::Copy),
+                Err(e) => Err(e),
             }
         }
     }
-
-    return Ok(result);
 }
 
-#[cfg(not(windows), test)]
-mod test {
-    use std::io;
-    use std::io::fs::{File, symlink, mkdir, mkdir_recursive};
-    use super::realpath;
-    use std::io::TempDir;
+#[derive(Debug)]
+pub enum RenameOrCopyRemove {
+    Rename,
+    CopyRemove,
+}
 
-    #[test]
-    fn realpath_works() {
-        let tmpdir = TempDir::new("rustc-fs").unwrap();
-        let tmpdir = realpath(tmpdir.path()).unwrap();
-        let file = tmpdir.join("test");
-        let dir = tmpdir.join("test2");
-        let link = dir.join("link");
-        let linkdir = tmpdir.join("test3");
-
-        File::create(&file).unwrap();
-        mkdir(&dir, io::UserRWX).unwrap();
-        symlink(&file, &link).unwrap();
-        symlink(&dir, &linkdir).unwrap();
-
-        assert!(realpath(&tmpdir).unwrap() == tmpdir);
-        assert!(realpath(&file).unwrap() == file);
-        assert!(realpath(&link).unwrap() == file);
-        assert!(realpath(&linkdir).unwrap() == dir);
-        assert!(realpath(&linkdir.join("link")).unwrap() == file);
-    }
-
-    #[test]
-    fn realpath_works_tricky() {
-        let tmpdir = TempDir::new("rustc-fs").unwrap();
-        let tmpdir = realpath(tmpdir.path()).unwrap();
-
-        let a = tmpdir.join("a");
-        let b = a.join("b");
-        let c = b.join("c");
-        let d = a.join("d");
-        let e = d.join("e");
-        let f = a.join("f");
-
-        mkdir_recursive(&b, io::UserRWX).unwrap();
-        mkdir_recursive(&d, io::UserRWX).unwrap();
-        File::create(&f).unwrap();
-        symlink(&Path::new("../d/e"), &c).unwrap();
-        symlink(&Path::new("../f"), &e).unwrap();
-
-        assert!(realpath(&c).unwrap() == f);
-        assert!(realpath(&e).unwrap() == f);
+/// Rename `p` into `q`, preferring to use `rename` if possible.
+/// If `rename` fails (rename may fail for reasons such as crossing
+/// filesystem), fallback to copy & remove
+pub fn rename_or_copy_remove<P: AsRef<Path>, Q: AsRef<Path>>(p: P,
+                                                             q: Q)
+                                                             -> io::Result<RenameOrCopyRemove> {
+    let p = p.as_ref();
+    let q = q.as_ref();
+    match fs::rename(p, q) {
+        Ok(()) => Ok(RenameOrCopyRemove::Rename),
+        Err(_) => {
+            match fs::copy(p, q) {
+                Ok(_) => {
+                    fs::remove_file(p)?;
+                    Ok(RenameOrCopyRemove::CopyRemove)
+                }
+                Err(e) => Err(e),
+            }
+        }
     }
 }

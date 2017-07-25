@@ -9,104 +9,86 @@
 // except according to those terms.
 
 // ignore-tidy-linelength
-// ignore-android: FIXME(#10381)
-
-#![feature(managed_boxes)]
+// ignore-lldb
+// ignore-gdb-version: 7.11.90 - 7.12.9
 
 // compile-flags:-g
-// gdb-command:set print pretty off
-// gdb-command:rbreak zzz
+
 // gdb-command:run
-// gdb-command:finish
 
 // gdb-command:print stack_unique.value
 // gdb-check:$1 = 0
-// gdb-command:print stack_unique.next.RUST$ENCODED$ENUM$0$Empty.val->value
+// gdbg-command:print stack_unique.next.RUST$ENCODED$ENUM$0$Empty.val->value
+// gdbr-command:print stack_unique.next.val.value
 // gdb-check:$2 = 1
 
-// gdb-command:print unique_unique->value
+// gdbg-command:print unique_unique->value
+// gdbr-command:print unique_unique.value
 // gdb-check:$3 = 2
-// gdb-command:print unique_unique->next.RUST$ENCODED$ENUM$0$Empty.val->value
+// gdbg-command:print unique_unique->next.RUST$ENCODED$ENUM$0$Empty.val->value
+// gdbr-command:print unique_unique.next.val.value
 // gdb-check:$4 = 3
 
-// gdb-command:print box_unique->val.value
-// gdb-check:$5 = 4
-// gdb-command:print box_unique->val.next.RUST$ENCODED$ENUM$0$Empty.val->value
-// gdb-check:$6 = 5
-
 // gdb-command:print vec_unique[0].value
-// gdb-check:$7 = 6.5
-// gdb-command:print vec_unique[0].next.RUST$ENCODED$ENUM$0$Empty.val->value
-// gdb-check:$8 = 7.5
+// gdb-check:$5 = 6.5
+// gdbg-command:print vec_unique[0].next.RUST$ENCODED$ENUM$0$Empty.val->value
+// gdbr-command:print vec_unique[0].next.val.value
+// gdb-check:$6 = 7.5
 
-// gdb-command:print borrowed_unique->value
-// gdb-check:$9 = 8.5
-// gdb-command:print borrowed_unique->next.RUST$ENCODED$ENUM$0$Empty.val->value
-// gdb-check:$10 = 9.5
-
-// MANAGED
-// gdb-command:print stack_managed.value
-// gdb-check:$11 = 10
-// gdb-command:print stack_managed.next.RUST$ENCODED$ENUM$0$Empty.val->val.value
-// gdb-check:$12 = 11
-
-// gdb-command:print unique_managed->value
-// gdb-check:$13 = 12
-// gdb-command:print unique_managed->next.RUST$ENCODED$ENUM$0$Empty.val->val.value
-// gdb-check:$14 = 13
-
-// gdb-command:print box_managed.val->value
-// gdb-check:$15 = 14
-// gdb-command:print box_managed->val->next.RUST$ENCODED$ENUM$0$Empty.val->val.value
-// gdb-check:$16 = 15
-
-// gdb-command:print vec_managed[0].value
-// gdb-check:$17 = 16.5
-// gdb-command:print vec_managed[0].next.RUST$ENCODED$ENUM$0$Empty.val->val.value
-// gdb-check:$18 = 17.5
-
-// gdb-command:print borrowed_managed->value
-// gdb-check:$19 = 18.5
-// gdb-command:print borrowed_managed->next.RUST$ENCODED$ENUM$0$Empty.val->val.value
-// gdb-check:$20 = 19.5
+// gdbg-command:print borrowed_unique->value
+// gdbr-command:print borrowed_unique.value
+// gdb-check:$7 = 8.5
+// gdbg-command:print borrowed_unique->next.RUST$ENCODED$ENUM$0$Empty.val->value
+// gdbr-command:print borrowed_unique.next.val.value
+// gdb-check:$8 = 9.5
 
 // LONG CYCLE
 // gdb-command:print long_cycle1.value
-// gdb-check:$21 = 20
-// gdb-command:print long_cycle1.next->value
-// gdb-check:$22 = 21
-// gdb-command:print long_cycle1.next->next->value
-// gdb-check:$23 = 22
-// gdb-command:print long_cycle1.next->next->next->value
-// gdb-check:$24 = 23
+// gdb-check:$9 = 20
+// gdbg-command:print long_cycle1.next->value
+// gdbr-command:print long_cycle1.next.value
+// gdb-check:$10 = 21
+// gdbg-command:print long_cycle1.next->next->value
+// gdbr-command:print long_cycle1.next.next.value
+// gdb-check:$11 = 22
+// gdbg-command:print long_cycle1.next->next->next->value
+// gdbr-command:print long_cycle1.next.next.next.value
+// gdb-check:$12 = 23
 
 // gdb-command:print long_cycle2.value
-// gdb-check:$25 = 24
-// gdb-command:print long_cycle2.next->value
-// gdb-check:$26 = 25
-// gdb-command:print long_cycle2.next->next->value
-// gdb-check:$27 = 26
+// gdb-check:$13 = 24
+// gdbg-command:print long_cycle2.next->value
+// gdbr-command:print long_cycle2.next.value
+// gdb-check:$14 = 25
+// gdbg-command:print long_cycle2.next->next->value
+// gdbr-command:print long_cycle2.next.next.value
+// gdb-check:$15 = 26
 
 // gdb-command:print long_cycle3.value
-// gdb-check:$28 = 27
-// gdb-command:print long_cycle3.next->value
-// gdb-check:$29 = 28
+// gdb-check:$16 = 27
+// gdbg-command:print long_cycle3.next->value
+// gdbr-command:print long_cycle3.next.value
+// gdb-check:$17 = 28
 
 // gdb-command:print long_cycle4.value
-// gdb-check:$30 = 29.5
+// gdb-check:$18 = 29.5
 
-// gdb-command:print (*****long_cycle_w_anonymous_types).value
-// gdb-check:$31 = 30
+// gdbg-command:print (*****long_cycle_w_anonymous_types).value
+// gdbr-command:print long_cycle_w_anonymous_types.value
+// gdb-check:$19 = 30
 
-// gdb-command:print (*****((*****long_cycle_w_anonymous_types).next.RUST$ENCODED$ENUM$0$Empty.val)).value
-// gdb-check:$32 = 31
+// gdbg-command:print (*****((*****long_cycle_w_anonymous_types).next.RUST$ENCODED$ENUM$0$Empty.val)).value
+// gdbr-command:print long_cycle_w_anonymous_types.next.val.value
+// gdb-check:$20 = 31
 
 // gdb-command:continue
 
-#![allow(unused_variable)]
-#![feature(struct_variant)]
+#![allow(unused_variables)]
+#![feature(box_syntax)]
+#![feature(omit_gdb_pretty_printer_section)]
+#![omit_gdb_pretty_printer_section]
 
-use std::gc::{Gc, GC};
+use self::Opt::{Empty, Val};
 
 enum Opt<T> {
     Empty,
@@ -115,11 +97,6 @@ enum Opt<T> {
 
 struct UniqueNode<T> {
     next: Opt<Box<UniqueNode<T>>>,
-    value: T
-}
-
-struct ManagedNode<T> {
-    next: Opt<Gc<ManagedNode<T>>>,
     value: T
 }
 
@@ -145,7 +122,7 @@ struct LongCycle4<T> {
 
 struct LongCycleWithAnonymousTypes {
     next: Opt<Box<Box<Box<Box<Box<LongCycleWithAnonymousTypes>>>>>>,
-    value: uint,
+    value: usize,
 }
 
 // This test case makes sure that recursive structs are properly described. The Node structs are
@@ -168,10 +145,10 @@ fn main() {
         next: Val {
             val: box UniqueNode {
                 next: Empty,
-                value: 1_u16,
+                value: 1,
             }
         },
-        value: 0_u16,
+        value: 0,
     };
 
     let unique_unique: Box<UniqueNode<u32>> = box UniqueNode {
@@ -184,17 +161,7 @@ fn main() {
         value: 2,
     };
 
-    let box_unique: Gc<UniqueNode<u64>> = box(GC) UniqueNode {
-        next: Val {
-            val: box UniqueNode {
-                next: Empty,
-                value: 5,
-            }
-        },
-        value: 4,
-    };
-
-    let vec_unique: [UniqueNode<f32>, ..1] = [UniqueNode {
+    let vec_unique: [UniqueNode<f32>; 1] = [UniqueNode {
         next: Val {
             val: box UniqueNode {
                 next: Empty,
@@ -212,56 +179,6 @@ fn main() {
             }
         },
         value: 8.5,
-    };
-
-    let stack_managed: ManagedNode<u16> = ManagedNode {
-        next: Val {
-            val: box(GC) ManagedNode {
-                next: Empty,
-                value: 11,
-            }
-        },
-        value: 10,
-    };
-
-    let unique_managed: Box<ManagedNode<u32>> = box ManagedNode {
-        next: Val {
-            val: box(GC) ManagedNode {
-                next: Empty,
-                value: 13,
-            }
-        },
-        value: 12,
-    };
-
-    let box_managed: Gc<ManagedNode<u64>> = box(GC) ManagedNode {
-        next: Val {
-            val: box(GC) ManagedNode {
-                next: Empty,
-                value: 15,
-            }
-        },
-        value: 14,
-    };
-
-    let vec_managed: [ManagedNode<f32>, ..1] = [ManagedNode {
-        next: Val {
-            val: box(GC) ManagedNode {
-                next: Empty,
-                value: 17.5,
-            }
-        },
-        value: 16.5,
-    }];
-
-    let borrowed_managed: &ManagedNode<f64> = &ManagedNode {
-        next: Val {
-            val: box(GC) ManagedNode {
-                next: Empty,
-                value: 19.5,
-            }
-        },
-        value: 18.5,
     };
 
     // LONG CYCLE
@@ -315,8 +232,7 @@ fn main() {
         value: 30
     };
 
-    zzz();
+    zzz(); // #break
 }
 
 fn zzz() {()}
-

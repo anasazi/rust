@@ -8,29 +8,25 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// no-pretty-expanded FIXME #15189
-
-extern crate debug;
-
 pub fn main() {
-    let x = vec!(1i, 2i, 3i);
-    let mut y = 0i;
-    for i in x.iter() { println!("{:?}", *i); y += *i; }
-    println!("{:?}", y);
+    let x = vec![1, 2, 3];
+    let mut y = 0;
+    for i in &x { println!("{}", *i); y += *i; }
+    println!("{}", y);
     assert_eq!(y, 6);
     let s = "hello there".to_string();
-    let mut i: int = 0;
-    for c in s.as_slice().bytes() {
-        if i == 0 { assert!((c == 'h' as u8)); }
-        if i == 1 { assert!((c == 'e' as u8)); }
-        if i == 2 { assert!((c == 'l' as u8)); }
-        if i == 3 { assert!((c == 'l' as u8)); }
-        if i == 4 { assert!((c == 'o' as u8)); }
+    let mut i: isize = 0;
+    for c in s.bytes() {
+        if i == 0 { assert_eq!(c, 'h' as u8); }
+        if i == 1 { assert_eq!(c, 'e' as u8); }
+        if i == 2 { assert_eq!(c, 'l' as u8); }
+        if i == 3 { assert_eq!(c, 'l' as u8); }
+        if i == 4 { assert_eq!(c, 'o' as u8); }
         // ...
 
         i += 1;
-        println!("{:?}", i);
-        println!("{:?}", c);
+        println!("{}", i);
+        println!("{}", c);
     }
     assert_eq!(i, 11);
 }

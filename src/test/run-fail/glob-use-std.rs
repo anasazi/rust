@@ -10,13 +10,10 @@
 
 // Issue #7580
 
-// error-pattern:fail works
-#![feature(globs)]
+// error-pattern:panic works
 
 use std::*;
 
 fn main() {
-    str::from_byte('a' as u8); // avoid an unused import message
-
-    fail!("fail works")
+    panic!("panic works")
 }

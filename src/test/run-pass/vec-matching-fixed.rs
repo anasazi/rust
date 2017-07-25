@@ -8,8 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+
+#![feature(advanced_slice_patterns)]
+#![feature(slice_patterns)]
+
 fn a() {
-    let x = [1i, 2, 3];
+    let x = [1, 2, 3];
     match x {
         [1, 2, 4] => unreachable!(),
         [0, 2, 3, ..] => unreachable!(),

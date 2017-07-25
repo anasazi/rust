@@ -8,18 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate debug;
-
-fn foo(c: Vec<int> ) {
-    let a: int = 5;
-    let mut b: Vec<int> = Vec::new();
+fn foo(c: Vec<isize> ) {
+    let a: isize = 5;
+    let mut b: Vec<isize> = Vec::new();
 
 
-    match none::<int> {
-        some::<int>(_) => {
-            for _i in c.iter() {
-                println!("{:?}", a);
-                let a = 17i;
+    match t::none::<isize> {
+        t::some::<isize>(_) => {
+            for _i in &c {
+                println!("{}", a);
+                let a = 17;
                 b.push(a);
             }
         }
@@ -29,4 +27,4 @@ fn foo(c: Vec<int> ) {
 
 enum t<T> { none, some(T), }
 
-pub fn main() { let x = 10i; let x = x + 20; assert!((x == 30)); foo(Vec::new()); }
+pub fn main() { let x = 10; let x = x + 20; assert_eq!(x, 30); foo(Vec::new()); }

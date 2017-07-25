@@ -8,8 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-linux #7340 fails on 32-bit linux
-// ignore-macos #7340 fails on 32-bit macos
 
 use std::mem;
 
@@ -26,49 +24,50 @@ struct Rec<A,B> {
 }
 
 fn mk_rec<A,B>(a: A, b: B) -> Rec<A,B> {
-    Rec { chA:0u8, tA:VarA(a), chB:1u8, tB:VarB(b) }
+    Rec { chA:0, tA:Tag::VarA(a), chB:1, tB:Tag::VarB(b) }
 }
 
-fn is_aligned<A>(amnt: uint, u: &A) -> bool {
-    let p: uint = unsafe { mem::transmute(u) };
-    return (p & (amnt-1u)) == 0u;
+fn is_aligned<A>(amnt: usize, u: &A) -> bool {
+    let p: usize = unsafe { mem::transmute(u) };
+    return (p & (amnt-1)) == 0;
 }
 
-fn variant_data_is_aligned<A,B>(amnt: uint, u: &Tag<A,B>) -> bool {
+fn variant_data_is_aligned<A,B>(amnt: usize, u: &Tag<A,B>) -> bool {
     match u {
-      &VarA(ref a) => is_aligned(amnt, a),
-      &VarB(ref b) => is_aligned(amnt, b)
+      &Tag::VarA(ref a) => is_aligned(amnt, a),
+      &Tag::VarB(ref b) => is_aligned(amnt, b)
     }
 }
 
 pub fn main() {
+    let u64_align = std::mem::min_align_of::<u64>();
     let x = mk_rec(22u64, 23u64);
-    assert!(is_aligned(8u, &x.tA));
-    assert!(variant_data_is_aligned(8u, &x.tA));
-    assert!(is_aligned(8u, &x.tB));
-    assert!(variant_data_is_aligned(8u, &x.tB));
+    assert!(is_aligned(u64_align, &x.tA));
+    assert!(variant_data_is_aligned(u64_align, &x.tA));
+    assert!(is_aligned(u64_align, &x.tB));
+    assert!(variant_data_is_aligned(u64_align, &x.tB));
 
     let x = mk_rec(22u64, 23u32);
-    assert!(is_aligned(8u, &x.tA));
-    assert!(variant_data_is_aligned(8u, &x.tA));
-    assert!(is_aligned(8u, &x.tB));
-    assert!(variant_data_is_aligned(4u, &x.tB));
+    assert!(is_aligned(u64_align, &x.tA));
+    assert!(variant_data_is_aligned(u64_align, &x.tA));
+    assert!(is_aligned(u64_align, &x.tB));
+    assert!(variant_data_is_aligned(4, &x.tB));
 
     let x = mk_rec(22u32, 23u64);
-    assert!(is_aligned(8u, &x.tA));
-    assert!(variant_data_is_aligned(4u, &x.tA));
-    assert!(is_aligned(8u, &x.tB));
-    assert!(variant_data_is_aligned(8u, &x.tB));
+    assert!(is_aligned(u64_align, &x.tA));
+    assert!(variant_data_is_aligned(4, &x.tA));
+    assert!(is_aligned(u64_align, &x.tB));
+    assert!(variant_data_is_aligned(u64_align, &x.tB));
 
     let x = mk_rec(22u32, 23u32);
-    assert!(is_aligned(4u, &x.tA));
-    assert!(variant_data_is_aligned(4u, &x.tA));
-    assert!(is_aligned(4u, &x.tB));
-    assert!(variant_data_is_aligned(4u, &x.tB));
+    assert!(is_aligned(4, &x.tA));
+    assert!(variant_data_is_aligned(4, &x.tA));
+    assert!(is_aligned(4, &x.tB));
+    assert!(variant_data_is_aligned(4, &x.tB));
 
     let x = mk_rec(22f64, 23f64);
-    assert!(is_aligned(8u, &x.tA));
-    assert!(variant_data_is_aligned(8u, &x.tA));
-    assert!(is_aligned(8u, &x.tB));
-    assert!(variant_data_is_aligned(8u, &x.tB));
+    assert!(is_aligned(u64_align, &x.tA));
+    assert!(variant_data_is_aligned(u64_align, &x.tA));
+    assert!(is_aligned(u64_align, &x.tB));
+    assert!(variant_data_is_aligned(u64_align, &x.tB));
 }

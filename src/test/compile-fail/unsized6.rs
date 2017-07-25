@@ -8,37 +8,34 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Test `Sized?` local variables.
+// Test `?Sized` local variables.
 
+trait T {}
 
-trait T for Sized? {}
-
-fn f1<Sized? X>(x: &X) {
-    let _: X; //~ERROR variable `_` has dynamically sized type `X`
-    let _: (int, (X, int)); //~ERROR variable `_` has dynamically sized type `(int,(X,int))`
-    let y: X; //~ERROR variable `y` has dynamically sized type `X`
-    let y: (int, (X, int)); //~ERROR variable `y` has dynamically sized type `(int,(X,int))`
+fn f1<W: ?Sized, X: ?Sized, Y: ?Sized, Z: ?Sized>(x: &X) {
+    let _: W; // <-- this is OK, no bindings created, no initializer.
+    let _: (isize, (X, isize)); //~ERROR `X: std::marker::Sized` is not satisfie
+    let y: Y; //~ERROR `Y: std::marker::Sized` is not satisfied
+    let y: (isize, (Z, usize)); //~ERROR `Z: std::marker::Sized` is not satisfied
 }
-fn f2<Sized? X: T>(x: &X) {
-    let _: X; //~ERROR variable `_` has dynamically sized type `X`
-    let _: (int, (X, int)); //~ERROR variable `_` has dynamically sized type `(int,(X,int))`
-    let y: X; //~ERROR variable `y` has dynamically sized type `X`
-    let y: (int, (X, int)); //~ERROR variable `y` has dynamically sized type `(int,(X,int))`
+fn f2<X: ?Sized, Y: ?Sized>(x: &X) {
+    let y: X; //~ERROR `X: std::marker::Sized` is not satisfied
+    let y: (isize, (Y, isize)); //~ERROR `Y: std::marker::Sized` is not satisfied
 }
 
-fn f3<Sized? X>(x1: Box<X>, x2: Box<X>, x3: Box<X>) {
-    let y: X = *x1; //~ERROR variable `y` has dynamically sized type `X`
-    let y = *x2; //~ERROR variable `y` has dynamically sized type `X`
-    let (y, z) = (*x3, 4i); //~ERROR variable `y` has dynamically sized type `X`
+fn f3<X: ?Sized>(x1: Box<X>, x2: Box<X>, x3: Box<X>) {
+    let y: X = *x1; //~ERROR `X: std::marker::Sized` is not satisfied
+    let y = *x2; //~ERROR `X: std::marker::Sized` is not satisfied
+    let (y, z) = (*x3, 4); //~ERROR `X: std::marker::Sized` is not satisfied
 }
-fn f4<Sized? X: T>(x1: Box<X>, x2: Box<X>, x3: Box<X>) {
-    let y: X = *x1;         //~ERROR variable `y` has dynamically sized type `X`
-    let y = *x2;            //~ERROR variable `y` has dynamically sized type `X`
-    let (y, z) = (*x3, 4i); //~ERROR variable `y` has dynamically sized type `X`
+fn f4<X: ?Sized + T>(x1: Box<X>, x2: Box<X>, x3: Box<X>) {
+    let y: X = *x1;         //~ERROR `X: std::marker::Sized` is not satisfied
+    let y = *x2;            //~ERROR `X: std::marker::Sized` is not satisfied
+    let (y, z) = (*x3, 4); //~ERROR `X: std::marker::Sized` is not satisfied
 }
 
-fn g1<Sized? X>(x: X) {} //~ERROR variable `x` has dynamically sized type `X`
-fn g2<Sized? X: T>(x: X) {} //~ERROR variable `x` has dynamically sized type `X`
+fn g1<X: ?Sized>(x: X) {} //~ERROR `X: std::marker::Sized` is not satisfied
+fn g2<X: ?Sized + T>(x: X) {} //~ERROR `X: std::marker::Sized` is not satisfied
 
 pub fn main() {
 }

@@ -9,12 +9,12 @@
 // except according to those terms.
 
 struct TrieMapIterator<'a> {
-    node: &'a uint
+    node: &'a usize
 }
 
 fn main() {
     let a = 5;
     let _iter = TrieMapIterator{node: &a};
     _iter.node = & //~ ERROR cannot assign to immutable field
-    fail!()
+    panic!()
 }

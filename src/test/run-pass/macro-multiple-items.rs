@@ -8,11 +8,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-pretty - token trees can't pretty print
-
-#![feature(macro_rules)]
-
-macro_rules! make_foo(
+macro_rules! make_foo {
     () => (
         struct Foo;
 
@@ -20,9 +16,9 @@ macro_rules! make_foo(
             fn bar(&self) {}
         }
     )
-)
+}
 
-make_foo!()
+make_foo!();
 
 pub fn main() {
     Foo.bar()

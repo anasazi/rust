@@ -8,14 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-
 trait Trait<T> {
     fn f(&self, x: T);
 }
 
+#[derive(Copy, Clone)]
 struct Struct {
-    x: int,
-    y: int,
+    x: isize,
+    y: isize,
 }
 
 impl Trait<&'static str> for Struct {
@@ -26,9 +26,8 @@ impl Trait<&'static str> for Struct {
 
 pub fn main() {
     let a = Struct { x: 1, y: 2 };
-    let b: Box<Trait<&'static str>> = box a;
+    let b: Box<Trait<&'static str>> = Box::new(a);
     b.f("Mary");
     let c: &Trait<&'static str> = &a;
     c.f("Joe");
 }
-

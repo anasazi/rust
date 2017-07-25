@@ -8,15 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate debug;
-
 pub fn main() {
-    let mut x = 0i;
+    let mut x = 0;
 
     'foo: loop {
         'bar: loop {
             'quux: loop {
-                if 1i == 2 {
+                if 1 == 2 {
                     break 'foo;
                 }
                 else {
@@ -29,6 +27,6 @@ pub fn main() {
         break;
     }
 
-    println!("{:?}", x);
+    println!("{}", x);
     assert_eq!(x, 42);
 }

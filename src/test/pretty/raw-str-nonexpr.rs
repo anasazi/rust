@@ -12,7 +12,7 @@
 
 #![feature(asm)]
 
-#[cfg = r#"just parse this"#]
-extern crate blah = r##"blah"##;
+#[cfg(foo = r#"just parse this"#)]
+extern crate blah as blah;
 
 fn main() { unsafe { asm!(r###"blah"###); } }

@@ -8,9 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![feature(box_syntax)]
+
 fn main() {
-    let x = box 1i;
-    let f: proc() = proc() {
+    let x: Box<_> = box 1;
+    let f = move|| {
         let _a = x;
         drop(x);
         //~^ ERROR: use of moved value: `x`

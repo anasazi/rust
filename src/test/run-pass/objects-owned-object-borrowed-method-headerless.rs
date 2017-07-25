@@ -13,28 +13,32 @@
 // not have headers.
 
 
+#![allow(unknown_features)]
+#![feature(box_syntax)]
+
+
 trait FooTrait {
-    fn foo(&self) -> uint;
+    fn foo(&self) -> usize;
 }
 
 struct BarStruct {
-    x: uint
+    x: usize
 }
 
 impl FooTrait for BarStruct {
-    fn foo(&self) -> uint {
+    fn foo(&self) -> usize {
         self.x
     }
 }
 
 pub fn main() {
-    let foos: Vec<Box<FooTrait>> = vec!(
+    let foos: Vec<Box<FooTrait>> = vec![
         box BarStruct{ x: 0 } as Box<FooTrait>,
         box BarStruct{ x: 1 } as Box<FooTrait>,
         box BarStruct{ x: 2 } as Box<FooTrait>
-    );
+    ];
 
-    for i in range(0u, foos.len()) {
-        assert_eq!(i, foos.get(i).foo());
+    for i in 0..foos.len() {
+        assert_eq!(i, foos[i].foo());
     }
 }

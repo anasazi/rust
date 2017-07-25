@@ -1,4 +1,3 @@
-
 // Copyright 2012-2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
@@ -16,4 +15,4 @@ mod zed {
     pub fn bar() { println!("bar"); }
 }
 
-pub fn main() { let _zed = 42i; bar(); }
+pub fn main() { let _zed = 42; bar(); }

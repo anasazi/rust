@@ -10,363 +10,271 @@
 
 //! Operations and constants for 32-bits floats (`f32` type)
 
-#![doc(primitive = "f32")]
 // FIXME: MIN_VALUE and MAX_VALUE literals are parsed as -inf and inf #14353
-#![allow(type_overflow)]
+#![allow(overflowing_literals)]
+
+#![stable(feature = "rust1", since = "1.0.0")]
 
 use intrinsics;
 use mem;
-use num::{FPNormal, FPCategory, FPZero, FPSubnormal, FPInfinite, FPNaN};
 use num::Float;
-use option::Option;
+use num::FpCategory as Fp;
 
-pub static RADIX: uint = 2u;
+/// The radix or base of the internal representation of `f32`.
+#[stable(feature = "rust1", since = "1.0.0")]
+pub const RADIX: u32 = 2;
 
-pub static MANTISSA_DIGITS: uint = 24u;
-pub static DIGITS: uint = 6u;
+/// Number of significant digits in base 2.
+#[stable(feature = "rust1", since = "1.0.0")]
+pub const MANTISSA_DIGITS: u32 = 24;
+/// Approximate number of significant digits in base 10.
+#[stable(feature = "rust1", since = "1.0.0")]
+pub const DIGITS: u32 = 6;
 
-pub static EPSILON: f32 = 1.19209290e-07_f32;
+/// Difference between `1.0` and the next largest representable number.
+#[stable(feature = "rust1", since = "1.0.0")]
+pub const EPSILON: f32 = 1.19209290e-07_f32;
 
-/// Smallest finite f32 value
-pub static MIN_VALUE: f32 = -3.40282347e+38_f32;
-/// Smallest positive, normalized f32 value
-pub static MIN_POS_VALUE: f32 = 1.17549435e-38_f32;
-/// Largest finite f32 value
-pub static MAX_VALUE: f32 = 3.40282347e+38_f32;
+/// Smallest finite `f32` value.
+#[stable(feature = "rust1", since = "1.0.0")]
+pub const MIN: f32 = -3.40282347e+38_f32;
+/// Smallest positive normal `f32` value.
+#[stable(feature = "rust1", since = "1.0.0")]
+pub const MIN_POSITIVE: f32 = 1.17549435e-38_f32;
+/// Largest finite `f32` value.
+#[stable(feature = "rust1", since = "1.0.0")]
+pub const MAX: f32 = 3.40282347e+38_f32;
 
-pub static MIN_EXP: int = -125;
-pub static MAX_EXP: int = 128;
+/// One greater than the minimum possible normal power of 2 exponent.
+#[stable(feature = "rust1", since = "1.0.0")]
+pub const MIN_EXP: i32 = -125;
+/// Maximum possible power of 2 exponent.
+#[stable(feature = "rust1", since = "1.0.0")]
+pub const MAX_EXP: i32 = 128;
 
-pub static MIN_10_EXP: int = -37;
-pub static MAX_10_EXP: int = 38;
+/// Minimum possible normal power of 10 exponent.
+#[stable(feature = "rust1", since = "1.0.0")]
+pub const MIN_10_EXP: i32 = -37;
+/// Maximum possible power of 10 exponent.
+#[stable(feature = "rust1", since = "1.0.0")]
+pub const MAX_10_EXP: i32 = 38;
 
-pub static NAN: f32 = 0.0_f32/0.0_f32;
-pub static INFINITY: f32 = 1.0_f32/0.0_f32;
-pub static NEG_INFINITY: f32 = -1.0_f32/0.0_f32;
+/// Not a Number (NaN).
+#[stable(feature = "rust1", since = "1.0.0")]
+pub const NAN: f32 = 0.0_f32 / 0.0_f32;
+/// Infinity (∞).
+#[stable(feature = "rust1", since = "1.0.0")]
+pub const INFINITY: f32 = 1.0_f32 / 0.0_f32;
+/// Negative infinity (-∞).
+#[stable(feature = "rust1", since = "1.0.0")]
+pub const NEG_INFINITY: f32 = -1.0_f32 / 0.0_f32;
 
-/// Various useful constants.
+/// Basic mathematical constants.
+#[stable(feature = "rust1", since = "1.0.0")]
 pub mod consts {
     // FIXME: replace with mathematical constants from cmath.
 
-    // FIXME(#5527): These constants should be deprecated once associated
-    // constants are implemented in favour of referencing the respective members
-    // of `Float`.
+    /// Archimedes' constant (π)
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub const PI: f32 = 3.14159265358979323846264338327950288_f32;
 
-    /// Archimedes' constant
-    pub static PI: f32 = 3.14159265358979323846264338327950288_f32;
+    /// π/2
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub const FRAC_PI_2: f32 = 1.57079632679489661923132169163975144_f32;
 
-    /// pi * 2.0
-    pub static PI_2: f32 = 6.28318530717958647692528676655900576_f32;
+    /// π/3
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub const FRAC_PI_3: f32 = 1.04719755119659774615421446109316763_f32;
 
-    /// pi/2.0
-    pub static FRAC_PI_2: f32 = 1.57079632679489661923132169163975144_f32;
+    /// π/4
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub const FRAC_PI_4: f32 = 0.785398163397448309615660845819875721_f32;
 
-    /// pi/3.0
-    pub static FRAC_PI_3: f32 = 1.04719755119659774615421446109316763_f32;
+    /// π/6
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub const FRAC_PI_6: f32 = 0.52359877559829887307710723054658381_f32;
 
-    /// pi/4.0
-    pub static FRAC_PI_4: f32 = 0.785398163397448309615660845819875721_f32;
+    /// π/8
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub const FRAC_PI_8: f32 = 0.39269908169872415480783042290993786_f32;
 
-    /// pi/6.0
-    pub static FRAC_PI_6: f32 = 0.52359877559829887307710723054658381_f32;
+    /// 1/π
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub const FRAC_1_PI: f32 = 0.318309886183790671537767526745028724_f32;
 
-    /// pi/8.0
-    pub static FRAC_PI_8: f32 = 0.39269908169872415480783042290993786_f32;
+    /// 2/π
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub const FRAC_2_PI: f32 = 0.636619772367581343075535053490057448_f32;
 
-    /// 1.0/pi
-    pub static FRAC_1_PI: f32 = 0.318309886183790671537767526745028724_f32;
+    /// 2/sqrt(π)
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub const FRAC_2_SQRT_PI: f32 = 1.12837916709551257389615890312154517_f32;
 
-    /// 2.0/pi
-    pub static FRAC_2_PI: f32 = 0.636619772367581343075535053490057448_f32;
+    /// sqrt(2)
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub const SQRT_2: f32 = 1.41421356237309504880168872420969808_f32;
 
-    /// 2.0/sqrt(pi)
-    pub static FRAC_2_SQRTPI: f32 = 1.12837916709551257389615890312154517_f32;
+    /// 1/sqrt(2)
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub const FRAC_1_SQRT_2: f32 = 0.707106781186547524400844362104849039_f32;
 
-    /// sqrt(2.0)
-    pub static SQRT2: f32 = 1.41421356237309504880168872420969808_f32;
+    /// Euler's number (e)
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub const E: f32 = 2.71828182845904523536028747135266250_f32;
 
-    /// 1.0/sqrt(2.0)
-    pub static FRAC_1_SQRT2: f32 = 0.707106781186547524400844362104849039_f32;
+    /// log<sub>2</sub>(e)
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub const LOG2_E: f32 = 1.44269504088896340735992468100189214_f32;
 
-    /// Euler's number
-    pub static E: f32 = 2.71828182845904523536028747135266250_f32;
+    /// log<sub>10</sub>(e)
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub const LOG10_E: f32 = 0.434294481903251827651128918916605082_f32;
 
-    /// log2(e)
-    pub static LOG2_E: f32 = 1.44269504088896340735992468100189214_f32;
+    /// ln(2)
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub const LN_2: f32 = 0.693147180559945309417232121458176568_f32;
 
-    /// log10(e)
-    pub static LOG10_E: f32 = 0.434294481903251827651128918916605082_f32;
-
-    /// ln(2.0)
-    pub static LN_2: f32 = 0.693147180559945309417232121458176568_f32;
-
-    /// ln(10.0)
-    pub static LN_10: f32 = 2.30258509299404568401799145468436421_f32;
+    /// ln(10)
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub const LN_10: f32 = 2.30258509299404568401799145468436421_f32;
 }
 
+#[unstable(feature = "core_float",
+           reason = "stable interface is via `impl f{32,64}` in later crates",
+           issue = "32110")]
 impl Float for f32 {
+    /// Returns `true` if the number is NaN.
     #[inline]
-    fn nan() -> f32 { NAN }
-
-    #[inline]
-    fn infinity() -> f32 { INFINITY }
-
-    #[inline]
-    fn neg_infinity() -> f32 { NEG_INFINITY }
-
-    #[inline]
-    fn neg_zero() -> f32 { -0.0 }
-
-    /// Returns `true` if the number is NaN
-    #[inline]
-    fn is_nan(self) -> bool { self != self }
-
-    /// Returns `true` if the number is infinite
-    #[inline]
-    fn is_infinite(self) -> bool {
-        self == Float::infinity() || self == Float::neg_infinity()
+    fn is_nan(self) -> bool {
+        self != self
     }
 
-    /// Returns `true` if the number is neither infinite or NaN
+    /// Returns `true` if the number is infinite.
+    #[inline]
+    fn is_infinite(self) -> bool {
+        self == INFINITY || self == NEG_INFINITY
+    }
+
+    /// Returns `true` if the number is neither infinite or NaN.
     #[inline]
     fn is_finite(self) -> bool {
         !(self.is_nan() || self.is_infinite())
     }
 
-    /// Returns `true` if the number is neither zero, infinite, subnormal or NaN
+    /// Returns `true` if the number is neither zero, infinite, subnormal or NaN.
     #[inline]
     fn is_normal(self) -> bool {
-        self.classify() == FPNormal
+        self.classify() == Fp::Normal
     }
 
     /// Returns the floating point category of the number. If only one property
     /// is going to be tested, it is generally faster to use the specific
     /// predicate instead.
-    fn classify(self) -> FPCategory {
-        static EXP_MASK: u32 = 0x7f800000;
-        static MAN_MASK: u32 = 0x007fffff;
+    fn classify(self) -> Fp {
+        const EXP_MASK: u32 = 0x7f800000;
+        const MAN_MASK: u32 = 0x007fffff;
 
         let bits: u32 = unsafe { mem::transmute(self) };
         match (bits & MAN_MASK, bits & EXP_MASK) {
-            (0, 0)        => FPZero,
-            (_, 0)        => FPSubnormal,
-            (0, EXP_MASK) => FPInfinite,
-            (_, EXP_MASK) => FPNaN,
-            _             => FPNormal,
+            (0, 0) => Fp::Zero,
+            (_, 0) => Fp::Subnormal,
+            (0, EXP_MASK) => Fp::Infinite,
+            (_, EXP_MASK) => Fp::Nan,
+            _ => Fp::Normal,
         }
     }
 
+    /// Computes the absolute value of `self`. Returns `Float::nan()` if the
+    /// number is `Float::nan()`.
     #[inline]
-    fn mantissa_digits(_: Option<f32>) -> uint { MANTISSA_DIGITS }
-
-    #[inline]
-    fn digits(_: Option<f32>) -> uint { DIGITS }
-
-    #[inline]
-    fn epsilon() -> f32 { EPSILON }
-
-    #[inline]
-    fn min_exp(_: Option<f32>) -> int { MIN_EXP }
-
-    #[inline]
-    fn max_exp(_: Option<f32>) -> int { MAX_EXP }
-
-    #[inline]
-    fn min_10_exp(_: Option<f32>) -> int { MIN_10_EXP }
-
-    #[inline]
-    fn max_10_exp(_: Option<f32>) -> int { MAX_10_EXP }
-
-    #[inline]
-    fn min_pos_value(_: Option<f32>) -> f32 { MIN_POS_VALUE }
-
-    /// Returns the mantissa, exponent and sign as integers.
-    fn integer_decode(self) -> (u64, i16, i8) {
-        let bits: u32 = unsafe { mem::transmute(self) };
-        let sign: i8 = if bits >> 31 == 0 { 1 } else { -1 };
-        let mut exponent: i16 = ((bits >> 23) & 0xff) as i16;
-        let mantissa = if exponent == 0 {
-            (bits & 0x7fffff) << 1
-        } else {
-            (bits & 0x7fffff) | 0x800000
-        };
-        // Exponent bias + mantissa shift
-        exponent -= 127 + 23;
-        (mantissa as u64, exponent, sign)
+    fn abs(self) -> f32 {
+        unsafe { intrinsics::fabsf32(self) }
     }
 
-    /// Round half-way cases toward `NEG_INFINITY`
-    #[inline]
-    fn floor(self) -> f32 {
-        unsafe { intrinsics::floorf32(self) }
-    }
-
-    /// Round half-way cases toward `INFINITY`
-    #[inline]
-    fn ceil(self) -> f32 {
-        unsafe { intrinsics::ceilf32(self) }
-    }
-
-    /// Round half-way cases away from `0.0`
-    #[inline]
-    fn round(self) -> f32 {
-        unsafe { intrinsics::roundf32(self) }
-    }
-
-    /// The integer part of the number (rounds towards `0.0`)
-    #[inline]
-    fn trunc(self) -> f32 {
-        unsafe { intrinsics::truncf32(self) }
-    }
-
-    /// The fractional part of the number, satisfying:
+    /// Returns a number that represents the sign of `self`.
     ///
-    /// ```rust
-    /// let x = 1.65f32;
-    /// assert!(x == x.trunc() + x.fract())
-    /// ```
+    /// - `1.0` if the number is positive, `+0.0` or `Float::infinity()`
+    /// - `-1.0` if the number is negative, `-0.0` or `Float::neg_infinity()`
+    /// - `Float::nan()` if the number is `Float::nan()`
     #[inline]
-    fn fract(self) -> f32 { self - self.trunc() }
-
-    /// Fused multiply-add. Computes `(self * a) + b` with only one rounding
-    /// error. This produces a more accurate result with better performance than
-    /// a separate multiplication operation followed by an add.
-    #[inline]
-    fn mul_add(self, a: f32, b: f32) -> f32 {
-        unsafe { intrinsics::fmaf32(self, a, b) }
+    fn signum(self) -> f32 {
+        if self.is_nan() {
+            NAN
+        } else {
+            unsafe { intrinsics::copysignf32(1.0, self) }
+        }
     }
 
-    /// The reciprocal (multiplicative inverse) of the number
+    /// Returns `true` if and only if `self` has a positive sign, including `+0.0`, `NaN`s with
+    /// positive sign bit and positive infinity.
     #[inline]
-    fn recip(self) -> f32 { 1.0 / self }
+    fn is_sign_positive(self) -> bool {
+        !self.is_sign_negative()
+    }
 
+    /// Returns `true` if and only if `self` has a negative sign, including `-0.0`, `NaN`s with
+    /// negative sign bit and negative infinity.
+    #[inline]
+    fn is_sign_negative(self) -> bool {
+        // IEEE754 says: isSignMinus(x) is true if and only if x has negative sign. isSignMinus
+        // applies to zeros and NaNs as well.
+        #[repr(C)]
+        union F32Bytes {
+            f: f32,
+            b: u32
+        }
+        unsafe { F32Bytes { f: self }.b & 0x8000_0000 != 0 }
+    }
+
+    /// Returns the reciprocal (multiplicative inverse) of the number.
+    #[inline]
+    fn recip(self) -> f32 {
+        1.0 / self
+    }
+
+    #[inline]
     fn powi(self, n: i32) -> f32 {
         unsafe { intrinsics::powif32(self, n) }
     }
 
+    /// Converts to degrees, assuming the number is in radians.
     #[inline]
-    fn powf(self, n: f32) -> f32 {
-        unsafe { intrinsics::powf32(self, n) }
+    fn to_degrees(self) -> f32 {
+        self * (180.0f32 / consts::PI)
     }
 
-    /// sqrt(2.0)
-    #[inline]
-    fn sqrt2() -> f32 { consts::SQRT2 }
-
-    /// 1.0 / sqrt(2.0)
-    #[inline]
-    fn frac_1_sqrt2() -> f32 { consts::FRAC_1_SQRT2 }
-
-    #[inline]
-    fn sqrt(self) -> f32 {
-        unsafe { intrinsics::sqrtf32(self) }
-    }
-
-    #[inline]
-    fn rsqrt(self) -> f32 { self.sqrt().recip() }
-
-    /// Archimedes' constant
-    #[inline]
-    fn pi() -> f32 { consts::PI }
-
-    /// 2.0 * pi
-    #[inline]
-    fn two_pi() -> f32 { consts::PI_2 }
-
-    /// pi / 2.0
-    #[inline]
-    fn frac_pi_2() -> f32 { consts::FRAC_PI_2 }
-
-    /// pi / 3.0
-    #[inline]
-    fn frac_pi_3() -> f32 { consts::FRAC_PI_3 }
-
-    /// pi / 4.0
-    #[inline]
-    fn frac_pi_4() -> f32 { consts::FRAC_PI_4 }
-
-    /// pi / 6.0
-    #[inline]
-    fn frac_pi_6() -> f32 { consts::FRAC_PI_6 }
-
-    /// pi / 8.0
-    #[inline]
-    fn frac_pi_8() -> f32 { consts::FRAC_PI_8 }
-
-    /// 1 .0/ pi
-    #[inline]
-    fn frac_1_pi() -> f32 { consts::FRAC_1_PI }
-
-    /// 2.0 / pi
-    #[inline]
-    fn frac_2_pi() -> f32 { consts::FRAC_2_PI }
-
-    /// 2.0 / sqrt(pi)
-    #[inline]
-    fn frac_2_sqrtpi() -> f32 { consts::FRAC_2_SQRTPI }
-
-    /// Euler's number
-    #[inline]
-    fn e() -> f32 { consts::E }
-
-    /// log2(e)
-    #[inline]
-    fn log2_e() -> f32 { consts::LOG2_E }
-
-    /// log10(e)
-    #[inline]
-    fn log10_e() -> f32 { consts::LOG10_E }
-
-    /// ln(2.0)
-    #[inline]
-    fn ln_2() -> f32 { consts::LN_2 }
-
-    /// ln(10.0)
-    #[inline]
-    fn ln_10() -> f32 { consts::LN_10 }
-
-    /// Returns the exponential of the number
-    #[inline]
-    fn exp(self) -> f32 {
-        unsafe { intrinsics::expf32(self) }
-    }
-
-    /// Returns 2 raised to the power of the number
-    #[inline]
-    fn exp2(self) -> f32 {
-        unsafe { intrinsics::exp2f32(self) }
-    }
-
-    /// Returns the natural logarithm of the number
-    #[inline]
-    fn ln(self) -> f32 {
-        unsafe { intrinsics::logf32(self) }
-    }
-
-    /// Returns the logarithm of the number with respect to an arbitrary base
-    #[inline]
-    fn log(self, base: f32) -> f32 { self.ln() / base.ln() }
-
-    /// Returns the base 2 logarithm of the number
-    #[inline]
-    fn log2(self) -> f32 {
-        unsafe { intrinsics::log2f32(self) }
-    }
-
-    /// Returns the base 10 logarithm of the number
-    #[inline]
-    fn log10(self) -> f32 {
-        unsafe { intrinsics::log10f32(self) }
-    }
-
-    /// Converts to degrees, assuming the number is in radians
-    #[inline]
-    fn to_degrees(self) -> f32 { self * (180.0f32 / Float::pi()) }
-
-    /// Converts to radians, assuming the number is in degrees
+    /// Converts to radians, assuming the number is in degrees.
     #[inline]
     fn to_radians(self) -> f32 {
-        let value: f32 = Float::pi();
+        let value: f32 = consts::PI;
         self * (value / 180.0f32)
+    }
+
+    /// Returns the maximum of the two numbers.
+    #[inline]
+    fn max(self, other: f32) -> f32 {
+        // IEEE754 says: maxNum(x, y) is the canonicalized number y if x < y, x if y < x, the
+        // canonicalized number if one operand is a number and the other a quiet NaN. Otherwise it
+        // is either x or y, canonicalized (this means results might differ among implementations).
+        // When either x or y is a signalingNaN, then the result is according to 6.2.
+        //
+        // Since we do not support sNaN in Rust yet, we do not need to handle them.
+        // FIXME(nagisa): due to https://bugs.llvm.org/show_bug.cgi?id=33303 we canonicalize by
+        // multiplying by 1.0. Should switch to the `canonicalize` when it works.
+        (if self < other || self.is_nan() { other } else { self }) * 1.0
+    }
+
+    /// Returns the minimum of the two numbers.
+    #[inline]
+    fn min(self, other: f32) -> f32 {
+        // IEEE754 says: minNum(x, y) is the canonicalized number x if x < y, y if y < x, the
+        // canonicalized number if one operand is a number and the other a quiet NaN. Otherwise it
+        // is either x or y, canonicalized (this means results might differ among implementations).
+        // When either x or y is a signalingNaN, then the result is according to 6.2.
+        //
+        // Since we do not support sNaN in Rust yet, we do not need to handle them.
+        // FIXME(nagisa): due to https://bugs.llvm.org/show_bug.cgi?id=33303 we canonicalize by
+        // multiplying by 1.0. Should switch to the `canonicalize` when it works.
+        (if self < other || other.is_nan() { self } else { other }) * 1.0
     }
 }

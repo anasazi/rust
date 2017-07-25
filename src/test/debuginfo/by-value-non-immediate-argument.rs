@@ -8,71 +8,104 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-android: FIXME(#10381)
+// ignore-tidy-linelength
+// min-lldb-version: 310
 
 // compile-flags:-g
-// gdb-command:rbreak zzz
+
+// === GDB TESTS ===================================================================================
+
 // gdb-command:run
 
-// gdb-command:finish
 // gdb-command:print s
-// gdb-check:$1 = {a = 1, b = 2.5}
+// gdbg-check:$1 = {a = 1, b = 2.5}
+// gdbr-check:$1 = by_value_non_immediate_argument::Struct {a: 1, b: 2.5}
 // gdb-command:continue
 
-// gdb-command:finish
 // gdb-command:print x
-// gdb-check:$2 = {a = 3, b = 4.5}
+// gdbg-check:$2 = {a = 3, b = 4.5}
+// gdbr-check:$2 = by_value_non_immediate_argument::Struct {a: 3, b: 4.5}
 // gdb-command:print y
 // gdb-check:$3 = 5
 // gdb-command:print z
 // gdb-check:$4 = 6.5
 // gdb-command:continue
 
-// gdb-command:finish
 // gdb-command:print a
-// gdb-check:$5 = {7, 8, 9.5, 10.5}
+// gdbg-check:$5 = {__0 = 7, __1 = 8, __2 = 9.5, __3 = 10.5}
+// gdbr-check:$5 = (7, 8, 9.5, 10.5)
 // gdb-command:continue
 
-// gdb-command:finish
 // gdb-command:print a
-// gdb-check:$6 = {11.5, 12.5, 13, 14}
+// gdbg-check:$6 = {__0 = 11.5, __1 = 12.5, __2 = 13, __3 = 14}
+// gdbr-check:$6 = by_value_non_immediate_argument::Newtype (11.5, 12.5, 13, 14)
 // gdb-command:continue
 
-// gdb-command:finish
 // gdb-command:print x
-// gdb-check:$7 = {{Case1, x = 0, y = 8970181431921507452}, {Case1, 0, 2088533116, 2088533116}}
+// gdbg-check:$7 = {{RUST$ENUM$DISR = Case1, x = 0, y = 8970181431921507452}, {RUST$ENUM$DISR = Case1, [...]}}
+// gdbr-check:$7 = by_value_non_immediate_argument::Enum::Case1{x: 0, y: 8970181431921507452}
 // gdb-command:continue
 
-#![feature(struct_variant)]
 
-#[deriving(Clone)]
+// === LLDB TESTS ==================================================================================
+
+// lldb-command:run
+
+// lldb-command:print s
+// lldb-check:[...]$0 = Struct { a: 1, b: 2.5 }
+// lldb-command:continue
+
+// lldb-command:print x
+// lldb-check:[...]$1 = Struct { a: 3, b: 4.5 }
+// lldb-command:print y
+// lldb-check:[...]$2 = 5
+// lldb-command:print z
+// lldb-check:[...]$3 = 6.5
+// lldb-command:continue
+
+// lldb-command:print a
+// lldb-check:[...]$4 = (7, 8, 9.5, 10.5)
+// lldb-command:continue
+
+// lldb-command:print a
+// lldb-check:[...]$5 = Newtype(11.5, 12.5, 13, 14)
+// lldb-command:continue
+
+// lldb-command:print x
+// lldb-check:[...]$6 = Case1 { x: 0, y: 8970181431921507452 }
+// lldb-command:continue
+
+#![feature(omit_gdb_pretty_printer_section)]
+#![omit_gdb_pretty_printer_section]
+
+#[derive(Clone)]
 struct Struct {
-    a: int,
+    a: isize,
     b: f64
 }
 
-#[deriving(Clone)]
+#[derive(Clone)]
 struct StructStruct {
     a: Struct,
     b: Struct
 }
 
 fn fun(s: Struct) {
-    zzz();
+    zzz(); // #break
 }
 
 fn fun_fun(StructStruct { a: x, b: Struct { a: y, b: z } }: StructStruct) {
-    zzz();
+    zzz(); // #break
 }
 
-fn tup(a: (int, uint, f64, f64)) {
-    zzz();
+fn tup(a: (isize, usize, f64, f64)) {
+    zzz(); // #break
 }
 
-struct Newtype(f64, f64, int, uint);
+struct Newtype(f64, f64, isize, usize);
 
 fn new_type(a: Newtype) {
-    zzz();
+    zzz(); // #break
 }
 
 // The first element is to ensure proper alignment, irrespective of the machines word size. Since
@@ -84,7 +117,7 @@ enum Enum {
 }
 
 fn by_val_enum(x: Enum) {
-    zzz();
+    zzz(); // #break
 }
 
 fn main() {
@@ -97,7 +130,7 @@ fn main() {
     // 0b01111100011111000111110001111100 = 2088533116
     // 0b0111110001111100 = 31868
     // 0b01111100 = 124
-    by_val_enum(Case1 { x: 0, y: 8970181431921507452 });
+    by_val_enum(Enum::Case1 { x: 0, y: 8970181431921507452 });
 }
 
-fn zzz() {()}
+fn zzz() { () }

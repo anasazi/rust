@@ -10,12 +10,15 @@
 
 // aux-build:weak-lang-items.rs
 
-extern crate other = "weak-lang-items";
+// ignore-emscripten no threads support
+// pretty-expanded FIXME #23616
 
-use std::task;
+extern crate weak_lang_items as other;
+
+use std::thread;
 
 fn main() {
-    let _ = task::try(proc() {
+    let _ = thread::spawn(move|| {
         other::foo()
     });
 }

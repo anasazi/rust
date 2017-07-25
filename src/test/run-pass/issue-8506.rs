@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// pretty-expanded FIXME #23616
+
 #![allow(dead_code)]
 
 enum Either {
@@ -15,6 +17,6 @@ enum Either {
     Other(String,String)
 }
 
-static one : Either = One;
+static one : Either = Either::One;
 
 pub fn main () { }

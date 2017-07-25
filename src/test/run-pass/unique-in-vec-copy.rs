@@ -9,16 +9,19 @@
 // except according to those terms.
 
 
+#![allow(unknown_features)]
+#![feature(box_syntax)]
+
 pub fn main() {
-    let mut a = vec!(box 10i);
+    let mut a: Vec<Box<_>> = vec![box 10];
     let b = a.clone();
 
-    assert_eq!(**a.get(0), 10);
-    assert_eq!(**b.get(0), 10);
+    assert_eq!(*a[0], 10);
+    assert_eq!(*b[0], 10);
 
     // This should only modify the value in a, not b
-    **a.get_mut(0) = 20;
+    *a[0] = 20;
 
-    assert_eq!(**a.get(0), 20);
-    assert_eq!(**b.get(0), 10);
+    assert_eq!(*a[0], 20);
+    assert_eq!(*b[0], 10);
 }

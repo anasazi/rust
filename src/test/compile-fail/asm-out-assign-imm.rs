@@ -1,4 +1,4 @@
-// Copyright 2012-2013-2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2015 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,22 +8,32 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// ignore-s390x
+// ignore-emscripten
+// ignore-powerpc
+
 #![feature(asm)]
 
-fn foo(x: int) { println!("{}", x); }
+fn foo(x: isize) { println!("{}", x); }
 
-#[cfg(target_arch = "x86")]
-#[cfg(target_arch = "x86_64")]
-#[cfg(target_arch = "arm")]
+#[cfg(any(target_arch = "x86",
+          target_arch = "x86_64",
+          target_arch = "arm",
+          target_arch = "aarch64"))]
 pub fn main() {
-    let x: int;
-    x = 1; //~ NOTE prior assignment occurs here
+    let x: isize;
+    x = 1; //~ NOTE first assignment
     foo(x);
     unsafe {
-        asm!("mov $1, $0" : "=r"(x) : "r"(5u)); //~ ERROR re-assignment of immutable variable `x`
+        asm!("mov $1, $0" : "=r"(x) : "r"(5));
+        //~^ ERROR re-assignment of immutable variable `x`
+        //~| NOTE re-assignment of immutable
     }
     foo(x);
 }
 
-#[cfg(not(target_arch = "x86"), not(target_arch = "x86_64"), not(target_arch = "arm"))]
+#[cfg(not(any(target_arch = "x86",
+              target_arch = "x86_64",
+              target_arch = "arm",
+              target_arch = "aarch64")))]
 pub fn main() {}

@@ -8,10 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(macro_rules)]
-
 macro_rules! foo {
-    ($e: expr) => { 'x: for _ in range(0,1) { $e } }
+    ($e: expr) => { 'x: for _ in 0..1 { $e } }
 }
 
 pub fn main() {

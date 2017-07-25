@@ -8,14 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(managed_boxes)]
-
-
-type Foo = Vec<u8>;
-
-impl Drop for Foo {
-//~^ ERROR cannot provide an extension implementation
-//~^^ ERROR multiple applicable methods
+impl<'a> Drop for &'a mut isize {
+    //~^ ERROR the Drop trait may only be implemented on structures
+    //~^^ ERROR E0117
     fn drop(&mut self) {
         println!("kaboom");
     }

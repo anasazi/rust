@@ -8,14 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(macro_rules)]
-
 macro_rules! foo {
-    () => { break 'x; }
+    () => { break 'x; } //~ ERROR use of undeclared label `'x`
 }
 
 pub fn main() {
-    'x: for _ in range(0,1) {
-        foo!() //~ ERROR use of undeclared label `'x`
+    'x: for _ in 0..1 {
+        foo!()
     };
 }

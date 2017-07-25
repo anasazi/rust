@@ -8,15 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::kinds::marker;
+#![feature(optin_builtin_traits)]
 
-struct Foo { a: int, m: marker::NoShare }
+use std::marker::Sync;
 
-fn bar<T: Share>(_: T) {}
+struct Foo { a: isize }
+impl !Sync for Foo {}
+
+fn bar<T: Sync>(_: T) {}
 
 fn main() {
-    let x = Foo { a: 5, m: marker::NoShare };
+    let x = Foo { a: 5 };
     bar(x);
-    //~^ ERROR instantiating a type parameter with an incompatible type `Foo`,
-    //         which does not fulfill `Share`
+    //~^ ERROR `Foo: std::marker::Sync` is not satisfied
 }

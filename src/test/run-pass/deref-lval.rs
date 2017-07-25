@@ -8,15 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(managed_boxes)]
-
-extern crate debug;
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
 use std::cell::Cell;
-use std::gc::GC;
 
 pub fn main() {
-    let x = box(GC) Cell::new(5i);
-    x.set(1000i);
-    println!("{:?}", x.get());
+    let x: Box<_> = box Cell::new(5);
+    x.set(1000);
+    println!("{}", x.get());
 }

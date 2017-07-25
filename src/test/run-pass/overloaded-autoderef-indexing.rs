@@ -8,17 +8,22 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-struct DerefArray<'a, T> {
+
+use std::ops::Deref;
+
+struct DerefArray<'a, T:'a> {
     inner: &'a [T]
 }
 
-impl<'a, T> Deref<&'a [T]> for DerefArray<'a, T> {
+impl<'a, T> Deref for DerefArray<'a, T> {
+    type Target = &'a [T];
+
     fn deref<'b>(&'b self) -> &'b &'a [T] {
         &self.inner
     }
 }
 
 pub fn main() {
-    let a = &[1i, 2i, 3i];
+    let a = &[1, 2, 3];
     assert_eq!(DerefArray {inner: a}[1], 2);
 }

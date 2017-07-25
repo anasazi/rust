@@ -9,8 +9,10 @@
 // except according to those terms.
 
 
+#![feature(main)]
+
 pub fn main() {
-    fail!()
+    panic!()
 }
 
 #[main]

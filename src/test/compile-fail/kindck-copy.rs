@@ -10,78 +10,72 @@
 
 // Test which of the builtin types are considered POD.
 
-#![feature(managed_boxes)]
-
 use std::rc::Rc;
-use std::gc::Gc;
 
 fn assert_copy<T:Copy>() { }
+
 trait Dummy { }
 
+#[derive(Copy, Clone)]
 struct MyStruct {
-    x: int,
-    y: int,
+    x: isize,
+    y: isize,
 }
 
 struct MyNoncopyStruct {
-    x: Box<int>,
+    x: Box<char>,
 }
 
-fn test<'a,T,U:Copy>(_: &'a int) {
+fn test<'a,T,U:Copy>(_: &'a isize) {
     // lifetime pointers are ok...
-    assert_copy::<&'static int>();
-    assert_copy::<&'a int>();
+    assert_copy::<&'static isize>();
+    assert_copy::<&'a isize>();
     assert_copy::<&'a str>();
-    assert_copy::<&'a [int]>();
+    assert_copy::<&'a [isize]>();
 
     // ...unless they are mutable
-    assert_copy::<&'static mut int>(); //~ ERROR does not fulfill
-    assert_copy::<&'a mut int>();  //~ ERROR does not fulfill
+    assert_copy::<&'static mut isize>(); //~ ERROR : std::marker::Copy` is not satisfied
+    assert_copy::<&'a mut isize>();  //~ ERROR : std::marker::Copy` is not satisfied
 
-    // ~ pointers are not ok
-    assert_copy::<Box<int>>();   //~ ERROR does not fulfill
-    assert_copy::<String>();   //~ ERROR does not fulfill
-    assert_copy::<Vec<int> >(); //~ ERROR does not fulfill
-    assert_copy::<Box<&'a mut int>>(); //~ ERROR does not fulfill
+    // boxes are not ok
+    assert_copy::<Box<isize>>();   //~ ERROR : std::marker::Copy` is not satisfied
+    assert_copy::<String>();   //~ ERROR : std::marker::Copy` is not satisfied
+    assert_copy::<Vec<isize> >(); //~ ERROR : std::marker::Copy` is not satisfied
+    assert_copy::<Box<&'a mut isize>>(); //~ ERROR : std::marker::Copy` is not satisfied
 
     // borrowed object types are generally ok
     assert_copy::<&'a Dummy>();
-    assert_copy::<&'a Dummy+Copy>();
-    assert_copy::<&'static Dummy+Copy>();
+    assert_copy::<&'a (Dummy+Send)>();
+    assert_copy::<&'static (Dummy+Send)>();
 
     // owned object types are not ok
-    assert_copy::<Box<Dummy>>(); //~ ERROR does not fulfill
-    assert_copy::<Box<Dummy+Copy>>(); //~ ERROR does not fulfill
+    assert_copy::<Box<Dummy>>(); //~ ERROR : std::marker::Copy` is not satisfied
+    assert_copy::<Box<Dummy+Send>>(); //~ ERROR : std::marker::Copy` is not satisfied
 
     // mutable object types are not ok
-    assert_copy::<&'a mut Dummy+Copy>();  //~ ERROR does not fulfill
-
-    // closures are like an `&mut` object
-    assert_copy::<||>(); //~ ERROR does not fulfill
+    assert_copy::<&'a mut (Dummy+Send)>();  //~ ERROR : std::marker::Copy` is not satisfied
 
     // unsafe ptrs are ok
-    assert_copy::<*const int>();
-    assert_copy::<*const &'a mut int>();
+    assert_copy::<*const isize>();
+    assert_copy::<*const &'a mut isize>();
 
     // regular old ints and such are ok
-    assert_copy::<int>();
+    assert_copy::<isize>();
     assert_copy::<bool>();
     assert_copy::<()>();
 
     // tuples are ok
-    assert_copy::<(int,int)>();
+    assert_copy::<(isize,isize)>();
 
     // structs of POD are ok
     assert_copy::<MyStruct>();
 
     // structs containing non-POD are not ok
-    assert_copy::<MyNoncopyStruct>(); //~ ERROR does not fulfill
+    assert_copy::<MyNoncopyStruct>(); //~ ERROR : std::marker::Copy` is not satisfied
 
-    // managed or ref counted types are not ok
-    assert_copy::<Gc<int>>();   //~ ERROR does not fulfill
-    assert_copy::<Rc<int>>();   //~ ERROR does not fulfill
+    // ref counted types are not ok
+    assert_copy::<Rc<isize>>();   //~ ERROR : std::marker::Copy` is not satisfied
 }
 
 pub fn main() {
 }
-

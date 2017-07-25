@@ -8,7 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[deriving(Clone)]
+// pretty-expanded FIXME #23616
+
+#[derive(Clone)]
 enum E {
     A,
     B(()),
@@ -16,5 +18,5 @@ enum E {
 }
 
 pub fn main() {
-    let _ = A.clone();
+    let _ = E::A.clone();
 }

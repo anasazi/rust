@@ -8,16 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-
-extern crate native;
-
-use std::io::timer;
-
-#[start]
-fn start(argc: int, argv: *const *const u8) -> int {
-    native::start(argc, argv, main)
-}
+use std::thread;
 
 fn main() {
-    timer::sleep(250);
+    thread::sleep_ms(250);
 }

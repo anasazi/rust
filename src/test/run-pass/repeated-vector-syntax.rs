@@ -8,14 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(managed_boxes)]
-
-extern crate debug;
-
 pub fn main() {
-    let x = [ [true], ..512 ];
-    let y = [ 0i, ..1 ];
+    let x = [ [true]; 512 ];
+    let y = [ 0; 1 ];
 
-    println!("{:?}", x);
-    println!("{:?}", y);
+    print!("[");
+    for xi in &x[..] {
+        print!("{:?}, ", &xi[..]);
+    }
+    println!("]");
+    println!("{:?}", &y[..]);
 }

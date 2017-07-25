@@ -9,7 +9,10 @@
 // except according to those terms.
 
 
-fn f() -> Box<int> {
+#![allow(unknown_features)]
+#![feature(box_syntax)]
+
+fn f() -> Box<isize> {
     box 100
 }
 

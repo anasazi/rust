@@ -8,24 +8,23 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(managed_boxes)]
+
 
 use std::mem;
-use std::gc::Gc;
 
-#[packed]
+#[repr(packed)]
 struct S4 {
     a: u8,
-    b: [u8, .. 3],
+    b: [u8;  3],
 }
 
-#[packed]
+#[repr(packed)]
 struct S5 {
     a: u8,
     b: u32
 }
 
-#[packed]
+#[repr(packed)]
 struct S13 {
     a: i64,
     b: f32,
@@ -37,25 +36,25 @@ enum Foo {
     Baz = 2
 }
 
-#[packed]
+#[repr(packed)]
 struct S3_Foo {
     a: u8,
     b: u16,
     c: Foo
 }
 
-#[packed]
+#[repr(packed)]
 struct S7_Option {
     a: f32,
     b: u8,
     c: u16,
-    d: Option<Gc<f64>>
+    d: Option<Box<f64>>
 }
 
 // Placing packed structs in statics should work
 static TEST_S4: S4 = S4 { a: 1, b: [2, 3, 4] };
 static TEST_S5: S5 = S5 { a: 3, b: 67 };
-static TEST_S3_Foo: S3_Foo = S3_Foo { a: 1, b: 2, c: Baz };
+static TEST_S3_Foo: S3_Foo = S3_Foo { a: 1, b: 2, c: Foo::Baz };
 
 
 pub fn main() {
@@ -63,5 +62,5 @@ pub fn main() {
     assert_eq!(mem::size_of::<S5>(), 5);
     assert_eq!(mem::size_of::<S13>(), 13);
     assert_eq!(mem::size_of::<S3_Foo>(), 3 + mem::size_of::<Foo>());
-    assert_eq!(mem::size_of::<S7_Option>(), 7 + mem::size_of::<Option<Gc<f64>>>());
+    assert_eq!(mem::size_of::<S7_Option>(), 7 + mem::size_of::<Option<Box<f64>>>());
 }

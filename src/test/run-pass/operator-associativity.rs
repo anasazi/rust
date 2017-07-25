@@ -12,4 +12,5 @@
 
 
 // Testcase for issue #130, operator associativity.
-pub fn main() { assert!((3i * 5i / 2i == 7i)); }
+
+pub fn main() { assert_eq!(3 * 5 / 2, 7); }

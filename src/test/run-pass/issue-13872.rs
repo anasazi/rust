@@ -12,7 +12,9 @@
 // aux-build:issue-13872-2.rs
 // aux-build:issue-13872-3.rs
 
-extern crate other = "issue-13872-3";
+// pretty-expanded FIXME #23616
+
+extern crate issue_13872_3 as other;
 
 fn main() {
     other::foo();

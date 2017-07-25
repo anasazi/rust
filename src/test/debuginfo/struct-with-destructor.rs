@@ -8,25 +8,50 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-android: FIXME(#10381)
+// ignore-tidy-linelength
+
+// min-lldb-version: 310
 
 // compile-flags:-g
-// gdb-command:rbreak zzz
+
+// === GDB TESTS ===================================================================================
+
 // gdb-command:run
-// gdb-command:finish
 // gdb-command:print simple
-// gdb-check:$1 = {x = 10, y = 20}
+// gdbg-check:$1 = {x = 10, y = 20}
+// gdbr-check:$1 = struct_with_destructor::WithDestructor {x: 10, y: 20}
 
 // gdb-command:print noDestructor
-// gdb-check:$2 = {a = {x = 10, y = 20}, guard = -1}
+// gdbg-check:$2 = {a = {x = 10, y = 20}, guard = -1}
+// gdbr-check:$2 = struct_with_destructor::NoDestructorGuarded {a: struct_with_destructor::NoDestructor {x: 10, y: 20}, guard: -1}
 
 // gdb-command:print withDestructor
-// gdb-check:$3 = {a = {x = 10, y = 20}, guard = -1}
+// gdbg-check:$3 = {a = {x = 10, y = 20}, guard = -1}
+// gdbr-check:$3 = struct_with_destructor::WithDestructorGuarded {a: struct_with_destructor::WithDestructor {x: 10, y: 20}, guard: -1}
 
 // gdb-command:print nested
-// gdb-check:$4 = {a = {a = {x = 7890, y = 9870}}}
+// gdbg-check:$4 = {a = {a = {x = 7890, y = 9870}}}
+// gdbr-check:$4 = struct_with_destructor::NestedOuter {a: struct_with_destructor::NestedInner {a: struct_with_destructor::WithDestructor {x: 7890, y: 9870}}}
 
-#![allow(unused_variable)]
+
+// === LLDB TESTS ==================================================================================
+
+// lldb-command:run
+// lldb-command:print simple
+// lldb-check:[...]$0 = WithDestructor { x: 10, y: 20 }
+
+// lldb-command:print noDestructor
+// lldb-check:[...]$1 = NoDestructorGuarded { a: NoDestructor { x: 10, y: 20 }, guard: -1 }
+
+// lldb-command:print withDestructor
+// lldb-check:[...]$2 = WithDestructorGuarded { a: WithDestructor { x: 10, y: 20 }, guard: -1 }
+
+// lldb-command:print nested
+// lldb-check:[...]$3 = NestedOuter { a: NestedInner { a: WithDestructor { x: 7890, y: 9870 } } }
+
+#![allow(unused_variables)]
+#![feature(omit_gdb_pretty_printer_section)]
+#![omit_gdb_pretty_printer_section]
 
 struct NoDestructor {
     x: i32,
@@ -121,7 +146,7 @@ fn main() {
     //                            <-------NestedOuter-------->
     let nested = NestedOuter { a: NestedInner { a: WithDestructor { x: 7890, y: 9870 } } };
 
-    zzz();
+    zzz(); // #break
 }
 
 fn zzz() {()}

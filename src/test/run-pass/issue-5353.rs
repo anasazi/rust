@@ -8,8 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-static INVALID_ENUM : u32 = 0;
-static INVALID_VALUE : u32 = 1;
+// pretty-expanded FIXME #23616
+
+const INVALID_ENUM : u32 = 0;
+const INVALID_VALUE : u32 = 1;
 
 fn gl_err_str(err: u32) -> String
 {

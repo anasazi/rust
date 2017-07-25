@@ -8,26 +8,22 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![allow(dead_code)]
-
 // Matching against NaN should result in a warning
+
+#![feature(slice_patterns)]
+#![allow(unused)]
 
 use std::f64::NAN;
 
 fn main() {
     let x = NAN;
     match x {
-        NAN => {},
+        NAN => {}, //~ ERROR floating point constants cannot be used
         _ => {},
     };
-    //~^^^ WARNING unmatchable NaN in pattern, use the is_nan method in a guard instead
-    match [x, 1.0] {
-        [NAN, _] => {},
-        _ => {},
-    };
-    //~^^^ WARNING unmatchable NaN in pattern, use the is_nan method in a guard instead
-}
 
-// At least one error is needed so that compilation fails
-#[static_assert]
-static b: bool = false; //~ ERROR static assertion failed
+    match [x, 1.0] {
+        [NAN, _] => {}, //~ ERROR floating point constants cannot be used
+        _ => {},
+    };
+}

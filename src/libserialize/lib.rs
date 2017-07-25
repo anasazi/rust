@@ -15,30 +15,35 @@ Core encoding and decoding interfaces.
 */
 
 #![crate_name = "serialize"]
-#![experimental]
 #![crate_type = "rlib"]
 #![crate_type = "dylib"]
-#![license = "MIT/ASL2"]
-#![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
-       html_favicon_url = "http://www.rust-lang.org/favicon.ico",
-       html_root_url = "http://doc.rust-lang.org/0.11.0/",
-       html_playground_url = "http://play.rust-lang.org/")]
-#![feature(macro_rules, managed_boxes, default_type_params, phase)]
+#![doc(html_logo_url = "https://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
+       html_favicon_url = "https://doc.rust-lang.org/favicon.ico",
+       html_root_url = "https://doc.rust-lang.org/nightly/",
+       html_playground_url = "https://play.rust-lang.org/",
+       test(attr(allow(unused_variables), deny(warnings))))]
+#![deny(warnings)]
 
-// test harness access
-#[cfg(test)]
-extern crate test;
+#![feature(box_syntax)]
+#![feature(core_intrinsics)]
+#![feature(i128_type)]
+#![feature(specialization)]
+#![cfg_attr(test, feature(test))]
 
-#[phase(plugin, link)]
-extern crate log;
+pub use self::serialize::{Decoder, Encoder, Decodable, Encodable};
 
-pub use self::serialize::{Decoder, Encoder, Decodable, Encodable,
-                          DecoderHelpers, EncoderHelpers};
+pub use self::serialize::{SpecializationError, SpecializedEncoder, SpecializedDecoder};
+pub use self::serialize::{UseSpecializedEncodable, UseSpecializedDecodable};
 
 mod serialize;
 mod collection_impls;
 
-pub mod base64;
-pub mod ebml;
 pub mod hex;
 pub mod json;
+
+pub mod opaque;
+pub mod leb128;
+
+mod rustc_serialize {
+    pub use serialize::*;
+}

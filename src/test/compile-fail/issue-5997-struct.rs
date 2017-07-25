@@ -9,13 +9,12 @@
 // except according to those terms.
 
 fn f<T>() -> bool {
-    struct S(T); //~ ERROR use of undeclared type name `T`
-    //~^ ERROR can't use type parameters from outer function; try using
+    struct S(T); //~ ERROR can't use type parameters from outer function; try using
 
     true
 }
 
 fn main() {
-    let b = f::<int>();
+    let b = f::<isize>();
     assert!(b);
 }

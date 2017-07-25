@@ -8,11 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate debug;
-
 pub fn main() {
-    let mut x: int = 3;
-    let y: &mut int = &mut x;
+    let mut x: isize = 3;
+    let y: &mut isize = &mut x;
     *y = 5;
-    println!("{:?}", *y);
+    println!("{}", *y);
 }

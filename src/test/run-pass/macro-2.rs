@@ -8,18 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-pretty - token trees can't pretty print
-
-#![feature(macro_rules)]
-
 pub fn main() {
 
-    macro_rules! mylambda_tt(
+    macro_rules! mylambda_tt {
         ($x:ident, $body:expr) => ({
-            fn f($x: int) -> int { return $body; };
+            fn f($x: isize) -> isize { return $body; };
             f
         })
-    )
+    }
 
-    assert!(mylambda_tt!(y, y * 2)(8) == 16)
+    assert_eq!(mylambda_tt!(y, y * 2)(8), 16);
 }

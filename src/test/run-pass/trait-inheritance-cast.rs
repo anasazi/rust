@@ -8,28 +8,27 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-test
 // Testing that supertrait methods can be called on subtrait object types
-// It's not clear yet that we want this
+
 
 trait Foo {
-    fn f() -> int;
+    fn f(&self) -> isize;
 }
 
 trait Bar : Foo {
-    fn g() -> int;
+    fn g(&self) -> isize;
 }
 
 struct A {
-    x: int
+    x: isize
 }
 
 impl Foo for A {
-    fn f() -> int { 10 }
+    fn f(&self) -> isize { 10 }
 }
 
 impl Bar for A {
-    fn g() -> int { 20 }
+    fn g(&self) -> isize { 20 }
 }
 
 pub fn main() {

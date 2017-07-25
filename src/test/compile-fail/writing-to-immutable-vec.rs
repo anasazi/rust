@@ -10,6 +10,6 @@
 
 
 fn main() {
-    let v: Vec<int> = vec!(1, 2, 3);
-    *v.get(1) = 4; //~ ERROR cannot assign
+    let v: Vec<isize> = vec![1, 2, 3];
+    v[1] = 4; //~ ERROR cannot borrow immutable local variable `v` as mutable
 }

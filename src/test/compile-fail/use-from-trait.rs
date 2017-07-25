@@ -8,19 +8,33 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+
 use Trait::foo;
-//~^ ERROR unresolved import `Trait::foo`. Cannot import from a trait or type implementation
+//~^ ERROR `foo` is not directly importable
+use Trait::Assoc;
+//~^ ERROR `Assoc` is not directly importable
+use Trait::C;
+//~^ ERROR `C` is not directly importable
+
 use Foo::new;
-//~^ ERROR unresolved import `Foo::new`. Cannot import from a trait or type implementation
+//~^ ERROR unresolved import `Foo::new` [E0432]
+//~| Not a module `Foo`
+
+use Foo::C2;
+//~^ ERROR unresolved import `Foo::C2` [E0432]
+//~| Not a module `Foo`
 
 pub trait Trait {
     fn foo();
+    type Assoc;
+    const C: u32;
 }
 
 struct Foo;
 
 impl Foo {
     fn new() {}
+    const C2: u32 = 0;
 }
 
 fn main() {}

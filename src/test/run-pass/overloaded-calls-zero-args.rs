@@ -8,19 +8,25 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(overloaded_calls)]
 
-use std::ops::{FnMut};
+#![feature(unboxed_closures, fn_traits)]
+
+use std::ops::FnMut;
 
 struct S {
-    x: int,
-    y: int,
+    x: i32,
+    y: i32,
 }
 
-impl FnMut<(),int> for S {
-    fn call_mut(&mut self, (): ()) -> int {
+impl FnMut<()> for S {
+    extern "rust-call" fn call_mut(&mut self, (): ()) -> i32 {
         self.x * self.y
     }
+}
+
+impl FnOnce<()> for S {
+    type Output = i32;
+    extern "rust-call" fn call_once(mut self, args: ()) -> i32 { self.call_mut(args) }
 }
 
 fn main() {
@@ -31,5 +37,3 @@ fn main() {
     let ans = s();
     assert_eq!(ans, 9);
 }
-
-

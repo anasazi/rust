@@ -8,14 +8,18 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::task;
+// ignore-emscripten no threads support
+
+use std::sync::mpsc::channel;
+use std::thread;
 
 pub fn main() {
     let (tx, rx) = channel::<&'static str>();
 
-    task::spawn(proc() {
-        assert_eq!(rx.recv(), "hello, world");
+    let t = thread::spawn(move|| {
+        assert_eq!(rx.recv().unwrap(), "hello, world");
     });
 
-    tx.send("hello, world");
+    tx.send("hello, world").unwrap();
+    t.join().ok().unwrap();
 }

@@ -8,9 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-
 fn main() {
-    for
-        &1i //~ ERROR refutable pattern in `for` loop binding
-        in [1i].iter() {}
+    for &1 in [1].iter() {} //~ ERROR refutable pattern in `for` loop binding
 }

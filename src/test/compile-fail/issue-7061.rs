@@ -8,15 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(managed_boxes)]
-
-use std::gc::Gc;
-
 struct BarStruct;
 
 impl<'a> BarStruct {
-    fn foo(&'a mut self) -> Gc<BarStruct> { self }
-    //~^ ERROR: error: mismatched types: expected `Gc<BarStruct>` but found `&'a mut BarStruct
+    fn foo(&'a mut self) -> Box<BarStruct> { self }
+    //~^ ERROR mismatched types
+    //~| expected type `std::boxed::Box<BarStruct>`
+    //~| found type `&'a mut BarStruct`
 }
 
 fn main() {}

@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// pretty-expanded FIXME #23616
+
 /*!
  * Try to double-check that static fns have the right size (with or
  * without dummy env ptr, as appropriate) by iterating a size-2 array.
@@ -17,13 +19,13 @@
 
 fn f() { }
 static bare_fns: &'static [fn()] = &[f, f];
-struct S<'a>(||:'a);
-static mut closures: &'static mut [S<'static>] = &mut [S(f), S(f)];
+struct S<F: FnOnce()>(F);
+static mut closures: &'static mut [S<fn()>] = &mut [S(f as fn()), S(f as fn())];
 
 pub fn main() {
     unsafe {
-        for &bare_fn in bare_fns.iter() { bare_fn() }
-        for closure in closures.mut_iter() {
+        for &bare_fn in bare_fns { bare_fn() }
+        for closure in &mut *closures {
             let S(ref mut closure) = *closure;
             (*closure)()
         }

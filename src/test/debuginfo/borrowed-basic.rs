@@ -8,15 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-android: FIXME(#10381)
 
 // Gdb doesn't know about UTF-32 character encoding and will print a rust char as only
 // its numerical value.
 
 // compile-flags:-g
-// gdb-command:rbreak zzz
+// min-lldb-version: 310
+
+// === GDB TESTS ===================================================================================
+
 // gdb-command:run
-// gdb-command:finish
 // gdb-command:print *bool_ref
 // gdb-check:$1 = true
 
@@ -24,10 +25,12 @@
 // gdb-check:$2 = -1
 
 // gdb-command:print *char_ref
-// gdb-check:$3 = 97
+// gdbg-check:$3 = 97
+// gdbr-check:$3 = 97 'a'
 
 // gdb-command:print *i8_ref
-// gdb-check:$4 = 68 'D'
+// gdbg-check:$4 = 68 'D'
+// gdbr-check:$4 = 68
 
 // gdb-command:print *i16_ref
 // gdb-check:$5 = -16
@@ -42,7 +45,8 @@
 // gdb-check:$8 = 1
 
 // gdb-command:print *u8_ref
-// gdb-check:$9 = 100 'd'
+// gdbg-check:$9 = 100 'd'
+// gdbr-check:$9 = 100
 
 // gdb-command:print *u16_ref
 // gdb-check:$10 = 16
@@ -59,14 +63,63 @@
 // gdb-command:print *f64_ref
 // gdb-check:$14 = 3.5
 
-#![allow(unused_variable)]
+
+// === LLDB TESTS ==================================================================================
+
+// lldb-command:run
+// lldb-command:print *bool_ref
+// lldb-check:[...]$0 = true
+
+// lldb-command:print *int_ref
+// lldb-check:[...]$1 = -1
+
+// NOTE: lldb doesn't support 32bit chars at the moment
+// d ebugger:print *char_ref
+// c heck:[...]$x = 97
+
+// lldb-command:print *i8_ref
+// lldb-check:[...]$2 = 'D'
+
+// lldb-command:print *i16_ref
+// lldb-check:[...]$3 = -16
+
+// lldb-command:print *i32_ref
+// lldb-check:[...]$4 = -32
+
+// lldb-command:print *i64_ref
+// lldb-check:[...]$5 = -64
+
+// lldb-command:print *uint_ref
+// lldb-check:[...]$6 = 1
+
+// lldb-command:print *u8_ref
+// lldb-check:[...]$7 = 'd'
+
+// lldb-command:print *u16_ref
+// lldb-check:[...]$8 = 16
+
+// lldb-command:print *u32_ref
+// lldb-check:[...]$9 = 32
+
+// lldb-command:print *u64_ref
+// lldb-check:[...]$10 = 64
+
+// lldb-command:print *f32_ref
+// lldb-check:[...]$11 = 2.5
+
+// lldb-command:print *f64_ref
+// lldb-check:[...]$12 = 3.5
+
+#![allow(unused_variables)]
+#![feature(omit_gdb_pretty_printer_section)]
+#![omit_gdb_pretty_printer_section]
 
 fn main() {
     let bool_val: bool = true;
     let bool_ref: &bool = &bool_val;
 
-    let int_val: int = -1;
-    let int_ref: &int = &int_val;
+    let int_val: isize = -1;
+    let int_ref: &isize = &int_val;
 
     let char_val: char = 'a';
     let char_ref: &char = &char_val;
@@ -80,11 +133,11 @@ fn main() {
     let i32_val: i32 = -32;
     let i32_ref: &i32 = &i32_val;
 
-    let uint_val: i64 = -64;
-    let i64_ref: &i64 = &uint_val;
+    let i64_val: i64 = -64;
+    let i64_ref: &i64 = &i64_val;
 
-    let uint_val: uint = 1;
-    let uint_ref: &uint = &uint_val;
+    let uint_val: usize = 1;
+    let uint_ref: &usize = &uint_val;
 
     let u8_val: u8 = 100;
     let u8_ref: &u8 = &u8_val;
@@ -103,7 +156,8 @@ fn main() {
 
     let f64_val: f64 = 3.5;
     let f64_ref: &f64 = &f64_val;
-    zzz();
+
+    zzz(); // #break
 }
 
 fn zzz() {()}

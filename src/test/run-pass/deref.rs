@@ -8,11 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(managed_boxes)]
+// pretty-expanded FIXME #23616
 
-use std::gc::{Gc, GC};
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
 pub fn main() {
-    let x: Gc<int> = box(GC) 10;
-    let _y: int = *x;
+    let x: Box<isize> = box 10;
+    let _y: isize = *x;
 }

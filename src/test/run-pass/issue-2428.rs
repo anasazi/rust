@@ -8,13 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+
 pub fn main() {
-    let _foo = 100i;
-    static quux: int = 5;
+    let _foo = 100;
+    const quux: isize = 5;
 
     enum Stuff {
         Bar = quux
     }
 
-    assert_eq!(Bar as int, quux);
+    assert_eq!(Stuff::Bar as isize, quux);
 }

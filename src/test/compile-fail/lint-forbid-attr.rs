@@ -8,8 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![forbid(experimental)]
+#![forbid(deprecated)]
+//~^ NOTE `forbid` level set here
 
-#[allow(experimental)] //~ ERROR allow(experimental) overruled by outer forbid(experimental)
+#[allow(deprecated)]
+//~^ ERROR allow(deprecated) overruled by outer forbid(deprecated)
+//~| NOTE overruled by previous forbid
 fn main() {
 }

@@ -8,40 +8,41 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// aux-build:struct-field-privacy.rs
+// aux-build:struct_field_privacy.rs
 
-extern crate xc = "struct-field-privacy";
+extern crate struct_field_privacy as xc;
 
 struct A {
-    a: int,
+    a: isize,
 }
 
 mod inner {
-    struct A {
-        a: int,
-        pub b: int,
+    pub struct A {
+        a: isize,
+        pub b: isize,
     }
     pub struct B {
-        pub a: int,
-        b: int,
+        pub a: isize,
+        b: isize,
     }
+    pub struct Z(pub isize, isize);
 }
 
-fn test(a: A, b: inner::A, c: inner::B, d: xc::A, e: xc::B) {
-    //~^ ERROR: type `A` is private
-    //~^^ ERROR: struct `A` is private
-
+fn test(a: A, b: inner::A, c: inner::B, d: xc::A, e: xc::B, z: inner::Z) {
     a.a;
     b.a; //~ ERROR: field `a` of struct `inner::A` is private
     b.b;
     c.a;
     c.b; //~ ERROR: field `b` of struct `inner::B` is private
 
-    d.a; //~ ERROR: field `a` of struct `struct-field-privacy::A` is private
+    d.a; //~ ERROR: field `a` of struct `xc::A` is private
     d.b;
 
     e.a;
-    e.b; //~ ERROR: field `b` of struct `struct-field-privacy::B` is private
+    e.b; //~ ERROR: field `b` of struct `xc::B` is private
+
+    z.0;
+    z.1; //~ ERROR: field `1` of tuple-struct `inner::Z` is private
 }
 
 fn main() {}

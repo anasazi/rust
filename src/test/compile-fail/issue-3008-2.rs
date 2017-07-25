@@ -8,11 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-enum foo { foo(bar) }
+enum foo { foo_(bar) }
 struct bar { x: bar }
-//~^ ERROR illegal recursive struct type; wrap the inner value in a box to make it representable
-//~^^ ERROR this type cannot be instantiated without an instance of itself
+//~^ ERROR E0072
+//~| NOTE recursive type has infinite size
+//~| NOTE recursive without indirection
 
 fn main() {
 }
-

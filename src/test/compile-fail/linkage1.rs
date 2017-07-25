@@ -8,7 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// gate-test-linkage
+
 extern {
-    #[linkage = "extern_weak"] static foo: int;
+    #[linkage = "extern_weak"] static foo: isize;
     //~^ ERROR: the `linkage` attribute is experimental and not portable
 }

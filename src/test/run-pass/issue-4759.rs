@@ -8,14 +8,18 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// pretty-expanded FIXME #23616
 
-struct T { a: Box<int> }
+#![allow(unknown_features)]
+#![feature(box_syntax)]
+
+struct T { a: Box<isize> }
 
 trait U {
     fn f(self);
 }
 
-impl U for Box<int> {
+impl U for Box<isize> {
     fn f(self) { }
 }
 
@@ -23,4 +27,3 @@ pub fn main() {
     let T { a: a } = T { a: box 0 };
     a.f();
 }
-

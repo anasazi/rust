@@ -8,14 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// aux-build:issue-11680.rs
+// aux-build:issue_11680.rs
 
-extern crate other = "issue-11680";
+extern crate issue_11680 as other;
 
 fn main() {
-    let _b = other::Bar(1);
-    //~^ ERROR: variant `Bar` is private
+    let _b = other::Foo::Bar(1);
+    //~^ ERROR: enum `Foo` is private
 
-    let _b = other::test::Bar(1);
-    //~^ ERROR: variant `Bar` is private
+    let _b = other::test::Foo::Bar(1);
+    //~^ ERROR: enum `Foo` is private
 }

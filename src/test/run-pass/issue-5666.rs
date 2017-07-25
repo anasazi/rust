@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
 struct Dog {
     name : String
@@ -29,8 +31,7 @@ pub fn main() {
     let bubbles = box Dog{name: "bubbles".to_string()};
     let barker = [snoopy as Box<Barks>, bubbles as Box<Barks>];
 
-    for pup in barker.iter() {
+    for pup in &barker {
         println!("{}", pup.bark());
     }
 }
-

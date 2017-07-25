@@ -8,29 +8,37 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-android: FIXME(#10381)
+// min-lldb-version: 310
 
 // compile-flags:-g
-// gdb-command:rbreak zzz
+
+// === GDB TESTS ===================================================================================
+
 // gdb-command:run
-// gdb-command:finish
 
 // gdb-command:print *unique
-// gdb-check:$1 = {x = 99, y = 999, z = 9999, w = 99999}
-
-// gdb-command:print managed->val
-// gdb-check:$2 = {x = 88, y = 888, z = 8888, w = 88888}
+// gdbg-check:$1 = {x = 99, y = 999, z = 9999, w = 99999}
+// gdbr-check:$1 = boxed_struct::StructWithSomePadding {x: 99, y: 999, z: 9999, w: 99999}
 
 // gdb-command:print *unique_dtor
-// gdb-check:$3 = {x = 77, y = 777, z = 7777, w = 77777}
+// gdbg-check:$2 = {x = 77, y = 777, z = 7777, w = 77777}
+// gdbr-check:$2 = boxed_struct::StructWithDestructor {x: 77, y: 777, z: 7777, w: 77777}
 
-// gdb-command:print managed_dtor->val
-// gdb-check:$4 = {x = 33, y = 333, z = 3333, w = 33333}
 
-#![feature(managed_boxes)]
-#![allow(unused_variable)]
+// === LLDB TESTS ==================================================================================
 
-use std::gc::GC;
+// lldb-command:run
+
+// lldb-command:print *unique
+// lldb-check:[...]$0 = StructWithSomePadding { x: 99, y: 999, z: 9999, w: 99999 }
+
+// lldb-command:print *unique_dtor
+// lldb-check:[...]$1 = StructWithDestructor { x: 77, y: 777, z: 7777, w: 77777 }
+
+#![allow(unused_variables)]
+#![feature(box_syntax)]
+#![feature(omit_gdb_pretty_printer_section)]
+#![omit_gdb_pretty_printer_section]
 
 struct StructWithSomePadding {
     x: i16,
@@ -52,13 +60,10 @@ impl Drop for StructWithDestructor {
 
 fn main() {
 
-    let unique = box StructWithSomePadding { x: 99, y: 999, z: 9999, w: 99999 };
-    let managed = box(GC) StructWithSomePadding { x: 88, y: 888, z: 8888, w: 88888 };
+    let unique: Box<_> = box StructWithSomePadding { x: 99, y: 999, z: 9999, w: 99999 };
 
-    let unique_dtor = box StructWithDestructor { x: 77, y: 777, z: 7777, w: 77777 };
-    let managed_dtor = box(GC) StructWithDestructor { x: 33, y: 333, z: 3333, w: 33333 };
-
-    zzz();
+    let unique_dtor: Box<_> = box StructWithDestructor { x: 77, y: 777, z: 7777, w: 77777 };
+    zzz(); // #break
 }
 
-fn zzz() {()}
+fn zzz() { () }

@@ -10,10 +10,14 @@
 
 // ABI is cdecl by default
 
+// pretty-expanded FIXME #23616
+
+#![feature(libc)]
+
 mod rustrt {
     extern crate libc;
 
-    #[link(name = "rust_test_helpers")]
+    #[link(name = "rust_test_helpers", kind = "static")]
     extern {
         pub fn rust_get_test_int() -> libc::intptr_t;
     }

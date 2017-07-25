@@ -19,8 +19,9 @@ use trait_superkinds_in_metadata::{RequiresRequiresShareAndSend, RequiresShare};
 
 struct X<T>(T);
 
-impl <T:Share> RequiresShare for X<T> { }
+impl <T:Sync> RequiresShare for X<T> { }
 
-impl <T:Share> RequiresRequiresShareAndSend for X<T> { } //~ ERROR cannot implement this trait
+impl <T:Sync+'static> RequiresRequiresShareAndSend for X<T> { }
+//~^ ERROR `T: std::marker::Send` is not satisfied
 
 fn main() { }

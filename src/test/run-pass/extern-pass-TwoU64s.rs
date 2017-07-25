@@ -11,12 +11,12 @@
 // Test a foreign function that accepts and returns a struct
 // by value.
 
-#[deriving(PartialEq, Show)]
-struct TwoU64s {
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub struct TwoU64s {
     one: u64, two: u64
 }
 
-#[link(name = "rust_test_helpers")]
+#[link(name = "rust_test_helpers", kind = "static")]
 extern {
     pub fn rust_dbg_extern_identity_TwoU64s(v: TwoU64s) -> TwoU64s;
 }

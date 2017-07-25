@@ -8,15 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// no-pretty-expanded FIXME #15189
-
-#[deriving(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
 struct TS<T>(T,T);
 
 
 pub fn main() {
-    let ts1 = TS(1i, 1i);
-    let ts2 = TS(1i, 2i);
+    let ts1 = TS(1, 1);
+    let ts2 = TS(1, 2);
 
     // in order for both PartialOrd and Ord
     let tss = [ts1, ts2];

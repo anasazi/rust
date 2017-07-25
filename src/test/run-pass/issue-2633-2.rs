@@ -8,12 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// pretty-expanded FIXME #23616
 
-fn a_val(x: Box<int>, y: Box<int>) -> int {
+#![allow(unknown_features)]
+#![feature(box_syntax)]
+
+
+fn a_val(x: Box<isize>, y: Box<isize>) -> isize {
     *x + *y
 }
 
 pub fn main() {
-    let z = box 22i;
+    let z: Box<_> = box 22;
     a_val(z.clone(), z.clone());
 }

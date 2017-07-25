@@ -9,9 +9,10 @@
 // except according to those terms.
 
 // exec-env:TEST_EXEC_ENV=22
+// ignore-emscripten FIXME: issue #31622
 
-use std::os;
+use std::env;
 
 pub fn main() {
-    assert_eq!(os::getenv("TEST_EXEC_ENV"), Some("22".to_string()));
+    assert_eq!(env::var("TEST_EXEC_ENV"), Ok("22".to_string()));
 }

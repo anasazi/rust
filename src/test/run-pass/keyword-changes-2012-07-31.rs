@@ -12,14 +12,16 @@
 // mod -> module
 // match -> match
 
+// pretty-expanded FIXME #23616
+
 pub fn main() {
 }
 
 mod foo {
 }
 
-fn bar() -> int {
-    match 0i {
-      _ => { 0i }
+fn bar() -> isize {
+    match 0 {
+      _ => { 0 }
     }
 }

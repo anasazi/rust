@@ -9,10 +9,10 @@
 // except according to those terms.
 
 #![deny(unreachable_code)]
-#![allow(unused_variable)]
+#![allow(unused_variables)]
 
 fn main() {
   loop{}
 
-  let a = 3i; //~ ERROR: unreachable statement
+  let a = 3; //~ ERROR: unreachable statement
 }

@@ -8,14 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// aux-build:syntax-extension-with-dll-deps-1.rs
-// aux-build:syntax-extension-with-dll-deps-2.rs
+// aux-build:syntax_extension_with_dll_deps_1.rs
+// aux-build:syntax_extension_with_dll_deps_2.rs
 // ignore-stage1
 
-#![feature(phase)]
-
-#[phase(plugin)]
-extern crate extension = "syntax-extension-with-dll-deps-2";
+#![feature(plugin, rustc_private)]
+#![plugin(syntax_extension_with_dll_deps_2)]
 
 fn main() {
     foo!();

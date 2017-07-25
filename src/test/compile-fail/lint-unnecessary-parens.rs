@@ -8,16 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![deny(unnecessary_parens)]
+#![deny(unused_parens)]
 
-#[deriving(Eq, PartialEq)]
+#[derive(Eq, PartialEq)]
 struct X { y: bool }
 impl X {
     fn foo(&self) -> bool { self.y }
 }
 
-fn foo() -> int {
-    return (1i); //~ ERROR unnecessary parentheses around `return` value
+fn foo() -> isize {
+    return (1); //~ ERROR unnecessary parentheses around `return` value
 }
 fn bar() -> X {
     return (X { y: true }); //~ ERROR unnecessary parentheses around `return` value
@@ -32,6 +32,8 @@ fn main() {
     match (true) { //~ ERROR unnecessary parentheses around `match` head expression
         _ => {}
     }
+    if let 1 = (1) {} //~ ERROR unnecessary parentheses around `if let` head expression
+    while let 1 = (2) {} //~ ERROR unnecessary parentheses around `while let` head expression
     let v = X { y: false };
     // struct lits needs parens, so these shouldn't warn.
     if (v == X { y: true }) {}
@@ -45,7 +47,7 @@ fn main() {
         _ => {}
     }
 
-    let mut _a = (0i); //~ ERROR unnecessary parentheses around assigned value
-    _a = (0i); //~ ERROR unnecessary parentheses around assigned value
-    _a += (1i); //~ ERROR unnecessary parentheses around assigned value
+    let mut _a = (0); //~ ERROR unnecessary parentheses around assigned value
+    _a = (0); //~ ERROR unnecessary parentheses around assigned value
+    _a += (1); //~ ERROR unnecessary parentheses around assigned value
 }

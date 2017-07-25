@@ -8,14 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::io::println;
+// ignore-emscripten no threads support
+
+use std::sync::mpsc::channel;
+use std::thread;
 
 pub fn main() {
     let (tx, rx) = channel();
 
-    tx.send("hello, world");
+    tx.send("hello, world").unwrap();
 
-    spawn(proc() {
-        println(rx.recv());
-    });
+    thread::spawn(move|| {
+        println!("{}", rx.recv().unwrap());
+    }).join().ok().unwrap();
 }

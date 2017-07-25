@@ -8,9 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+
 use std::mem;
 
-#[packed]
+#[repr(packed)]
 struct S<T, S> {
     a: T,
     b: u8,

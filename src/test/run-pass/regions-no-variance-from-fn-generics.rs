@@ -12,21 +12,28 @@
 // should not upset the variance inference for actual occurrences of
 // that lifetime in type expressions.
 
-trait HasLife<'a> { }
+
+pub trait HasLife<'a> {
+    fn dummy(&'a self) { } // just to induce a variance on 'a
+}
 
 trait UseLife01 {
     fn refs<'a, H: HasLife<'a>>(&'a self) -> H;
 }
 
 trait UseLife02 {
-    fn refs<'a, T, H: HasType<&'a T>>(&'a self) -> H;
+    fn refs<'a, T: 'a, H: HasType<&'a T>>(&'a self) -> H;
 }
 
 
-trait HasType<T> { }
+pub trait HasType<T>
+{
+    fn dummy(&self, t: T) -> T { panic!() }
+}
+
 
 trait UseLife03<T> {
-    fn refs<'a, H: HasType<&'a T>>(&'a self) -> H;
+    fn refs<'a, H: HasType<&'a T>>(&'a self) -> H where T: 'a;
 }
 
 
@@ -38,7 +45,7 @@ pub fn top_refs_1<'a, H: HasLife<'a>>(_s: &'a ()) -> H {
     unimplemented!()
 }
 
-pub fn top_refs_2<'a, T, H: HasType<&'a T>>(_s: &'a ()) -> H {
+pub fn top_refs_2<'a, T: 'a, H: HasType<&'a T>>(_s: &'a ()) -> H {
     unimplemented!()
 }
 

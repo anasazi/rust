@@ -9,9 +9,11 @@
 // except according to those terms.
 
 
-#![feature(simd)]
+// pretty-expanded FIXME #23616
 
-#[simd]
+#![feature(repr_simd)]
+
+#[repr(simd)]
 struct RGBA {
     r: f32,
     g: f32,

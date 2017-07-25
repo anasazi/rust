@@ -8,76 +8,98 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::collections::HashSet;
+use std::default::Default;
+use std::fs::File;
+use std::io::prelude::*;
 use std::io;
-use std::string::String;
+use std::path::{PathBuf, Path};
 
 use getopts;
 use testing;
+use rustc::session::search_paths::SearchPaths;
+use rustc::session::config::Externs;
+use syntax::codemap::DUMMY_SP;
 
-use externalfiles::ExternalHtml;
+use externalfiles::{ExternalHtml, LoadStringError, load_string};
 
+use html::render::reset_ids;
 use html::escape::Escape;
 use html::markdown;
-use html::markdown::{MarkdownWithToc, find_testable_code, reset_headers};
-use test::Collector;
+use html::markdown::{Markdown, MarkdownWithToc, find_testable_code, old_find_testable_code};
+use html::markdown::RenderType;
+use test::{TestOptions, Collector};
 
-/// Separate any lines at the start of the file that begin with `%`.
+/// Separate any lines at the start of the file that begin with `# ` or `%`.
 fn extract_leading_metadata<'a>(s: &'a str) -> (Vec<&'a str>, &'a str) {
     let mut metadata = Vec::new();
+    let mut count = 0;
+
     for line in s.lines() {
-        if line.starts_with("%") {
-            // remove %<whitespace>
-            metadata.push(line.slice_from(1).trim_left())
+        if line.starts_with("# ") || line.starts_with("%") {
+            // trim the whitespace after the symbol
+            metadata.push(line[1..].trim_left());
+            count += line.len() + 1;
         } else {
-            let line_start_byte = s.subslice_offset(line);
-            return (metadata, s.slice_from(line_start_byte));
+            return (metadata, &s[count..]);
         }
     }
-    // if we're here, then all lines were metadata % lines.
+
+    // if we're here, then all lines were metadata `# ` or `%` lines.
     (metadata, "")
 }
 
 /// Render `input` (e.g. "foo.md") into an HTML file in `output`
 /// (e.g. output = "bar" => "bar/foo.html").
-pub fn render(input: &str, mut output: Path, matches: &getopts::Matches,
-              external_html: &ExternalHtml) -> int {
+pub fn render(input: &str, mut output: PathBuf, matches: &getopts::Matches,
+              external_html: &ExternalHtml, include_toc: bool,
+              render_type: RenderType) -> isize {
     let input_p = Path::new(input);
-    output.push(input_p.filestem().unwrap());
+    output.push(input_p.file_stem().unwrap());
     output.set_extension("html");
 
     let mut css = String::new();
-    for name in matches.opt_strs("markdown-css").iter() {
+    for name in &matches.opt_strs("markdown-css") {
         let s = format!("<link rel=\"stylesheet\" type=\"text/css\" href=\"{}\">\n", name);
-        css.push_str(s.as_slice())
+        css.push_str(&s)
     }
 
-    let input_str = load_or_return!(input, 1, 2);
-    let playground = matches.opt_str("markdown-playground-url");
-    if playground.is_some() {
-        markdown::playground_krate.replace(Some(None));
+    let input_str = match load_string(input) {
+        Ok(s) => s,
+        Err(LoadStringError::ReadFail) => return 1,
+        Err(LoadStringError::BadUtf8) => return 2,
+    };
+    if let Some(playground) = matches.opt_str("markdown-playground-url").or(
+                              matches.opt_str("playground-url")) {
+        markdown::PLAYGROUND.with(|s| { *s.borrow_mut() = Some((None, playground)); });
     }
-    let playground = playground.unwrap_or("".to_string());
 
-    let mut out = match io::File::create(&output) {
+    let mut out = match File::create(&output) {
         Err(e) => {
             let _ = writeln!(&mut io::stderr(),
-                             "error opening `{}` for writing: {}",
+                             "rustdoc: {}: {}",
                              output.display(), e);
             return 4;
         }
         Ok(f) => f
     };
 
-    let (metadata, text) = extract_leading_metadata(input_str.as_slice());
-    if metadata.len() == 0 {
-        let _ = writeln!(&mut io::stderr(),
-                         "invalid markdown file: expecting initial line with `% ...TITLE...`");
+    let (metadata, text) = extract_leading_metadata(&input_str);
+    if metadata.is_empty() {
+        let _ = writeln!(
+            &mut io::stderr(),
+            "rustdoc: invalid markdown file: no initial lines starting with `# ` or `%`"
+        );
         return 5;
     }
-    let title = metadata.get(0).as_slice();
+    let title = metadata[0];
 
-    reset_headers();
+    reset_ids(false);
+
+    let rendered = if include_toc {
+        format!("{}", MarkdownWithToc(text, render_type))
+    } else {
+        format!("{}", Markdown(text, render_type))
+    };
 
     let err = write!(
         &mut out,
@@ -85,13 +107,14 @@ pub fn render(input: &str, mut output: Path, matches: &getopts::Matches,
 <html lang="en">
 <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="generator" content="rustdoc">
     <title>{title}</title>
 
     {css}
     {in_header}
 </head>
-<body>
+<body class="rustdoc">
     <!--[if lte IE 8]>
     <div class="warning">
         This old browser is unsupported and will most likely display funky
@@ -102,9 +125,6 @@ pub fn render(input: &str, mut output: Path, matches: &getopts::Matches,
     {before_content}
     <h1 class="title">{title}</h1>
     {text}
-    <script type="text/javascript">
-        window.playgroundUrl = "{playground}";
-    </script>
     {after_content}
 </body>
 </html>"#,
@@ -112,15 +132,14 @@ pub fn render(input: &str, mut output: Path, matches: &getopts::Matches,
         css = css,
         in_header = external_html.in_header,
         before_content = external_html.before_content,
-        text = MarkdownWithToc(text),
+        text = rendered,
         after_content = external_html.after_content,
-        playground = playground,
         );
 
     match err {
         Err(e) => {
             let _ = writeln!(&mut io::stderr(),
-                             "error writing to `{}`: {}",
+                             "rustdoc: cannot write to `{}`: {}",
                              output.display(), e);
             6
         }
@@ -129,12 +148,29 @@ pub fn render(input: &str, mut output: Path, matches: &getopts::Matches,
 }
 
 /// Run any tests/code examples in the markdown file `input`.
-pub fn test(input: &str, libs: HashSet<Path>, mut test_args: Vec<String>) -> int {
-    let input_str = load_or_return!(input, 1, 2);
+pub fn test(input: &str, cfgs: Vec<String>, libs: SearchPaths, externs: Externs,
+            mut test_args: Vec<String>, maybe_sysroot: Option<PathBuf>,
+            render_type: RenderType, display_warnings: bool) -> isize {
+    let input_str = match load_string(input) {
+        Ok(s) => s,
+        Err(LoadStringError::ReadFail) => return 1,
+        Err(LoadStringError::BadUtf8) => return 2,
+    };
 
-    let mut collector = Collector::new(input.to_string(), libs, true);
-    find_testable_code(input_str.as_slice(), &mut collector);
-    test_args.unshift("rustdoctest".to_string());
-    testing::test_main(test_args.as_slice(), collector.tests);
+    let mut opts = TestOptions::default();
+    opts.no_crate_inject = true;
+    let mut collector = Collector::new(input.to_string(), cfgs, libs, externs,
+                                       true, opts, maybe_sysroot, None,
+                                       Some(input.to_owned()),
+                                       render_type);
+    if render_type == RenderType::Pulldown {
+        old_find_testable_code(&input_str, &mut collector, DUMMY_SP);
+        find_testable_code(&input_str, &mut collector, DUMMY_SP);
+    } else {
+        old_find_testable_code(&input_str, &mut collector, DUMMY_SP);
+    }
+    test_args.insert(0, "rustdoctest".to_string());
+    testing::test_main(&test_args, collector.tests,
+                       testing::Options::new().display_output(display_warnings));
     0
 }

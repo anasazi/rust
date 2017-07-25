@@ -8,10 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn f<T>(g: || -> T) -> T { g() }
+// pretty-expanded FIXME #23616
+
+fn f<T, F>(g: F) -> T where F: FnOnce() -> T { g() }
 
 pub fn main() {
-  let _x = f( | | { 10i });
+  let _x = f( | | { 10 });
     // used to be: cannot determine a type for this expression
     f(| | { });
     // ditto

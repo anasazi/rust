@@ -11,25 +11,25 @@
 // compile-flags: --cfg fooA --cfg fooB
 
 // fooA AND !bar
-#[cfg(fooA, not(bar))]
-fn foo1() -> int { 1 }
+
+#[cfg(all(fooA, not(bar)))]
+fn foo1() -> isize { 1 }
 
 // !fooA AND !bar
-#[cfg(not(fooA), not(bar))]
-fn foo2() -> int { 2 }
+#[cfg(all(not(fooA), not(bar)))]
+fn foo2() -> isize { 2 }
 
 // fooC OR (fooB AND !bar)
-#[cfg(fooC)]
-#[cfg(fooB, not(bar))]
-fn foo2() -> int { 3 }
+#[cfg(any(fooC, all(fooB, not(bar))))]
+fn foo2() -> isize { 3 }
 
 // fooA AND bar
-#[cfg(fooA, bar)]
-fn foo3() -> int { 2 }
+#[cfg(all(fooA, bar))]
+fn foo3() -> isize { 2 }
 
 // !(fooA AND bar)
-#[cfg(not(fooA, bar))]
-fn foo3() -> int { 3 }
+#[cfg(not(all(fooA, bar)))]
+fn foo3() -> isize { 3 }
 
 pub fn main() {
     assert_eq!(1, foo1());

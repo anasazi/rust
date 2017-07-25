@@ -8,1523 +8,2923 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Numeric traits and functions for generic mathematics
+//! Numeric traits and functions for the built-in numeric types.
 
-#![allow(missing_doc)]
+#![stable(feature = "rust1", since = "1.0.0")]
 
+use convert::TryFrom;
+use fmt;
 use intrinsics;
-use {int, i8, i16, i32, i64};
-use {uint, u8, u16, u32, u64};
-use {f32, f64};
-use clone::Clone;
-use cmp::{PartialEq, PartialOrd};
-use kinds::Copy;
-use mem::size_of;
-use ops::{Add, Sub, Mul, Div, Rem, Neg};
-use ops::{Not, BitAnd, BitOr, BitXor, Shl, Shr};
-use option::{Option, Some, None};
+use str::FromStr;
 
-/// The base trait for numeric types
-pub trait Num: PartialEq + Zero + One
-             + Neg<Self>
-             + Add<Self,Self>
-             + Sub<Self,Self>
-             + Mul<Self,Self>
-             + Div<Self,Self>
-             + Rem<Self,Self> {}
-
-macro_rules! trait_impl(
-    ($name:ident for $($t:ty)*) => ($(
-        impl $name for $t {}
-    )*)
-)
-
-trait_impl!(Num for uint u8 u16 u32 u64 int i8 i16 i32 i64 f32 f64)
-
-/// Simultaneous division and remainder
-#[inline]
-pub fn div_rem<T: Div<T, T> + Rem<T, T>>(x: T, y: T) -> (T, T) {
-    (x / y, x % y)
-}
-
-/// Defines an additive identity element for `Self`.
+/// Provides intentionally-wrapped arithmetic on `T`.
 ///
-/// # Deriving
+/// Operations like `+` on `u32` values is intended to never overflow,
+/// and in some debug configurations overflow is detected and results
+/// in a panic. While most arithmetic falls into this category, some
+/// code explicitly expects and relies upon modular arithmetic (e.g.,
+/// hashing).
 ///
-/// This trait can be automatically be derived using `#[deriving(Zero)]`
-/// attribute. If you choose to use this, make sure that the laws outlined in
-/// the documentation for `Zero::zero` still hold.
-pub trait Zero: Add<Self, Self> {
-    /// Returns the additive identity element of `Self`, `0`.
-    ///
-    /// # Laws
-    ///
-    /// ~~~text
-    /// a + 0 = a       ∀ a ∈ Self
-    /// 0 + a = a       ∀ a ∈ Self
-    /// ~~~
-    ///
-    /// # Purity
-    ///
-    /// This function should return the same result at all times regardless of
-    /// external mutable state, for example values stored in TLS or in
-    /// `static mut`s.
-    // FIXME (#5527): This should be an associated constant
-    fn zero() -> Self;
-
-    /// Returns `true` if `self` is equal to the additive identity.
-    fn is_zero(&self) -> bool;
-}
-
-macro_rules! zero_impl(
-    ($t:ty, $v:expr) => {
-        impl Zero for $t {
-            #[inline]
-            fn zero() -> $t { $v }
-            #[inline]
-            fn is_zero(&self) -> bool { *self == $v }
-        }
-    }
-)
-
-macro_rules! zero_float_impl(
-    ($t:ty, $v:expr) => {
-        impl Zero for $t {
-            #[inline]
-            fn zero() -> $t { $v }
-
-            #[inline]
-            fn is_zero(&self) -> bool { *self == $v || *self == -$v }
-        }
-    }
-)
-
-zero_impl!(uint, 0u)
-zero_impl!(u8,  0u8)
-zero_impl!(u16, 0u16)
-zero_impl!(u32, 0u32)
-zero_impl!(u64, 0u64)
-
-zero_impl!(int, 0i)
-zero_impl!(i8,  0i8)
-zero_impl!(i16, 0i16)
-zero_impl!(i32, 0i32)
-zero_impl!(i64, 0i64)
-
-zero_float_impl!(f32, 0.0f32)
-zero_float_impl!(f64, 0.0f64)
-
-/// Returns the additive identity, `0`.
-#[inline(always)] pub fn zero<T: Zero>() -> T { Zero::zero() }
-
-/// Defines a multiplicative identity element for `Self`.
-pub trait One: Mul<Self, Self> {
-    /// Returns the multiplicative identity element of `Self`, `1`.
-    ///
-    /// # Laws
-    ///
-    /// ~~~text
-    /// a * 1 = a       ∀ a ∈ Self
-    /// 1 * a = a       ∀ a ∈ Self
-    /// ~~~
-    ///
-    /// # Purity
-    ///
-    /// This function should return the same result at all times regardless of
-    /// external mutable state, for example values stored in TLS or in
-    /// `static mut`s.
-    // FIXME (#5527): This should be an associated constant
-    fn one() -> Self;
-}
-
-macro_rules! one_impl(
-    ($t:ty, $v:expr) => {
-        impl One for $t {
-            #[inline]
-            fn one() -> $t { $v }
-        }
-    }
-)
-
-one_impl!(uint, 1u)
-one_impl!(u8,  1u8)
-one_impl!(u16, 1u16)
-one_impl!(u32, 1u32)
-one_impl!(u64, 1u64)
-
-one_impl!(int, 1i)
-one_impl!(i8,  1i8)
-one_impl!(i16, 1i16)
-one_impl!(i32, 1i32)
-one_impl!(i64, 1i64)
-
-one_impl!(f32, 1.0f32)
-one_impl!(f64, 1.0f64)
-
-/// Returns the multiplicative identity, `1`.
-#[inline(always)] pub fn one<T: One>() -> T { One::one() }
-
-/// Useful functions for signed numbers (i.e. numbers that can be negative).
-pub trait Signed: Num + Neg<Self> {
-    /// Computes the absolute value.
-    ///
-    /// For `f32` and `f64`, `NaN` will be returned if the number is `NaN`.
-    fn abs(&self) -> Self;
-
-    /// The positive difference of two numbers.
-    ///
-    /// Returns `zero` if the number is less than or equal to `other`, otherwise the difference
-    /// between `self` and `other` is returned.
-    fn abs_sub(&self, other: &Self) -> Self;
-
-    /// Returns the sign of the number.
-    ///
-    /// For `f32` and `f64`:
-    ///
-    /// * `1.0` if the number is positive, `+0.0` or `INFINITY`
-    /// * `-1.0` if the number is negative, `-0.0` or `NEG_INFINITY`
-    /// * `NaN` if the number is `NaN`
-    ///
-    /// For `int`:
-    ///
-    /// * `0` if the number is zero
-    /// * `1` if the number is positive
-    /// * `-1` if the number is negative
-    fn signum(&self) -> Self;
-
-    /// Returns true if the number is positive and false if the number is zero or negative.
-    fn is_positive(&self) -> bool;
-
-    /// Returns true if the number is negative and false if the number is zero or positive.
-    fn is_negative(&self) -> bool;
-}
-
-macro_rules! signed_impl(
-    ($($t:ty)*) => ($(
-        impl Signed for $t {
-            #[inline]
-            fn abs(&self) -> $t {
-                if self.is_negative() { -*self } else { *self }
-            }
-
-            #[inline]
-            fn abs_sub(&self, other: &$t) -> $t {
-                if *self <= *other { 0 } else { *self - *other }
-            }
-
-            #[inline]
-            fn signum(&self) -> $t {
-                match *self {
-                    n if n > 0 => 1,
-                    0 => 0,
-                    _ => -1,
-                }
-            }
-
-            #[inline]
-            fn is_positive(&self) -> bool { *self > 0 }
-
-            #[inline]
-            fn is_negative(&self) -> bool { *self < 0 }
-        }
-    )*)
-)
-
-signed_impl!(int i8 i16 i32 i64)
-
-macro_rules! signed_float_impl(
-    ($t:ty, $nan:expr, $inf:expr, $neg_inf:expr, $fabs:path, $fcopysign:path, $fdim:ident) => {
-        impl Signed for $t {
-            /// Computes the absolute value. Returns `NAN` if the number is `NAN`.
-            #[inline]
-            fn abs(&self) -> $t {
-                unsafe { $fabs(*self) }
-            }
-
-            /// The positive difference of two numbers. Returns `0.0` if the number is
-            /// less than or equal to `other`, otherwise the difference between`self`
-            /// and `other` is returned.
-            #[inline]
-            fn abs_sub(&self, other: &$t) -> $t {
-                extern { fn $fdim(a: $t, b: $t) -> $t; }
-                unsafe { $fdim(*self, *other) }
-            }
-
-            /// # Returns
-            ///
-            /// - `1.0` if the number is positive, `+0.0` or `INFINITY`
-            /// - `-1.0` if the number is negative, `-0.0` or `NEG_INFINITY`
-            /// - `NAN` if the number is NaN
-            #[inline]
-            fn signum(&self) -> $t {
-                if self != self { $nan } else {
-                    unsafe { $fcopysign(1.0, *self) }
-                }
-            }
-
-            /// Returns `true` if the number is positive, including `+0.0` and `INFINITY`
-            #[inline]
-            fn is_positive(&self) -> bool { *self > 0.0 || (1.0 / *self) == $inf }
-
-            /// Returns `true` if the number is negative, including `-0.0` and `NEG_INFINITY`
-            #[inline]
-            fn is_negative(&self) -> bool { *self < 0.0 || (1.0 / *self) == $neg_inf }
-        }
-    }
-)
-
-signed_float_impl!(f32, f32::NAN, f32::INFINITY, f32::NEG_INFINITY,
-                   intrinsics::fabsf32, intrinsics::copysignf32, fdimf)
-signed_float_impl!(f64, f64::NAN, f64::INFINITY, f64::NEG_INFINITY,
-                   intrinsics::fabsf64, intrinsics::copysignf64, fdim)
-
-/// Computes the absolute value.
+/// Wrapping arithmetic can be achieved either through methods like
+/// `wrapping_add`, or through the `Wrapping<T>` type, which says that
+/// all standard arithmetic operations on the underlying value are
+/// intended to have wrapping semantics.
 ///
-/// For `f32` and `f64`, `NaN` will be returned if the number is `NaN`
-#[inline(always)]
-pub fn abs<T: Signed>(value: T) -> T {
-    value.abs()
-}
-
-/// The positive difference of two numbers.
+/// # Examples
 ///
-/// Returns `zero` if the number is less than or equal to `other`,
-/// otherwise the difference between `self` and `other` is returned.
-#[inline(always)]
-pub fn abs_sub<T: Signed>(x: T, y: T) -> T {
-    x.abs_sub(&y)
-}
-
-/// Returns the sign of the number.
-///
-/// For `f32` and `f64`:
-///
-/// * `1.0` if the number is positive, `+0.0` or `INFINITY`
-/// * `-1.0` if the number is negative, `-0.0` or `NEG_INFINITY`
-/// * `NaN` if the number is `NaN`
-///
-/// For int:
-///
-/// * `0` if the number is zero
-/// * `1` if the number is positive
-/// * `-1` if the number is negative
-#[inline(always)] pub fn signum<T: Signed>(value: T) -> T { value.signum() }
-
-/// A trait for values which cannot be negative
-pub trait Unsigned: Num {}
-
-trait_impl!(Unsigned for uint u8 u16 u32 u64)
-
-/// Raises a value to the power of exp, using exponentiation by squaring.
-///
-/// # Example
-///
-/// ```rust
-/// use std::num;
-///
-/// assert_eq!(num::pow(2i, 4), 16);
 /// ```
-#[inline]
-pub fn pow<T: One + Mul<T, T>>(mut base: T, mut exp: uint) -> T {
-    if exp == 1 { base }
-    else {
-        let mut acc = one::<T>();
-        while exp > 0 {
-            if (exp & 1) == 1 {
+/// use std::num::Wrapping;
+///
+/// let zero = Wrapping(0u32);
+/// let one = Wrapping(1u32);
+///
+/// assert_eq!(std::u32::MAX, (zero - one).0);
+/// ```
+#[stable(feature = "rust1", since = "1.0.0")]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Default, Hash)]
+pub struct Wrapping<T>(#[stable(feature = "rust1", since = "1.0.0")]
+                       pub T);
+
+#[stable(feature = "rust1", since = "1.0.0")]
+impl<T: fmt::Debug> fmt::Debug for Wrapping<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+#[stable(feature = "wrapping_display", since = "1.10.0")]
+impl<T: fmt::Display> fmt::Display for Wrapping<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+#[stable(feature = "wrapping_fmt", since = "1.11.0")]
+impl<T: fmt::Binary> fmt::Binary for Wrapping<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+#[stable(feature = "wrapping_fmt", since = "1.11.0")]
+impl<T: fmt::Octal> fmt::Octal for Wrapping<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+#[stable(feature = "wrapping_fmt", since = "1.11.0")]
+impl<T: fmt::LowerHex> fmt::LowerHex for Wrapping<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+#[stable(feature = "wrapping_fmt", since = "1.11.0")]
+impl<T: fmt::UpperHex> fmt::UpperHex for Wrapping<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+mod wrapping;
+
+// All these modules are technically private and only exposed for coretests:
+pub mod flt2dec;
+pub mod dec2flt;
+pub mod bignum;
+pub mod diy_float;
+
+// `Int` + `SignedInt` implemented for signed integers
+macro_rules! int_impl {
+    ($SelfT:ty, $ActualT:ident, $UnsignedT:ty, $BITS:expr,
+     $add_with_overflow:path,
+     $sub_with_overflow:path,
+     $mul_with_overflow:path) => {
+        /// Returns the smallest value that can be represented by this integer type.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// assert_eq!(i8::min_value(), -128);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub const fn min_value() -> Self {
+            !0 ^ ((!0 as $UnsignedT) >> 1) as Self
+        }
+
+        /// Returns the largest value that can be represented by this integer type.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// assert_eq!(i8::max_value(), 127);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub const fn max_value() -> Self {
+            !Self::min_value()
+        }
+
+        /// Converts a string slice in a given base to an integer.
+        ///
+        /// Leading and trailing whitespace represent an error.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(i32::from_str_radix("A", 16), Ok(10));
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        pub fn from_str_radix(src: &str, radix: u32) -> Result<Self, ParseIntError> {
+            from_str_radix(src, radix)
+        }
+
+        /// Returns the number of ones in the binary representation of `self`.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let n = -0b1000_0000i8;
+        ///
+        /// assert_eq!(n.count_ones(), 1);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn count_ones(self) -> u32 { (self as $UnsignedT).count_ones() }
+
+        /// Returns the number of zeros in the binary representation of `self`.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let n = -0b1000_0000i8;
+        ///
+        /// assert_eq!(n.count_zeros(), 7);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn count_zeros(self) -> u32 {
+            (!self).count_ones()
+        }
+
+        /// Returns the number of leading zeros in the binary representation
+        /// of `self`.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let n = -1i16;
+        ///
+        /// assert_eq!(n.leading_zeros(), 0);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn leading_zeros(self) -> u32 {
+            (self as $UnsignedT).leading_zeros()
+        }
+
+        /// Returns the number of trailing zeros in the binary representation
+        /// of `self`.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let n = -4i8;
+        ///
+        /// assert_eq!(n.trailing_zeros(), 2);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn trailing_zeros(self) -> u32 {
+            (self as $UnsignedT).trailing_zeros()
+        }
+
+        /// Shifts the bits to the left by a specified amount, `n`,
+        /// wrapping the truncated bits to the end of the resulting integer.
+        ///
+        /// Please note this isn't the same operation as `<<`!
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let n = 0x0123456789ABCDEFi64;
+        /// let m = -0x76543210FEDCBA99i64;
+        ///
+        /// assert_eq!(n.rotate_left(32), m);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn rotate_left(self, n: u32) -> Self {
+            (self as $UnsignedT).rotate_left(n) as Self
+        }
+
+        /// Shifts the bits to the right by a specified amount, `n`,
+        /// wrapping the truncated bits to the beginning of the resulting
+        /// integer.
+        ///
+        /// Please note this isn't the same operation as `>>`!
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let n = 0x0123456789ABCDEFi64;
+        /// let m = -0xFEDCBA987654322i64;
+        ///
+        /// assert_eq!(n.rotate_right(4), m);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn rotate_right(self, n: u32) -> Self {
+            (self as $UnsignedT).rotate_right(n) as Self
+        }
+
+        /// Reverses the byte order of the integer.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let n =  0x0123456789ABCDEFi64;
+        /// let m = -0x1032547698BADCFFi64;
+        ///
+        /// assert_eq!(n.swap_bytes(), m);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn swap_bytes(self) -> Self {
+            (self as $UnsignedT).swap_bytes() as Self
+        }
+
+        /// Converts an integer from big endian to the target's endianness.
+        ///
+        /// On big endian this is a no-op. On little endian the bytes are
+        /// swapped.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let n = 0x0123456789ABCDEFi64;
+        ///
+        /// if cfg!(target_endian = "big") {
+        ///     assert_eq!(i64::from_be(n), n)
+        /// } else {
+        ///     assert_eq!(i64::from_be(n), n.swap_bytes())
+        /// }
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn from_be(x: Self) -> Self {
+            if cfg!(target_endian = "big") { x } else { x.swap_bytes() }
+        }
+
+        /// Converts an integer from little endian to the target's endianness.
+        ///
+        /// On little endian this is a no-op. On big endian the bytes are
+        /// swapped.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let n = 0x0123456789ABCDEFi64;
+        ///
+        /// if cfg!(target_endian = "little") {
+        ///     assert_eq!(i64::from_le(n), n)
+        /// } else {
+        ///     assert_eq!(i64::from_le(n), n.swap_bytes())
+        /// }
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn from_le(x: Self) -> Self {
+            if cfg!(target_endian = "little") { x } else { x.swap_bytes() }
+        }
+
+        /// Converts `self` to big endian from the target's endianness.
+        ///
+        /// On big endian this is a no-op. On little endian the bytes are
+        /// swapped.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let n = 0x0123456789ABCDEFi64;
+        ///
+        /// if cfg!(target_endian = "big") {
+        ///     assert_eq!(n.to_be(), n)
+        /// } else {
+        ///     assert_eq!(n.to_be(), n.swap_bytes())
+        /// }
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn to_be(self) -> Self { // or not to be?
+            if cfg!(target_endian = "big") { self } else { self.swap_bytes() }
+        }
+
+        /// Converts `self` to little endian from the target's endianness.
+        ///
+        /// On little endian this is a no-op. On big endian the bytes are
+        /// swapped.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let n = 0x0123456789ABCDEFi64;
+        ///
+        /// if cfg!(target_endian = "little") {
+        ///     assert_eq!(n.to_le(), n)
+        /// } else {
+        ///     assert_eq!(n.to_le(), n.swap_bytes())
+        /// }
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn to_le(self) -> Self {
+            if cfg!(target_endian = "little") { self } else { self.swap_bytes() }
+        }
+
+        /// Checked integer addition. Computes `self + other`, returning `None`
+        /// if overflow occurred.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(7i16.checked_add(32760), Some(32767));
+        /// assert_eq!(8i16.checked_add(32760), None);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn checked_add(self, other: Self) -> Option<Self> {
+            let (a, b) = self.overflowing_add(other);
+            if b {None} else {Some(a)}
+        }
+
+        /// Checked integer subtraction. Computes `self - other`, returning
+        /// `None` if underflow occurred.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!((-127i8).checked_sub(1), Some(-128));
+        /// assert_eq!((-128i8).checked_sub(1), None);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn checked_sub(self, other: Self) -> Option<Self> {
+            let (a, b) = self.overflowing_sub(other);
+            if b {None} else {Some(a)}
+        }
+
+        /// Checked integer multiplication. Computes `self * other`, returning
+        /// `None` if underflow or overflow occurred.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(6i8.checked_mul(21), Some(126));
+        /// assert_eq!(6i8.checked_mul(22), None);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn checked_mul(self, other: Self) -> Option<Self> {
+            let (a, b) = self.overflowing_mul(other);
+            if b {None} else {Some(a)}
+        }
+
+        /// Checked integer division. Computes `self / other`, returning `None`
+        /// if `other == 0` or the operation results in underflow or overflow.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!((-127i8).checked_div(-1), Some(127));
+        /// assert_eq!((-128i8).checked_div(-1), None);
+        /// assert_eq!((1i8).checked_div(0), None);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn checked_div(self, other: Self) -> Option<Self> {
+            if other == 0 || (self == Self::min_value() && other == -1) {
+                None
+            } else {
+                Some(unsafe { intrinsics::unchecked_div(self, other) })
+            }
+        }
+
+        /// Checked integer remainder. Computes `self % other`, returning `None`
+        /// if `other == 0` or the operation results in underflow or overflow.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// use std::i32;
+        ///
+        /// assert_eq!(5i32.checked_rem(2), Some(1));
+        /// assert_eq!(5i32.checked_rem(0), None);
+        /// assert_eq!(i32::MIN.checked_rem(-1), None);
+        /// ```
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        #[inline]
+        pub fn checked_rem(self, other: Self) -> Option<Self> {
+            if other == 0 || (self == Self::min_value() && other == -1) {
+                None
+            } else {
+                Some(unsafe { intrinsics::unchecked_rem(self, other) })
+            }
+        }
+
+        /// Checked negation. Computes `-self`, returning `None` if `self ==
+        /// MIN`.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// use std::i32;
+        ///
+        /// assert_eq!(5i32.checked_neg(), Some(-5));
+        /// assert_eq!(i32::MIN.checked_neg(), None);
+        /// ```
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        #[inline]
+        pub fn checked_neg(self) -> Option<Self> {
+            let (a, b) = self.overflowing_neg();
+            if b {None} else {Some(a)}
+        }
+
+        /// Checked shift left. Computes `self << rhs`, returning `None`
+        /// if `rhs` is larger than or equal to the number of bits in `self`.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(0x10i32.checked_shl(4), Some(0x100));
+        /// assert_eq!(0x10i32.checked_shl(33), None);
+        /// ```
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        #[inline]
+        pub fn checked_shl(self, rhs: u32) -> Option<Self> {
+            let (a, b) = self.overflowing_shl(rhs);
+            if b {None} else {Some(a)}
+        }
+
+        /// Checked shift right. Computes `self >> rhs`, returning `None`
+        /// if `rhs` is larger than or equal to the number of bits in `self`.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(0x10i32.checked_shr(4), Some(0x1));
+        /// assert_eq!(0x10i32.checked_shr(33), None);
+        /// ```
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        #[inline]
+        pub fn checked_shr(self, rhs: u32) -> Option<Self> {
+            let (a, b) = self.overflowing_shr(rhs);
+            if b {None} else {Some(a)}
+        }
+
+        /// Checked absolute value. Computes `self.abs()`, returning `None` if
+        /// `self == MIN`.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// use std::i32;
+        ///
+        /// assert_eq!((-5i32).checked_abs(), Some(5));
+        /// assert_eq!(i32::MIN.checked_abs(), None);
+        /// ```
+        #[stable(feature = "no_panic_abs", since = "1.13.0")]
+        #[inline]
+        pub fn checked_abs(self) -> Option<Self> {
+            if self.is_negative() {
+                self.checked_neg()
+            } else {
+                Some(self)
+            }
+        }
+
+        /// Saturating integer addition. Computes `self + other`, saturating at
+        /// the numeric bounds instead of overflowing.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(100i8.saturating_add(1), 101);
+        /// assert_eq!(100i8.saturating_add(127), 127);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn saturating_add(self, other: Self) -> Self {
+            match self.checked_add(other) {
+                Some(x) => x,
+                None if other >= 0 => Self::max_value(),
+                None => Self::min_value(),
+            }
+        }
+
+        /// Saturating integer subtraction. Computes `self - other`, saturating
+        /// at the numeric bounds instead of overflowing.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(100i8.saturating_sub(127), -27);
+        /// assert_eq!((-100i8).saturating_sub(127), -128);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn saturating_sub(self, other: Self) -> Self {
+            match self.checked_sub(other) {
+                Some(x) => x,
+                None if other >= 0 => Self::min_value(),
+                None => Self::max_value(),
+            }
+        }
+
+        /// Saturating integer multiplication. Computes `self * other`,
+        /// saturating at the numeric bounds instead of overflowing.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// use std::i32;
+        ///
+        /// assert_eq!(100i32.saturating_mul(127), 12700);
+        /// assert_eq!((1i32 << 23).saturating_mul(1 << 23), i32::MAX);
+        /// assert_eq!((-1i32 << 23).saturating_mul(1 << 23), i32::MIN);
+        /// ```
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        #[inline]
+        pub fn saturating_mul(self, other: Self) -> Self {
+            self.checked_mul(other).unwrap_or_else(|| {
+                if (self < 0 && other < 0) || (self > 0 && other > 0) {
+                    Self::max_value()
+                } else {
+                    Self::min_value()
+                }
+            })
+        }
+
+        /// Wrapping (modular) addition. Computes `self + other`,
+        /// wrapping around at the boundary of the type.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(100i8.wrapping_add(27), 127);
+        /// assert_eq!(100i8.wrapping_add(127), -29);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn wrapping_add(self, rhs: Self) -> Self {
+            unsafe {
+                intrinsics::overflowing_add(self, rhs)
+            }
+        }
+
+        /// Wrapping (modular) subtraction. Computes `self - other`,
+        /// wrapping around at the boundary of the type.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(0i8.wrapping_sub(127), -127);
+        /// assert_eq!((-2i8).wrapping_sub(127), 127);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn wrapping_sub(self, rhs: Self) -> Self {
+            unsafe {
+                intrinsics::overflowing_sub(self, rhs)
+            }
+        }
+
+        /// Wrapping (modular) multiplication. Computes `self *
+        /// other`, wrapping around at the boundary of the type.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(10i8.wrapping_mul(12), 120);
+        /// assert_eq!(11i8.wrapping_mul(12), -124);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn wrapping_mul(self, rhs: Self) -> Self {
+            unsafe {
+                intrinsics::overflowing_mul(self, rhs)
+            }
+        }
+
+        /// Wrapping (modular) division. Computes `self / other`,
+        /// wrapping around at the boundary of the type.
+        ///
+        /// The only case where such wrapping can occur is when one
+        /// divides `MIN / -1` on a signed type (where `MIN` is the
+        /// negative minimal value for the type); this is equivalent
+        /// to `-MIN`, a positive value that is too large to represent
+        /// in the type. In such a case, this function returns `MIN`
+        /// itself.
+        ///
+        /// # Panics
+        ///
+        /// This function will panic if `rhs` is 0.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(100u8.wrapping_div(10), 10);
+        /// assert_eq!((-128i8).wrapping_div(-1), -128);
+        /// ```
+        #[stable(feature = "num_wrapping", since = "1.2.0")]
+        #[inline]
+        pub fn wrapping_div(self, rhs: Self) -> Self {
+            self.overflowing_div(rhs).0
+        }
+
+        /// Wrapping (modular) remainder. Computes `self % other`,
+        /// wrapping around at the boundary of the type.
+        ///
+        /// Such wrap-around never actually occurs mathematically;
+        /// implementation artifacts make `x % y` invalid for `MIN /
+        /// -1` on a signed type (where `MIN` is the negative
+        /// minimal value). In such a case, this function returns `0`.
+        ///
+        /// # Panics
+        ///
+        /// This function will panic if `rhs` is 0.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(100i8.wrapping_rem(10), 0);
+        /// assert_eq!((-128i8).wrapping_rem(-1), 0);
+        /// ```
+        #[stable(feature = "num_wrapping", since = "1.2.0")]
+        #[inline]
+        pub fn wrapping_rem(self, rhs: Self) -> Self {
+            self.overflowing_rem(rhs).0
+        }
+
+        /// Wrapping (modular) negation. Computes `-self`,
+        /// wrapping around at the boundary of the type.
+        ///
+        /// The only case where such wrapping can occur is when one
+        /// negates `MIN` on a signed type (where `MIN` is the
+        /// negative minimal value for the type); this is a positive
+        /// value that is too large to represent in the type. In such
+        /// a case, this function returns `MIN` itself.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(100i8.wrapping_neg(), -100);
+        /// assert_eq!((-128i8).wrapping_neg(), -128);
+        /// ```
+        #[stable(feature = "num_wrapping", since = "1.2.0")]
+        #[inline]
+        pub fn wrapping_neg(self) -> Self {
+            self.overflowing_neg().0
+        }
+
+        /// Panic-free bitwise shift-left; yields `self << mask(rhs)`,
+        /// where `mask` removes any high-order bits of `rhs` that
+        /// would cause the shift to exceed the bitwidth of the type.
+        ///
+        /// Note that this is *not* the same as a rotate-left; the
+        /// RHS of a wrapping shift-left is restricted to the range
+        /// of the type, rather than the bits shifted out of the LHS
+        /// being returned to the other end. The primitive integer
+        /// types all implement a `rotate_left` function, which may
+        /// be what you want instead.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!((-1i8).wrapping_shl(7), -128);
+        /// assert_eq!((-1i8).wrapping_shl(8), -1);
+        /// ```
+        #[stable(feature = "num_wrapping", since = "1.2.0")]
+        #[inline]
+        pub fn wrapping_shl(self, rhs: u32) -> Self {
+            unsafe {
+                intrinsics::unchecked_shl(self, (rhs & ($BITS - 1)) as $SelfT)
+            }
+        }
+
+        /// Panic-free bitwise shift-right; yields `self >> mask(rhs)`,
+        /// where `mask` removes any high-order bits of `rhs` that
+        /// would cause the shift to exceed the bitwidth of the type.
+        ///
+        /// Note that this is *not* the same as a rotate-right; the
+        /// RHS of a wrapping shift-right is restricted to the range
+        /// of the type, rather than the bits shifted out of the LHS
+        /// being returned to the other end. The primitive integer
+        /// types all implement a `rotate_right` function, which may
+        /// be what you want instead.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!((-128i8).wrapping_shr(7), -1);
+        /// assert_eq!((-128i8).wrapping_shr(8), -128);
+        /// ```
+        #[stable(feature = "num_wrapping", since = "1.2.0")]
+        #[inline]
+        pub fn wrapping_shr(self, rhs: u32) -> Self {
+            unsafe {
+                intrinsics::unchecked_shr(self, (rhs & ($BITS - 1)) as $SelfT)
+            }
+        }
+
+        /// Wrapping (modular) absolute value. Computes `self.abs()`,
+        /// wrapping around at the boundary of the type.
+        ///
+        /// The only case where such wrapping can occur is when one takes
+        /// the absolute value of the negative minimal value for the type
+        /// this is a positive value that is too large to represent in the
+        /// type. In such a case, this function returns `MIN` itself.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(100i8.wrapping_abs(), 100);
+        /// assert_eq!((-100i8).wrapping_abs(), 100);
+        /// assert_eq!((-128i8).wrapping_abs(), -128);
+        /// assert_eq!((-128i8).wrapping_abs() as u8, 128);
+        /// ```
+        #[stable(feature = "no_panic_abs", since = "1.13.0")]
+        #[inline]
+        pub fn wrapping_abs(self) -> Self {
+            if self.is_negative() {
+                self.wrapping_neg()
+            } else {
+                self
+            }
+        }
+
+        /// Calculates `self` + `rhs`
+        ///
+        /// Returns a tuple of the addition along with a boolean indicating
+        /// whether an arithmetic overflow would occur. If an overflow would
+        /// have occurred then the wrapped value is returned.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage
+        ///
+        /// ```
+        /// use std::i32;
+        ///
+        /// assert_eq!(5i32.overflowing_add(2), (7, false));
+        /// assert_eq!(i32::MAX.overflowing_add(1), (i32::MIN, true));
+        /// ```
+        #[inline]
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        pub fn overflowing_add(self, rhs: Self) -> (Self, bool) {
+            unsafe {
+                let (a, b) = $add_with_overflow(self as $ActualT,
+                                                rhs as $ActualT);
+                (a as Self, b)
+            }
+        }
+
+        /// Calculates `self` - `rhs`
+        ///
+        /// Returns a tuple of the subtraction along with a boolean indicating
+        /// whether an arithmetic overflow would occur. If an overflow would
+        /// have occurred then the wrapped value is returned.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage
+        ///
+        /// ```
+        /// use std::i32;
+        ///
+        /// assert_eq!(5i32.overflowing_sub(2), (3, false));
+        /// assert_eq!(i32::MIN.overflowing_sub(1), (i32::MAX, true));
+        /// ```
+        #[inline]
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        pub fn overflowing_sub(self, rhs: Self) -> (Self, bool) {
+            unsafe {
+                let (a, b) = $sub_with_overflow(self as $ActualT,
+                                                rhs as $ActualT);
+                (a as Self, b)
+            }
+        }
+
+        /// Calculates the multiplication of `self` and `rhs`.
+        ///
+        /// Returns a tuple of the multiplication along with a boolean
+        /// indicating whether an arithmetic overflow would occur. If an
+        /// overflow would have occurred then the wrapped value is returned.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage
+        ///
+        /// ```
+        /// assert_eq!(5i32.overflowing_mul(2), (10, false));
+        /// assert_eq!(1_000_000_000i32.overflowing_mul(10), (1410065408, true));
+        /// ```
+        #[inline]
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        pub fn overflowing_mul(self, rhs: Self) -> (Self, bool) {
+            unsafe {
+                let (a, b) = $mul_with_overflow(self as $ActualT,
+                                                rhs as $ActualT);
+                (a as Self, b)
+            }
+        }
+
+        /// Calculates the divisor when `self` is divided by `rhs`.
+        ///
+        /// Returns a tuple of the divisor along with a boolean indicating
+        /// whether an arithmetic overflow would occur. If an overflow would
+        /// occur then self is returned.
+        ///
+        /// # Panics
+        ///
+        /// This function will panic if `rhs` is 0.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage
+        ///
+        /// ```
+        /// use std::i32;
+        ///
+        /// assert_eq!(5i32.overflowing_div(2), (2, false));
+        /// assert_eq!(i32::MIN.overflowing_div(-1), (i32::MIN, true));
+        /// ```
+        #[inline]
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        pub fn overflowing_div(self, rhs: Self) -> (Self, bool) {
+            if self == Self::min_value() && rhs == -1 {
+                (self, true)
+            } else {
+                (self / rhs, false)
+            }
+        }
+
+        /// Calculates the remainder when `self` is divided by `rhs`.
+        ///
+        /// Returns a tuple of the remainder after dividing along with a boolean
+        /// indicating whether an arithmetic overflow would occur. If an
+        /// overflow would occur then 0 is returned.
+        ///
+        /// # Panics
+        ///
+        /// This function will panic if `rhs` is 0.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage
+        ///
+        /// ```
+        /// use std::i32;
+        ///
+        /// assert_eq!(5i32.overflowing_rem(2), (1, false));
+        /// assert_eq!(i32::MIN.overflowing_rem(-1), (0, true));
+        /// ```
+        #[inline]
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        pub fn overflowing_rem(self, rhs: Self) -> (Self, bool) {
+            if self == Self::min_value() && rhs == -1 {
+                (0, true)
+            } else {
+                (self % rhs, false)
+            }
+        }
+
+        /// Negates self, overflowing if this is equal to the minimum value.
+        ///
+        /// Returns a tuple of the negated version of self along with a boolean
+        /// indicating whether an overflow happened. If `self` is the minimum
+        /// value (e.g. `i32::MIN` for values of type `i32`), then the minimum
+        /// value will be returned again and `true` will be returned for an
+        /// overflow happening.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage
+        ///
+        /// ```
+        /// use std::i32;
+        ///
+        /// assert_eq!(2i32.overflowing_neg(), (-2, false));
+        /// assert_eq!(i32::MIN.overflowing_neg(), (i32::MIN, true));
+        /// ```
+        #[inline]
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        pub fn overflowing_neg(self) -> (Self, bool) {
+            if self == Self::min_value() {
+                (Self::min_value(), true)
+            } else {
+                (-self, false)
+            }
+        }
+
+        /// Shifts self left by `rhs` bits.
+        ///
+        /// Returns a tuple of the shifted version of self along with a boolean
+        /// indicating whether the shift value was larger than or equal to the
+        /// number of bits. If the shift value is too large, then value is
+        /// masked (N-1) where N is the number of bits, and this value is then
+        /// used to perform the shift.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage
+        ///
+        /// ```
+        /// assert_eq!(0x10i32.overflowing_shl(4), (0x100, false));
+        /// assert_eq!(0x10i32.overflowing_shl(36), (0x100, true));
+        /// ```
+        #[inline]
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        pub fn overflowing_shl(self, rhs: u32) -> (Self, bool) {
+            (self.wrapping_shl(rhs), (rhs > ($BITS - 1)))
+        }
+
+        /// Shifts self right by `rhs` bits.
+        ///
+        /// Returns a tuple of the shifted version of self along with a boolean
+        /// indicating whether the shift value was larger than or equal to the
+        /// number of bits. If the shift value is too large, then value is
+        /// masked (N-1) where N is the number of bits, and this value is then
+        /// used to perform the shift.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage
+        ///
+        /// ```
+        /// assert_eq!(0x10i32.overflowing_shr(4), (0x1, false));
+        /// assert_eq!(0x10i32.overflowing_shr(36), (0x1, true));
+        /// ```
+        #[inline]
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        pub fn overflowing_shr(self, rhs: u32) -> (Self, bool) {
+            (self.wrapping_shr(rhs), (rhs > ($BITS - 1)))
+        }
+
+        /// Computes the absolute value of `self`.
+        ///
+        /// Returns a tuple of the absolute version of self along with a
+        /// boolean indicating whether an overflow happened. If self is the
+        /// minimum value (e.g. i32::MIN for values of type i32), then the
+        /// minimum value will be returned again and true will be returned for
+        /// an overflow happening.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(10i8.overflowing_abs(), (10,false));
+        /// assert_eq!((-10i8).overflowing_abs(), (10,false));
+        /// assert_eq!((-128i8).overflowing_abs(), (-128,true));
+        /// ```
+        #[stable(feature = "no_panic_abs", since = "1.13.0")]
+        #[inline]
+        pub fn overflowing_abs(self) -> (Self, bool) {
+            if self.is_negative() {
+                self.overflowing_neg()
+            } else {
+                (self, false)
+            }
+        }
+
+        /// Raises self to the power of `exp`, using exponentiation by squaring.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let x: i32 = 2; // or any other integer type
+        ///
+        /// assert_eq!(x.pow(4), 16);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        #[rustc_inherit_overflow_checks]
+        pub fn pow(self, mut exp: u32) -> Self {
+            let mut base = self;
+            let mut acc = 1;
+
+            while exp > 1 {
+                if (exp & 1) == 1 {
+                    acc = acc * base;
+                }
+                exp /= 2;
+                base = base * base;
+            }
+
+            // Deal with the final bit of the exponent separately, since
+            // squaring the base afterwards is not necessary and may cause a
+            // needless overflow.
+            if exp == 1 {
                 acc = acc * base;
             }
-            base = base * base;
-            exp = exp >> 1;
+
+            acc
         }
-        acc
-    }
-}
 
-/// Numbers which have upper and lower bounds
-pub trait Bounded {
-    // FIXME (#5527): These should be associated constants
-    /// returns the smallest finite number this type can represent
-    fn min_value() -> Self;
-    /// returns the largest finite number this type can represent
-    fn max_value() -> Self;
-}
-
-macro_rules! bounded_impl(
-    ($t:ty, $min:expr, $max:expr) => {
-        impl Bounded for $t {
-            #[inline]
-            fn min_value() -> $t { $min }
-
-            #[inline]
-            fn max_value() -> $t { $max }
-        }
-    }
-)
-
-bounded_impl!(uint, uint::MIN, uint::MAX)
-bounded_impl!(u8, u8::MIN, u8::MAX)
-bounded_impl!(u16, u16::MIN, u16::MAX)
-bounded_impl!(u32, u32::MIN, u32::MAX)
-bounded_impl!(u64, u64::MIN, u64::MAX)
-
-bounded_impl!(int, int::MIN, int::MAX)
-bounded_impl!(i8, i8::MIN, i8::MAX)
-bounded_impl!(i16, i16::MIN, i16::MAX)
-bounded_impl!(i32, i32::MIN, i32::MAX)
-bounded_impl!(i64, i64::MIN, i64::MAX)
-
-bounded_impl!(f32, f32::MIN_VALUE, f32::MAX_VALUE)
-bounded_impl!(f64, f64::MIN_VALUE, f64::MAX_VALUE)
-
-/// Specifies the available operations common to all of Rust's core numeric primitives.
-/// These may not always make sense from a purely mathematical point of view, but
-/// may be useful for systems programming.
-pub trait Primitive: Copy
-                   + Clone
-                   + Num
-                   + NumCast
-                   + PartialOrd
-                   + Bounded {}
-
-trait_impl!(Primitive for uint u8 u16 u32 u64 int i8 i16 i32 i64 f32 f64)
-
-/// A primitive signed or unsigned integer equipped with various bitwise
-/// operators, bit counting methods, and endian conversion functions.
-pub trait Int: Primitive
-             + CheckedAdd
-             + CheckedSub
-             + CheckedMul
-             + CheckedDiv
-             + Bounded
-             + Not<Self>
-             + BitAnd<Self,Self>
-             + BitOr<Self,Self>
-             + BitXor<Self,Self>
-             + Shl<Self,Self>
-             + Shr<Self,Self> {
-    /// Returns the number of ones in the binary representation of the integer.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let n = 0b01001100u8;
-    ///
-    /// assert_eq!(n.count_ones(), 3);
-    /// ```
-    fn count_ones(self) -> Self;
-
-    /// Returns the number of zeros in the binary representation of the integer.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let n = 0b01001100u8;
-    ///
-    /// assert_eq!(n.count_zeros(), 5);
-    /// ```
-    #[inline]
-    fn count_zeros(self) -> Self {
-        (!self).count_ones()
-    }
-
-    /// Returns the number of leading zeros in the in the binary representation
-    /// of the integer.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let n = 0b0101000u16;
-    ///
-    /// assert_eq!(n.leading_zeros(), 10);
-    /// ```
-    fn leading_zeros(self) -> Self;
-
-    /// Returns the number of trailing zeros in the in the binary representation
-    /// of the integer.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let n = 0b0101000u16;
-    ///
-    /// assert_eq!(n.trailing_zeros(), 3);
-    /// ```
-    fn trailing_zeros(self) -> Self;
-
-    /// Shifts the bits to the left by a specified amount amount, `n`, wrapping
-    /// the truncated bits to the end of the resulting integer.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let n = 0x0123456789ABCDEFu64;
-    /// let m = 0x3456789ABCDEF012u64;
-    ///
-    /// assert_eq!(n.rotate_left(12), m);
-    /// ```
-    fn rotate_left(self, n: uint) -> Self;
-
-    /// Shifts the bits to the right by a specified amount amount, `n`, wrapping
-    /// the truncated bits to the beginning of the resulting integer.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let n = 0x0123456789ABCDEFu64;
-    /// let m = 0xDEF0123456789ABCu64;
-    ///
-    /// assert_eq!(n.rotate_right(12), m);
-    /// ```
-    fn rotate_right(self, n: uint) -> Self;
-
-    /// Reverses the byte order of the integer.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let n = 0x0123456789ABCDEFu64;
-    /// let m = 0xEFCDAB8967452301u64;
-    ///
-    /// assert_eq!(n.swap_bytes(), m);
-    /// ```
-    fn swap_bytes(self) -> Self;
-
-    /// Convert a integer from big endian to the target's endianness.
-    ///
-    /// On big endian this is a no-op. On little endian the bytes are swapped.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let n = 0x0123456789ABCDEFu64;
-    ///
-    /// if cfg!(target_endian = "big") {
-    ///     assert_eq!(Int::from_be(n), n)
-    /// } else {
-    ///     assert_eq!(Int::from_be(n), n.swap_bytes())
-    /// }
-    /// ```
-    #[inline]
-    fn from_be(x: Self) -> Self {
-        if cfg!(target_endian = "big") { x } else { x.swap_bytes() }
-    }
-
-    /// Convert a integer from little endian to the target's endianness.
-    ///
-    /// On little endian this is a no-op. On big endian the bytes are swapped.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let n = 0x0123456789ABCDEFu64;
-    ///
-    /// if cfg!(target_endian = "little") {
-    ///     assert_eq!(Int::from_le(n), n)
-    /// } else {
-    ///     assert_eq!(Int::from_le(n), n.swap_bytes())
-    /// }
-    /// ```
-    #[inline]
-    fn from_le(x: Self) -> Self {
-        if cfg!(target_endian = "little") { x } else { x.swap_bytes() }
-    }
-
-    /// Convert the integer to big endian from the target's endianness.
-    ///
-    /// On big endian this is a no-op. On little endian the bytes are swapped.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let n = 0x0123456789ABCDEFu64;
-    ///
-    /// if cfg!(target_endian = "big") {
-    ///     assert_eq!(n.to_be(), n)
-    /// } else {
-    ///     assert_eq!(n.to_be(), n.swap_bytes())
-    /// }
-    /// ```
-    #[inline]
-    fn to_be(self) -> Self { // or not to be?
-        if cfg!(target_endian = "big") { self } else { self.swap_bytes() }
-    }
-
-    /// Convert the integer to little endian from the target's endianness.
-    ///
-    /// On little endian this is a no-op. On big endian the bytes are swapped.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let n = 0x0123456789ABCDEFu64;
-    ///
-    /// if cfg!(target_endian = "little") {
-    ///     assert_eq!(n.to_le(), n)
-    /// } else {
-    ///     assert_eq!(n.to_le(), n.swap_bytes())
-    /// }
-    /// ```
-    #[inline]
-    fn to_le(self) -> Self {
-        if cfg!(target_endian = "little") { self } else { self.swap_bytes() }
-    }
-}
-
-macro_rules! int_impl {
-    ($T:ty, $BITS:expr, $ctpop:path, $ctlz:path, $cttz:path, $bswap:path) => {
-        impl Int for $T {
-            #[inline]
-            fn count_ones(self) -> $T { unsafe { $ctpop(self) } }
-
-            #[inline]
-            fn leading_zeros(self) -> $T { unsafe { $ctlz(self) } }
-
-            #[inline]
-            fn trailing_zeros(self) -> $T { unsafe { $cttz(self) } }
-
-            #[inline]
-            fn rotate_left(self, n: uint) -> $T {
-                // Protect against undefined behaviour for over-long bit shifts
-                let n = n % $BITS;
-                (self << n) | (self >> (($BITS - n) % $BITS))
-            }
-
-            #[inline]
-            fn rotate_right(self, n: uint) -> $T {
-                // Protect against undefined behaviour for over-long bit shifts
-                let n = n % $BITS;
-                (self >> n) | (self << (($BITS - n) % $BITS))
-            }
-
-            #[inline]
-            fn swap_bytes(self) -> $T { unsafe { $bswap(self) } }
-        }
-    }
-}
-
-/// Swapping a single byte is a no-op. This is marked as `unsafe` for
-/// consistency with the other `bswap` intrinsics.
-unsafe fn bswap8(x: u8) -> u8 { x }
-
-int_impl!(u8, 8,
-    intrinsics::ctpop8,
-    intrinsics::ctlz8,
-    intrinsics::cttz8,
-    bswap8)
-
-int_impl!(u16, 16,
-    intrinsics::ctpop16,
-    intrinsics::ctlz16,
-    intrinsics::cttz16,
-    intrinsics::bswap16)
-
-int_impl!(u32, 32,
-    intrinsics::ctpop32,
-    intrinsics::ctlz32,
-    intrinsics::cttz32,
-    intrinsics::bswap32)
-
-int_impl!(u64, 64,
-    intrinsics::ctpop64,
-    intrinsics::ctlz64,
-    intrinsics::cttz64,
-    intrinsics::bswap64)
-
-macro_rules! int_cast_impl {
-    ($T:ty, $U:ty) => {
-        impl Int for $T {
-            #[inline]
-            fn count_ones(self) -> $T { (self as $U).count_ones() as $T }
-
-            #[inline]
-            fn leading_zeros(self) -> $T { (self as $U).leading_zeros() as $T }
-
-            #[inline]
-            fn trailing_zeros(self) -> $T { (self as $U).trailing_zeros() as $T }
-
-            #[inline]
-            fn rotate_left(self, n: uint) -> $T { (self as $U).rotate_left(n) as $T }
-
-            #[inline]
-            fn rotate_right(self, n: uint) -> $T { (self as $U).rotate_right(n) as $T }
-
-            #[inline]
-            fn swap_bytes(self) -> $T { (self as $U).swap_bytes() as $T }
-        }
-    }
-}
-
-int_cast_impl!(i8, u8)
-int_cast_impl!(i16, u16)
-int_cast_impl!(i32, u32)
-int_cast_impl!(i64, u64)
-
-#[cfg(target_word_size = "32")] int_cast_impl!(uint, u32)
-#[cfg(target_word_size = "64")] int_cast_impl!(uint, u64)
-#[cfg(target_word_size = "32")] int_cast_impl!(int, u32)
-#[cfg(target_word_size = "64")] int_cast_impl!(int, u64)
-
-/// Returns the smallest power of 2 greater than or equal to `n`.
-#[inline]
-pub fn next_power_of_two<T: Unsigned + Int>(n: T) -> T {
-    let halfbits: T = cast(size_of::<T>() * 4).unwrap();
-    let mut tmp: T = n - one();
-    let mut shift: T = one();
-    while shift <= halfbits {
-        tmp = tmp | (tmp >> shift);
-        shift = shift << one();
-    }
-    tmp + one()
-}
-
-// Returns `true` iff `n == 2^k` for some k.
-#[inline]
-pub fn is_power_of_two<T: Unsigned + Int>(n: T) -> bool {
-    (n - one()) & n == zero()
-}
-
-/// Returns the smallest power of 2 greater than or equal to `n`. If the next
-/// power of two is greater than the type's maximum value, `None` is returned,
-/// otherwise the power of 2 is wrapped in `Some`.
-#[inline]
-pub fn checked_next_power_of_two<T: Unsigned + Int>(n: T) -> Option<T> {
-    let halfbits: T = cast(size_of::<T>() * 4).unwrap();
-    let mut tmp: T = n - one();
-    let mut shift: T = one();
-    while shift <= halfbits {
-        tmp = tmp | (tmp >> shift);
-        shift = shift << one();
-    }
-    tmp.checked_add(&one())
-}
-
-/// A generic trait for converting a value to a number.
-pub trait ToPrimitive {
-    /// Converts the value of `self` to an `int`.
-    #[inline]
-    fn to_int(&self) -> Option<int> {
-        self.to_i64().and_then(|x| x.to_int())
-    }
-
-    /// Converts the value of `self` to an `i8`.
-    #[inline]
-    fn to_i8(&self) -> Option<i8> {
-        self.to_i64().and_then(|x| x.to_i8())
-    }
-
-    /// Converts the value of `self` to an `i16`.
-    #[inline]
-    fn to_i16(&self) -> Option<i16> {
-        self.to_i64().and_then(|x| x.to_i16())
-    }
-
-    /// Converts the value of `self` to an `i32`.
-    #[inline]
-    fn to_i32(&self) -> Option<i32> {
-        self.to_i64().and_then(|x| x.to_i32())
-    }
-
-    /// Converts the value of `self` to an `i64`.
-    fn to_i64(&self) -> Option<i64>;
-
-    /// Converts the value of `self` to an `uint`.
-    #[inline]
-    fn to_uint(&self) -> Option<uint> {
-        self.to_u64().and_then(|x| x.to_uint())
-    }
-
-    /// Converts the value of `self` to an `u8`.
-    #[inline]
-    fn to_u8(&self) -> Option<u8> {
-        self.to_u64().and_then(|x| x.to_u8())
-    }
-
-    /// Converts the value of `self` to an `u16`.
-    #[inline]
-    fn to_u16(&self) -> Option<u16> {
-        self.to_u64().and_then(|x| x.to_u16())
-    }
-
-    /// Converts the value of `self` to an `u32`.
-    #[inline]
-    fn to_u32(&self) -> Option<u32> {
-        self.to_u64().and_then(|x| x.to_u32())
-    }
-
-    /// Converts the value of `self` to an `u64`.
-    #[inline]
-    fn to_u64(&self) -> Option<u64>;
-
-    /// Converts the value of `self` to an `f32`.
-    #[inline]
-    fn to_f32(&self) -> Option<f32> {
-        self.to_f64().and_then(|x| x.to_f32())
-    }
-
-    /// Converts the value of `self` to an `f64`.
-    #[inline]
-    fn to_f64(&self) -> Option<f64> {
-        self.to_i64().and_then(|x| x.to_f64())
-    }
-}
-
-macro_rules! impl_to_primitive_int_to_int(
-    ($SrcT:ty, $DstT:ty, $slf:expr) => (
-        {
-            if size_of::<$SrcT>() <= size_of::<$DstT>() {
-                Some($slf as $DstT)
+        /// Computes the absolute value of `self`.
+        ///
+        /// # Overflow behavior
+        ///
+        /// The absolute value of `i32::min_value()` cannot be represented as an
+        /// `i32`, and attempting to calculate it will cause an overflow. This
+        /// means that code in debug mode will trigger a panic on this case and
+        /// optimized code will return `i32::min_value()` without a panic.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(10i8.abs(), 10);
+        /// assert_eq!((-10i8).abs(), 10);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        #[rustc_inherit_overflow_checks]
+        pub fn abs(self) -> Self {
+            if self.is_negative() {
+                // Note that the #[inline] above means that the overflow
+                // semantics of this negation depend on the crate we're being
+                // inlined into.
+                -self
             } else {
-                let n = $slf as i64;
-                let min_value: $DstT = Bounded::min_value();
-                let max_value: $DstT = Bounded::max_value();
-                if min_value as i64 <= n && n <= max_value as i64 {
-                    Some($slf as $DstT)
+                self
+            }
+        }
+
+        /// Returns a number representing sign of `self`.
+        ///
+        /// - `0` if the number is zero
+        /// - `1` if the number is positive
+        /// - `-1` if the number is negative
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(10i8.signum(), 1);
+        /// assert_eq!(0i8.signum(), 0);
+        /// assert_eq!((-10i8).signum(), -1);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn signum(self) -> Self {
+            match self {
+                n if n > 0 =>  1,
+                0          =>  0,
+                _          => -1,
+            }
+        }
+
+        /// Returns `true` if `self` is positive and `false` if the number
+        /// is zero or negative.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert!(10i8.is_positive());
+        /// assert!(!(-10i8).is_positive());
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn is_positive(self) -> bool { self > 0 }
+
+        /// Returns `true` if `self` is negative and `false` if the number
+        /// is zero or positive.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert!((-10i8).is_negative());
+        /// assert!(!10i8.is_negative());
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn is_negative(self) -> bool { self < 0 }
+    }
+}
+
+#[lang = "i8"]
+impl i8 {
+    int_impl! { i8, i8, u8, 8,
+        intrinsics::add_with_overflow,
+        intrinsics::sub_with_overflow,
+        intrinsics::mul_with_overflow }
+}
+
+#[lang = "i16"]
+impl i16 {
+    int_impl! { i16, i16, u16, 16,
+        intrinsics::add_with_overflow,
+        intrinsics::sub_with_overflow,
+        intrinsics::mul_with_overflow }
+}
+
+#[lang = "i32"]
+impl i32 {
+    int_impl! { i32, i32, u32, 32,
+        intrinsics::add_with_overflow,
+        intrinsics::sub_with_overflow,
+        intrinsics::mul_with_overflow }
+}
+
+#[lang = "i64"]
+impl i64 {
+    int_impl! { i64, i64, u64, 64,
+        intrinsics::add_with_overflow,
+        intrinsics::sub_with_overflow,
+        intrinsics::mul_with_overflow }
+}
+
+#[lang = "i128"]
+impl i128 {
+    int_impl! { i128, i128, u128, 128,
+        intrinsics::add_with_overflow,
+        intrinsics::sub_with_overflow,
+        intrinsics::mul_with_overflow }
+}
+
+#[cfg(target_pointer_width = "16")]
+#[lang = "isize"]
+impl isize {
+    int_impl! { isize, i16, u16, 16,
+        intrinsics::add_with_overflow,
+        intrinsics::sub_with_overflow,
+        intrinsics::mul_with_overflow }
+}
+
+#[cfg(target_pointer_width = "32")]
+#[lang = "isize"]
+impl isize {
+    int_impl! { isize, i32, u32, 32,
+        intrinsics::add_with_overflow,
+        intrinsics::sub_with_overflow,
+        intrinsics::mul_with_overflow }
+}
+
+#[cfg(target_pointer_width = "64")]
+#[lang = "isize"]
+impl isize {
+    int_impl! { isize, i64, u64, 64,
+        intrinsics::add_with_overflow,
+        intrinsics::sub_with_overflow,
+        intrinsics::mul_with_overflow }
+}
+
+// `Int` + `UnsignedInt` implemented for unsigned integers
+macro_rules! uint_impl {
+    ($SelfT:ty, $ActualT:ty, $BITS:expr,
+     $ctpop:path,
+     $ctlz:path,
+     $ctlz_nonzero:path,
+     $cttz:path,
+     $bswap:path,
+     $add_with_overflow:path,
+     $sub_with_overflow:path,
+     $mul_with_overflow:path) => {
+        /// Returns the smallest value that can be represented by this integer type.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// assert_eq!(u8::min_value(), 0);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub const fn min_value() -> Self { 0 }
+
+        /// Returns the largest value that can be represented by this integer type.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// assert_eq!(u8::max_value(), 255);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub const fn max_value() -> Self { !0 }
+
+        /// Converts a string slice in a given base to an integer.
+        ///
+        /// Leading and trailing whitespace represent an error.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(u32::from_str_radix("A", 16), Ok(10));
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        pub fn from_str_radix(src: &str, radix: u32) -> Result<Self, ParseIntError> {
+            from_str_radix(src, radix)
+        }
+
+        /// Returns the number of ones in the binary representation of `self`.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let n = 0b01001100u8;
+        ///
+        /// assert_eq!(n.count_ones(), 3);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn count_ones(self) -> u32 {
+            unsafe { $ctpop(self as $ActualT) as u32 }
+        }
+
+        /// Returns the number of zeros in the binary representation of `self`.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let n = 0b01001100u8;
+        ///
+        /// assert_eq!(n.count_zeros(), 5);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn count_zeros(self) -> u32 {
+            (!self).count_ones()
+        }
+
+        /// Returns the number of leading zeros in the binary representation
+        /// of `self`.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let n = 0b0101000u16;
+        ///
+        /// assert_eq!(n.leading_zeros(), 10);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn leading_zeros(self) -> u32 {
+            unsafe { $ctlz(self as $ActualT) as u32 }
+        }
+
+        /// Returns the number of trailing zeros in the binary representation
+        /// of `self`.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let n = 0b0101000u16;
+        ///
+        /// assert_eq!(n.trailing_zeros(), 3);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn trailing_zeros(self) -> u32 {
+            // As of LLVM 3.6 the codegen for the zero-safe cttz8 intrinsic
+            // emits two conditional moves on x86_64. By promoting the value to
+            // u16 and setting bit 8, we get better code without any conditional
+            // operations.
+            // FIXME: There's a LLVM patch (http://reviews.llvm.org/D9284)
+            // pending, remove this workaround once LLVM generates better code
+            // for cttz8.
+            unsafe {
+                if $BITS == 8 {
+                    intrinsics::cttz(self as u16 | 0x100) as u32
                 } else {
-                    None
+                    intrinsics::cttz(self) as u32
                 }
             }
         }
-    )
-)
 
-macro_rules! impl_to_primitive_int_to_uint(
-    ($SrcT:ty, $DstT:ty, $slf:expr) => (
-        {
-            let zero: $SrcT = Zero::zero();
-            let max_value: $DstT = Bounded::max_value();
-            if zero <= $slf && $slf as u64 <= max_value as u64 {
-                Some($slf as $DstT)
-            } else {
-                None
+        /// Shifts the bits to the left by a specified amount, `n`,
+        /// wrapping the truncated bits to the end of the resulting integer.
+        ///
+        /// Please note this isn't the same operation as `<<`!
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let n = 0x0123456789ABCDEFu64;
+        /// let m = 0x3456789ABCDEF012u64;
+        ///
+        /// assert_eq!(n.rotate_left(12), m);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn rotate_left(self, n: u32) -> Self {
+            // Protect against undefined behaviour for over-long bit shifts
+            let n = n % $BITS;
+            (self << n) | (self >> (($BITS - n) % $BITS))
+        }
+
+        /// Shifts the bits to the right by a specified amount, `n`,
+        /// wrapping the truncated bits to the beginning of the resulting
+        /// integer.
+        ///
+        /// Please note this isn't the same operation as `>>`!
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let n = 0x0123456789ABCDEFu64;
+        /// let m = 0xDEF0123456789ABCu64;
+        ///
+        /// assert_eq!(n.rotate_right(12), m);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn rotate_right(self, n: u32) -> Self {
+            // Protect against undefined behaviour for over-long bit shifts
+            let n = n % $BITS;
+            (self >> n) | (self << (($BITS - n) % $BITS))
+        }
+
+        /// Reverses the byte order of the integer.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let n = 0x0123456789ABCDEFu64;
+        /// let m = 0xEFCDAB8967452301u64;
+        ///
+        /// assert_eq!(n.swap_bytes(), m);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn swap_bytes(self) -> Self {
+            unsafe { $bswap(self as $ActualT) as Self }
+        }
+
+        /// Converts an integer from big endian to the target's endianness.
+        ///
+        /// On big endian this is a no-op. On little endian the bytes are
+        /// swapped.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let n = 0x0123456789ABCDEFu64;
+        ///
+        /// if cfg!(target_endian = "big") {
+        ///     assert_eq!(u64::from_be(n), n)
+        /// } else {
+        ///     assert_eq!(u64::from_be(n), n.swap_bytes())
+        /// }
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn from_be(x: Self) -> Self {
+            if cfg!(target_endian = "big") { x } else { x.swap_bytes() }
+        }
+
+        /// Converts an integer from little endian to the target's endianness.
+        ///
+        /// On little endian this is a no-op. On big endian the bytes are
+        /// swapped.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let n = 0x0123456789ABCDEFu64;
+        ///
+        /// if cfg!(target_endian = "little") {
+        ///     assert_eq!(u64::from_le(n), n)
+        /// } else {
+        ///     assert_eq!(u64::from_le(n), n.swap_bytes())
+        /// }
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn from_le(x: Self) -> Self {
+            if cfg!(target_endian = "little") { x } else { x.swap_bytes() }
+        }
+
+        /// Converts `self` to big endian from the target's endianness.
+        ///
+        /// On big endian this is a no-op. On little endian the bytes are
+        /// swapped.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let n = 0x0123456789ABCDEFu64;
+        ///
+        /// if cfg!(target_endian = "big") {
+        ///     assert_eq!(n.to_be(), n)
+        /// } else {
+        ///     assert_eq!(n.to_be(), n.swap_bytes())
+        /// }
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn to_be(self) -> Self { // or not to be?
+            if cfg!(target_endian = "big") { self } else { self.swap_bytes() }
+        }
+
+        /// Converts `self` to little endian from the target's endianness.
+        ///
+        /// On little endian this is a no-op. On big endian the bytes are
+        /// swapped.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// let n = 0x0123456789ABCDEFu64;
+        ///
+        /// if cfg!(target_endian = "little") {
+        ///     assert_eq!(n.to_le(), n)
+        /// } else {
+        ///     assert_eq!(n.to_le(), n.swap_bytes())
+        /// }
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn to_le(self) -> Self {
+            if cfg!(target_endian = "little") { self } else { self.swap_bytes() }
+        }
+
+        /// Checked integer addition. Computes `self + other`, returning `None`
+        /// if overflow occurred.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(5u16.checked_add(65530), Some(65535));
+        /// assert_eq!(6u16.checked_add(65530), None);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn checked_add(self, other: Self) -> Option<Self> {
+            let (a, b) = self.overflowing_add(other);
+            if b {None} else {Some(a)}
+        }
+
+        /// Checked integer subtraction. Computes `self - other`, returning
+        /// `None` if underflow occurred.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(1u8.checked_sub(1), Some(0));
+        /// assert_eq!(0u8.checked_sub(1), None);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn checked_sub(self, other: Self) -> Option<Self> {
+            let (a, b) = self.overflowing_sub(other);
+            if b {None} else {Some(a)}
+        }
+
+        /// Checked integer multiplication. Computes `self * other`, returning
+        /// `None` if underflow or overflow occurred.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(5u8.checked_mul(51), Some(255));
+        /// assert_eq!(5u8.checked_mul(52), None);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn checked_mul(self, other: Self) -> Option<Self> {
+            let (a, b) = self.overflowing_mul(other);
+            if b {None} else {Some(a)}
+        }
+
+        /// Checked integer division. Computes `self / other`, returning `None`
+        /// if `other == 0` or the operation results in underflow or overflow.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(128u8.checked_div(2), Some(64));
+        /// assert_eq!(1u8.checked_div(0), None);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn checked_div(self, other: Self) -> Option<Self> {
+            match other {
+                0 => None,
+                other => Some(unsafe { intrinsics::unchecked_div(self, other) }),
             }
         }
-    )
-)
 
-macro_rules! impl_to_primitive_int(
-    ($T:ty) => (
-        impl ToPrimitive for $T {
-            #[inline]
-            fn to_int(&self) -> Option<int> { impl_to_primitive_int_to_int!($T, int, *self) }
-            #[inline]
-            fn to_i8(&self) -> Option<i8> { impl_to_primitive_int_to_int!($T, i8, *self) }
-            #[inline]
-            fn to_i16(&self) -> Option<i16> { impl_to_primitive_int_to_int!($T, i16, *self) }
-            #[inline]
-            fn to_i32(&self) -> Option<i32> { impl_to_primitive_int_to_int!($T, i32, *self) }
-            #[inline]
-            fn to_i64(&self) -> Option<i64> { impl_to_primitive_int_to_int!($T, i64, *self) }
-
-            #[inline]
-            fn to_uint(&self) -> Option<uint> { impl_to_primitive_int_to_uint!($T, uint, *self) }
-            #[inline]
-            fn to_u8(&self) -> Option<u8> { impl_to_primitive_int_to_uint!($T, u8, *self) }
-            #[inline]
-            fn to_u16(&self) -> Option<u16> { impl_to_primitive_int_to_uint!($T, u16, *self) }
-            #[inline]
-            fn to_u32(&self) -> Option<u32> { impl_to_primitive_int_to_uint!($T, u32, *self) }
-            #[inline]
-            fn to_u64(&self) -> Option<u64> { impl_to_primitive_int_to_uint!($T, u64, *self) }
-
-            #[inline]
-            fn to_f32(&self) -> Option<f32> { Some(*self as f32) }
-            #[inline]
-            fn to_f64(&self) -> Option<f64> { Some(*self as f64) }
-        }
-    )
-)
-
-impl_to_primitive_int!(int)
-impl_to_primitive_int!(i8)
-impl_to_primitive_int!(i16)
-impl_to_primitive_int!(i32)
-impl_to_primitive_int!(i64)
-
-macro_rules! impl_to_primitive_uint_to_int(
-    ($DstT:ty, $slf:expr) => (
-        {
-            let max_value: $DstT = Bounded::max_value();
-            if $slf as u64 <= max_value as u64 {
-                Some($slf as $DstT)
-            } else {
+        /// Checked integer remainder. Computes `self % other`, returning `None`
+        /// if `other == 0` or the operation results in underflow or overflow.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(5u32.checked_rem(2), Some(1));
+        /// assert_eq!(5u32.checked_rem(0), None);
+        /// ```
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        #[inline]
+        pub fn checked_rem(self, other: Self) -> Option<Self> {
+            if other == 0 {
                 None
+            } else {
+                Some(unsafe { intrinsics::unchecked_rem(self, other) })
             }
         }
-    )
-)
 
-macro_rules! impl_to_primitive_uint_to_uint(
-    ($SrcT:ty, $DstT:ty, $slf:expr) => (
-        {
-            if size_of::<$SrcT>() <= size_of::<$DstT>() {
-                Some($slf as $DstT)
-            } else {
-                let zero: $SrcT = Zero::zero();
-                let max_value: $DstT = Bounded::max_value();
-                if zero <= $slf && $slf as u64 <= max_value as u64 {
-                    Some($slf as $DstT)
-                } else {
-                    None
+        /// Checked negation. Computes `-self`, returning `None` unless `self ==
+        /// 0`.
+        ///
+        /// Note that negating any positive integer will overflow.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(0u32.checked_neg(), Some(0));
+        /// assert_eq!(1u32.checked_neg(), None);
+        /// ```
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        #[inline]
+        pub fn checked_neg(self) -> Option<Self> {
+            let (a, b) = self.overflowing_neg();
+            if b {None} else {Some(a)}
+        }
+
+        /// Checked shift left. Computes `self << rhs`, returning `None`
+        /// if `rhs` is larger than or equal to the number of bits in `self`.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(0x10u32.checked_shl(4), Some(0x100));
+        /// assert_eq!(0x10u32.checked_shl(33), None);
+        /// ```
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        #[inline]
+        pub fn checked_shl(self, rhs: u32) -> Option<Self> {
+            let (a, b) = self.overflowing_shl(rhs);
+            if b {None} else {Some(a)}
+        }
+
+        /// Checked shift right. Computes `self >> rhs`, returning `None`
+        /// if `rhs` is larger than or equal to the number of bits in `self`.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(0x10u32.checked_shr(4), Some(0x1));
+        /// assert_eq!(0x10u32.checked_shr(33), None);
+        /// ```
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        #[inline]
+        pub fn checked_shr(self, rhs: u32) -> Option<Self> {
+            let (a, b) = self.overflowing_shr(rhs);
+            if b {None} else {Some(a)}
+        }
+
+        /// Saturating integer addition. Computes `self + other`, saturating at
+        /// the numeric bounds instead of overflowing.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(100u8.saturating_add(1), 101);
+        /// assert_eq!(200u8.saturating_add(127), 255);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn saturating_add(self, other: Self) -> Self {
+            match self.checked_add(other) {
+                Some(x) => x,
+                None => Self::max_value(),
+            }
+        }
+
+        /// Saturating integer subtraction. Computes `self - other`, saturating
+        /// at the numeric bounds instead of overflowing.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(100u8.saturating_sub(27), 73);
+        /// assert_eq!(13u8.saturating_sub(127), 0);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn saturating_sub(self, other: Self) -> Self {
+            match self.checked_sub(other) {
+                Some(x) => x,
+                None => Self::min_value(),
+            }
+        }
+
+        /// Saturating integer multiplication. Computes `self * other`,
+        /// saturating at the numeric bounds instead of overflowing.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// use std::u32;
+        ///
+        /// assert_eq!(100u32.saturating_mul(127), 12700);
+        /// assert_eq!((1u32 << 23).saturating_mul(1 << 23), u32::MAX);
+        /// ```
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        #[inline]
+        pub fn saturating_mul(self, other: Self) -> Self {
+            self.checked_mul(other).unwrap_or(Self::max_value())
+        }
+
+        /// Wrapping (modular) addition. Computes `self + other`,
+        /// wrapping around at the boundary of the type.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(200u8.wrapping_add(55), 255);
+        /// assert_eq!(200u8.wrapping_add(155), 99);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn wrapping_add(self, rhs: Self) -> Self {
+            unsafe {
+                intrinsics::overflowing_add(self, rhs)
+            }
+        }
+
+        /// Wrapping (modular) subtraction. Computes `self - other`,
+        /// wrapping around at the boundary of the type.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(100u8.wrapping_sub(100), 0);
+        /// assert_eq!(100u8.wrapping_sub(155), 201);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn wrapping_sub(self, rhs: Self) -> Self {
+            unsafe {
+                intrinsics::overflowing_sub(self, rhs)
+            }
+        }
+
+        /// Wrapping (modular) multiplication. Computes `self *
+        /// other`, wrapping around at the boundary of the type.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(10u8.wrapping_mul(12), 120);
+        /// assert_eq!(25u8.wrapping_mul(12), 44);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn wrapping_mul(self, rhs: Self) -> Self {
+            unsafe {
+                intrinsics::overflowing_mul(self, rhs)
+            }
+        }
+
+        /// Wrapping (modular) division. Computes `self / other`.
+        /// Wrapped division on unsigned types is just normal division.
+        /// There's no way wrapping could ever happen.
+        /// This function exists, so that all operations
+        /// are accounted for in the wrapping operations.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(100u8.wrapping_div(10), 10);
+        /// ```
+        #[stable(feature = "num_wrapping", since = "1.2.0")]
+        #[inline]
+        pub fn wrapping_div(self, rhs: Self) -> Self {
+            self / rhs
+        }
+
+        /// Wrapping (modular) remainder. Computes `self % other`.
+        /// Wrapped remainder calculation on unsigned types is
+        /// just the regular remainder calculation.
+        /// There's no way wrapping could ever happen.
+        /// This function exists, so that all operations
+        /// are accounted for in the wrapping operations.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(100u8.wrapping_rem(10), 0);
+        /// ```
+        #[stable(feature = "num_wrapping", since = "1.2.0")]
+        #[inline]
+        pub fn wrapping_rem(self, rhs: Self) -> Self {
+            self % rhs
+        }
+
+        /// Wrapping (modular) negation. Computes `-self`,
+        /// wrapping around at the boundary of the type.
+        ///
+        /// Since unsigned types do not have negative equivalents
+        /// all applications of this function will wrap (except for `-0`).
+        /// For values smaller than the corresponding signed type's maximum
+        /// the result is the same as casting the corresponding signed value.
+        /// Any larger values are equivalent to `MAX + 1 - (val - MAX - 1)` where
+        /// `MAX` is the corresponding signed type's maximum.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(100u8.wrapping_neg(), 156);
+        /// assert_eq!(0u8.wrapping_neg(), 0);
+        /// assert_eq!(180u8.wrapping_neg(), 76);
+        /// assert_eq!(180u8.wrapping_neg(), (127 + 1) - (180u8 - (127 + 1)));
+        /// ```
+        #[stable(feature = "num_wrapping", since = "1.2.0")]
+        #[inline]
+        pub fn wrapping_neg(self) -> Self {
+            self.overflowing_neg().0
+        }
+
+        /// Panic-free bitwise shift-left; yields `self << mask(rhs)`,
+        /// where `mask` removes any high-order bits of `rhs` that
+        /// would cause the shift to exceed the bitwidth of the type.
+        ///
+        /// Note that this is *not* the same as a rotate-left; the
+        /// RHS of a wrapping shift-left is restricted to the range
+        /// of the type, rather than the bits shifted out of the LHS
+        /// being returned to the other end. The primitive integer
+        /// types all implement a `rotate_left` function, which may
+        /// be what you want instead.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(1u8.wrapping_shl(7), 128);
+        /// assert_eq!(1u8.wrapping_shl(8), 1);
+        /// ```
+        #[stable(feature = "num_wrapping", since = "1.2.0")]
+        #[inline]
+        pub fn wrapping_shl(self, rhs: u32) -> Self {
+            unsafe {
+                intrinsics::unchecked_shl(self, (rhs & ($BITS - 1)) as $SelfT)
+            }
+        }
+
+        /// Panic-free bitwise shift-right; yields `self >> mask(rhs)`,
+        /// where `mask` removes any high-order bits of `rhs` that
+        /// would cause the shift to exceed the bitwidth of the type.
+        ///
+        /// Note that this is *not* the same as a rotate-right; the
+        /// RHS of a wrapping shift-right is restricted to the range
+        /// of the type, rather than the bits shifted out of the LHS
+        /// being returned to the other end. The primitive integer
+        /// types all implement a `rotate_right` function, which may
+        /// be what you want instead.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(128u8.wrapping_shr(7), 1);
+        /// assert_eq!(128u8.wrapping_shr(8), 128);
+        /// ```
+        #[stable(feature = "num_wrapping", since = "1.2.0")]
+        #[inline]
+        pub fn wrapping_shr(self, rhs: u32) -> Self {
+            unsafe {
+                intrinsics::unchecked_shr(self, (rhs & ($BITS - 1)) as $SelfT)
+            }
+        }
+
+        /// Calculates `self` + `rhs`
+        ///
+        /// Returns a tuple of the addition along with a boolean indicating
+        /// whether an arithmetic overflow would occur. If an overflow would
+        /// have occurred then the wrapped value is returned.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage
+        ///
+        /// ```
+        /// use std::u32;
+        ///
+        /// assert_eq!(5u32.overflowing_add(2), (7, false));
+        /// assert_eq!(u32::MAX.overflowing_add(1), (0, true));
+        /// ```
+        #[inline]
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        pub fn overflowing_add(self, rhs: Self) -> (Self, bool) {
+            unsafe {
+                let (a, b) = $add_with_overflow(self as $ActualT,
+                                                rhs as $ActualT);
+                (a as Self, b)
+            }
+        }
+
+        /// Calculates `self` - `rhs`
+        ///
+        /// Returns a tuple of the subtraction along with a boolean indicating
+        /// whether an arithmetic overflow would occur. If an overflow would
+        /// have occurred then the wrapped value is returned.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage
+        ///
+        /// ```
+        /// use std::u32;
+        ///
+        /// assert_eq!(5u32.overflowing_sub(2), (3, false));
+        /// assert_eq!(0u32.overflowing_sub(1), (u32::MAX, true));
+        /// ```
+        #[inline]
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        pub fn overflowing_sub(self, rhs: Self) -> (Self, bool) {
+            unsafe {
+                let (a, b) = $sub_with_overflow(self as $ActualT,
+                                                rhs as $ActualT);
+                (a as Self, b)
+            }
+        }
+
+        /// Calculates the multiplication of `self` and `rhs`.
+        ///
+        /// Returns a tuple of the multiplication along with a boolean
+        /// indicating whether an arithmetic overflow would occur. If an
+        /// overflow would have occurred then the wrapped value is returned.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage
+        ///
+        /// ```
+        /// assert_eq!(5u32.overflowing_mul(2), (10, false));
+        /// assert_eq!(1_000_000_000u32.overflowing_mul(10), (1410065408, true));
+        /// ```
+        #[inline]
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        pub fn overflowing_mul(self, rhs: Self) -> (Self, bool) {
+            unsafe {
+                let (a, b) = $mul_with_overflow(self as $ActualT,
+                                                rhs as $ActualT);
+                (a as Self, b)
+            }
+        }
+
+        /// Calculates the divisor when `self` is divided by `rhs`.
+        ///
+        /// Returns a tuple of the divisor along with a boolean indicating
+        /// whether an arithmetic overflow would occur. Note that for unsigned
+        /// integers overflow never occurs, so the second value is always
+        /// `false`.
+        ///
+        /// # Panics
+        ///
+        /// This function will panic if `rhs` is 0.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage
+        ///
+        /// ```
+        /// assert_eq!(5u32.overflowing_div(2), (2, false));
+        /// ```
+        #[inline]
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        pub fn overflowing_div(self, rhs: Self) -> (Self, bool) {
+            (self / rhs, false)
+        }
+
+        /// Calculates the remainder when `self` is divided by `rhs`.
+        ///
+        /// Returns a tuple of the remainder after dividing along with a boolean
+        /// indicating whether an arithmetic overflow would occur. Note that for
+        /// unsigned integers overflow never occurs, so the second value is
+        /// always `false`.
+        ///
+        /// # Panics
+        ///
+        /// This function will panic if `rhs` is 0.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage
+        ///
+        /// ```
+        /// assert_eq!(5u32.overflowing_rem(2), (1, false));
+        /// ```
+        #[inline]
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        pub fn overflowing_rem(self, rhs: Self) -> (Self, bool) {
+            (self % rhs, false)
+        }
+
+        /// Negates self in an overflowing fashion.
+        ///
+        /// Returns `!self + 1` using wrapping operations to return the value
+        /// that represents the negation of this unsigned value. Note that for
+        /// positive unsigned values overflow always occurs, but negating 0 does
+        /// not overflow.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage
+        ///
+        /// ```
+        /// assert_eq!(0u32.overflowing_neg(), (0, false));
+        /// assert_eq!(2u32.overflowing_neg(), (-2i32 as u32, true));
+        /// ```
+        #[inline]
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        pub fn overflowing_neg(self) -> (Self, bool) {
+            ((!self).wrapping_add(1), self != 0)
+        }
+
+        /// Shifts self left by `rhs` bits.
+        ///
+        /// Returns a tuple of the shifted version of self along with a boolean
+        /// indicating whether the shift value was larger than or equal to the
+        /// number of bits. If the shift value is too large, then value is
+        /// masked (N-1) where N is the number of bits, and this value is then
+        /// used to perform the shift.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage
+        ///
+        /// ```
+        /// assert_eq!(0x10u32.overflowing_shl(4), (0x100, false));
+        /// assert_eq!(0x10u32.overflowing_shl(36), (0x100, true));
+        /// ```
+        #[inline]
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        pub fn overflowing_shl(self, rhs: u32) -> (Self, bool) {
+            (self.wrapping_shl(rhs), (rhs > ($BITS - 1)))
+        }
+
+        /// Shifts self right by `rhs` bits.
+        ///
+        /// Returns a tuple of the shifted version of self along with a boolean
+        /// indicating whether the shift value was larger than or equal to the
+        /// number of bits. If the shift value is too large, then value is
+        /// masked (N-1) where N is the number of bits, and this value is then
+        /// used to perform the shift.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage
+        ///
+        /// ```
+        /// assert_eq!(0x10u32.overflowing_shr(4), (0x1, false));
+        /// assert_eq!(0x10u32.overflowing_shr(36), (0x1, true));
+        /// ```
+        #[inline]
+        #[stable(feature = "wrapping", since = "1.7.0")]
+        pub fn overflowing_shr(self, rhs: u32) -> (Self, bool) {
+            (self.wrapping_shr(rhs), (rhs > ($BITS - 1)))
+
+        }
+
+        /// Raises self to the power of `exp`, using exponentiation by squaring.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(2u32.pow(4), 16);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        #[rustc_inherit_overflow_checks]
+        pub fn pow(self, mut exp: u32) -> Self {
+            let mut base = self;
+            let mut acc = 1;
+
+            while exp > 1 {
+                if (exp & 1) == 1 {
+                    acc = acc * base;
                 }
+                exp /= 2;
+                base = base * base;
             }
-        }
-    )
-)
 
-macro_rules! impl_to_primitive_uint(
-    ($T:ty) => (
-        impl ToPrimitive for $T {
-            #[inline]
-            fn to_int(&self) -> Option<int> { impl_to_primitive_uint_to_int!(int, *self) }
-            #[inline]
-            fn to_i8(&self) -> Option<i8> { impl_to_primitive_uint_to_int!(i8, *self) }
-            #[inline]
-            fn to_i16(&self) -> Option<i16> { impl_to_primitive_uint_to_int!(i16, *self) }
-            #[inline]
-            fn to_i32(&self) -> Option<i32> { impl_to_primitive_uint_to_int!(i32, *self) }
-            #[inline]
-            fn to_i64(&self) -> Option<i64> { impl_to_primitive_uint_to_int!(i64, *self) }
-
-            #[inline]
-            fn to_uint(&self) -> Option<uint> { impl_to_primitive_uint_to_uint!($T, uint, *self) }
-            #[inline]
-            fn to_u8(&self) -> Option<u8> { impl_to_primitive_uint_to_uint!($T, u8, *self) }
-            #[inline]
-            fn to_u16(&self) -> Option<u16> { impl_to_primitive_uint_to_uint!($T, u16, *self) }
-            #[inline]
-            fn to_u32(&self) -> Option<u32> { impl_to_primitive_uint_to_uint!($T, u32, *self) }
-            #[inline]
-            fn to_u64(&self) -> Option<u64> { impl_to_primitive_uint_to_uint!($T, u64, *self) }
-
-            #[inline]
-            fn to_f32(&self) -> Option<f32> { Some(*self as f32) }
-            #[inline]
-            fn to_f64(&self) -> Option<f64> { Some(*self as f64) }
-        }
-    )
-)
-
-impl_to_primitive_uint!(uint)
-impl_to_primitive_uint!(u8)
-impl_to_primitive_uint!(u16)
-impl_to_primitive_uint!(u32)
-impl_to_primitive_uint!(u64)
-
-macro_rules! impl_to_primitive_float_to_float(
-    ($SrcT:ty, $DstT:ty, $slf:expr) => (
-        if size_of::<$SrcT>() <= size_of::<$DstT>() {
-            Some($slf as $DstT)
-        } else {
-            let n = $slf as f64;
-            let max_value: $SrcT = Bounded::max_value();
-            if -max_value as f64 <= n && n <= max_value as f64 {
-                Some($slf as $DstT)
-            } else {
-                None
+            // Deal with the final bit of the exponent separately, since
+            // squaring the base afterwards is not necessary and may cause a
+            // needless overflow.
+            if exp == 1 {
+                acc = acc * base;
             }
+
+            acc
         }
-    )
-)
 
-macro_rules! impl_to_primitive_float(
-    ($T:ty) => (
-        impl ToPrimitive for $T {
-            #[inline]
-            fn to_int(&self) -> Option<int> { Some(*self as int) }
-            #[inline]
-            fn to_i8(&self) -> Option<i8> { Some(*self as i8) }
-            #[inline]
-            fn to_i16(&self) -> Option<i16> { Some(*self as i16) }
-            #[inline]
-            fn to_i32(&self) -> Option<i32> { Some(*self as i32) }
-            #[inline]
-            fn to_i64(&self) -> Option<i64> { Some(*self as i64) }
-
-            #[inline]
-            fn to_uint(&self) -> Option<uint> { Some(*self as uint) }
-            #[inline]
-            fn to_u8(&self) -> Option<u8> { Some(*self as u8) }
-            #[inline]
-            fn to_u16(&self) -> Option<u16> { Some(*self as u16) }
-            #[inline]
-            fn to_u32(&self) -> Option<u32> { Some(*self as u32) }
-            #[inline]
-            fn to_u64(&self) -> Option<u64> { Some(*self as u64) }
-
-            #[inline]
-            fn to_f32(&self) -> Option<f32> { impl_to_primitive_float_to_float!($T, f32, *self) }
-            #[inline]
-            fn to_f64(&self) -> Option<f64> { impl_to_primitive_float_to_float!($T, f64, *self) }
+        /// Returns `true` if and only if `self == 2^k` for some `k`.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert!(16u8.is_power_of_two());
+        /// assert!(!10u8.is_power_of_two());
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn is_power_of_two(self) -> bool {
+            (self.wrapping_sub(1)) & self == 0 && !(self == 0)
         }
-    )
-)
 
-impl_to_primitive_float!(f32)
-impl_to_primitive_float!(f64)
+        // Returns one less than next power of two.
+        // (For 8u8 next power of two is 8u8 and for 6u8 it is 8u8)
+        //
+        // 8u8.one_less_than_next_power_of_two() == 7
+        // 6u8.one_less_than_next_power_of_two() == 7
+        //
+        // This method cannot overflow, as in the `next_power_of_two`
+        // overflow cases it instead ends up returning the maximum value
+        // of the type, and can return 0 for 0.
+        #[inline]
+        fn one_less_than_next_power_of_two(self) -> Self {
+            if self <= 1 { return 0; }
 
-/// A generic trait for converting a number to a value.
-pub trait FromPrimitive {
-    /// Convert an `int` to return an optional value of this type. If the
-    /// value cannot be represented by this value, the `None` is returned.
-    #[inline]
-    fn from_int(n: int) -> Option<Self> {
-        FromPrimitive::from_i64(n as i64)
-    }
-
-    /// Convert an `i8` to return an optional value of this type. If the
-    /// type cannot be represented by this value, the `None` is returned.
-    #[inline]
-    fn from_i8(n: i8) -> Option<Self> {
-        FromPrimitive::from_i64(n as i64)
-    }
-
-    /// Convert an `i16` to return an optional value of this type. If the
-    /// type cannot be represented by this value, the `None` is returned.
-    #[inline]
-    fn from_i16(n: i16) -> Option<Self> {
-        FromPrimitive::from_i64(n as i64)
-    }
-
-    /// Convert an `i32` to return an optional value of this type. If the
-    /// type cannot be represented by this value, the `None` is returned.
-    #[inline]
-    fn from_i32(n: i32) -> Option<Self> {
-        FromPrimitive::from_i64(n as i64)
-    }
-
-    /// Convert an `i64` to return an optional value of this type. If the
-    /// type cannot be represented by this value, the `None` is returned.
-    fn from_i64(n: i64) -> Option<Self>;
-
-    /// Convert an `uint` to return an optional value of this type. If the
-    /// type cannot be represented by this value, the `None` is returned.
-    #[inline]
-    fn from_uint(n: uint) -> Option<Self> {
-        FromPrimitive::from_u64(n as u64)
-    }
-
-    /// Convert an `u8` to return an optional value of this type. If the
-    /// type cannot be represented by this value, the `None` is returned.
-    #[inline]
-    fn from_u8(n: u8) -> Option<Self> {
-        FromPrimitive::from_u64(n as u64)
-    }
-
-    /// Convert an `u16` to return an optional value of this type. If the
-    /// type cannot be represented by this value, the `None` is returned.
-    #[inline]
-    fn from_u16(n: u16) -> Option<Self> {
-        FromPrimitive::from_u64(n as u64)
-    }
-
-    /// Convert an `u32` to return an optional value of this type. If the
-    /// type cannot be represented by this value, the `None` is returned.
-    #[inline]
-    fn from_u32(n: u32) -> Option<Self> {
-        FromPrimitive::from_u64(n as u64)
-    }
-
-    /// Convert an `u64` to return an optional value of this type. If the
-    /// type cannot be represented by this value, the `None` is returned.
-    fn from_u64(n: u64) -> Option<Self>;
-
-    /// Convert a `f32` to return an optional value of this type. If the
-    /// type cannot be represented by this value, the `None` is returned.
-    #[inline]
-    fn from_f32(n: f32) -> Option<Self> {
-        FromPrimitive::from_f64(n as f64)
-    }
-
-    /// Convert a `f64` to return an optional value of this type. If the
-    /// type cannot be represented by this value, the `None` is returned.
-    #[inline]
-    fn from_f64(n: f64) -> Option<Self> {
-        FromPrimitive::from_i64(n as i64)
-    }
-}
-
-/// A utility function that just calls `FromPrimitive::from_int`.
-pub fn from_int<A: FromPrimitive>(n: int) -> Option<A> {
-    FromPrimitive::from_int(n)
-}
-
-/// A utility function that just calls `FromPrimitive::from_i8`.
-pub fn from_i8<A: FromPrimitive>(n: i8) -> Option<A> {
-    FromPrimitive::from_i8(n)
-}
-
-/// A utility function that just calls `FromPrimitive::from_i16`.
-pub fn from_i16<A: FromPrimitive>(n: i16) -> Option<A> {
-    FromPrimitive::from_i16(n)
-}
-
-/// A utility function that just calls `FromPrimitive::from_i32`.
-pub fn from_i32<A: FromPrimitive>(n: i32) -> Option<A> {
-    FromPrimitive::from_i32(n)
-}
-
-/// A utility function that just calls `FromPrimitive::from_i64`.
-pub fn from_i64<A: FromPrimitive>(n: i64) -> Option<A> {
-    FromPrimitive::from_i64(n)
-}
-
-/// A utility function that just calls `FromPrimitive::from_uint`.
-pub fn from_uint<A: FromPrimitive>(n: uint) -> Option<A> {
-    FromPrimitive::from_uint(n)
-}
-
-/// A utility function that just calls `FromPrimitive::from_u8`.
-pub fn from_u8<A: FromPrimitive>(n: u8) -> Option<A> {
-    FromPrimitive::from_u8(n)
-}
-
-/// A utility function that just calls `FromPrimitive::from_u16`.
-pub fn from_u16<A: FromPrimitive>(n: u16) -> Option<A> {
-    FromPrimitive::from_u16(n)
-}
-
-/// A utility function that just calls `FromPrimitive::from_u32`.
-pub fn from_u32<A: FromPrimitive>(n: u32) -> Option<A> {
-    FromPrimitive::from_u32(n)
-}
-
-/// A utility function that just calls `FromPrimitive::from_u64`.
-pub fn from_u64<A: FromPrimitive>(n: u64) -> Option<A> {
-    FromPrimitive::from_u64(n)
-}
-
-/// A utility function that just calls `FromPrimitive::from_f32`.
-pub fn from_f32<A: FromPrimitive>(n: f32) -> Option<A> {
-    FromPrimitive::from_f32(n)
-}
-
-/// A utility function that just calls `FromPrimitive::from_f64`.
-pub fn from_f64<A: FromPrimitive>(n: f64) -> Option<A> {
-    FromPrimitive::from_f64(n)
-}
-
-macro_rules! impl_from_primitive(
-    ($T:ty, $to_ty:ident) => (
-        impl FromPrimitive for $T {
-            #[inline] fn from_int(n: int) -> Option<$T> { n.$to_ty() }
-            #[inline] fn from_i8(n: i8) -> Option<$T> { n.$to_ty() }
-            #[inline] fn from_i16(n: i16) -> Option<$T> { n.$to_ty() }
-            #[inline] fn from_i32(n: i32) -> Option<$T> { n.$to_ty() }
-            #[inline] fn from_i64(n: i64) -> Option<$T> { n.$to_ty() }
-
-            #[inline] fn from_uint(n: uint) -> Option<$T> { n.$to_ty() }
-            #[inline] fn from_u8(n: u8) -> Option<$T> { n.$to_ty() }
-            #[inline] fn from_u16(n: u16) -> Option<$T> { n.$to_ty() }
-            #[inline] fn from_u32(n: u32) -> Option<$T> { n.$to_ty() }
-            #[inline] fn from_u64(n: u64) -> Option<$T> { n.$to_ty() }
-
-            #[inline] fn from_f32(n: f32) -> Option<$T> { n.$to_ty() }
-            #[inline] fn from_f64(n: f64) -> Option<$T> { n.$to_ty() }
+            // Because `p > 0`, it cannot consist entirely of leading zeros.
+            // That means the shift is always in-bounds, and some processors
+            // (such as intel pre-haswell) have more efficient ctlz
+            // intrinsics when the argument is non-zero.
+            let p = self - 1;
+            let z = unsafe { $ctlz_nonzero(p) };
+            <$SelfT>::max_value() >> z
         }
-    )
-)
 
-impl_from_primitive!(int, to_int)
-impl_from_primitive!(i8, to_i8)
-impl_from_primitive!(i16, to_i16)
-impl_from_primitive!(i32, to_i32)
-impl_from_primitive!(i64, to_i64)
-impl_from_primitive!(uint, to_uint)
-impl_from_primitive!(u8, to_u8)
-impl_from_primitive!(u16, to_u16)
-impl_from_primitive!(u32, to_u32)
-impl_from_primitive!(u64, to_u64)
-impl_from_primitive!(f32, to_f32)
-impl_from_primitive!(f64, to_f64)
+        /// Returns the smallest power of two greater than or equal to `self`.
+        ///
+        /// When return value overflows (i.e. `self > (1 << (N-1))` for type
+        /// `uN`), it panics in debug mode and return value is wrapped to 0 in
+        /// release mode (the only situation in which method can return 0).
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(2u8.next_power_of_two(), 2);
+        /// assert_eq!(3u8.next_power_of_two(), 4);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        #[inline]
+        pub fn next_power_of_two(self) -> Self {
+            self.one_less_than_next_power_of_two() + 1
+        }
 
-/// Cast from one machine scalar to another.
+        /// Returns the smallest power of two greater than or equal to `n`. If
+        /// the next power of two is greater than the type's maximum value,
+        /// `None` is returned, otherwise the power of two is wrapped in `Some`.
+        ///
+        /// # Examples
+        ///
+        /// Basic usage:
+        ///
+        /// ```
+        /// assert_eq!(2u8.checked_next_power_of_two(), Some(2));
+        /// assert_eq!(3u8.checked_next_power_of_two(), Some(4));
+        /// assert_eq!(200u8.checked_next_power_of_two(), None);
+        /// ```
+        #[stable(feature = "rust1", since = "1.0.0")]
+        pub fn checked_next_power_of_two(self) -> Option<Self> {
+            self.one_less_than_next_power_of_two().checked_add(1)
+        }
+    }
+}
+
+#[cfg(stage0)]
+unsafe fn ctlz_nonzero<T>(x: T) -> T { intrinsics::ctlz(x) }
+#[cfg(not(stage0))]
+unsafe fn ctlz_nonzero<T>(x: T) -> T { intrinsics::ctlz_nonzero(x) }
+
+#[lang = "u8"]
+impl u8 {
+    uint_impl! { u8, u8, 8,
+        intrinsics::ctpop,
+        intrinsics::ctlz,
+        ctlz_nonzero,
+        intrinsics::cttz,
+        intrinsics::bswap,
+        intrinsics::add_with_overflow,
+        intrinsics::sub_with_overflow,
+        intrinsics::mul_with_overflow }
+}
+
+#[lang = "u16"]
+impl u16 {
+    uint_impl! { u16, u16, 16,
+        intrinsics::ctpop,
+        intrinsics::ctlz,
+        ctlz_nonzero,
+        intrinsics::cttz,
+        intrinsics::bswap,
+        intrinsics::add_with_overflow,
+        intrinsics::sub_with_overflow,
+        intrinsics::mul_with_overflow }
+}
+
+#[lang = "u32"]
+impl u32 {
+    uint_impl! { u32, u32, 32,
+        intrinsics::ctpop,
+        intrinsics::ctlz,
+        ctlz_nonzero,
+        intrinsics::cttz,
+        intrinsics::bswap,
+        intrinsics::add_with_overflow,
+        intrinsics::sub_with_overflow,
+        intrinsics::mul_with_overflow }
+}
+
+#[lang = "u64"]
+impl u64 {
+    uint_impl! { u64, u64, 64,
+        intrinsics::ctpop,
+        intrinsics::ctlz,
+        ctlz_nonzero,
+        intrinsics::cttz,
+        intrinsics::bswap,
+        intrinsics::add_with_overflow,
+        intrinsics::sub_with_overflow,
+        intrinsics::mul_with_overflow }
+}
+
+#[lang = "u128"]
+impl u128 {
+    uint_impl! { u128, u128, 128,
+        intrinsics::ctpop,
+        intrinsics::ctlz,
+        ctlz_nonzero,
+        intrinsics::cttz,
+        intrinsics::bswap,
+        intrinsics::add_with_overflow,
+        intrinsics::sub_with_overflow,
+        intrinsics::mul_with_overflow }
+}
+
+#[cfg(target_pointer_width = "16")]
+#[lang = "usize"]
+impl usize {
+    uint_impl! { usize, u16, 16,
+        intrinsics::ctpop,
+        intrinsics::ctlz,
+        ctlz_nonzero,
+        intrinsics::cttz,
+        intrinsics::bswap,
+        intrinsics::add_with_overflow,
+        intrinsics::sub_with_overflow,
+        intrinsics::mul_with_overflow }
+}
+#[cfg(target_pointer_width = "32")]
+#[lang = "usize"]
+impl usize {
+    uint_impl! { usize, u32, 32,
+        intrinsics::ctpop,
+        intrinsics::ctlz,
+        ctlz_nonzero,
+        intrinsics::cttz,
+        intrinsics::bswap,
+        intrinsics::add_with_overflow,
+        intrinsics::sub_with_overflow,
+        intrinsics::mul_with_overflow }
+}
+
+#[cfg(target_pointer_width = "64")]
+#[lang = "usize"]
+impl usize {
+    uint_impl! { usize, u64, 64,
+        intrinsics::ctpop,
+        intrinsics::ctlz,
+        ctlz_nonzero,
+        intrinsics::cttz,
+        intrinsics::bswap,
+        intrinsics::add_with_overflow,
+        intrinsics::sub_with_overflow,
+        intrinsics::mul_with_overflow }
+}
+
+/// A classification of floating point numbers.
 ///
-/// # Example
+/// This `enum` is used as the return type for [`f32::classify`] and [`f64::classify`]. See
+/// their documentation for more.
+///
+/// [`f32::classify`]: ../../std/primitive.f32.html#method.classify
+/// [`f64::classify`]: ../../std/primitive.f64.html#method.classify
+///
+/// # Examples
 ///
 /// ```
-/// use std::num;
+/// use std::num::FpCategory;
+/// use std::f32;
 ///
-/// let twenty: f32 = num::cast(0x14i).unwrap();
-/// assert_eq!(twenty, 20f32);
+/// let num = 12.4_f32;
+/// let inf = f32::INFINITY;
+/// let zero = 0f32;
+/// let sub: f32 = 1.1754942e-38;
+/// let nan = f32::NAN;
+///
+/// assert_eq!(num.classify(), FpCategory::Normal);
+/// assert_eq!(inf.classify(), FpCategory::Infinite);
+/// assert_eq!(zero.classify(), FpCategory::Zero);
+/// assert_eq!(nan.classify(), FpCategory::Nan);
+/// assert_eq!(sub.classify(), FpCategory::Subnormal);
 /// ```
-///
-#[inline]
-pub fn cast<T: NumCast,U: NumCast>(n: T) -> Option<U> {
-    NumCast::from(n)
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[stable(feature = "rust1", since = "1.0.0")]
+pub enum FpCategory {
+    /// "Not a Number", often obtained by dividing by zero.
+    #[stable(feature = "rust1", since = "1.0.0")]
+    Nan,
+
+    /// Positive or negative infinity.
+    #[stable(feature = "rust1", since = "1.0.0")]
+    Infinite,
+
+    /// Positive or negative zero.
+    #[stable(feature = "rust1", since = "1.0.0")]
+    Zero,
+
+    /// De-normalized floating point representation (less precise than `Normal`).
+    #[stable(feature = "rust1", since = "1.0.0")]
+    Subnormal,
+
+    /// A regular floating point number.
+    #[stable(feature = "rust1", since = "1.0.0")]
+    Normal,
 }
 
-/// An interface for casting between machine scalars.
-pub trait NumCast: ToPrimitive {
-    /// Creates a number from another value that can be converted into a primitive via the
-    /// `ToPrimitive` trait.
-    fn from<T: ToPrimitive>(n: T) -> Option<Self>;
-}
-
-macro_rules! impl_num_cast(
-    ($T:ty, $conv:ident) => (
-        impl NumCast for $T {
-            #[inline]
-            fn from<N: ToPrimitive>(n: N) -> Option<$T> {
-                // `$conv` could be generated using `concat_idents!`, but that
-                // macro seems to be broken at the moment
-                n.$conv()
-            }
-        }
-    )
-)
-
-impl_num_cast!(u8,    to_u8)
-impl_num_cast!(u16,   to_u16)
-impl_num_cast!(u32,   to_u32)
-impl_num_cast!(u64,   to_u64)
-impl_num_cast!(uint,  to_uint)
-impl_num_cast!(i8,    to_i8)
-impl_num_cast!(i16,   to_i16)
-impl_num_cast!(i32,   to_i32)
-impl_num_cast!(i64,   to_i64)
-impl_num_cast!(int,   to_int)
-impl_num_cast!(f32,   to_f32)
-impl_num_cast!(f64,   to_f64)
-
-/// Saturating math operations
-pub trait Saturating {
-    /// Saturating addition operator.
-    /// Returns a+b, saturating at the numeric bounds instead of overflowing.
-    fn saturating_add(self, v: Self) -> Self;
-
-    /// Saturating subtraction operator.
-    /// Returns a-b, saturating at the numeric bounds instead of overflowing.
-    fn saturating_sub(self, v: Self) -> Self;
-}
-
-impl<T: CheckedAdd + CheckedSub + Zero + PartialOrd + Bounded> Saturating for T {
-    #[inline]
-    fn saturating_add(self, v: T) -> T {
-        match self.checked_add(&v) {
-            Some(x) => x,
-            None => if v >= Zero::zero() {
-                Bounded::max_value()
-            } else {
-                Bounded::min_value()
-            }
-        }
-    }
-
-    #[inline]
-    fn saturating_sub(self, v: T) -> T {
-        match self.checked_sub(&v) {
-            Some(x) => x,
-            None => if v >= Zero::zero() {
-                Bounded::min_value()
-            } else {
-                Bounded::max_value()
-            }
-        }
-    }
-}
-
-/// Performs addition that returns `None` instead of wrapping around on overflow.
-pub trait CheckedAdd: Add<Self, Self> {
-    /// Adds two numbers, checking for overflow. If overflow happens, `None` is returned.
-    fn checked_add(&self, v: &Self) -> Option<Self>;
-}
-
-macro_rules! checked_impl(
-    ($trait_name:ident, $method:ident, $t:ty, $op:path) => {
-        impl $trait_name for $t {
-            #[inline]
-            fn $method(&self, v: &$t) -> Option<$t> {
-                unsafe {
-                    let (x, y) = $op(*self, *v);
-                    if y { None } else { Some(x) }
-                }
-            }
-        }
-    }
-)
-macro_rules! checked_cast_impl(
-    ($trait_name:ident, $method:ident, $t:ty, $cast:ty, $op:path) => {
-        impl $trait_name for $t {
-            #[inline]
-            fn $method(&self, v: &$t) -> Option<$t> {
-                unsafe {
-                    let (x, y) = $op(*self as $cast, *v as $cast);
-                    if y { None } else { Some(x as $t) }
-                }
-            }
-        }
-    }
-)
-
-#[cfg(target_word_size = "32")]
-checked_cast_impl!(CheckedAdd, checked_add, uint, u32, intrinsics::u32_add_with_overflow)
-#[cfg(target_word_size = "64")]
-checked_cast_impl!(CheckedAdd, checked_add, uint, u64, intrinsics::u64_add_with_overflow)
-
-checked_impl!(CheckedAdd, checked_add, u8,  intrinsics::u8_add_with_overflow)
-checked_impl!(CheckedAdd, checked_add, u16, intrinsics::u16_add_with_overflow)
-checked_impl!(CheckedAdd, checked_add, u32, intrinsics::u32_add_with_overflow)
-checked_impl!(CheckedAdd, checked_add, u64, intrinsics::u64_add_with_overflow)
-
-#[cfg(target_word_size = "32")]
-checked_cast_impl!(CheckedAdd, checked_add, int, i32, intrinsics::i32_add_with_overflow)
-#[cfg(target_word_size = "64")]
-checked_cast_impl!(CheckedAdd, checked_add, int, i64, intrinsics::i64_add_with_overflow)
-
-checked_impl!(CheckedAdd, checked_add, i8,  intrinsics::i8_add_with_overflow)
-checked_impl!(CheckedAdd, checked_add, i16, intrinsics::i16_add_with_overflow)
-checked_impl!(CheckedAdd, checked_add, i32, intrinsics::i32_add_with_overflow)
-checked_impl!(CheckedAdd, checked_add, i64, intrinsics::i64_add_with_overflow)
-
-/// Performs subtraction that returns `None` instead of wrapping around on underflow.
-pub trait CheckedSub: Sub<Self, Self> {
-    /// Subtracts two numbers, checking for underflow. If underflow happens, `None` is returned.
-    fn checked_sub(&self, v: &Self) -> Option<Self>;
-}
-
-#[cfg(target_word_size = "32")]
-checked_cast_impl!(CheckedSub, checked_sub, uint, u32, intrinsics::u32_sub_with_overflow)
-#[cfg(target_word_size = "64")]
-checked_cast_impl!(CheckedSub, checked_sub, uint, u64, intrinsics::u64_sub_with_overflow)
-
-checked_impl!(CheckedSub, checked_sub, u8,  intrinsics::u8_sub_with_overflow)
-checked_impl!(CheckedSub, checked_sub, u16, intrinsics::u16_sub_with_overflow)
-checked_impl!(CheckedSub, checked_sub, u32, intrinsics::u32_sub_with_overflow)
-checked_impl!(CheckedSub, checked_sub, u64, intrinsics::u64_sub_with_overflow)
-
-#[cfg(target_word_size = "32")]
-checked_cast_impl!(CheckedSub, checked_sub, int, i32, intrinsics::i32_sub_with_overflow)
-#[cfg(target_word_size = "64")]
-checked_cast_impl!(CheckedSub, checked_sub, int, i64, intrinsics::i64_sub_with_overflow)
-
-checked_impl!(CheckedSub, checked_sub, i8,  intrinsics::i8_sub_with_overflow)
-checked_impl!(CheckedSub, checked_sub, i16, intrinsics::i16_sub_with_overflow)
-checked_impl!(CheckedSub, checked_sub, i32, intrinsics::i32_sub_with_overflow)
-checked_impl!(CheckedSub, checked_sub, i64, intrinsics::i64_sub_with_overflow)
-
-/// Performs multiplication that returns `None` instead of wrapping around on underflow or
-/// overflow.
-pub trait CheckedMul: Mul<Self, Self> {
-    /// Multiplies two numbers, checking for underflow or overflow. If underflow or overflow
-    /// happens, `None` is returned.
-    fn checked_mul(&self, v: &Self) -> Option<Self>;
-}
-
-#[cfg(target_word_size = "32")]
-checked_cast_impl!(CheckedMul, checked_mul, uint, u32, intrinsics::u32_mul_with_overflow)
-#[cfg(target_word_size = "64")]
-checked_cast_impl!(CheckedMul, checked_mul, uint, u64, intrinsics::u64_mul_with_overflow)
-
-checked_impl!(CheckedMul, checked_mul, u8,  intrinsics::u8_mul_with_overflow)
-checked_impl!(CheckedMul, checked_mul, u16, intrinsics::u16_mul_with_overflow)
-checked_impl!(CheckedMul, checked_mul, u32, intrinsics::u32_mul_with_overflow)
-checked_impl!(CheckedMul, checked_mul, u64, intrinsics::u64_mul_with_overflow)
-
-#[cfg(target_word_size = "32")]
-checked_cast_impl!(CheckedMul, checked_mul, int, i32, intrinsics::i32_mul_with_overflow)
-#[cfg(target_word_size = "64")]
-checked_cast_impl!(CheckedMul, checked_mul, int, i64, intrinsics::i64_mul_with_overflow)
-
-checked_impl!(CheckedMul, checked_mul, i8,  intrinsics::i8_mul_with_overflow)
-checked_impl!(CheckedMul, checked_mul, i16, intrinsics::i16_mul_with_overflow)
-checked_impl!(CheckedMul, checked_mul, i32, intrinsics::i32_mul_with_overflow)
-checked_impl!(CheckedMul, checked_mul, i64, intrinsics::i64_mul_with_overflow)
-
-/// Performs division that returns `None` instead of wrapping around on underflow or overflow.
-pub trait CheckedDiv: Div<Self, Self> {
-    /// Divides two numbers, checking for underflow or overflow. If underflow or overflow happens,
-    /// `None` is returned.
-    fn checked_div(&self, v: &Self) -> Option<Self>;
-}
-
-macro_rules! checkeddiv_int_impl(
-    ($t:ty, $min:expr) => {
-        impl CheckedDiv for $t {
-            #[inline]
-            fn checked_div(&self, v: &$t) -> Option<$t> {
-                if *v == 0 || (*self == $min && *v == -1) {
-                    None
-                } else {
-                    Some(self / *v)
-                }
-            }
-        }
-    }
-)
-
-checkeddiv_int_impl!(int, int::MIN)
-checkeddiv_int_impl!(i8, i8::MIN)
-checkeddiv_int_impl!(i16, i16::MIN)
-checkeddiv_int_impl!(i32, i32::MIN)
-checkeddiv_int_impl!(i64, i64::MIN)
-
-macro_rules! checkeddiv_uint_impl(
-    ($($t:ty)*) => ($(
-        impl CheckedDiv for $t {
-            #[inline]
-            fn checked_div(&self, v: &$t) -> Option<$t> {
-                if *v == 0 {
-                    None
-                } else {
-                    Some(self / *v)
-                }
-            }
-        }
-    )*)
-)
-
-checkeddiv_uint_impl!(uint u8 u16 u32 u64)
-
-/// Used for representing the classification of floating point numbers
-#[deriving(PartialEq, Show)]
-pub enum FPCategory {
-    /// "Not a Number", often obtained by dividing by zero
-    FPNaN,
-    /// Positive or negative infinity
-    FPInfinite ,
-    /// Positive or negative zero
-    FPZero,
-    /// De-normalized floating point representation (less precise than `FPNormal`)
-    FPSubnormal,
-    /// A regular floating point number
-    FPNormal,
-}
-
-/// Operations on primitive floating point numbers.
-// FIXME(#5527): In a future version of Rust, many of these functions will
-//               become constants.
-//
-// FIXME(#8888): Several of these functions have a parameter named
-//               `unused_self`. Removing it requires #8888 to be fixed.
-pub trait Float: Signed + Primitive {
-    /// Returns the NaN value.
-    fn nan() -> Self;
-    /// Returns the infinite value.
-    fn infinity() -> Self;
-    /// Returns the negative infinite value.
-    fn neg_infinity() -> Self;
-    /// Returns -0.0.
-    fn neg_zero() -> Self;
-
-    /// Returns true if this value is NaN and false otherwise.
+/// A built-in floating point number.
+#[doc(hidden)]
+#[unstable(feature = "core_float",
+           reason = "stable interface is via `impl f{32,64}` in later crates",
+           issue = "32110")]
+pub trait Float: Sized {
+    /// Returns `true` if this value is NaN and false otherwise.
+    #[stable(feature = "core", since = "1.6.0")]
     fn is_nan(self) -> bool;
-    /// Returns true if this value is positive infinity or negative infinity and
+    /// Returns `true` if this value is positive infinity or negative infinity and
     /// false otherwise.
+    #[stable(feature = "core", since = "1.6.0")]
     fn is_infinite(self) -> bool;
-    /// Returns true if this number is neither infinite nor NaN.
+    /// Returns `true` if this number is neither infinite nor NaN.
+    #[stable(feature = "core", since = "1.6.0")]
     fn is_finite(self) -> bool;
-    /// Returns true if this number is neither zero, infinite, denormal, or NaN.
+    /// Returns `true` if this number is neither zero, infinite, denormal, or NaN.
+    #[stable(feature = "core", since = "1.6.0")]
     fn is_normal(self) -> bool;
     /// Returns the category that this number falls into.
-    fn classify(self) -> FPCategory;
+    #[stable(feature = "core", since = "1.6.0")]
+    fn classify(self) -> FpCategory;
 
-    // FIXME (#5527): These should be associated constants
+    /// Computes the absolute value of `self`. Returns `Float::nan()` if the
+    /// number is `Float::nan()`.
+    #[stable(feature = "core", since = "1.6.0")]
+    fn abs(self) -> Self;
+    /// Returns a number that represents the sign of `self`.
+    ///
+    /// - `1.0` if the number is positive, `+0.0` or `Float::infinity()`
+    /// - `-1.0` if the number is negative, `-0.0` or `Float::neg_infinity()`
+    /// - `Float::nan()` if the number is `Float::nan()`
+    #[stable(feature = "core", since = "1.6.0")]
+    fn signum(self) -> Self;
 
-    /// Returns the number of binary digits of mantissa that this type supports.
-    fn mantissa_digits(unused_self: Option<Self>) -> uint;
-    /// Returns the number of base-10 digits of precision that this type supports.
-    fn digits(unused_self: Option<Self>) -> uint;
-    /// Returns the difference between 1.0 and the smallest representable number larger than 1.0.
-    fn epsilon() -> Self;
-    /// Returns the minimum binary exponent that this type can represent.
-    fn min_exp(unused_self: Option<Self>) -> int;
-    /// Returns the maximum binary exponent that this type can represent.
-    fn max_exp(unused_self: Option<Self>) -> int;
-    /// Returns the minimum base-10 exponent that this type can represent.
-    fn min_10_exp(unused_self: Option<Self>) -> int;
-    /// Returns the maximum base-10 exponent that this type can represent.
-    fn max_10_exp(unused_self: Option<Self>) -> int;
-    /// Returns the smallest normalized positive number that this type can represent.
-    fn min_pos_value(unused_self: Option<Self>) -> Self;
+    /// Returns `true` if `self` is positive, including `+0.0` and
+    /// `Float::infinity()`.
+    #[stable(feature = "core", since = "1.6.0")]
+    fn is_sign_positive(self) -> bool;
+    /// Returns `true` if `self` is negative, including `-0.0` and
+    /// `Float::neg_infinity()`.
+    #[stable(feature = "core", since = "1.6.0")]
+    fn is_sign_negative(self) -> bool;
 
-    /// Returns the mantissa, exponent and sign as integers, respectively.
-    fn integer_decode(self) -> (u64, i16, i8);
-
-    /// Return the largest integer less than or equal to a number.
-    fn floor(self) -> Self;
-    /// Return the smallest integer greater than or equal to a number.
-    fn ceil(self) -> Self;
-    /// Return the nearest integer to a number. Round half-way cases away from
-    /// `0.0`.
-    fn round(self) -> Self;
-    /// Return the integer part of a number.
-    fn trunc(self) -> Self;
-    /// Return the fractional part of a number.
-    fn fract(self) -> Self;
-
-    /// Fused multiply-add. Computes `(self * a) + b` with only one rounding
-    /// error. This produces a more accurate result with better performance than
-    /// a separate multiplication operation followed by an add.
-    fn mul_add(self, a: Self, b: Self) -> Self;
     /// Take the reciprocal (inverse) of a number, `1/x`.
+    #[stable(feature = "core", since = "1.6.0")]
     fn recip(self) -> Self;
 
     /// Raise a number to an integer power.
     ///
     /// Using this function is generally faster than using `powf`
+    #[stable(feature = "core", since = "1.6.0")]
     fn powi(self, n: i32) -> Self;
-    /// Raise a number to a floating point power.
-    fn powf(self, n: Self) -> Self;
-
-    /// sqrt(2.0).
-    fn sqrt2() -> Self;
-    /// 1.0 / sqrt(2.0).
-    fn frac_1_sqrt2() -> Self;
-
-    /// Take the square root of a number.
-    fn sqrt(self) -> Self;
-    /// Take the reciprocal (inverse) square root of a number, `1/sqrt(x)`.
-    fn rsqrt(self) -> Self;
-
-    // FIXME (#5527): These should be associated constants
-
-    /// Archimedes' constant.
-    fn pi() -> Self;
-    /// 2.0 * pi.
-    fn two_pi() -> Self;
-    /// pi / 2.0.
-    fn frac_pi_2() -> Self;
-    /// pi / 3.0.
-    fn frac_pi_3() -> Self;
-    /// pi / 4.0.
-    fn frac_pi_4() -> Self;
-    /// pi / 6.0.
-    fn frac_pi_6() -> Self;
-    /// pi / 8.0.
-    fn frac_pi_8() -> Self;
-    /// 1.0 / pi.
-    fn frac_1_pi() -> Self;
-    /// 2.0 / pi.
-    fn frac_2_pi() -> Self;
-    /// 2.0 / sqrt(pi).
-    fn frac_2_sqrtpi() -> Self;
-
-    /// Euler's number.
-    fn e() -> Self;
-    /// log2(e).
-    fn log2_e() -> Self;
-    /// log10(e).
-    fn log10_e() -> Self;
-    /// ln(2.0).
-    fn ln_2() -> Self;
-    /// ln(10.0).
-    fn ln_10() -> Self;
-
-    /// Returns `e^(self)`, (the exponential function).
-    fn exp(self) -> Self;
-    /// Returns 2 raised to the power of the number, `2^(self)`.
-    fn exp2(self) -> Self;
-    /// Returns the natural logarithm of the number.
-    fn ln(self) -> Self;
-    /// Returns the logarithm of the number with respect to an arbitrary base.
-    fn log(self, base: Self) -> Self;
-    /// Returns the base 2 logarithm of the number.
-    fn log2(self) -> Self;
-    /// Returns the base 10 logarithm of the number.
-    fn log10(self) -> Self;
 
     /// Convert radians to degrees.
+    #[stable(feature = "deg_rad_conversions", since="1.7.0")]
     fn to_degrees(self) -> Self;
     /// Convert degrees to radians.
+    #[stable(feature = "deg_rad_conversions", since="1.7.0")]
     fn to_radians(self) -> Self;
+
+    /// Returns the maximum of the two numbers.
+    #[stable(feature = "core_float_min_max", since="1.20.0")]
+    fn max(self, other: Self) -> Self;
+    /// Returns the minimum of the two numbers.
+    #[stable(feature = "core_float_min_max", since="1.20.0")]
+    fn min(self, other: Self) -> Self;
 }
+
+macro_rules! from_str_radix_int_impl {
+    ($($t:ty)*) => {$(
+        #[stable(feature = "rust1", since = "1.0.0")]
+        impl FromStr for $t {
+            type Err = ParseIntError;
+            fn from_str(src: &str) -> Result<Self, ParseIntError> {
+                from_str_radix(src, 10)
+            }
+        }
+    )*}
+}
+from_str_radix_int_impl! { isize i8 i16 i32 i64 i128 usize u8 u16 u32 u64 u128 }
+
+/// The error type returned when a checked integral type conversion fails.
+#[unstable(feature = "try_from", issue = "33417")]
+#[derive(Debug, Copy, Clone)]
+pub struct TryFromIntError(());
+
+impl TryFromIntError {
+    #[unstable(feature = "int_error_internals",
+               reason = "available through Error trait and this method should \
+                         not be exposed publicly",
+               issue = "0")]
+    #[doc(hidden)]
+    pub fn __description(&self) -> &str {
+        "out of range integral type conversion attempted"
+    }
+}
+
+#[unstable(feature = "try_from", issue = "33417")]
+impl fmt::Display for TryFromIntError {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        self.__description().fmt(fmt)
+    }
+}
+
+// no possible bounds violation
+macro_rules! try_from_unbounded {
+    ($source:ty, $($target:ty),*) => {$(
+        #[unstable(feature = "try_from", issue = "33417")]
+        impl TryFrom<$source> for $target {
+            type Error = TryFromIntError;
+
+            #[inline]
+            fn try_from(u: $source) -> Result<$target, TryFromIntError> {
+                Ok(u as $target)
+            }
+        }
+    )*}
+}
+
+// only negative bounds
+macro_rules! try_from_lower_bounded {
+    ($source:ty, $($target:ty),*) => {$(
+        #[unstable(feature = "try_from", issue = "33417")]
+        impl TryFrom<$source> for $target {
+            type Error = TryFromIntError;
+
+            #[inline]
+            fn try_from(u: $source) -> Result<$target, TryFromIntError> {
+                if u >= 0 {
+                    Ok(u as $target)
+                } else {
+                    Err(TryFromIntError(()))
+                }
+            }
+        }
+    )*}
+}
+
+// unsigned to signed (only positive bound)
+macro_rules! try_from_upper_bounded {
+    ($source:ty, $($target:ty),*) => {$(
+        #[unstable(feature = "try_from", issue = "33417")]
+        impl TryFrom<$source> for $target {
+            type Error = TryFromIntError;
+
+            #[inline]
+            fn try_from(u: $source) -> Result<$target, TryFromIntError> {
+                if u > (<$target>::max_value() as $source) {
+                    Err(TryFromIntError(()))
+                } else {
+                    Ok(u as $target)
+                }
+            }
+        }
+    )*}
+}
+
+// all other cases
+macro_rules! try_from_both_bounded {
+    ($source:ty, $($target:ty),*) => {$(
+        #[unstable(feature = "try_from", issue = "33417")]
+        impl TryFrom<$source> for $target {
+            type Error = TryFromIntError;
+
+            #[inline]
+            fn try_from(u: $source) -> Result<$target, TryFromIntError> {
+                let min = <$target>::min_value() as $source;
+                let max = <$target>::max_value() as $source;
+                if u < min || u > max {
+                    Err(TryFromIntError(()))
+                } else {
+                    Ok(u as $target)
+                }
+            }
+        }
+    )*}
+}
+
+macro_rules! rev {
+    ($mac:ident, $source:ty, $($target:ty),*) => {$(
+        $mac!($target, $source);
+    )*}
+}
+
+/// intra-sign conversions
+try_from_unbounded!(u8, u8, u16, u32, u64, u128);
+try_from_unbounded!(u16, u16, u32, u64, u128);
+try_from_unbounded!(u32, u32, u64, u128);
+try_from_unbounded!(u64, u64, u128);
+try_from_unbounded!(u128, u128);
+try_from_upper_bounded!(u16, u8);
+try_from_upper_bounded!(u32, u16, u8);
+try_from_upper_bounded!(u64, u32, u16, u8);
+try_from_upper_bounded!(u128, u64, u32, u16, u8);
+
+try_from_unbounded!(i8, i8, i16, i32, i64, i128);
+try_from_unbounded!(i16, i16, i32, i64, i128);
+try_from_unbounded!(i32, i32, i64, i128);
+try_from_unbounded!(i64, i64, i128);
+try_from_unbounded!(i128, i128);
+try_from_both_bounded!(i16, i8);
+try_from_both_bounded!(i32, i16, i8);
+try_from_both_bounded!(i64, i32, i16, i8);
+try_from_both_bounded!(i128, i64, i32, i16, i8);
+
+// unsigned-to-signed
+try_from_unbounded!(u8, i16, i32, i64, i128);
+try_from_unbounded!(u16, i32, i64, i128);
+try_from_unbounded!(u32, i64, i128);
+try_from_unbounded!(u64, i128);
+try_from_upper_bounded!(u8, i8);
+try_from_upper_bounded!(u16, i8, i16);
+try_from_upper_bounded!(u32, i8, i16, i32);
+try_from_upper_bounded!(u64, i8, i16, i32, i64);
+try_from_upper_bounded!(u128, i8, i16, i32, i64, i128);
+
+// signed-to-unsigned
+try_from_lower_bounded!(i8, u8, u16, u32, u64, u128);
+try_from_lower_bounded!(i16, u16, u32, u64, u128);
+try_from_lower_bounded!(i32, u32, u64, u128);
+try_from_lower_bounded!(i64, u64, u128);
+try_from_lower_bounded!(i128, u128);
+try_from_both_bounded!(i16, u8);
+try_from_both_bounded!(i32, u16, u8);
+try_from_both_bounded!(i64, u32, u16, u8);
+try_from_both_bounded!(i128, u64, u32, u16, u8);
+
+#[unstable(feature = "try_from", issue = "33417")]
+pub use self::ptr_try_from_impls::*;
+
+#[cfg(target_pointer_width = "16")]
+mod ptr_try_from_impls {
+    use super::TryFromIntError;
+    use convert::TryFrom;
+
+    try_from_upper_bounded!(usize, u8);
+    try_from_unbounded!(usize, usize, u16, u32, u64, u128);
+    try_from_upper_bounded!(usize, i8, i16, isize);
+    try_from_unbounded!(usize, i32, i64, i128);
+
+    try_from_both_bounded!(isize, u8);
+    try_from_lower_bounded!(isize, usize, u16, u32, u64, u128);
+    try_from_both_bounded!(isize, i8);
+    try_from_unbounded!(isize, i16, i32, i64, i128);
+
+    rev!(try_from_unbounded, usize, u8, u16);
+    rev!(try_from_upper_bounded, usize, u32, u64, u128);
+    rev!(try_from_lower_bounded, usize, i8, i16);
+    rev!(try_from_both_bounded, usize, i32, i64, i128);
+
+    rev!(try_from_unbounded, isize, u8);
+    rev!(try_from_upper_bounded, isize, u16, u32, u64, u128);
+    rev!(try_from_unbounded, isize, i8, i16);
+    rev!(try_from_both_bounded, isize, i32, i64, i128);
+}
+
+#[cfg(target_pointer_width = "32")]
+mod ptr_try_from_impls {
+    use super::TryFromIntError;
+    use convert::TryFrom;
+
+    try_from_upper_bounded!(usize, u8, u16);
+    try_from_unbounded!(usize, usize, u32, u64, u128);
+    try_from_upper_bounded!(usize, i8, i16, i32, isize);
+    try_from_unbounded!(usize, i64, i128);
+
+    try_from_both_bounded!(isize, u8, u16);
+    try_from_lower_bounded!(isize, usize, u32, u64, u128);
+    try_from_both_bounded!(isize, i8, i16);
+    try_from_unbounded!(isize, i32, i64, i128);
+
+    rev!(try_from_unbounded, usize, u8, u16, u32);
+    rev!(try_from_upper_bounded, usize, u64, u128);
+    rev!(try_from_lower_bounded, usize, i8, i16, i32);
+    rev!(try_from_both_bounded, usize, i64, i128);
+
+    rev!(try_from_unbounded, isize, u8, u16);
+    rev!(try_from_upper_bounded, isize, u32, u64, u128);
+    rev!(try_from_unbounded, isize, i8, i16, i32);
+    rev!(try_from_both_bounded, isize, i64, i128);
+}
+
+#[cfg(target_pointer_width = "64")]
+mod ptr_try_from_impls {
+    use super::TryFromIntError;
+    use convert::TryFrom;
+
+    try_from_upper_bounded!(usize, u8, u16, u32);
+    try_from_unbounded!(usize, usize, u64, u128);
+    try_from_upper_bounded!(usize, i8, i16, i32, i64, isize);
+    try_from_unbounded!(usize, i128);
+
+    try_from_both_bounded!(isize, u8, u16, u32);
+    try_from_lower_bounded!(isize, usize, u64, u128);
+    try_from_both_bounded!(isize, i8, i16, i32);
+    try_from_unbounded!(isize, i64, i128);
+
+    rev!(try_from_unbounded, usize, u8, u16, u32, u64);
+    rev!(try_from_upper_bounded, usize, u128);
+    rev!(try_from_lower_bounded, usize, i8, i16, i32, i64);
+    rev!(try_from_both_bounded, usize, i128);
+
+    rev!(try_from_unbounded, isize, u8, u16, u32);
+    rev!(try_from_upper_bounded, isize, u64, u128);
+    rev!(try_from_unbounded, isize, i8, i16, i32, i64);
+    rev!(try_from_both_bounded, isize, i128);
+}
+
+#[doc(hidden)]
+trait FromStrRadixHelper: PartialOrd + Copy {
+    fn min_value() -> Self;
+    fn max_value() -> Self;
+    fn from_u32(u: u32) -> Self;
+    fn checked_mul(&self, other: u32) -> Option<Self>;
+    fn checked_sub(&self, other: u32) -> Option<Self>;
+    fn checked_add(&self, other: u32) -> Option<Self>;
+}
+
+macro_rules! doit {
+    ($($t:ty)*) => ($(impl FromStrRadixHelper for $t {
+        #[inline]
+        fn min_value() -> Self { Self::min_value() }
+        #[inline]
+        fn max_value() -> Self { Self::max_value() }
+        #[inline]
+        fn from_u32(u: u32) -> Self { u as Self }
+        #[inline]
+        fn checked_mul(&self, other: u32) -> Option<Self> {
+            Self::checked_mul(*self, other as Self)
+        }
+        #[inline]
+        fn checked_sub(&self, other: u32) -> Option<Self> {
+            Self::checked_sub(*self, other as Self)
+        }
+        #[inline]
+        fn checked_add(&self, other: u32) -> Option<Self> {
+            Self::checked_add(*self, other as Self)
+        }
+    })*)
+}
+doit! { i8 i16 i32 i64 i128 isize u8 u16 u32 u64 u128 usize }
+
+fn from_str_radix<T: FromStrRadixHelper>(src: &str, radix: u32) -> Result<T, ParseIntError> {
+    use self::IntErrorKind::*;
+    use self::ParseIntError as PIE;
+
+    assert!(radix >= 2 && radix <= 36,
+           "from_str_radix_int: must lie in the range `[2, 36]` - found {}",
+           radix);
+
+    if src.is_empty() {
+        return Err(PIE { kind: Empty });
+    }
+
+    let is_signed_ty = T::from_u32(0) > T::min_value();
+
+    // all valid digits are ascii, so we will just iterate over the utf8 bytes
+    // and cast them to chars. .to_digit() will safely return None for anything
+    // other than a valid ascii digit for the given radix, including the first-byte
+    // of multi-byte sequences
+    let src = src.as_bytes();
+
+    let (is_positive, digits) = match src[0] {
+        b'+' => (true, &src[1..]),
+        b'-' if is_signed_ty => (false, &src[1..]),
+        _ => (true, src),
+    };
+
+    if digits.is_empty() {
+        return Err(PIE { kind: Empty });
+    }
+
+    let mut result = T::from_u32(0);
+    if is_positive {
+        // The number is positive
+        for &c in digits {
+            let x = match (c as char).to_digit(radix) {
+                Some(x) => x,
+                None => return Err(PIE { kind: InvalidDigit }),
+            };
+            result = match result.checked_mul(radix) {
+                Some(result) => result,
+                None => return Err(PIE { kind: Overflow }),
+            };
+            result = match result.checked_add(x) {
+                Some(result) => result,
+                None => return Err(PIE { kind: Overflow }),
+            };
+        }
+    } else {
+        // The number is negative
+        for &c in digits {
+            let x = match (c as char).to_digit(radix) {
+                Some(x) => x,
+                None => return Err(PIE { kind: InvalidDigit }),
+            };
+            result = match result.checked_mul(radix) {
+                Some(result) => result,
+                None => return Err(PIE { kind: Underflow }),
+            };
+            result = match result.checked_sub(x) {
+                Some(result) => result,
+                None => return Err(PIE { kind: Underflow }),
+            };
+        }
+    }
+    Ok(result)
+}
+
+/// An error which can be returned when parsing an integer.
+///
+/// This error is used as the error type for the `from_str_radix()` functions
+/// on the primitive integer types, such as [`i8::from_str_radix`].
+///
+/// [`i8::from_str_radix`]: ../../std/primitive.i8.html#method.from_str_radix
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[stable(feature = "rust1", since = "1.0.0")]
+pub struct ParseIntError {
+    kind: IntErrorKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum IntErrorKind {
+    Empty,
+    InvalidDigit,
+    Overflow,
+    Underflow,
+}
+
+impl ParseIntError {
+    #[unstable(feature = "int_error_internals",
+               reason = "available through Error trait and this method should \
+                         not be exposed publicly",
+               issue = "0")]
+    #[doc(hidden)]
+    pub fn __description(&self) -> &str {
+        match self.kind {
+            IntErrorKind::Empty => "cannot parse integer from empty string",
+            IntErrorKind::InvalidDigit => "invalid digit found in string",
+            IntErrorKind::Overflow => "number too large to fit in target type",
+            IntErrorKind::Underflow => "number too small to fit in target type",
+        }
+    }
+}
+
+#[stable(feature = "rust1", since = "1.0.0")]
+impl fmt::Display for ParseIntError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.__description().fmt(f)
+    }
+}
+
+#[stable(feature = "rust1", since = "1.0.0")]
+pub use num::dec2flt::ParseFloatError;
+
+// Conversion traits for primitive integer and float types
+// Conversions T -> T are covered by a blanket impl and therefore excluded
+// Some conversions from and to usize/isize are not implemented due to portability concerns
+macro_rules! impl_from {
+    ($Small: ty, $Large: ty, #[$attr:meta]) => {
+        #[$attr]
+        impl From<$Small> for $Large {
+            #[inline]
+            fn from(small: $Small) -> $Large {
+                small as $Large
+            }
+        }
+    }
+}
+
+// Unsigned -> Unsigned
+impl_from! { u8, u16, #[stable(feature = "lossless_int_conv", since = "1.5.0")] }
+impl_from! { u8, u32, #[stable(feature = "lossless_int_conv", since = "1.5.0")] }
+impl_from! { u8, u64, #[stable(feature = "lossless_int_conv", since = "1.5.0")] }
+impl_from! { u8, u128, #[unstable(feature = "i128", issue = "35118")] }
+impl_from! { u8, usize, #[stable(feature = "lossless_int_conv", since = "1.5.0")] }
+impl_from! { u16, u32, #[stable(feature = "lossless_int_conv", since = "1.5.0")] }
+impl_from! { u16, u64, #[stable(feature = "lossless_int_conv", since = "1.5.0")] }
+impl_from! { u16, u128, #[unstable(feature = "i128", issue = "35118")] }
+impl_from! { u32, u64, #[stable(feature = "lossless_int_conv", since = "1.5.0")] }
+impl_from! { u32, u128, #[unstable(feature = "i128", issue = "35118")] }
+impl_from! { u64, u128, #[unstable(feature = "i128", issue = "35118")] }
+
+// Signed -> Signed
+impl_from! { i8, i16, #[stable(feature = "lossless_int_conv", since = "1.5.0")] }
+impl_from! { i8, i32, #[stable(feature = "lossless_int_conv", since = "1.5.0")] }
+impl_from! { i8, i64, #[stable(feature = "lossless_int_conv", since = "1.5.0")] }
+impl_from! { i8, i128, #[unstable(feature = "i128", issue = "35118")] }
+impl_from! { i8, isize, #[stable(feature = "lossless_int_conv", since = "1.5.0")] }
+impl_from! { i16, i32, #[stable(feature = "lossless_int_conv", since = "1.5.0")] }
+impl_from! { i16, i64, #[stable(feature = "lossless_int_conv", since = "1.5.0")] }
+impl_from! { i16, i128, #[unstable(feature = "i128", issue = "35118")] }
+impl_from! { i32, i64, #[stable(feature = "lossless_int_conv", since = "1.5.0")] }
+impl_from! { i32, i128, #[unstable(feature = "i128", issue = "35118")] }
+impl_from! { i64, i128, #[unstable(feature = "i128", issue = "35118")] }
+
+// Unsigned -> Signed
+impl_from! { u8, i16, #[stable(feature = "lossless_int_conv", since = "1.5.0")] }
+impl_from! { u8, i32, #[stable(feature = "lossless_int_conv", since = "1.5.0")] }
+impl_from! { u8, i64, #[stable(feature = "lossless_int_conv", since = "1.5.0")] }
+impl_from! { u8, i128, #[unstable(feature = "i128", issue = "35118")] }
+impl_from! { u16, i32, #[stable(feature = "lossless_int_conv", since = "1.5.0")] }
+impl_from! { u16, i64, #[stable(feature = "lossless_int_conv", since = "1.5.0")] }
+impl_from! { u16, i128, #[unstable(feature = "i128", issue = "35118")] }
+impl_from! { u32, i64, #[stable(feature = "lossless_int_conv", since = "1.5.0")] }
+impl_from! { u32, i128, #[unstable(feature = "i128", issue = "35118")] }
+impl_from! { u64, i128, #[unstable(feature = "i128", issue = "35118")] }
+
+// Note: integers can only be represented with full precision in a float if
+// they fit in the significand, which is 24 bits in f32 and 53 bits in f64.
+// Lossy float conversions are not implemented at this time.
+
+// Signed -> Float
+impl_from! { i8, f32, #[stable(feature = "lossless_float_conv", since = "1.6.0")] }
+impl_from! { i8, f64, #[stable(feature = "lossless_float_conv", since = "1.6.0")] }
+impl_from! { i16, f32, #[stable(feature = "lossless_float_conv", since = "1.6.0")] }
+impl_from! { i16, f64, #[stable(feature = "lossless_float_conv", since = "1.6.0")] }
+impl_from! { i32, f64, #[stable(feature = "lossless_float_conv", since = "1.6.0")] }
+
+// Unsigned -> Float
+impl_from! { u8, f32, #[stable(feature = "lossless_float_conv", since = "1.6.0")] }
+impl_from! { u8, f64, #[stable(feature = "lossless_float_conv", since = "1.6.0")] }
+impl_from! { u16, f32, #[stable(feature = "lossless_float_conv", since = "1.6.0")] }
+impl_from! { u16, f64, #[stable(feature = "lossless_float_conv", since = "1.6.0")] }
+impl_from! { u32, f64, #[stable(feature = "lossless_float_conv", since = "1.6.0")] }
+
+// Float -> Float
+impl_from! { f32, f64, #[stable(feature = "lossless_float_conv", since = "1.6.0")] }

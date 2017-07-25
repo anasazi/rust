@@ -8,10 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::task;
+// ignore-emscripten no threads support
+// pretty-expanded FIXME #23616
+
+#![feature(std_misc)]
+
+use std::thread;
 
 pub fn main() {
-    task::spawn(proc() child("Hello".to_string()) );
+    thread::spawn(move|| child("Hello".to_string()) ).join();
 }
 
 fn child(_s: String) {

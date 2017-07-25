@@ -9,14 +9,17 @@
 // except according to those terms.
 
 
-#[deriving(Clone)]
+#![allow(unknown_features)]
+#![feature(box_syntax)]
+
+#[derive(Clone)]
 struct Triple {
-    x: int,
-    y: int,
-    z: int,
+    x: isize,
+    y: isize,
+    z: isize,
 }
 
-fn test(x: bool, foo: Box<Triple>) -> int {
+fn test(x: bool, foo: Box<Triple>) -> isize {
     let bar = foo;
     let mut y: Box<Triple>;
     if x { y = bar; } else { y = box Triple {x: 4, y: 5, z: 6}; }
@@ -24,8 +27,8 @@ fn test(x: bool, foo: Box<Triple>) -> int {
 }
 
 pub fn main() {
-    let x = box Triple{x: 1, y: 2, z: 3};
-    for _ in range(0u, 10000u) {
+    let x: Box<_> = box Triple{x: 1, y: 2, z: 3};
+    for _ in 0_usize..10000_usize {
         assert_eq!(test(true, x.clone()), 2);
     }
     assert_eq!(test(false, x), 5);

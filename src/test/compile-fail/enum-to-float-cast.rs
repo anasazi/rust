@@ -20,16 +20,12 @@ enum F {
     H1 = 0xFFFFFFFFFFFFFFFF
 }
 
-static C0: f32 = L0 as f32; //~ ERROR illegal cast
-static C1: f32 = H1 as f32; //~ ERROR illegal cast
+static C0: f32 = E::L0 as f32; //~ ERROR casting
+static C1: f32 = F::H1 as f32; //~ ERROR casting
 
 pub fn main() {
-    let a = L0 as f32;  //~ ERROR illegal cast
     let b = C0;
-    let c = H1 as f32;  //~ ERROR illegal cast
     let d = C1;
-    assert_eq!(a, -1.0f32);
     assert_eq!(b, -1.0f32);
-    assert_eq!(c, -1.0f32);
     assert_eq!(d, -1.0f32);
 }

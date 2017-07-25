@@ -8,13 +8,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+
 pub fn main() {
-    assert_eq!((vec!(0i, 1)).to_string(), "[0, 1]".to_string());
-    assert_eq!((&[1i, 2]).to_string(), "[1, 2]".to_string());
+    assert_eq!(format!("{:?}", vec![0, 1]), "[0, 1]".to_string());
 
-    let foo = vec!(3i, 4);
-    let bar = &[4i, 5];
+    let foo = vec![3, 4];
+    let bar: &[isize] = &[4, 5];
 
-    assert_eq!(foo.to_string(), "[3, 4]".to_string());
-    assert_eq!(bar.to_string(), "[4, 5]".to_string());
+    assert_eq!(format!("{:?}", foo), "[3, 4]");
+    assert_eq!(format!("{:?}", bar), "[4, 5]");
 }

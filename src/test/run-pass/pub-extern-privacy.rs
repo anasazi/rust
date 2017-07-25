@@ -8,6 +8,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// pretty-expanded FIXME #23616
+
 use std::mem::transmute;
 
 mod a {
@@ -18,6 +20,6 @@ mod a {
 
 pub fn main() {
     unsafe {
-        a::free(transmute(0u));
+        a::free(transmute(0_usize));
     }
 }

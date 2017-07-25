@@ -8,27 +8,28 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(managed_boxes)]
 
-use std::gc::{Gc, GC};
+
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
 trait Foo {
     fn foo(&self) -> String;
 }
 
-impl<T:Foo> Foo for Gc<T> {
+impl<T:Foo> Foo for Box<T> {
     fn foo(&self) -> String {
-        format!("box(GC) {}", (**self).foo())
+        format!("box {}", (**self).foo())
     }
 }
 
-impl Foo for uint {
+impl Foo for usize {
     fn foo(&self) -> String {
         format!("{}", *self)
     }
 }
 
 pub fn main() {
-    let x = box(GC) 3u;
-    assert_eq!(x.foo(), "box(GC) 3".to_string());
+    let x: Box<_> = box 3;
+    assert_eq!(x.foo(), "box 3".to_string());
 }

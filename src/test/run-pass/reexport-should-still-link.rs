@@ -10,7 +10,9 @@
 
 // aux-build:reexport-should-still-link.rs
 
-extern crate foo = "reexport-should-still-link";
+// pretty-expanded FIXME #23616
+
+extern crate reexport_should_still_link as foo;
 
 pub fn main() {
     foo::bar();

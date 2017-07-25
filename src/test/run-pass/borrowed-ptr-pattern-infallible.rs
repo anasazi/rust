@@ -8,10 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(managed_boxes)]
+
 
 pub fn main() {
-    let (&x, &y) = (&3i, &'a');
+    let (&x, &y) = (&3, &'a');
     assert_eq!(x, 3);
     assert_eq!(y, 'a');
 }

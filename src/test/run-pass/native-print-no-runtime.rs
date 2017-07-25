@@ -8,9 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![feature(start)]
 
 #[start]
-pub fn main(_: int, _: *const *const u8) -> int {
+pub fn main(_: isize, _: *const *const u8) -> isize {
     println!("hello");
     0
 }

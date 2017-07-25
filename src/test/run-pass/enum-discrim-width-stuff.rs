@@ -8,24 +8,21 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(macro_rules)]
-
-extern crate debug;
-
 macro_rules! check {
     ($m:ident, $t:ty, $v:expr) => {{
         mod $m {
             use std::mem::size_of;
+            #[derive(Copy, Clone, Debug)]
             enum E {
                 V = $v,
                 A = 0
             }
-            static C: E = V;
+            static C: E = E::V;
             pub fn check() {
                 assert_eq!(size_of::<E>(), size_of::<$t>());
-                assert_eq!(V as $t, $v as $t);
+                assert_eq!(E::V as $t, $v as $t);
                 assert_eq!(C as $t, $v as $t);
-                assert_eq!(format!("{:?}", V), "V".to_string());
+                assert_eq!(format!("{:?}", E::V), "V".to_string());
                 assert_eq!(format!("{:?}", C), "V".to_string());
             }
         }

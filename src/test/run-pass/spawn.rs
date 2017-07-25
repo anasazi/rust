@@ -8,10 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::task;
+// ignore-emscripten no threads support
+
+use std::thread;
 
 pub fn main() {
-    task::spawn(proc() child(10) );
+    thread::spawn(move|| child(10)).join().ok().unwrap();
 }
 
-fn child(i: int) { println!("{}", i); assert!((i == 10)); }
+fn child(i: isize) { println!("{}", i); assert_eq!(i, 10); }

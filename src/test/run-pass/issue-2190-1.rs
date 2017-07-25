@@ -8,20 +8,23 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::task::TaskBuilder;
+// pretty-expanded FIXME #23616
+// ignore-emscripten
 
-static generations: uint = 1024+256+128+49;
+use std::thread::Builder;
 
-fn spawn(f: proc():Send) {
-    TaskBuilder::new().stack_size(32 * 1024).spawn(f)
+static generations: usize = 1024+256+128+49;
+
+fn spawn(mut f: Box<FnMut() + 'static + Send>) {
+    Builder::new().stack_size(32 * 1024).spawn(move|| f());
 }
 
-fn child_no(x: uint) -> proc():Send {
-    proc() {
+fn child_no(x: usize) -> Box<FnMut() + 'static + Send> {
+    Box::new(move|| {
         if x < generations {
             spawn(child_no(x+1));
         }
-    }
+    })
 }
 
 pub fn main() {

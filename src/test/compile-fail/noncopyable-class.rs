@@ -11,28 +11,28 @@
 // Test that a class with a non-copyable field can't be
 // copied
 
-extern crate debug;
-
+#[derive(Debug)]
 struct bar {
-  x: int,
+  x: isize,
 }
 
 impl Drop for bar {
     fn drop(&mut self) {}
 }
 
-fn bar(x:int) -> bar {
+fn bar(x:isize) -> bar {
     bar {
         x: x
     }
 }
 
+#[derive(Debug)]
 struct foo {
-  i: int,
+  i: isize,
   j: bar,
 }
 
-fn foo(i:int) -> foo {
+fn foo(i:isize) -> foo {
     foo {
         i: i,
         j: bar(5)
@@ -41,6 +41,6 @@ fn foo(i:int) -> foo {
 
 fn main() {
     let x = foo(10);
-    let _y = x.clone(); //~ ERROR does not implement any method in scope
+    let _y = x.clone(); //~ ERROR no method named `clone` found
     println!("{:?}", x);
 }

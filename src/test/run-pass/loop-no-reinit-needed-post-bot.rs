@@ -8,16 +8,18 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// pretty-expanded FIXME #23616
+
 struct S;
 // Ensure S is moved, not copied, on assignment.
 impl Drop for S { fn drop(&mut self) { } }
 
 // user-defined function "returning" bottom (i.e. no return at all).
-fn my_fail() -> ! { loop {} }
+fn my_panic() -> ! { loop {} }
 
 pub fn step(f: bool) {
     let mut g = S;
-    let mut i = 0i;
+    let mut i = 0;
     loop
     {
         if i > 10 { break; } else { i += 1; }
@@ -30,7 +32,7 @@ pub fn step(f: bool) {
             continue;
         }
 
-        my_fail();
+        my_panic();
 
         // we never get here, so we do not need to re-initialize g.
     }

@@ -9,11 +9,10 @@
 // except according to those terms.
 
 // aux-build:weak-lang-items.rs
-// error-pattern: language item required, but not found: `begin_unwind`
-// error-pattern: language item required, but not found: `stack_exhausted`
+// error-pattern: language item required, but not found: `panic_fmt`
 // error-pattern: language item required, but not found: `eh_personality`
 
 #![no_std]
 
 extern crate core;
-extern crate other = "weak-lang-items";
+extern crate weak_lang_items;

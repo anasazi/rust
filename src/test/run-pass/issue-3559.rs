@@ -8,8 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate collections;
-
 use std::collections::HashMap;
 
 fn check_strs(actual: &str, expected: &str) -> bool {
@@ -22,8 +20,8 @@ fn check_strs(actual: &str, expected: &str) -> bool {
 
 pub fn main() {
     let mut table = HashMap::new();
-    table.insert("one".to_string(), 1i);
-    table.insert("two".to_string(), 2i);
-    assert!(check_strs(table.to_string().as_slice(), "{one: 1, two: 2}") ||
-            check_strs(table.to_string().as_slice(), "{two: 2, one: 1}"));
+    table.insert("one".to_string(), 1);
+    table.insert("two".to_string(), 2);
+    assert!(check_strs(&format!("{:?}", table), "{\"one\": 1, \"two\": 2}") ||
+            check_strs(&format!("{:?}", table), "{\"two\": 2, \"one\": 1}"));
 }

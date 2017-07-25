@@ -8,21 +8,18 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(managed_boxes, unsafe_destructor)]
+use std::thread;
+use std::rc::Rc;
 
-extern crate debug;
-
-use std::task;
-use std::gc::{Gc, GC};
-
-struct Port<T>(Gc<T>);
+#[derive(Debug)]
+struct Port<T>(Rc<T>);
 
 fn main() {
+    #[derive(Debug)]
     struct foo {
       _x: Port<()>,
     }
 
-    #[unsafe_destructor]
     impl Drop for foo {
         fn drop(&mut self) {}
     }
@@ -33,10 +30,11 @@ fn main() {
         }
     }
 
-    let x = foo(Port(box(GC) ()));
+    let x = foo(Port(Rc::new(())));
 
-    task::spawn(proc() {
-        let y = x;   //~ ERROR does not fulfill `Send`
+    thread::spawn(move|| {
+        //~^ ERROR `std::rc::Rc<()>: std::marker::Send` is not satisfied
+        let y = x;
         println!("{:?}", y);
     });
 }

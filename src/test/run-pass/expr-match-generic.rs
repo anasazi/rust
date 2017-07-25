@@ -9,10 +9,11 @@
 // except according to those terms.
 
 
+
 type compare<T> = extern "Rust" fn(T, T) -> bool;
 
 fn test_generic<T:Clone>(expected: T, eq: compare<T>) {
-  let actual: T = match true { true => { expected.clone() }, _ => fail!("wat") };
+  let actual: T = match true { true => { expected.clone() }, _ => panic!("wat") };
     assert!((eq(expected, actual)));
 }
 
@@ -21,10 +22,10 @@ fn test_bool() {
     test_generic::<bool>(true, compare_bool);
 }
 
-#[deriving(Clone)]
+#[derive(Clone)]
 struct Pair {
-    a: int,
-    b: int,
+    a: isize,
+    b: isize,
 }
 
 fn test_rec() {

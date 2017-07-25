@@ -14,24 +14,25 @@
 
 // aux-build:static_mut_xc.rs
 
+
 extern crate static_mut_xc;
 
-unsafe fn static_bound(_: &'static int) {}
+unsafe fn static_bound(_: &'static isize) {}
 
-fn static_bound_set(a: &'static mut int) {
+fn static_bound_set(a: &'static mut isize) {
     *a = 3;
 }
 
 unsafe fn run() {
-    assert!(static_mut_xc::a == 3);
+    assert_eq!(static_mut_xc::a, 3);
     static_mut_xc::a = 4;
-    assert!(static_mut_xc::a == 4);
+    assert_eq!(static_mut_xc::a, 4);
     static_mut_xc::a += 1;
-    assert!(static_mut_xc::a == 5);
+    assert_eq!(static_mut_xc::a, 5);
     static_mut_xc::a *= 3;
-    assert!(static_mut_xc::a == 15);
+    assert_eq!(static_mut_xc::a, 15);
     static_mut_xc::a = -3;
-    assert!(static_mut_xc::a == -3);
+    assert_eq!(static_mut_xc::a, -3);
     static_bound(&static_mut_xc::a);
     static_bound_set(&mut static_mut_xc::a);
 }
@@ -41,5 +42,5 @@ pub fn main() {
 }
 
 pub mod inner {
-    pub static mut a: int = 4;
+    pub static mut a: isize = 4;
 }

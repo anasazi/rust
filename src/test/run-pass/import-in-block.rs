@@ -8,15 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(globs)]
+// pretty-expanded FIXME #23616
 
 pub fn main() {
     use std::mem::replace;
-    let mut x = 5i;
+    let mut x = 5;
     replace(&mut x, 6);
     {
         use std::mem::*;
-        let mut y = 6i;
+        let mut y = 6;
         swap(&mut x, &mut y);
     }
 }

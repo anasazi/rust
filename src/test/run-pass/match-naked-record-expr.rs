@@ -8,10 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-struct X { x: int }
+// pretty-expanded FIXME #23616
+
+struct X { x: isize }
 
 pub fn main() {
-    let _x = match 0i {
+    let _x = match 0 {
       _ => X {
         x: 0
       }.x

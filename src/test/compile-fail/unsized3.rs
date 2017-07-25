@@ -8,74 +8,54 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Test sized-ness checking in substitution.
+// Test sized-ness checking in substitution within fn bodies..
 
+use std::marker;
 
 // Unbounded.
-fn f1<Sized? X>(x: &X) {
-    f2::<X>(x); //~ ERROR instantiating a type parameter with an incompatible type `X`, which does n
+fn f1<X: ?Sized>(x: &X) {
+    f2::<X>(x);
+    //~^ ERROR `X: std::marker::Sized` is not satisfied
 }
 fn f2<X>(x: &X) {
 }
 
 // Bounded.
-trait T for Sized? {}
-fn f3<Sized? X: T>(x: &X) {
-    f4::<X>(x); //~ ERROR instantiating a type parameter with an incompatible type `X`, which does n
+trait T {
+    fn foo(&self) { }
+}
+fn f3<X: ?Sized + T>(x: &X) {
+    f4::<X>(x);
+    //~^ ERROR `X: std::marker::Sized` is not satisfied
 }
 fn f4<X: T>(x: &X) {
 }
 
-// Test with unsized enum.
-enum E<Sized? X> {
-    V(X),
-}
-
 fn f5<Y>(x: &Y) {}
-fn f6<Sized? X>(x: &X) {}
-fn f7<Sized? X>(x1: &E<X>, x2: &E<X>) {
-    f5(x1); //~ERROR instantiating a type parameter with an incompatible type `E<X>`, which does not
-    f6(x2); // ok
-}
-
+fn f6<X: ?Sized>(x: &X) {}
 
 // Test with unsized struct.
-struct S<Sized? X> {
+struct S<X: ?Sized> {
     x: X,
 }
 
-fn f8<Sized? X>(x1: &S<X>, x2: &S<X>) {
-    f5(x1); //~ERROR instantiating a type parameter with an incompatible type `S<X>`, which does not
+fn f8<X: ?Sized>(x1: &S<X>, x2: &S<X>) {
+    f5(x1);
+    //~^ ERROR `X: std::marker::Sized` is not satisfied
     f6(x2); // ok
 }
 
 // Test some tuples.
-fn f9<Sized? X>(x1: Box<S<X>>, x2: Box<E<X>>) {
-    f5(&(*x1, 34i)); //~ERROR instantiating a type parameter with an incompatible type `(S<X>,int)`,
-    f5(&(32i, *x2)); //~ERROR instantiating a type parameter with an incompatible type `(int,E<X>)`,
+fn f9<X: ?Sized>(x1: Box<S<X>>) {
+    f5(&(*x1, 34));
+    //~^ ERROR `X: std::marker::Sized` is not satisfied
 }
 
-// I would like these to fail eventually.
-/*
-// impl - bounded
-trait T1<Z: T> {
+fn f10<X: ?Sized>(x1: Box<S<X>>) {
+    f5(&(32, *x1));
+    //~^ ERROR `X: std::marker::Sized` is not satisfied
+    //~| ERROR `X: std::marker::Sized` is not satisfied
 }
-struct S3<Sized? Y>;
-impl<Sized? X: T> T1<X> for S3<X> { //ERROR instantiating a type parameter with an incompatible type
-}
-
-// impl - unbounded
-trait T2<Z> {
-}
-impl<Sized? X> T2<X> for S3<X> { //ERROR instantiating a type parameter with an incompatible type `X
-
-// impl - struct
-trait T3<Sized? Z> {
-}
-struct S4<Y>;
-impl<Sized? X> T3<X> for S4<X> { //ERROR instantiating a type parameter with an incompatible type `X
-}
-*/
 
 pub fn main() {
 }

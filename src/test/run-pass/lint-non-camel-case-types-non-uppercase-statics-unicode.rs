@@ -7,10 +7,11 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
+//
 
 
 #![forbid(non_camel_case_types)]
-#![forbid(non_uppercase_statics)]
+#![forbid(non_upper_case_globals)]
 #![feature(non_ascii_idents)]
 
 // Some scripts (e.g. hiragana) don't have a concept of
@@ -18,6 +19,6 @@
 
 struct ヒ;
 
-static ラ: uint = 0;
+static ラ: usize = 0;
 
 pub fn main() {}

@@ -13,21 +13,20 @@
 // the error points to the start of the file, not the line with the
 // transmute
 
-// error-pattern: transmute called on types with different size
-
-extern crate debug;
+// error-pattern: transmute called with types of different sizes
 
 use std::mem;
 
-#[packed]
+#[repr(packed)]
 struct Foo {
     bar: u8,
-    baz: uint
+    baz: usize
 }
 
+#[derive(Debug)]
 struct Oof {
     rab: u8,
-    zab: uint
+    zab: usize
 }
 
 fn main() {

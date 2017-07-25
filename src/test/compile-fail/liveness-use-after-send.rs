@@ -8,21 +8,22 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate debug;
+use std::marker;
 
-fn send<T:Send>(ch: _chan<T>, data: T) {
+fn send<T:Send + std::fmt::Debug>(ch: _chan<T>, data: T) {
     println!("{:?}", ch);
     println!("{:?}", data);
-    fail!();
+    panic!();
 }
 
-struct _chan<T>(int);
+#[derive(Debug)]
+struct _chan<T>(isize, marker::PhantomData<T>);
 
 // Tests that "log(debug, message);" is flagged as using
 // message after the send deinitializes it
-fn test00_start(ch: _chan<Box<int>>, message: Box<int>, _count: Box<int>) {
+fn test00_start(ch: _chan<Box<isize>>, message: Box<isize>, _count: Box<isize>) {
     send(ch, message);
-    println!("{:?}", message); //~ ERROR use of moved value: `message`
+    println!("{}", message); //~ ERROR use of moved value: `message`
 }
 
-fn main() { fail!(); }
+fn main() { panic!(); }

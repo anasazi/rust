@@ -14,21 +14,24 @@
 // Tests "capabilities" granted by traits with super-builtin-kinds,
 // even when using them cross-crate.
 
+
 extern crate trait_superkinds_in_metadata;
+
+use std::sync::mpsc::{channel, Sender, Receiver};
 use trait_superkinds_in_metadata::{RequiresRequiresShareAndSend, RequiresShare};
 
-#[deriving(PartialEq)]
+#[derive(PartialEq, Debug)]
 struct X<T>(T);
 
-impl <T: Share> RequiresShare for X<T> { }
-impl <T: Share+Send> RequiresRequiresShareAndSend for X<T> { }
+impl <T: Sync> RequiresShare for X<T> { }
+impl <T: Sync+Send> RequiresRequiresShareAndSend for X<T> { }
 
-fn foo<T: RequiresRequiresShareAndSend>(val: T, chan: Sender<T>) {
-    chan.send(val);
+fn foo<T: RequiresRequiresShareAndSend + 'static>(val: T, chan: Sender<T>) {
+    chan.send(val).unwrap();
 }
 
 pub fn main() {
-    let (tx, rx): (Sender<X<int>>, Receiver<X<int>>) = channel();
-    foo(X(31337i), tx);
-    assert!(rx.recv() == X(31337i));
+    let (tx, rx): (Sender<X<isize>>, Receiver<X<isize>>) = channel();
+    foo(X(31337), tx);
+    assert_eq!(rx.recv().unwrap(), X(31337));
 }

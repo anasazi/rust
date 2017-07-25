@@ -1,4 +1,4 @@
- // Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,19 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(struct_variant)]
-
 // Destructuring struct variants would ICE where regular structs wouldn't
 
 enum Foo {
-    VBar { num: int }
+    VBar { num: isize }
 }
 
-struct SBar { num: int }
+struct SBar { num: isize }
 
 pub fn main() {
-    let vbar = VBar { num: 1 };
-    let VBar { num } = vbar;
+    let vbar = Foo::VBar { num: 1 };
+    let Foo::VBar { num } = vbar;
     assert_eq!(num, 1);
 
     let sbar = SBar { num: 2 };

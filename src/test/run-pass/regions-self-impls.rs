@@ -8,22 +8,20 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate debug;
-
 struct Clam<'a> {
-    chowder: &'a int
+    chowder: &'a isize
 }
 
 trait get_chowder<'a> {
-    fn get_chowder(&self) -> &'a int;
+    fn get_chowder(&self) -> &'a isize;
 }
 
 impl<'a> get_chowder<'a> for Clam<'a> {
-    fn get_chowder(&self) -> &'a int { return self.chowder; }
+    fn get_chowder(&self) -> &'a isize { return self.chowder; }
 }
 
 pub fn main() {
     let clam = Clam { chowder: &3 };
-    println!("{:?}", *clam.get_chowder());
+    println!("{}", *clam.get_chowder());
     clam.get_chowder();
 }

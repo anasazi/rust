@@ -30,7 +30,6 @@ impl ToString_ for Point {
 
 fn main() {
     let p = Point::new(0.0, 0.0);
-    //~^ ERROR unresolved name `Point::new`
-    //~^^ ERROR failed to resolve. Use of undeclared module `Point`
+    //~^ ERROR no function or associated item named `new` found for type `Point`
     println!("{}", p.to_string());
 }

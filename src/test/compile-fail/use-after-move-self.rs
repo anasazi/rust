@@ -8,15 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+#![feature(box_syntax)]
 
 struct S {
-    x: Box<int>,
+    x: Box<isize>,
 }
 
 impl S {
-    pub fn foo(self) -> int {
+    pub fn foo(self) -> isize {
         self.bar();
-        return *self.x;  //~ ERROR use of partially moved value: `*self.x`
+        return *self.x;  //~ ERROR use of moved value: `*self.x`
     }
 
     pub fn bar(self) {}

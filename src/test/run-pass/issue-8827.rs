@@ -8,17 +8,24 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-fn periodical(n: int) -> Receiver<bool> {
+// ignore-emscripten no threads support
+
+#![feature(std_misc)]
+
+use std::thread;
+use std::sync::mpsc::{channel, Receiver};
+
+fn periodical(n: isize) -> Receiver<bool> {
     let (chan, port) = channel();
-    spawn(proc() {
+    thread::spawn(move|| {
         loop {
-            for _ in range(1, n) {
-                match chan.send_opt(false) {
+            for _ in 1..n {
+                match chan.send(false) {
                     Ok(()) => {}
                     Err(..) => break,
                 }
             }
-            match chan.send_opt(true) {
+            match chan.send(true) {
                 Ok(()) => {}
                 Err(..) => break
             }
@@ -27,12 +34,12 @@ fn periodical(n: int) -> Receiver<bool> {
     return port;
 }
 
-fn integers() -> Receiver<int> {
+fn integers() -> Receiver<isize> {
     let (chan, port) = channel();
-    spawn(proc() {
+    thread::spawn(move|| {
         let mut i = 1;
         loop {
-            match chan.send_opt(i) {
+            match chan.send(i) {
                 Ok(()) => {}
                 Err(..) => break,
             }
@@ -46,8 +53,8 @@ fn main() {
     let ints = integers();
     let threes = periodical(3);
     let fives = periodical(5);
-    for _ in range(1i, 100i) {
-        match (ints.recv(), threes.recv(), fives.recv()) {
+    for _ in 1..100 {
+        match (ints.recv().unwrap(), threes.recv().unwrap(), fives.recv().unwrap()) {
             (_, true, true) => println!("FizzBuzz"),
             (_, true, false) => println!("Fizz"),
             (_, false, true) => println!("Buzz"),
@@ -55,4 +62,3 @@ fn main() {
         }
     }
 }
-

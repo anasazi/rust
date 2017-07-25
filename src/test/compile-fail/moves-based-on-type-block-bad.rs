@@ -10,28 +10,33 @@
 
 // ignore-tidy-linelength
 
+#![feature(box_patterns)]
+#![feature(box_syntax)]
+
 struct S {
     x: Box<E>
 }
 
 enum E {
     Foo(Box<S>),
-    Bar(Box<int>),
+    Bar(Box<isize>),
     Baz
 }
 
-fn f(s: &S, g: |&S|) {
+fn f<G>(s: &S, g: G) where G: FnOnce(&S) {
     g(s)
 }
 
 fn main() {
-    let s = S { x: box Bar(box 42) };
+    let s = S { x: box E::Bar(box 42) };
     loop {
         f(&s, |hellothere| {
             match hellothere.x { //~ ERROR cannot move out
-                box Foo(_) => {}
-                box Bar(x) => println!("{}", x.to_string()), //~ NOTE attempting to move value to here
-                box Baz => {}
+                                 //~| cannot move out of borrowed content
+                box E::Foo(_) => {}
+                box E::Bar(x) => println!("{}", x.to_string()),
+                //~^ NOTE to prevent move
+                box E::Baz => {}
             }
         })
     }

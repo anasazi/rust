@@ -8,16 +8,18 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-enum Q { R(Option<uint>) }
 
-fn xyzzy(q: Q) -> uint {
+#[derive(Copy, Clone)]
+enum Q { R(Option<usize>) }
+
+fn xyzzy(q: Q) -> usize {
     match q {
-        R(S) if S.is_some() => { 0 }
+        Q::R(S) if S.is_some() => { 0 }
         _ => 1
     }
 }
 
 
 pub fn main() {
-    assert_eq!(xyzzy(R(Some(5))), 0);
+    assert_eq!(xyzzy(Q::R(Some(5))), 0);
 }

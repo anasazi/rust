@@ -8,14 +8,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// ignore-tidy-linelength
-
-#![no_std]
-#![feature(lang_items)]
-
-#[lang="sized"]
-pub trait Sized {}
-
 struct S<T> {
     contents: T,
 }
@@ -33,11 +25,11 @@ trait Trait<T> {
 }
 
 struct S2 {
-    contents: int,
+    contents: isize,
 }
 
-impl Trait<int> for S2 {
-    fn new<U>(x: int, _: U) -> S2 {
+impl Trait<isize> for S2 {
+    fn new<U>(x: isize, _: U) -> S2 {
         S2 {
             contents: x,
         }
@@ -45,16 +37,16 @@ impl Trait<int> for S2 {
 }
 
 fn foo<'a>() {
-    let _ = S::new::<int,f64>(1, 1.0);
+    let _ = S::new::<isize,f64>(1, 1.0);
     //~^ ERROR too many type parameters provided
 
-    let _ = S::<'a,int>::new::<f64>(1, 1.0);
-    //~^ ERROR too many lifetime parameters provided
+    let _ = S::<'a,isize>::new::<f64>(1, 1.0);
+    //~^ ERROR wrong number of lifetime parameters
 
-    let _: S2 = Trait::new::<int,f64>(1, 1.0);
+    let _: S2 = Trait::new::<isize,f64>(1, 1.0);
     //~^ ERROR too many type parameters provided
 
-    let _: S2 = Trait::<'a,int>::new::<f64>(1, 1.0);
+    let _: S2 = Trait::<'a,isize>::new::<f64>(1, 1.0);
     //~^ ERROR too many lifetime parameters provided
 }
 

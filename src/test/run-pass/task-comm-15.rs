@@ -8,25 +8,31 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+// ignore-emscripten no threads support
+// pretty-expanded FIXME #23616
 
-use std::task;
+#![feature(std_misc)]
 
-fn start(tx: &Sender<int>, i0: int) {
+use std::sync::mpsc::{channel, Sender};
+use std::thread;
+
+fn start(tx: &Sender<isize>, i0: isize) {
     let mut i = i0;
     while i > 0 {
-        tx.send(0);
+        tx.send(0).unwrap();
         i = i - 1;
     }
 }
 
 pub fn main() {
-    // Spawn a task that sends us back messages. The parent task
+    // Spawn a thread that sends us back messages. The parent thread
     // is likely to terminate before the child completes, so from
     // the child's point of view the receiver may die. We should
     // drop messages on the floor in this case, and not crash!
     let (tx, rx) = channel();
-    task::spawn(proc() {
+    let t = thread::spawn(move|| {
         start(&tx, 10)
     });
     rx.recv();
+    t.join();
 }

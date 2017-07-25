@@ -26,28 +26,6 @@ pub fn main() {
     println!("{}", d_neg);
 
     let e = 1;
-    let e_neg: int = -e;
+    let e_neg: isize = -e;
     println!("{}", e_neg);
-
-    // intentional overflows
-
-    let f = 1;
-    let f_neg: u8 = -f;
-    println!("{}", f_neg);
-
-    let g = 1;
-    let g_neg: u16 = -g;
-    println!("{}", g_neg);
-
-    let h = 1;
-    let h_neg: u32 = -h;
-    println!("{}", h_neg);
-
-    let i = 1;
-    let i_neg: u64 = -i;
-    println!("{}", i_neg);
-
-    let j = 1;
-    let j_neg: uint = -j;
-    println!("{}", j_neg);
 }

@@ -8,15 +8,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(managed_boxes)]
+// pretty-expanded FIXME #23616
+
 #![allow(dead_assignment)]
-#![allow(unused_variable)]
+#![allow(unused_variables)]
+#![allow(unknown_features)]
+#![feature(box_syntax)]
 
-use std::gc::{Gc, GC};
-
-enum option<T> { some(Gc<T>), none, }
+enum option<T> { some(Box<T>), none, }
 
 pub fn main() {
-    let mut a: option<int> = some::<int>(box(GC) 10);
-    a = none::<int>;
+    let mut a: option<isize> = option::some::<isize>(box 10);
+    a = option::none::<isize>;
 }

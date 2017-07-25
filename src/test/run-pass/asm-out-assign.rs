@@ -8,15 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+
 #![feature(asm)]
 
-#[cfg(target_arch = "x86")]
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub fn main() {
-    let x: int;
+    let x: isize;
     unsafe {
         // Treat the output as initialization.
-        asm!("mov $1, $0" : "=r"(x) : "r"(5u));
+        asm!("mov $1, $0" : "=r"(x) : "r"(5_usize));
     }
     assert_eq!(x, 5);
 
@@ -30,5 +30,5 @@ pub fn main() {
     assert_eq!(x, 13);
 }
 
-#[cfg(not(target_arch = "x86"), not(target_arch = "x86_64"))]
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
 pub fn main() {}

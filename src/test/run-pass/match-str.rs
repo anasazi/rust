@@ -10,22 +10,23 @@
 
 // Issue #53
 
+
 pub fn main() {
-    match "test" { "not-test" => fail!(), "test" => (), _ => fail!() }
+    match "test" { "not-test" => panic!(), "test" => (), _ => panic!() }
 
     enum t { tag1(String), tag2, }
 
 
-    match tag1("test".to_string()) {
-      tag2 => fail!(),
-      tag1(ref s) if "test" != s.as_slice() => fail!(),
-      tag1(ref s) if "test" == s.as_slice() => (),
-      _ => fail!()
+    match t::tag1("test".to_string()) {
+      t::tag2 => panic!(),
+      t::tag1(ref s) if "test" != &**s => panic!(),
+      t::tag1(ref s) if "test" == &**s => (),
+      _ => panic!()
     }
 
-    let x = match "a" { "a" => 1i, "b" => 2i, _ => fail!() };
+    let x = match "a" { "a" => 1, "b" => 2, _ => panic!() };
     assert_eq!(x, 1);
 
-    match "a" { "a" => { } "b" => { }, _ => fail!() }
+    match "a" { "a" => { } "b" => { }, _ => panic!() }
 
 }

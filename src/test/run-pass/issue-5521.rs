@@ -10,15 +10,15 @@
 
 // aux-build:issue-5521.rs
 
-#![feature(managed_boxes)]
 
-extern crate foo = "issue-5521";
 
-fn foo(a: foo::map) {
+extern crate issue_5521 as foo;
+
+fn bar(a: foo::map) {
     if false {
-        fail!();
+        panic!();
     } else {
-        let _b = a.get(&2);
+        let _b = &(*a)[&2];
     }
 }
 

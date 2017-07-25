@@ -13,7 +13,7 @@
 // terms of the binding, not the discriminant.
 
 struct Foo<A> { f: A }
-fn guard(_s: String) -> bool {fail!()}
+fn guard(_s: String) -> bool {panic!()}
 fn touch<A>(_a: &A) {}
 
 fn f10() {
@@ -24,6 +24,8 @@ fn f10() {
     };
 
     touch(&x); //~ ERROR use of partially moved value: `x`
+    //~^ value used here after move
+    //~| move occurs because `x.f` has type `std::string::String`
 }
 
 fn main() {}
